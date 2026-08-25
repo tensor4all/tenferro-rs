@@ -56,6 +56,41 @@ Candidate gates when need passes:
 
 Coverage is metadata-only: no tenferro executable source changes.
 
+## Paired public evidence
+
+Baseline one-thread gate attempt 1 failed because CPU 0 was 30.8% busy and
+produced no timing; the accepted retry had selected CPU 1 at 0.2% and
+domain-other maximum 0.3%. Baseline four-thread passed first attempt with every
+domain core 0.0%. Candidate one-thread passed first attempt with every domain
+core 0.0%. Five candidate four-thread gate attempts failed because CPU 0 stayed
+100% busy; a fresh arm passed with CPU 0 at 0.3%, selected maximum 0.5%, and
+other siblings 0.0%, then supplied the retained timing. No failed arm
+contributes a timing.
+
+| case | baseline 1T | candidate 1T | speedup | baseline 4T | candidate 4T | speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| rank-8 windowed scatter | 7.463022 ± 0.428646 ms | 1.453812 ± 0.007650 ms | 5.13x | 8.911004 ± 0.895104 ms | 1.728380 ± 0.009851 ms | 5.16x |
+| rank-1 scalar control | 1.008478 ± 0.000570 ms | 0.969094 ± 0.033301 ms | — | 1.253987 ± 0.002591 ms | 1.172441 ± 0.026412 ms | — |
+
+The need gate and every candidate gate are **PASS**. Rank-8 public speedups
+exceed 5x in both contexts; controls improve 3.9%/6.5%. Full exact-output
+comparisons passed before and after timing.
+
+## Pin and verification
+
+Commit `629983d3` updates only the four pins and canonical source-contract
+revision. The ignored lock resolves all four packages at version 0.4.0 and
+exact `b40cd2f6`.
+
+- build-artifact contracts: 9 passed
+- focused CPU scatter tests: 10 passed
+- `scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-cpu test_scatter_clamps_negative_and_out_of_bounds_windows'`: passed, including formatting, doc snippets, workspace/extension clippy, and focused test
+- upstream durable evidence: benchmark-suite PR #37, merge `b03e98db`
+
+Coverage was reviewed: dependency metadata and its contract test changed; no
+tenferro executable source line was added. Exact-final review, committed
+repository-rules review, and hosted CI remain pending.
+
 ## Design gate
 
 Read-only `reviewer-flash` with high thinking reviewed exact design `a9d35674`
