@@ -88,8 +88,11 @@ exact `b40cd2f6`.
 - upstream durable evidence: benchmark-suite PR #37, merge `b03e98db`
 
 Coverage was reviewed: dependency metadata and its contract test changed; no
-tenferro executable source line was added. Exact-final review, committed
-repository-rules review, and hosted CI remain pending.
+tenferro executable source line was added. The committed repository-rules
+review passed with only the expected external-LLM-skipped warning. Exact-final
+read-only `reviewer-flash` review of candidate `3f62bdd9` with high thinking
+returned **Correct-to-merge** with no blocking findings. Hosted CI remains
+pending.
 
 ## Design gate
 
