@@ -25,6 +25,11 @@ addition to, not in place of, the upstream citations.
   "Algorithm origins" below).
 - Check the citation policies of the upstream projects listed in the
   component table and apply them recursively.
+- If a calculation uses the faer backend for dense CPU linear algebra, cite
+  Sarah Quiñones El Kazdadi, “faer: A linear algebra library for the Rust
+  programming language,” *Journal of Open Source Software* 11(123), 6099
+  (2026), [doi:10.21105/joss.06099](https://doi.org/10.21105/joss.06099), in
+  addition to tenferro-rs and method-specific references.
 - tenferro-rs itself does not yet have a software paper; if you need to
   reference it directly, cite the repository URL and the version or commit
   you used.

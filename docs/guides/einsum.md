@@ -144,6 +144,11 @@ Flat string notation supports one NumPy-style ellipsis per term. Ellipsis
 axes right-align and broadcast dimensions of size one. The programmatic
 `EinsumNotation` form resolves to the same canonical labels before planning.
 
+> **Warning:** string equations require exactly one explicit `->`. Omitting it
+> returns `Error::InvalidSubscripts` during parsing. Parenthesized contraction
+> order containing ellipsis is also rejected during parsing; use flat `...`
+> notation or `EinsumNotation` instead.
+
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_20 -->
 ```rust
 use tenferro_cpu::CpuBackend;
