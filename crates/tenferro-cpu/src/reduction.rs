@@ -1034,6 +1034,9 @@ fn typed_reduce_sum_wrapping<T>(
 where
     T: WrappingReductionElem + TensorScalar,
 {
+    // INVARIANT: the pinned strided-kernel `ErasedReduceScalar` implementation
+    // for i32/i64 uses `wrapping_add`; the CPU overflow regression test pins
+    // this delegated two's-complement contract.
     typed_reduce_erased(input, axes, ReduceOp::Sum, "reduce_sum", exec_context)
 }
 
@@ -1061,6 +1064,9 @@ fn typed_reduce_prod_wrapping<T>(
 where
     T: WrappingReductionElem + TensorScalar,
 {
+    // INVARIANT: the pinned strided-kernel `ErasedReduceScalar` implementation
+    // for i32/i64 uses `wrapping_mul`; the CPU overflow regression test pins
+    // this delegated two's-complement contract.
     typed_reduce_erased(input, axes, ReduceOp::Product, "reduce_prod", exec_context)
 }
 
