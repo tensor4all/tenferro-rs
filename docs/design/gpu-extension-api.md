@@ -295,6 +295,8 @@ independent API/unsafe/lifetime/retirement/multi-GPU audit complete.
 
 - [gpu-backend-design.md](./gpu-backend-design.md) — backend provider model,
   runtime ownership, and cache ownership.
+- [Custom CUDA kernels](../guides/custom-cuda-kernels.md) — downstream PTX,
+  CUBIN, NVRTC, tensor-borrowing, launch, and lifetime cookbook.
 - `docs/design/storage-contract-freeze.md` — the frozen layout/storage contract.
 - `crates/tenferro-gpu/src/cubecl/` — implementation.
 - Plan: `docs/superpowers/plans/2026-08-09-gpu-extension-api.md`.
