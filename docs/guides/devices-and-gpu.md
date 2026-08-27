@@ -37,7 +37,7 @@ plugins at runtime. See [XLA and PJRT](xla.md).
 | CUDA tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
 | Ordinary WebGPU tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
 | Apple managed tensor to its paired CPU backend | Guarded RustFFT and rank-2 Cholesky run without a transfer; other operations are not implied |
-| GPU tensor to host inspection | Direct host slice APIs panic; download first |
+| GPU tensor to host inspection | Direct host slice APIs return `Error::RuntimeState`; download first |
 | Unsupported CUDA op or dtype | Error, not silent CPU fallback |
 | Unsupported WebGPU op or dtype | Error, not silent CPU fallback |
 
@@ -132,6 +132,10 @@ cargo build -p tenferro-tutorial-code --no-default-features \
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
+For downstream PTX, CUBIN, NVRTC, or device-library kernels, see
+[Custom CUDA kernels](custom-cuda-kernels.md). That guide uses only the public
+`CudaExecSession` and `cuda::raw` extension boundary.
+
 `TensorStructural::copy_read_into` can reuse an already allocated CUDA
 destination; for supported floating and complex permutation layouts it uses
 the backend-owned cuTENSOR permutation plan cache. The source and destination
