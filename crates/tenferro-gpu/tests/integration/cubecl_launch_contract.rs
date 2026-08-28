@@ -1194,7 +1194,7 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     let gemm_ptr = source_section(
         &gemm_source,
         "fn typed_device_ptr<T: TensorScalar + 'static>(",
-        "fn zero_alloc<T>",
+        "fn build_layout(",
     );
     assert_ordered_needles(
         "gemm::typed_device_ptr",
@@ -1472,22 +1472,27 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
 #[test]
 fn cubecl_gemm_zero_contracting_path_stays_device_native() {
     let gemm_source = cubecl_source("gemm.rs");
-    let zero_alloc_source = source_section(&gemm_source, "fn zero_alloc<", "fn build_layout<");
+    let alloc_path_source = source_section(
+        &gemm_source,
+        "fn dot_general_typed_with_conj<",
+        "fn cutensor_conj_op<",
+    );
 
     for banned in [
         "vec![T::zero(); len]",
         "create_from_slice(T::as_bytes(&zeros))",
     ] {
         assert!(
-            !zero_alloc_source.contains(banned),
+            !alloc_path_source.contains(banned),
             "CubeCL GEMM zero-contracting fast path must not materialize host zeros: {banned}"
         );
     }
     assert_ordered_needles(
-        "gemm::zero_alloc",
-        zero_alloc_source,
+        "gemm::dot_general_typed_with_conj",
+        alloc_path_source,
         &[
-            "alloc_output::<T>(rt, shape)",
+            "alloc_output::<T>(backend.runtime(), &layout.output_shape)",
+            "layout.contracting_elements == 0",
             "structural::fill_zero_kernel",
         ],
     );
