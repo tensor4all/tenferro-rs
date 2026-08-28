@@ -1,9 +1,10 @@
 //! CubeCL CUDA runtime initialization and synchronization.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cubecl::client::ComputeClient;
 use cubecl::stream_id::StreamId;
@@ -201,6 +202,16 @@ struct CudaRuntimeState {
     primary_context: CudaPrimaryContext,
     identity: CudaRuntimeIdentity,
     allocation_domain: AllocationDomainId,
+    // Memoized raw CUDA stream handles keyed by CubeCL [`StreamId`] value.
+    //
+    // INVARIANT: in pinned CubeCL rev 1c88bb6, the CUDA server maps each
+    // `StreamId` to a fixed `StreamPool` slot whose `CUstream` is created once
+    // and never destroyed or replaced while the server is alive, and the
+    // server outlives the `ComputeClient` clone owned by this state. The map
+    // is owned by this runtime object (not thread-local/global), holds one
+    // entry per thread that has executed on the runtime, and is dropped with
+    // the runtime.
+    raw_streams: Mutex<HashMap<u64, u64>>,
 }
 
 // SAFETY: `CudaRuntimeState` owns a retained CUDA primary context and a CubeCL
@@ -320,6 +331,7 @@ impl CudaRuntime {
                 primary_context,
                 identity: CudaRuntimeIdentity::fresh(),
                 allocation_domain: AllocationDomainId::fresh(),
+                raw_streams: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -495,6 +507,16 @@ impl CudaRuntime {
 
 impl CudaRuntimeState {
     fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
+        // Fast path: the tenferro primary context is already current on this
+        // thread. `cuCtxGetCurrent` only reads driver thread state, so this
+        // skips the per-op `cudaSetDevice` + `cuCtxSetCurrent` round trips.
+        // Runtime-API calls made afterwards operate on the current driver
+        // context, so no separate runtime-API device activation is needed.
+        if let Ok(Some(current)) = cudarc::driver::result::ctx::get_current() {
+            if current == self.primary_context.context() {
+                return Ok(());
+            }
+        }
         // INVARIANT: CUDA ordinals are device identifiers; bad ordinals are
         // reported by CUDA instead of indexing memory in tenferro.
         let device_ordinal = i32::try_from(self.device_id.ordinal())
@@ -506,16 +528,33 @@ impl CudaRuntimeState {
     }
 
     fn raw_cuda_stream(&self) -> crate::Result<u64> {
-        self.client
-            .with_server(|server| {
+        let stream_id = StreamId::current();
+        let poisoned =
+            || crate::Error::runtime_state("raw_cuda_stream", "raw stream cache lock poisoned");
+        if let Some(&stream) = self
+            .raw_streams
+            .lock()
+            .map_err(|_| poisoned())?
+            .get(&stream_id.value)
+        {
+            return Ok(stream);
+        }
+        let stream = self
+            .client
+            .with_server(move |server| {
                 server
-                    .raw_stream(StreamId::current())
+                    .raw_stream(stream_id)
                     .map(|stream| stream as u64)
                     .map_err(|err| crate::Error::backend_source("raw_cuda_stream", err))
             })
             .ok_or_else(|| {
                 crate::Error::runtime_state("raw_cuda_stream", "CubeCL server is unavailable")
-            })?
+            })??;
+        self.raw_streams
+            .lock()
+            .map_err(|_| poisoned())?
+            .insert(stream_id.value, stream);
+        Ok(stream)
     }
 
     fn synchronize(&self) -> crate::Result<()> {
