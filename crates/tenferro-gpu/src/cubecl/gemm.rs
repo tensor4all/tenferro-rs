@@ -626,9 +626,11 @@ fn view_descriptor_alignment_requirement<T: CutensorScalar>() -> u32 {
 }
 
 /// Device pointer plus cuTENSOR descriptor metadata for one operand.
-struct ResolvedOperand {
+/// Compact owned operands borrow the layout's precomputed strides; strided
+/// views own their converted strides.
+struct ResolvedOperand<'a> {
     ptr: *mut c_void,
-    strides: Vec<i64>,
+    strides: std::borrow::Cow<'a, [i64]>,
     alignment: u32,
 }
 
@@ -802,18 +804,18 @@ where
     })
 }
 
-fn resolve_read_operand<T>(
+fn resolve_read_operand<'a, T>(
     rt: &CudaRuntime,
     operand: &ReadOperand<'_, '_, T>,
-    compact_strides: &[i64],
-) -> crate::Result<ResolvedOperand>
+    compact_strides: &'a [i64],
+) -> crate::Result<ResolvedOperand<'a>>
 where
     T: CutensorScalar + 'static,
 {
     match operand {
         ReadOperand::Owned(tensor) => Ok(ResolvedOperand {
             ptr: typed_device_ptr(rt, tensor)?,
-            strides: compact_strides.to_vec(),
+            strides: std::borrow::Cow::Borrowed(compact_strides),
             alignment: CUDA_ALLOCATION_ALIGNMENT,
         }),
         ReadOperand::View(view) => {
@@ -824,18 +826,18 @@ where
     }
 }
 
-fn resolve_write_operand<T>(
+fn resolve_write_operand<'a, T>(
     rt: &CudaRuntime,
     operand: &mut WriteOperand<'_, '_, T>,
-    compact_strides: &[i64],
-) -> crate::Result<ResolvedOperand>
+    compact_strides: &'a [i64],
+) -> crate::Result<ResolvedOperand<'a>>
 where
     T: CutensorScalar + 'static,
 {
     match operand {
         WriteOperand::Owned(tensor) => Ok(ResolvedOperand {
             ptr: typed_device_ptr(rt, tensor)?,
-            strides: compact_strides.to_vec(),
+            strides: std::borrow::Cow::Borrowed(compact_strides),
             alignment: CUDA_ALLOCATION_ALIGNMENT,
         }),
         WriteOperand::View(view) => {
@@ -855,7 +857,7 @@ fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
     prepared: CubeclPreparedAccess,
     strides: &[isize],
     offset: isize,
-) -> crate::Result<ResolvedOperand> {
+) -> crate::Result<ResolvedOperand<'static>> {
     let mut strides_i64 = Vec::with_capacity(strides.len());
     for &stride in strides {
         if stride < 0 {
@@ -890,7 +892,7 @@ fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
     // even when the view starts inside the root allocation.
     Ok(ResolvedOperand {
         ptr: cuda_device_ptr_from_addr(addr, OP)?,
-        strides: strides_i64,
+        strides: std::borrow::Cow::Owned(strides_i64),
         alignment: view_descriptor_alignment_requirement::<T>(),
     })
 }
