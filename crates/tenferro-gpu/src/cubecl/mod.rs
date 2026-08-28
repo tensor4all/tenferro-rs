@@ -79,7 +79,7 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::CacheStats;
-use tenferro_tensor::{DotGeneralAccumulation, TensorRead, TensorWrite};
+use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, TensorRead, TensorWrite};
 
 use crate::backend::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, TensorAnalytic, TensorBackend,
@@ -100,6 +100,7 @@ use crate::{
     TypedTensorView, TypedTensorViewMut,
 };
 
+mod blas1;
 mod capability;
 mod device;
 pub(crate) mod dispatch;
@@ -5708,6 +5709,24 @@ impl TensorFusion for CudaBackend {
 }
 
 impl BackendSession for CudaBackend {
+    fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        blas1::vdot_read(self, lhs, rhs)
+    }
+
+    fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        blas1::norm_squared_read(self, input)
+    }
+
+    fn axpby_read_into_accum(
+        &mut self,
+        alpha: ContractionScalar,
+        x: TensorRead<'_>,
+        beta: ContractionScalar,
+        y: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        blas1::axpby_read_into_accum(self, alpha, x, beta, y)
+    }
+
     fn session_type_id(&self) -> TypeId {
         TypeId::of::<CudaBackendSessionMarker>()
     }

@@ -10,9 +10,10 @@ use cubecl::client::ComputeClient;
 use cubecl::stream_id::StreamId;
 use cubecl::Runtime;
 use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
+use cudarc::cublas::sys as cublas_sys;
 use cudarc::driver::result::DriverError;
 use cudarc::driver::sys::{CUcontext, CUdevice, CUresult};
-use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
+use cudarc::runtime::{result as cuda_result, sys as cuda_sys, sys::cudaStream_t};
 use tenferro_tensor::AllocationDomainId;
 
 use super::device::{
@@ -212,15 +213,42 @@ struct CudaRuntimeState {
     // entry per thread that has executed on the runtime, and is dropped with
     // the runtime.
     raw_streams: Mutex<HashMap<u64, u64>>,
+    // cuBLAS handles keyed by CubeCL [`StreamId`] value, mirroring the
+    // `raw_streams` cache: one handle per (device, stream), created lazily on
+    // the first BLAS1 call and bound to that stream via `cublasSetStream`.
+    // The map is runtime-owned (not thread-local/global), holds at most one
+    // entry per thread that has executed BLAS1 work on the runtime, and every
+    // handle is destroyed in this state's `Drop` while the primary context is
+    // still retained.
+    cublas_handles: Mutex<HashMap<u64, CublasStreamHandle>>,
+    // Lazily allocated pinned-host staging slot for single-scalar downloads
+    // (`cudaHostAlloc`, `PINNED_SCALAR_BYTES` bytes). Freed in `Drop` with
+    // `cudaFreeHost` while the primary context is still retained.
+    pinned_scalar: Mutex<PinnedScalarSlot>,
 }
+
+/// One cached cuBLAS handle bound to a fixed CUDA stream.
+struct CublasStreamHandle(cublas_sys::cublasHandle_t);
+
+/// Pinned-host staging slot; `ptr` is null until the first scalar download.
+struct PinnedScalarSlot {
+    ptr: *mut std::ffi::c_void,
+}
+
+/// Size of the runtime-owned pinned staging slot: large enough for the widest
+/// supported scalar (`Complex64`, 16 bytes).
+pub(crate) const PINNED_SCALAR_BYTES: usize = 16;
 
 // SAFETY: `CudaRuntimeState` owns a retained CUDA primary context and a CubeCL
 // client for one device ordinal. Methods set the context current before raw CUDA
-// calls, and backend/executor layers serialize mutating tensor execution.
+// calls, and backend/executor layers serialize mutating tensor execution. The
+// raw cuBLAS handles and the pinned staging pointer are plain CUDA resource
+// addresses owned by this state and released in `Drop`.
 unsafe impl Send for CudaRuntimeState {}
 // SAFETY: Shared state access exposes immutable runtime handles; synchronization
 // and stream queries use explicit CUDA/CubeCL handles and do not mutate Rust
-// aliasing-visible fields.
+// aliasing-visible fields. cuBLAS handles are per-stream (per-thread) and the
+// pinned staging slot is used only while its mutex is held.
 unsafe impl Sync for CudaRuntimeState {}
 
 impl fmt::Debug for CudaRuntime {
@@ -332,6 +360,10 @@ impl CudaRuntime {
                 identity: CudaRuntimeIdentity::fresh(),
                 allocation_domain: AllocationDomainId::fresh(),
                 raw_streams: Mutex::new(HashMap::new()),
+                cublas_handles: Mutex::new(HashMap::new()),
+                pinned_scalar: Mutex::new(PinnedScalarSlot {
+                    ptr: std::ptr::null_mut(),
+                }),
             }),
         })
     }
@@ -484,6 +516,30 @@ impl CudaRuntime {
         self.inner.raw_cuda_stream()
     }
 
+    /// Return the cuBLAS handle bound to the current thread's CubeCL stream,
+    /// creating and caching it on first use.
+    ///
+    /// The caller must have the tenferro primary context current on this
+    /// thread (see [`CudaRuntimeState::set_current_cuda_context`]).
+    pub(crate) fn cublas_handle(&self, op: &'static str) -> crate::Result<cublas_sys::cublasHandle_t> {
+        self.inner.cublas_handle(op)
+    }
+
+    /// Download up to [`PINNED_SCALAR_BYTES`] bytes from a device address
+    /// through the runtime-owned pinned staging slot.
+    ///
+    /// Enqueues an async device-to-host copy on the current thread's CubeCL
+    /// stream and synchronizes only that stream, so previously enqueued work
+    /// on the stream is observed without a device-wide barrier.
+    pub(crate) fn download_scalar_bytes(
+        &self,
+        device_addr: u64,
+        out: &mut [u8],
+        op: &'static str,
+    ) -> crate::Result<()> {
+        self.inner.download_scalar_bytes(device_addr, out, op)
+    }
+
     /// Block the current thread until work submitted to the current CUDA stream completes.
     ///
     /// # Examples
@@ -564,6 +620,147 @@ impl CudaRuntimeState {
         unsafe { cuda_result::stream::synchronize(stream) }
             .map_err(|err| crate::Error::backend_source(OP, err))
     }
+
+    fn cublas_handle(&self, op: &'static str) -> crate::Result<cublas_sys::cublasHandle_t> {
+        let stream_id = StreamId::current();
+        let poisoned = || crate::Error::runtime_state(op, "cuBLAS handle cache lock poisoned");
+        if let Some(handle) = self
+            .cublas_handles
+            .lock()
+            .map_err(|_| poisoned())?
+            .get(&stream_id.value)
+        {
+            return Ok(handle.0);
+        }
+        if !cublas_library_present() {
+            return Err(crate::Error::io_source(op, CublasLibraryMissing));
+        }
+        let stream = self.raw_cuda_stream()? as usize as cublas_sys::cudaStream_t;
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: the caller holds the tenferro primary context current; the
+        // handle is created on this device and bound to this runtime's stream.
+        check_cublas(op, "cublasCreate", unsafe {
+            cublas_sys::cublasCreate_v2(&mut raw)
+        })?;
+        // SAFETY: `raw` was just created; `stream` is the memoized CubeCL
+        // stream for the current thread (see the `raw_streams` invariant).
+        if let Err(err) = check_cublas(op, "cublasSetStream", unsafe {
+            cublas_sys::cublasSetStream_v2(raw, stream)
+        }) {
+            // SAFETY: `raw` is live and not stored anywhere else.
+            let _ = unsafe { cublas_sys::cublasDestroy_v2(raw) };
+            return Err(err);
+        }
+        self.cublas_handles
+            .lock()
+            .map_err(|_| poisoned())?
+            .insert(stream_id.value, CublasStreamHandle(raw));
+        Ok(raw)
+    }
+
+    fn download_scalar_bytes(
+        &self,
+        device_addr: u64,
+        out: &mut [u8],
+        op: &'static str,
+    ) -> crate::Result<()> {
+        if out.len() > PINNED_SCALAR_BYTES {
+            return Err(crate::Error::Internal(format!(
+                "pinned scalar staging supports at most {PINNED_SCALAR_BYTES} bytes, got {}",
+                out.len()
+            )));
+        }
+        self.set_current_cuda_context(op)?;
+        let stream = self.raw_cuda_stream()? as usize as cudaStream_t;
+        // ponytail: one shared staging slot serializes concurrent scalar
+        // downloads per runtime; add per-thread slots if that lock contends.
+        let mut slot = self
+            .pinned_scalar
+            .lock()
+            .map_err(|_| crate::Error::runtime_state(op, "pinned scalar staging lock poisoned"))?;
+        if slot.ptr.is_null() {
+            let mut ptr = std::ptr::null_mut();
+            // SAFETY: the primary context is current; the allocation is freed
+            // in this state's `Drop` with `cudaFreeHost`.
+            unsafe { cuda_sys::cudaHostAlloc(&mut ptr, PINNED_SCALAR_BYTES, cuda_sys::cudaHostAllocDefault) }
+                .result()
+                .map_err(|err| crate::Error::backend_source(op, err))?;
+            slot.ptr = ptr;
+        }
+        let src = super::interop::cuda_device_ptr_from_addr(device_addr, op)?;
+        // SAFETY: `slot.ptr` is a live pinned allocation of PINNED_SCALAR_BYTES
+        // bytes, `out.len()` is validated above, and the mutex guard keeps the
+        // slot exclusive until the stream synchronization below completes.
+        let staging =
+            unsafe { std::slice::from_raw_parts_mut(slot.ptr.cast::<u8>(), out.len()) };
+        // SAFETY: `src` is a residency-checked device address owned by this
+        // runtime and the copy length equals the destination slice length.
+        unsafe { cuda_result::memcpy_dtoh_async(staging, src, stream) }
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        // SAFETY: `stream` is the memoized CubeCL stream the copy was enqueued on.
+        unsafe { cuda_result::stream::synchronize(stream) }
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        out.copy_from_slice(staging);
+        Ok(())
+    }
+
+    /// Destroy cached cuBLAS handles and free the pinned staging slot.
+    ///
+    /// Called from `Drop` after `synchronize`, which leaves the primary
+    /// context current on the dropping thread.
+    fn release_cuda_library_resources(&mut self) {
+        if let Ok(mut handles) = self.cublas_handles.lock() {
+            for (_, handle) in handles.drain() {
+                // SAFETY: each stored handle is live and no longer reachable.
+                if let Err(err) = unsafe { cublas_sys::cublasDestroy_v2(handle.0) }.result() {
+                    report_cuda_resource_release_error("cuBLAS handle", &err);
+                }
+            }
+        }
+        if let Ok(mut slot) = self.pinned_scalar.lock() {
+            if !slot.ptr.is_null() {
+                // SAFETY: the slot owns exactly one live cudaHostAlloc allocation.
+                if let Err(err) = unsafe { cuda_sys::cudaFreeHost(slot.ptr) }.result() {
+                    report_cuda_resource_release_error("pinned scalar staging", &err);
+                }
+                slot.ptr = std::ptr::null_mut();
+            }
+        }
+    }
+}
+
+/// Typed load failure for the dynamically loaded cuBLAS library.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "cuBLAS shared library not found; ensure `LD_LIBRARY_PATH` includes the CUDA toolkit library directory"
+)]
+struct CublasLibraryMissing;
+
+/// Report whether the cuBLAS shared library can be dynamically loaded.
+fn cublas_library_present() -> bool {
+    use std::sync::OnceLock;
+    static PRESENT: OnceLock<bool> = OnceLock::new();
+    // SAFETY: `is_culib_present` only probes candidate library names and does
+    // not call cuBLAS function pointers or retain a library handle.
+    *PRESENT.get_or_init(|| unsafe { cublas_sys::is_culib_present() })
+}
+
+/// Map a non-success cuBLAS status to a typed provider error.
+pub(super) fn check_cublas(
+    op: &'static str,
+    call: &'static str,
+    status: cublas_sys::cublasStatus_t,
+) -> crate::Result<()> {
+    if matches!(status, cublas_sys::cublasStatus_t::CUBLAS_STATUS_SUCCESS) {
+        Ok(())
+    } else {
+        Err(super::error::provider_status(op, "cuBLAS", call, status as i32))
+    }
+}
+
+#[cold]
+fn report_cuda_resource_release_error(what: &'static str, err: &impl fmt::Debug) {
+    eprintln!("tenferro-gpu: failed to release {what} during Drop: {err:?}");
 }
 
 fn is_invalid_device_lookup(source: DriverError) -> bool {
@@ -602,6 +799,9 @@ impl Drop for CudaRuntimeState {
         if let Err(err) = self.synchronize() {
             report_cuda_runtime_drop_error(&err);
         }
+        // `synchronize` left the primary context current; release CUDA library
+        // resources before the retained primary context drops with this state.
+        self.release_cuda_library_resources();
     }
 }
 

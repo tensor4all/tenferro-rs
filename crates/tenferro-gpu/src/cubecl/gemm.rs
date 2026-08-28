@@ -1180,7 +1180,7 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     })
 }
 
-fn typed_device_ptr<T: TensorScalar + 'static>(
+pub(super) fn typed_device_ptr<T: TensorScalar + 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
 ) -> crate::Result<*mut c_void> {

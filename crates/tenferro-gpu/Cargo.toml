@@ -89,6 +89,10 @@ name = "integration"
 path = "tests/integration.rs"
 
 [[test]]
+name = "blas1_cuda"
+path = "tests/blas1_cuda.rs"
+
+[[test]]
 name = "storage_provider_cuda_progress"
 path = "tests/storage_provider_cuda_progress.rs"
 

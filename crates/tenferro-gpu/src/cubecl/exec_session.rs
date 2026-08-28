@@ -592,6 +592,24 @@ delegate_cached! {
 }
 
 impl BackendSession for CudaExecSession<'_> {
+    fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        BackendSession::vdot_read(self.backend, lhs, rhs)
+    }
+
+    fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        BackendSession::norm_squared_read(self.backend, input)
+    }
+
+    fn axpby_read_into_accum(
+        &mut self,
+        alpha: tenferro_tensor::ContractionScalar,
+        x: TensorRead<'_>,
+        beta: tenferro_tensor::ContractionScalar,
+        y: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        BackendSession::axpby_read_into_accum(self.backend, alpha, x, beta, y)
+    }
+
     fn session_type_id(&self) -> TypeId {
         TypeId::of::<CudaExecSessionMarker>()
     }
