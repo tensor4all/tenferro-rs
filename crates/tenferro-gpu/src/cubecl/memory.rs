@@ -6,7 +6,7 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 
 use super::dispatch;
-use crate::cubecl::runtime::CudaRuntime;
+use crate::cubecl::runtime::{CudaRuntime, PINNED_SCALAR_BYTES};
 use crate::types::{
     CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
     Tensor, TensorScalar, TypedTensor,
@@ -109,6 +109,23 @@ fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     )
 }
 
+/// Read a scalar-sized compact tensor through the runtime's pinned staging slot.
+///
+/// Returns `Ok(None)` when the tensor's layout has no directly addressable
+/// device pointer, so the caller falls back to the general download.
+fn download_scalar<T: CubeElement + TensorScalar + Clone + 'static>(
+    rt: &CudaRuntime,
+    typed: &TypedTensor<T>,
+    byte_len: usize,
+) -> crate::Result<Option<Vec<T>>> {
+    let Ok(ptr) = super::gemm::typed_device_ptr(rt, typed) else {
+        return Ok(None);
+    };
+    let mut bytes = vec![0_u8; byte_len];
+    rt.download_scalar_bytes(ptr as u64, &mut bytes, "download")?;
+    Ok(Some(T::from_bytes(&bytes).to_vec()))
+}
+
 fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
     rt: &CudaRuntime,
     typed: &TypedTensor<T>,
@@ -129,6 +146,21 @@ fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
             StorageBuffer::Host(Vec::new()),
             Placement::default(),
         );
+    }
+
+    // Scalar fast path. A Krylov loop reads back one reduction result per
+    // iteration, and the general path below pays a device-wide synchronize
+    // plus CubeCL's pageable staging for those 8-16 bytes. Copy them through
+    // the runtime's pinned slot instead and synchronize only this stream.
+    let byte_len = typed.n_elements() * size_of::<T>();
+    if byte_len <= PINNED_SCALAR_BYTES {
+        if let Some(data) = download_scalar(rt, typed, byte_len)? {
+            return TypedTensor::from_buffer_col_major(
+                typed.shape().to_vec(),
+                StorageBuffer::Host(data),
+                Placement::default(),
+            );
+        }
     }
 
     rt.synchronize()?;
