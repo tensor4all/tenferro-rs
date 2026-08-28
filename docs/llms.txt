@@ -7,7 +7,7 @@
 - **Column-major storage.** Dense buffers are column-major: the leftmost dimension varies fastest. Row-major data passed to `from_vec_col_major` is silently reinterpreted as column-major — permuted/wrong values, never rejected.
 - **No facade crate.** `cargo add tenferro` fails by design; depend on the crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
 - **Explicit backend.** Direct operations take an explicit backend argument; construct the backend/runtime once and reuse it — per-call construction discards the buffer pool.
-- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`). Flat notation supports one right-aligned, broadcastable `...` ellipsis per term; `EinsumNotation` is the programmatic form. Parenthesized ellipsis remains unsupported.
+- **WARNING — einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`); omitting it is rejected during parsing with `Error::InvalidSubscripts`. Flat notation supports one right-aligned, broadcastable `...` ellipsis per term, and `EinsumNotation` is the programmatic form. Parenthesized contraction order containing ellipsis is also rejected during parsing.
 - **Result-returning operators.** Traced operators return `Result`; propagate with `?`.
 
 ## Recipes and references
@@ -28,13 +28,14 @@
 
 ## Guides
 
-- [Einsum](https://tensor4all.org/tenferro-rs/guides/einsum.html): Requires the explicit arrow; documents flat `...` ellipsis and `EinsumNotation` semantics plus the parenthesized-ellipsis limitation.
+- [Einsum](https://tensor4all.org/tenferro-rs/guides/einsum.html): WARNING — missing arrows and parenthesized ellipses are parse-time `Error::InvalidSubscripts` failures; use flat `...` ellipsis or `EinsumNotation`.
 - [Linear Algebra](https://tensor4all.org/tenferro-rs/guides/linear-algebra.html): Covers the `tenferro-linalg` operation crate and its direct, eager, and traced execution surfaces.
 - [External Linear Algebra Interop](https://tensor4all.org/tenferro-rs/guides/external-linalg-interop.html): Calling faer or BLAS/LAPACK directly on tenferro-owned storage: the direct-dependency contract, column-major leading dimensions, non-contiguous/non-host rejection, and provider thread control.
 - [Autodiff](https://tensor4all.org/tenferro-rs/guides/autodiff.html): Describes eager `backward()` and functional or traced `grad`, `vjp`, and `jvp` workflows.
 - [Parallelism and Caching](https://tensor4all.org/tenferro-rs/guides/parallelism-and-caching.html): WARNING — backend/runtime instances own thread pools and caches; per-call construction throws them away.
 - [Memory Order](https://tensor4all.org/tenferro-rs/guides/memory-order.html): WARNING — buffers are column-major; row-major data passed to `from_vec_col_major` is silently reinterpreted as column-major (wrong values), never rejected.
 - [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html): Documents explicit CPU/GPU placement and transfer boundaries plus CUDA and WebGPU capability coverage.
+- [Custom CUDA kernels](https://tensor4all.org/tenferro-rs/guides/custom-cuda-kernels.html): Downstream PTX, CUBIN, NVRTC, raw tensor borrowing, stream ordering, and launch safety through the public CUDA extension API.
 - [Troubleshooting](https://tensor4all.org/tenferro-rs/guides/troubleshooting.html): Covers feature selection, BLAS providers, CUDA setup, workspace traps, and common runtime failures.
 
 ## Specification

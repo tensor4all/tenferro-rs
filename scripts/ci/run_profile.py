@@ -88,6 +88,10 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "--features cpu-faer --bin faer_interop",
         f"RUSTFLAGS='-l dylib=openblas -l dylib=lapack' cargo run -p tenferro-tutorial-code "
         f"{_CARGO_TEST_PROFILE} --no-default-features --features cpu-blas --bin blas_interop",
+        # Issue #1724: compile the source-backed raw CUDA examples on GPU-less
+        # docs CI; hardware execution remains in the CUDA test lane.
+        f"cargo check -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
+        "--features cuda,cpu-faer --bin custom_cuda_kernels",
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (

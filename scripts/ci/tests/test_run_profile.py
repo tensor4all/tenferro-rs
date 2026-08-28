@@ -156,6 +156,20 @@ class RunProfileTests(unittest.TestCase):
             commands.index("bash scripts/build_docs_site.sh"),
         )
 
+    def test_docs_profile_compile_checks_custom_cuda_kernel_examples(self) -> None:
+        commands = commands_for("docs")
+        command = (
+            "cargo check -p tenferro-tutorial-code --profile ci "
+            "--no-default-features --features cuda,cpu-faer "
+            "--bin custom_cuda_kernels"
+        )
+
+        self.assertIn(command, commands)
+        self.assertLess(
+            commands.index(command),
+            commands.index("bash scripts/build_docs_site.sh"),
+        )
+
     def test_ci_config_runs_release_publication_checks(self) -> None:
         commands = commands_for("ci-config")
         for command in (

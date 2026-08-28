@@ -498,7 +498,7 @@ Error behavior:
 | --- | --- |
 | GPU op receives a CPU tensor | `Error::BackendFailure` with an upload hint |
 | CPU op receives a GPU tensor | `Error::BackendFailure` with a download hint for `Result` APIs |
-| `TypedTensor::host_data()` on a GPU buffer | panic with a diagnostic |
+| `TypedTensor::host_data()` or `host_data_mut()` on a GPU buffer | `Error::RuntimeState` with a download hint |
 | CUDA op receives a WebGPU tensor, or WebGPU op receives a CUDA tensor | `Error::BackendFailure` naming the expected provider |
 
 ## Implemented Coverage
