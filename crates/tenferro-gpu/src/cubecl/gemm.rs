@@ -1,4 +1,3 @@
-use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
@@ -21,6 +20,7 @@ use super::ffi::cutensor::{
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
 };
 use super::interop::cuda_device_ptr_from_addr;
+use super::plan_cache::LruPlanCache;
 use super::{CudaBackend, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
@@ -33,6 +33,7 @@ use tenferro_tensor::{
 const OP: &str = "dot_general";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
 const DEFAULT_CUTENSOR_PLAN_CACHE_MAX_ENTRIES: usize = 64;
+type CutensorContractionPlanCache = LruPlanCache<CutensorContractionKey, CachedCutensorContraction>;
 type CutensorPlanCacheState = Arc<Mutex<CutensorContractionPlanCache>>;
 
 trait CutensorScalar: CubeElement + TensorScalar + CubePrimitive + Clone + One + Zero {
@@ -437,104 +438,53 @@ impl CachedCutensorContraction {
     }
 }
 
-struct CutensorContractionPlanCache {
-    max_entries: NonZeroUsize,
-    entries: HashMap<CutensorContractionKey, CachedCutensorContraction>,
-    order: VecDeque<CutensorContractionKey>,
-    stats: CacheStats,
+/// Hash `spec` into the plan-cache key hash without materializing an owned
+/// key. Field order mirrors [`CutensorContractionKey::from_spec`]; the stored
+/// key is compared with [`key_matches_spec`] on lookup, so a 64-bit collision
+/// degrades to a plan rebuild instead of a wrong plan.
+fn spec_hash<T: CutensorScalar>(spec: &CutensorContractionSpec<'_>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    T::DTYPE.hash(&mut hasher);
+    spec.layout.lhs_extents.hash(&mut hasher);
+    spec.lhs_strides.hash(&mut hasher);
+    spec.layout.lhs_modes.hash(&mut hasher);
+    spec.layout.rhs_extents.hash(&mut hasher);
+    spec.rhs_strides.hash(&mut hasher);
+    spec.layout.rhs_modes.hash(&mut hasher);
+    spec.layout.output_extents.hash(&mut hasher);
+    spec.output_strides.hash(&mut hasher);
+    spec.layout.output_modes.hash(&mut hasher);
+    spec.lhs_alignment_requirement.hash(&mut hasher);
+    spec.rhs_alignment_requirement.hash(&mut hasher);
+    spec.output_alignment_requirement.hash(&mut hasher);
+    cutensor_conj_op::<T>(spec.lhs_conj).hash(&mut hasher);
+    cutensor_conj_op::<T>(spec.rhs_conj).hash(&mut hasher);
+    spec.workspace_preference.hash(&mut hasher);
+    hasher.finish()
 }
 
-impl CutensorContractionPlanCache {
-    fn new(max_entries: NonZeroUsize) -> Self {
-        Self {
-            max_entries,
-            entries: HashMap::new(),
-            order: VecDeque::new(),
-            stats: CacheStats::empty(),
-        }
-    }
-
-    fn ensure<T>(
-        &mut self,
-        rt: &CudaRuntime,
-        cutensor: &CutensorHandle,
-        key: &CutensorContractionKey,
-        spec: &CutensorContractionSpec<'_>,
-    ) -> crate::Result<()>
-    where
-        T: CutensorScalar,
-    {
-        if self.entries.contains_key(key) {
-            self.stats.hits = self.stats.hits.saturating_add(1);
-            self.touch(key);
-            return Ok(());
-        }
-        self.stats.misses = self.stats.misses.saturating_add(1);
-        let cached = CachedCutensorContraction::new::<T>(rt, cutensor, spec)?;
-        self.entries.insert(key.clone(), cached);
-        self.touch(key);
-        self.evict_to_limit();
-        Ok(())
-    }
-
-    fn get(&self, key: &CutensorContractionKey) -> crate::Result<&CachedCutensorContraction> {
-        self.entries.get(key).ok_or_else(|| {
-            Error::runtime_state(
-                "cutensor_plan_cache",
-                "cached cuTENSOR contraction was evicted before use",
-            )
-        })
-    }
-
-    fn touch(&mut self, key: &CutensorContractionKey) {
-        // INVARIANT: the LRU order is bounded by configured `max_entries`, so
-        // this retain scan has a constant configured ceiling.
-        self.order.retain(|existing| existing != key);
-        self.order.push_back(key.clone());
-    }
-
-    fn evict_to_limit(&mut self) {
-        while self.entries.len() > self.max_entries.get() {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            if self.entries.remove(&oldest).is_some() {
-                self.stats.evictions = self.stats.evictions.saturating_add(1);
-            }
-        }
-    }
-
-    fn max_entries(&self) -> NonZeroUsize {
-        self.max_entries
-    }
-
-    fn set_max_entries(&mut self, max_entries: NonZeroUsize) {
-        self.max_entries = max_entries;
-        self.evict_to_limit();
-    }
-
-    fn stats(&self) -> CacheStats {
-        CacheStats {
-            entries: self.entries.len(),
-            retained_bytes: self.retained_bytes(),
-            ..self.stats
-        }
-    }
-
-    fn retained_bytes(&self) -> usize {
-        // INVARIANT: retained entries are bounded by configured `max_entries`,
-        // so this retained-byte fold has a constant configured ceiling.
-        let entries_bytes =
-            self.entries
-                .iter()
-                .fold(std::mem::size_of::<Self>(), |total, (key, cached)| {
-                    total
-                        .saturating_add(key.retained_bytes())
-                        .saturating_add(cached.retained_bytes())
-                });
-        entries_bytes
-            .saturating_add(self.order.capacity() * std::mem::size_of::<CutensorContractionKey>())
-    }
+/// Verify a stored materialized key against a borrowed spec.
+fn key_matches_spec<T: CutensorScalar>(
+    key: &CutensorContractionKey,
+    spec: &CutensorContractionSpec<'_>,
+) -> bool {
+    key.dtype == T::DTYPE
+        && key.lhs.extents == spec.layout.lhs_extents
+        && key.lhs.strides == spec.lhs_strides
+        && key.lhs.modes == spec.layout.lhs_modes
+        && key.rhs.extents == spec.layout.rhs_extents
+        && key.rhs.strides == spec.rhs_strides
+        && key.rhs.modes == spec.layout.rhs_modes
+        && key.output.extents == spec.layout.output_extents
+        && key.output.strides == spec.output_strides
+        && key.output.modes == spec.layout.output_modes
+        && key.lhs_alignment_requirement == spec.lhs_alignment_requirement
+        && key.rhs_alignment_requirement == spec.rhs_alignment_requirement
+        && key.output_alignment_requirement == spec.output_alignment_requirement
+        && key.lhs_op == cutensor_conj_op::<T>(spec.lhs_conj)
+        && key.rhs_op == cutensor_conj_op::<T>(spec.rhs_conj)
+        && key.workspace_preference == spec.workspace_preference
 }
 
 pub(super) fn dot_general(
@@ -1116,7 +1066,7 @@ pub(super) fn cutensor_plan_cache_workspace_bytes(backend: &CudaBackend) -> crat
         return Ok(0);
     };
     let plan_cache = lock_cutensor_plan_cache(&plan_cache)?;
-    Ok(plan_cache.entries.values().fold(0, |total, cached| {
+    Ok(plan_cache.values().fold(0, |total, cached| {
         total.saturating_add(cached.workspace.size)
     }))
 }
@@ -1156,15 +1106,35 @@ where
     T: CutensorScalar,
 {
     let cutensor = backend.cutensor_handle()?;
-    let key = CutensorContractionKey::from_spec::<T>(spec);
+    let hash = spec_hash::<T>(spec);
     let plan_cache = get_or_init_cutensor_plan_cache(backend)?;
     let mut plan_cache = lock_cutensor_plan_cache(&plan_cache)?;
-    plan_cache.ensure::<T>(backend.runtime(), cutensor, &key, spec)?;
-    let retained_bytes = plan_cache.retained_bytes();
-    backend
-        .cuda_extension_cache()
-        .update_retained_bytes::<CutensorPlanCacheState>(retained_bytes)?;
-    let cached = plan_cache.get(&key)?;
+    let entries_changed = plan_cache.ensure(
+        hash,
+        |key| key_matches_spec::<T>(key, spec),
+        || {
+            let cached = CachedCutensorContraction::new::<T>(backend.runtime(), cutensor, spec)?;
+            let key = CutensorContractionKey::from_spec::<T>(spec);
+            let retained_bytes = key.retained_bytes().saturating_add(cached.retained_bytes());
+            Ok((key, cached, retained_bytes))
+        },
+    )?;
+    if entries_changed {
+        // Retained bytes only move on insert/evict, so cache hits skip the
+        // extension-cache accounting write entirely.
+        let retained_bytes = plan_cache.retained_bytes();
+        backend
+            .cuda_extension_cache()
+            .update_retained_bytes::<CutensorPlanCacheState>(retained_bytes)?;
+    }
+    let cached = plan_cache
+        .get(hash, |key| key_matches_spec::<T>(key, spec))
+        .ok_or_else(|| {
+            Error::runtime_state(
+                "cutensor_plan_cache",
+                "cached cuTENSOR contraction was evicted before use",
+            )
+        })?;
     execute(cutensor, &cached.plan, &cached.workspace)
 }
 

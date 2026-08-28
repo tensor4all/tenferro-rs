@@ -32,6 +32,7 @@ blas-mkl = ["tenferro-cpu/blas-mkl"]
 cpu-reference = []
 cuda = [
     "dep:cubecl",
+    "dep:lru",
     "cubecl/std",
     "cubecl/stdlib",
     "cubecl/cuda",
@@ -68,6 +69,7 @@ cubek-std = { workspace = true, optional = true }
 cubek-fft = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 libloading.workspace = true
+lru = { workspace = true, optional = true }
 num-complex.workspace = true
 num-traits.workspace = true
 smallvec.workspace = true
