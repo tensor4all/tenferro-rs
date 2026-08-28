@@ -4,14 +4,16 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use cubecl::prelude::{CubeElement, CubePrimitive};
+use cubecl::stream_id::StreamId;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
 use super::dispatch::{
-    alloc_output, cube_count_for_len, cube_dim_1d, dtype_mismatch, ensure_resident_on_runtime,
-    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_nullary_into,
-    prepared_tensor_access, prepared_view_access, prepared_view_mut_access, CubeclPreparedAccess,
+    alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, dtype_mismatch,
+    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    ensure_view_resident_on_runtime, launch_nullary_into, prepared_tensor_access,
+    prepared_view_access, prepared_view_mut_access, CubeclPreparedAccess,
 };
 use super::error::{unsupported_dtype, unsupported_operation, workspace_size_overflow};
 use super::ffi::cutensor::{
@@ -1212,13 +1214,31 @@ fn typed_device_ptr<T: TensorScalar + 'static>(
 ) -> crate::Result<*mut c_void> {
     ensure_resident_on_runtime(rt, tensor, OP)?;
     let prepared = prepared_tensor_access(tensor, OP)?;
+    let buffer = cubecl_buffer(tensor, OP)?;
+    // Fast path: reuse the buffer's memoized device address when executing on
+    // the stream that created the allocation. In that case `get_resource` is
+    // only a pointer lookup — CubeCL's cross-stream alignment pass skips
+    // bindings whose creation stream equals the current stream — so no
+    // synchronization is lost. Any other stream takes the full `get_resource`
+    // round trip below, preserving CubeCL's cross-stream alignment.
+    let same_stream = StreamId::current() == buffer.handle().stream;
+    if same_stream {
+        if let Some(addr) = buffer.cached_device_addr() {
+            // The residency check above ties this raw FFI pointer to the
+            // caller's runtime/device.
+            return cuda_device_ptr_from_addr(addr, OP);
+        }
+    }
     let handle = prepared.into_handle();
     let resource = rt
         .client()
         .get_resource(handle)
         .map_err(|err| crate::Error::backend_source(OP, err))?;
+    let addr = resource.resource().ptr;
+    // See `CubeclBuffer::device_addr` for the address-stability invariant.
+    buffer.memoize_device_addr(addr);
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
-    cuda_device_ptr_from_addr(resource.resource().ptr, OP)
+    cuda_device_ptr_from_addr(addr, OP)
 }
 
 fn build_layout(
