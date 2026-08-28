@@ -1001,15 +1001,26 @@ where
         return Ok(output);
     }
     if layout.contracting_elements == 0 {
-        return zero_alloc::<T>(backend.runtime(), &layout.output_shape);
+        // The contraction sum is empty: fill the already-allocated output with
+        // zeros instead of allocating a second output tensor.
+        launch_nullary_into(
+            backend.runtime(),
+            &output,
+            OP,
+            cube_count_for_len(output.n_elements())?,
+            cube_dim_1d(),
+            |client, count, dim, out| unsafe {
+                structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client, count, dim, out,
+                );
+            },
+        )?;
+        return Ok(output);
     }
 
     let lhs_ptr = typed_device_ptr(backend.runtime(), lhs)?;
     let rhs_ptr = typed_device_ptr(backend.runtime(), rhs)?;
     let output_ptr = typed_device_ptr(backend.runtime(), &output)?;
-
-    let accumulator = alloc_output::<T>(backend.runtime(), &layout.output_shape)?;
-    let accumulator_ptr = typed_device_ptr(backend.runtime(), &accumulator)?;
 
     let alpha = T::one();
     let beta = T::zero();
@@ -1026,6 +1037,9 @@ where
         rhs_conj,
         workspace_preference: CutensorWorksizePreference::Default,
     };
+    // C = D = output: cuTENSOR never reads the accumulator slot when
+    // beta == 0, so the freshly allocated output serves as both C and D and
+    // no separate accumulator tensor is needed.
     cached_cutensor_contraction::<T, _>(backend, &spec, |cutensor, plan, workspace| unsafe {
         cutensor.contract(
             plan,
@@ -1033,7 +1047,7 @@ where
             lhs_ptr as *const c_void,
             rhs_ptr as *const c_void,
             &beta as *const T as *const c_void,
-            accumulator_ptr as *const c_void,
+            output_ptr as *const c_void,
             output_ptr,
             workspace.ptr,
             workspace.size,
@@ -1205,26 +1219,6 @@ fn typed_device_ptr<T: TensorScalar + 'static>(
         .map_err(|err| crate::Error::backend_source(OP, err))?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     cuda_device_ptr_from_addr(resource.resource().ptr, OP)
-}
-
-fn zero_alloc<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
-where
-    T: CutensorScalar,
-{
-    let output = alloc_output::<T>(rt, shape)?;
-    launch_nullary_into(
-        rt,
-        &output,
-        OP,
-        cube_count_for_len(output.n_elements())?,
-        cube_dim_1d(),
-        |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
-                client, count, dim, out,
-            );
-        },
-    )?;
-    Ok(output)
 }
 
 fn build_layout(
