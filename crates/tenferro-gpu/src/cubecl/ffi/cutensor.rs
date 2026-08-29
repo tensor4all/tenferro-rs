@@ -3,6 +3,9 @@ use std::os::raw::c_char;
 use std::sync::Arc;
 
 use libloading::Library;
+use tenferro_tensor::ErrorKind;
+
+use super::super::CudaComputeCapability;
 
 const OP: &str = "cuda_cutensor";
 /// Default cuTENSOR search paths. Override with `TENFERRO_CUTENSOR_PATH` env var.
@@ -22,6 +25,7 @@ pub(crate) type CutensorCudaStream = *mut c_void;
 type CutensorStatus = i32;
 
 const CUTENSOR_STATUS_SUCCESS: CutensorStatus = 0;
+const CUTENSOR_VERSION_2_2_0: usize = 20_200;
 
 #[derive(Debug, thiserror::Error)]
 enum CutensorLoadError {
@@ -38,6 +42,43 @@ enum CutensorLoadError {
         #[source]
         source: libloading::Error,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "cuTENSOR {version_major}.{version_minor}.{version_patch} is unsupported by tenferro on SM {sm_major}.{sm_minor} because it can return incorrect results; use cuTENSOR 2.1.x on Volta"
+)]
+struct CutensorArchitectureError {
+    version_major: usize,
+    version_minor: usize,
+    version_patch: usize,
+    sm_major: u32,
+    sm_minor: u32,
+}
+
+fn validate_device_support(
+    version: usize,
+    compute_capability: CudaComputeCapability,
+) -> crate::Result<()> {
+    if compute_capability.major != 7
+        || compute_capability.minor != 0
+        || version < CUTENSOR_VERSION_2_2_0
+    {
+        return Ok(());
+    }
+
+    Err(crate::Error::extension(
+        OP,
+        "cuda",
+        ErrorKind::Unsupported,
+        CutensorArchitectureError {
+            version_major: version / 10_000,
+            version_minor: (version % 10_000) / 100,
+            version_patch: version % 100,
+            sm_major: compute_capability.major,
+            sm_minor: compute_capability.minor,
+        },
+    ))
 }
 
 #[repr(i32)]
@@ -160,6 +201,7 @@ type CutensorPermuteFn = unsafe extern "C" fn(
     CutensorCudaStream,
 ) -> CutensorStatus;
 type CutensorGetErrorStringFn = unsafe extern "C" fn(CutensorStatus) -> *const c_char;
+type CutensorGetVersionFn = unsafe extern "C" fn() -> usize;
 
 struct CutensorVtable {
     create: CutensorCreateFn,
@@ -177,6 +219,7 @@ struct CutensorVtable {
     contract: CutensorContractFn,
     permute: CutensorPermuteFn,
     get_error_string: CutensorGetErrorStringFn,
+    get_version: CutensorGetVersionFn,
     compute_desc_32f: CutensorComputeDescriptor,
     compute_desc_64f: CutensorComputeDescriptor,
 }
@@ -202,6 +245,7 @@ impl CutensorVtable {
             contract: load_symbol(lib, b"cutensorContract\0")?,
             permute: load_symbol(lib, b"cutensorPermute\0")?,
             get_error_string: load_symbol(lib, b"cutensorGetErrorString\0")?,
+            get_version: load_symbol(lib, b"cutensorGetVersion\0")?,
             compute_desc_32f: load_data_symbol(lib, b"CUTENSOR_COMPUTE_DESC_32F\0")?,
             compute_desc_64f: load_data_symbol(lib, b"CUTENSOR_COMPUTE_DESC_64F\0")?,
         })
@@ -371,8 +415,12 @@ unsafe impl Send for CutensorHandle {}
 unsafe impl Sync for CutensorHandle {}
 
 impl CutensorHandle {
-    pub(crate) fn load() -> crate::Result<Self> {
+    pub(crate) fn load(compute_capability: CudaComputeCapability) -> crate::Result<Self> {
         let lib = CutensorLibrary::load()?;
+        // SAFETY: `cutensorGetVersion` takes no arguments and only returns the
+        // version of the loaded library retained by `lib`.
+        let version = unsafe { (lib.vtable.get_version)() };
+        validate_device_support(version, compute_capability)?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe { (lib.vtable.create)(&mut raw) };
         lib.check_status(status, OP, "cutensorCreate")?;

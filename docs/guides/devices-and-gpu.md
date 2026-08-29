@@ -171,6 +171,11 @@ CUDA operations implemented through NVIDIA libraries return typed load or
 provider errors when the required library is missing. They do not silently use
 a slower native CubeCL kernel as a CUDA fallback.
 
+cuTENSOR 2.2 and newer can return success with incorrect results on Volta
+(compute capability 7.0). On a Volta GPU, select a cuTENSOR 2.1.x library with
+`TENFERRO_CUTENSOR_PATH`; tenferro rejects newer cuTENSOR versions before
+creating a library handle.
+
 For XLA/PJRT GPU verification, add the PJRT plugin path separately:
 
 ```bash
