@@ -210,6 +210,30 @@ fn cuda_extension_cache_allows_dynamic_retained_byte_updates() {
 }
 
 #[test]
+fn cuda_extension_cache_byte_pressure_evicts_largest_entry() {
+    let cache = CudaExtensionCache::with_max_entries(NonZeroUsize::new(8).unwrap());
+    cache
+        .set_max_retained_bytes(NonZeroUsize::new(64).unwrap())
+        .unwrap();
+    drop(cache.get_or_try_init::<usize>(|| Ok(17)).unwrap());
+    drop(
+        cache
+            .get_or_try_init::<String>(|| Ok("gpu".to_string()))
+            .unwrap(),
+    );
+
+    cache.update_retained_bytes::<String>(128).unwrap();
+
+    let value = cache.get_or_try_init::<usize>(|| Ok(23)).unwrap();
+    assert_eq!(*value, 17);
+    drop(value);
+    let stats = cache.stats().unwrap();
+    assert_eq!(stats.entries, 1);
+    assert!(stats.retained_bytes <= 64);
+    assert_eq!(stats.evictions, 1);
+}
+
+#[test]
 fn cuda_backend_exposes_extension_cache_retained_byte_controls() {
     let _getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
         CudaBackend::cuda_extension_cache_max_retained_bytes;
