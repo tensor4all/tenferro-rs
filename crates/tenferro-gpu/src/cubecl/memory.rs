@@ -109,7 +109,8 @@ fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     )
 }
 
-/// Read a scalar-sized compact tensor through the runtime's pinned staging slot.
+/// Read a compact tensor of at most `PINNED_SCALAR_BYTES` through the runtime's
+/// pinned staging slot.
 fn download_scalar<T: CubeElement + TensorScalar + Clone + 'static>(
     rt: &CudaRuntime,
     typed: &TypedTensor<T>,
@@ -144,10 +145,13 @@ fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
         );
     }
 
-    // Scalar fast path. A Krylov loop reads back one reduction result per
-    // iteration, and the general path below pays a device-wide synchronize
-    // plus CubeCL's pageable staging for those 8-16 bytes. Copy them through
-    // the runtime's pinned slot instead and synchronize only this stream.
+    // Small-payload fast path. A Krylov loop reads back one reduction result
+    // per iteration. Both this path and the general one below synchronize the
+    // same single stream, so the saving is in staging, not in the barrier:
+    // CubeCL's `read_one` allocates and copies through pageable host memory,
+    // while this copies those 8-16 bytes through the runtime's pinned slot.
+    // The gate is a byte length, so a short vector takes it too, not only a
+    // scalar.
     let byte_len = typed
         .n_elements()
         .checked_mul(size_of::<T>())

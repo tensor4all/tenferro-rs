@@ -795,7 +795,9 @@ impl CudaRuntimeState {
         let src = super::interop::cuda_device_ptr_from_addr(device_addr, op)?;
         // SAFETY: `slot.ptr` is a live pinned allocation of PINNED_SCALAR_BYTES
         // bytes, `out.len()` is validated above, and the mutex guard keeps the
-        // slot exclusive until the stream synchronization below completes.
+        // slot exclusive until the stream synchronization below completes. If
+        // that synchronization fails the slot is abandoned rather than reused,
+        // so exclusivity never depends on an unproven barrier.
         let staging = unsafe { std::slice::from_raw_parts_mut(slot.ptr.cast::<u8>(), out.len()) };
         // SAFETY: `src` is a residency-checked device address owned by this
         // runtime and the copy length equals the destination slice length.
@@ -803,10 +805,16 @@ impl CudaRuntimeState {
             .map_err(|err| crate::Error::backend_source(op, err))?;
         // SAFETY: `stream` is the memoized CubeCL stream the copy was enqueued on.
         if let Err(err) = unsafe { cuda_result::stream::synchronize(stream) } {
-            // The stream did not provide a proven completion barrier. Keep the
-            // source allocation alive rather than letting an async copy or the
-            // preceding scalar-producing kernel race reclamation.
+            // The stream did not provide a proven completion barrier, so the
+            // device-to-host copy may still be in flight. Keep the source
+            // allocation alive rather than letting that copy or the preceding
+            // scalar-producing kernel race reclamation, and abandon the pinned
+            // staging slot for the same reason: no later download may reuse a
+            // destination the device might still write, and `Drop` must not
+            // `cudaFreeHost` it. Both leaks are bounded and the next call
+            // allocates a fresh slot.
             std::mem::forget(retained);
+            slot.ptr = std::ptr::null_mut();
             return Err(crate::Error::backend_source(op, err));
         }
         out.copy_from_slice(staging);
