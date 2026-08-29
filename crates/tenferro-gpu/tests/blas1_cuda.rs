@@ -6,7 +6,9 @@
 //! [`CudaBackend`] bypass the generic `dot_general`/elementwise composition and
 //! call cuBLAS directly. These tests pin the numerics against the CPU backend,
 //! which keeps the composed reference semantics. They are no-ops on machines
-//! without an available CUDA device.
+//! without an available CUDA device, and report the same `ok` when they skip as
+//! when they pass, so set `TENFERRO_REQUIRE_GPU=1` wherever a device is
+//! expected to turn that silent skip into a failure.
 //!
 //! The conjugation convention in `vdot_read` is the reason this file exists: a
 //! `dotu`-for-`dotc` slip is invisible on real inputs and silently wrong on the
@@ -41,6 +43,17 @@ fn sample(len: usize, seed: f64) -> Tensor {
 
 fn backends() -> Option<(CudaBackend, CpuBackend)> {
     if !gpu_available() {
+        // Every case below returns without asserting anything when this is
+        // `None`, and the harness still prints `ok`. A green run therefore
+        // means nothing unless the reader independently knows a device was
+        // visible. On a machine that is supposed to have one, say so and let
+        // the absence fail loudly instead.
+        assert!(
+            std::env::var_os("TENFERRO_REQUIRE_GPU").is_none(),
+            "TENFERRO_REQUIRE_GPU is set but no CUDA device is available: this \
+             hardware parity gate would have reported success without executing \
+             a single cuBLAS call"
+        );
         return None;
     }
     let cuda = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
@@ -237,6 +250,198 @@ fn transposed_host_view(tensor: &Tensor) -> TensorRead<'_> {
     )
     .unwrap();
     TensorRead::from_view(TensorView::C64(view))
+}
+
+/// The middle three elements of a length-5 buffer: compact, but starting at a
+/// nonzero offset, which is the layout a Krylov basis slice has.
+fn offset_host_view(tensor: &Tensor) -> TensorRead<'_> {
+    let view = TypedTensorView::from_slice(
+        vec![3],
+        vec![1_isize],
+        1,
+        tensor.as_slice::<Complex64>().unwrap(),
+    )
+    .unwrap();
+    TensorRead::from_view(TensorView::C64(view))
+}
+
+fn offset_device_view(tensor: &Tensor) -> TensorRead<'_> {
+    let Tensor::C64(typed) = tensor else {
+        panic!("blas1 parity tests use C64 tensors")
+    };
+    let view = typed.backend_region_view(vec![3], vec![1], 1).unwrap();
+    TensorRead::from_view(TensorView::C64(view))
+}
+
+/// A `[4, 3]` column-major buffer of distinct complex entries, seeded so two
+/// such buffers cannot accidentally agree.
+fn grid(seed: f64) -> Tensor {
+    Tensor::from_vec_col_major(
+        vec![4, 3],
+        (0..12)
+            .map(|i| {
+                let x = i as f64;
+                c64(seed + 0.5 * x, 1.0 - 0.25 * x - seed)
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn cuda_vdot_accepts_two_strided_operands() {
+    let Some((mut cuda, mut cpu)) = backends() else {
+        return;
+    };
+
+    // The existing strided case leaves the right operand owned and compact, so
+    // it cannot catch a materialization that only ever runs on the left slot.
+    let host_lhs = grid(0.25);
+    let host_rhs = grid(-1.5);
+
+    let expected = cpu
+        .vdot_read(
+            transposed_host_view(&host_lhs),
+            transposed_host_view(&host_rhs),
+        )
+        .unwrap();
+
+    let lhs = upload_tensor(cuda.runtime(), &host_lhs).unwrap();
+    let rhs = upload_tensor(cuda.runtime(), &host_rhs).unwrap();
+    let got = cuda
+        .vdot_read(
+            transposed_device_view(&lhs),
+            transposed_device_view(&rhs),
+        )
+        .unwrap();
+    let got = download_tensor(cuda.runtime(), &got).unwrap();
+
+    assert_close_c64(&got, &expected, "vdot both operands transposed");
+
+    // The convention again, independently: transposing both operands must not
+    // silently cancel a conjugation error the way matched layouts can.
+    let lhs_elems = host_lhs.as_slice::<Complex64>().unwrap();
+    let rhs_elems = host_rhs.as_slice::<Complex64>().unwrap();
+    let mut manual = c64(0.0, 0.0);
+    for row in 0..3 {
+        for col in 0..4 {
+            let index = row * 4 + col;
+            manual += lhs_elems[index].conj() * rhs_elems[index];
+        }
+    }
+    let got = got.as_slice::<Complex64>().unwrap()[0];
+    assert!(
+        (got - manual).norm() <= 1e-12 * (1.0 + manual.norm()),
+        "vdot both transposed is {got} but sum(conj(l)*r) is {manual}"
+    );
+}
+
+#[test]
+fn cuda_axpby_accepts_a_non_contiguous_read() {
+    let Some((mut cuda, mut cpu)) = backends() else {
+        return;
+    };
+
+    // `axpby` requires a compact destination, so only the read slot can be
+    // strided. That slot has no coverage otherwise: the offset-view case is
+    // compact, and the length-swept case is owned.
+    let alpha = ContractionScalar::C64(c64(0.75, -1.25));
+    let beta = ContractionScalar::C64(c64(-0.5, 2.0));
+
+    let host_x = grid(0.5);
+    let host_y = Tensor::from_vec_col_major(
+        vec![3, 4],
+        (0..12)
+            .map(|i| c64(2.0 - 0.125 * i as f64, 0.5 + 0.375 * i as f64))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+
+    let mut expected = host_y.duplicate().unwrap();
+    cpu.axpby_read_into_accum(
+        alpha,
+        transposed_host_view(&host_x),
+        beta,
+        TensorWrite::from_tensor(&mut expected),
+    )
+    .unwrap();
+
+    let x = upload_tensor(cuda.runtime(), &host_x).unwrap();
+    let mut y = upload_tensor(cuda.runtime(), &host_y).unwrap();
+    cuda.axpby_read_into_accum(
+        alpha,
+        transposed_device_view(&x),
+        beta,
+        TensorWrite::from_tensor(&mut y),
+    )
+    .unwrap();
+    let got = download_tensor(cuda.runtime(), &y).unwrap();
+
+    assert_close_c64(&got, &expected, "axpby transposed read");
+}
+
+#[test]
+fn cuda_reductions_accept_compact_views_with_offsets() {
+    let Some((mut cuda, mut cpu)) = backends() else {
+        return;
+    };
+
+    // A compact view at a nonzero offset is the shape a Krylov basis slice
+    // takes. It is contiguous, so it skips the materialization path and hands
+    // cuBLAS an offset pointer directly: the arithmetic that offset needs is
+    // what this pins. The sentinel ends must not enter either result.
+    let host = Tensor::from_vec_col_major(
+        vec![5],
+        vec![
+            c64(99.0, -99.0),
+            c64(1.0, 2.0),
+            c64(-3.0, 4.0),
+            c64(0.5, -1.5),
+            c64(98.0, -98.0),
+        ],
+    )
+    .unwrap();
+    let host_other = Tensor::from_vec_col_major(
+        vec![5],
+        vec![
+            c64(-97.0, 97.0),
+            c64(2.0, -0.5),
+            c64(1.5, 3.0),
+            c64(-2.5, 0.25),
+            c64(-96.0, 96.0),
+        ],
+    )
+    .unwrap();
+
+    let expected_dot = cpu
+        .vdot_read(offset_host_view(&host), offset_host_view(&host_other))
+        .unwrap();
+    let expected_norm = cpu.norm_squared_read(offset_host_view(&host)).unwrap();
+
+    let device = upload_tensor(cuda.runtime(), &host).unwrap();
+    let device_other = upload_tensor(cuda.runtime(), &host_other).unwrap();
+
+    let dot = cuda
+        .vdot_read(
+            offset_device_view(&device),
+            offset_device_view(&device_other),
+        )
+        .unwrap();
+    let dot = download_tensor(cuda.runtime(), &dot).unwrap();
+    assert_close_c64(&dot, &expected_dot, "vdot compact offset view");
+
+    let norm = cuda.norm_squared_read(offset_device_view(&device)).unwrap();
+    let norm = download_tensor(cuda.runtime(), &norm).unwrap();
+    assert_close_f64(&norm, &expected_norm, "norm_squared compact offset view");
+
+    // A wrong offset would fold a sentinel in; both results are far too small
+    // for that to hide inside the tolerance above.
+    let norm = norm.as_slice::<f64>().unwrap()[0];
+    assert!(
+        norm < 100.0,
+        "norm_squared over the offset slice is {norm}, which means a sentinel \
+         element outside the view was read"
+    );
 }
 
 #[test]

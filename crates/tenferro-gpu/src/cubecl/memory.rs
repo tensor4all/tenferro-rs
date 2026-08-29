@@ -146,12 +146,13 @@ fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
     }
 
     // Small-payload fast path. A Krylov loop reads back one reduction result
-    // per iteration. Both this path and the general one below synchronize the
-    // same single stream, so the saving is in staging, not in the barrier:
-    // CubeCL's `read_one` allocates and copies through pageable host memory,
-    // while this copies those 8-16 bytes through the runtime's pinned slot.
-    // The gate is a byte length, so a short vector takes it too, not only a
-    // scalar.
+    // per iteration. CubeCL's `read_one` already stages through pinned memory,
+    // so this is not a pageable-to-pinned conversion; what it avoids is
+    // CubeCL's staging-reservation machinery and one of two barriers. The
+    // general path below synchronizes the stream and then lets `read_one` wait
+    // on its own fence after the copy, while this issues the copy and waits
+    // once. Neither path synchronizes the device. The gate is a byte length, so
+    // a short vector takes it too, not only a scalar.
     let byte_len = typed
         .n_elements()
         .checked_mul(size_of::<T>())

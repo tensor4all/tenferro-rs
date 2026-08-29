@@ -795,24 +795,24 @@ impl CudaRuntimeState {
         let src = super::interop::cuda_device_ptr_from_addr(device_addr, op)?;
         // SAFETY: `slot.ptr` is a live pinned allocation of PINNED_SCALAR_BYTES
         // bytes, `out.len()` is validated above, and the mutex guard keeps the
-        // slot exclusive until the stream synchronization below completes. If
-        // that synchronization fails the slot is abandoned rather than reused,
-        // so exclusivity never depends on an unproven barrier.
+        // slot exclusive until the copy below is known to have completed. Every
+        // exit that cannot prove completion abandons the slot instead of
+        // returning it, so exclusivity never rests on an unproven barrier.
         let staging = unsafe { std::slice::from_raw_parts_mut(slot.ptr.cast::<u8>(), out.len()) };
+        // Neither submitting the copy nor waiting on it proves the device is
+        // done with `staging` and `retained` once it reports an error: an async
+        // CUDA call can surface a failure from an earlier launch on the stream,
+        // so a non-success return says nothing about what is still running.
+        // Both paths therefore leak the source allocation and abandon the
+        // staging slot rather than let a later download reuse a destination the
+        // device may still write, or let `Drop` `cudaFreeHost` it. Each failure
+        // leaks one slot and one handle; the next call allocates fresh ones.
         // SAFETY: `src` is a residency-checked device address owned by this
-        // runtime and the copy length equals the destination slice length.
-        unsafe { cuda_result::memcpy_dtoh_async(staging, src, stream) }
-            .map_err(|err| crate::Error::backend_source(op, err))?;
-        // SAFETY: `stream` is the memoized CubeCL stream the copy was enqueued on.
-        if let Err(err) = unsafe { cuda_result::stream::synchronize(stream) } {
-            // The stream did not provide a proven completion barrier, so the
-            // device-to-host copy may still be in flight. Keep the source
-            // allocation alive rather than letting that copy or the preceding
-            // scalar-producing kernel race reclamation, and abandon the pinned
-            // staging slot for the same reason: no later download may reuse a
-            // destination the device might still write, and `Drop` must not
-            // `cudaFreeHost` it. Both leaks are bounded and the next call
-            // allocates a fresh slot.
+        // runtime, the copy length equals the destination slice length, and
+        // `stream` is the memoized CubeCL stream the copy is enqueued on.
+        let completed = unsafe { cuda_result::memcpy_dtoh_async(staging, src, stream) }
+            .and_then(|()| unsafe { cuda_result::stream::synchronize(stream) });
+        if let Err(err) = completed {
             std::mem::forget(retained);
             slot.ptr = std::ptr::null_mut();
             return Err(crate::Error::backend_source(op, err));
