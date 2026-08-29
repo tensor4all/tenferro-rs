@@ -205,6 +205,10 @@ session, so it is not owned by the cached plan entry. The CUDA provider first
 uses default soname/path candidates and allows explicit override with these
 variables:
 
+The cuTENSOR loader rejects version 2.2 and newer on SM 7.0 before creating a
+handle. PR #1733 reproduced silent wrong results for that combination, so
+cuTENSOR 2.1.x remains the supported Volta path.
+
 | Variable | Library |
 | --- | --- |
 | `TENFERRO_CUTENSOR_PATH` | cuTENSOR |

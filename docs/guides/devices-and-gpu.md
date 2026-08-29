@@ -171,6 +171,10 @@ CUDA operations implemented through NVIDIA libraries return typed load or
 provider errors when the required library is missing. They do not silently use
 a slower native CubeCL kernel as a CUDA fallback.
 
+On compute capability 7.0, select cuTENSOR 2.1.x with
+`TENFERRO_CUTENSOR_PATH`. tenferro rejects cuTENSOR 2.2 and newer because that
+combination has returned success with incorrect results.
+
 For XLA/PJRT GPU verification, add the PJRT plugin path separately:
 
 ```bash
