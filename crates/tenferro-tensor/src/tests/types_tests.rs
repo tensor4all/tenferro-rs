@@ -753,6 +753,23 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
     assert!(col_err
         .to_string()
         .contains("backend buffers cannot be exported"));
+
+    let tensor = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(43, 2))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+            cpu_affinity: None,
+        },
+    )
+    .unwrap();
+    let parts_err = tensor.into_parts().unwrap_err();
+
+    assert!(matches!(parts_err, Error::RuntimeState { .. }));
 }
 
 #[test]

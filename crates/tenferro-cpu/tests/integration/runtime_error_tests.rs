@@ -312,6 +312,29 @@ fn cpu_reductions_use_common_empty_axes_validation_helpers() {
 }
 
 #[test]
+fn integer_reductions_record_the_delegated_wrapping_contract() {
+    let reduction = include_str!("../../src/reduction.rs");
+
+    for (start, end, operation) in [
+        (
+            "fn typed_reduce_sum_wrapping",
+            "pub(crate) fn typed_reduce_prod",
+            "wrapping_add",
+        ),
+        (
+            "fn typed_reduce_prod_wrapping",
+            "pub fn typed_reduce_max",
+            "wrapping_mul",
+        ),
+    ] {
+        let section = source_section(reduction, start, end);
+        assert!(section.contains("// INVARIANT:"));
+        assert!(section.contains("pinned strided-kernel"));
+        assert!(section.contains(operation));
+    }
+}
+
+#[test]
 fn cpu_backend_with_threads_rejects_zero_without_panicking() {
     let err = match CpuBackend::with_threads(0) {
         Ok(_) => panic!("zero threads should be rejected"),

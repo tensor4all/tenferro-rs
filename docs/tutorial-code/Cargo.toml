@@ -170,6 +170,11 @@ name = "cuda_tutorial"
 path = "src/bin/cuda_tutorial.rs"
 required-features = ["cuda"]
 
+[[bin]]
+name = "custom_cuda_kernels"
+path = "src/bin/custom_cuda_kernels.rs"
+required-features = ["cuda"]
+
 [[test]]
 name = "tutorial_binaries"
 path = "tests/tutorial_binaries.rs"

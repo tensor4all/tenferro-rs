@@ -11,11 +11,13 @@ cheatsheet](api-cheatsheet.md#direct-concrete-tensors).
 
 ## Einsum syntax
 
-Use the explicit arrow in every equation: `"ij,jk->ik"`. Flat notation
+**Warning:** use the explicit arrow in every equation: `"ij,jk->ik"`.
+Omitting it returns `Error::InvalidSubscripts` during parsing. Flat notation
 supports one right-aligned, broadcastable `...` ellipsis per term, and
-`EinsumNotation` is the programmatic form. Parenthesized ellipsis remains
-unsupported; `"i->ii"` is a tenferro extension rather than a general NumPy
-spelling. Read the `tenferro-einsum` guide before porting a large equation.
+`EinsumNotation` is the programmatic form. Parenthesized contraction order
+containing ellipsis is also rejected during parsing; `"i->ii"` is a tenferro
+extension rather than a general NumPy spelling. Read the `tenferro-einsum`
+guide before porting a large equation.
 
 ## Extension registration
 
@@ -72,8 +74,10 @@ Same traps, keyed by the priors you arrived with.
 
 - Trace one level of `?`: traced operators return `Result`; `a.matmul(&b)` is
   a `Result`, unlike `torch.matmul` / `jnp.matmul`.
-- Einsum needs the explicit arrow; flat `...` ellipsis is supported, while
-  parenthesized ellipsis is deferred (see [Einsum syntax](#einsum-syntax)).
+- Einsum needs the explicit arrow; omitting it is a parse-time
+  `Error::InvalidSubscripts`. Flat `...` ellipsis is supported, while
+  parenthesized ellipsis is rejected during parsing (see
+  [Einsum syntax](#einsum-syntax)).
 - The backend is not ambient: eager code must own an `EagerRuntime`, traced
   code must register an engine plus extension modules (see
   [Extension registration](#extension-registration)).

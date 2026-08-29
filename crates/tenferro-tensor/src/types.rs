@@ -6904,13 +6904,21 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::{StorageBuffer, TypedTensor};
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    /// let (buffer, layout, placement) = t.into_parts();
+    /// # fn main() -> tenferro_tensor::Result<()> {
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// let (buffer, layout, placement) = t.into_parts()?;
     /// assert!(matches!(buffer, StorageBuffer::Host(_)));
     /// assert_eq!(layout.shape(), &[2]);
     /// assert!(placement.device.is_none());
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn into_parts(self) -> (StorageBuffer<T>, TensorLayout<R>, Placement)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before extracting host storage.
+    pub fn into_parts(self) -> crate::Result<(StorageBuffer<T>, TensorLayout<R>, Placement)>
     where
         T: TensorScalar,
     {
@@ -6920,11 +6928,8 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             placement,
             ..
         } = self;
-        let buffer = match group.into_host_vec::<T>() {
-            Ok(data) => StorageBuffer::Host(data),
-            Err(_) => StorageBuffer::Host(Vec::new()),
-        };
-        (buffer, layout, placement)
+        let data = group.into_host_vec::<T>()?;
+        Ok((StorageBuffer::Host(data), layout, placement))
     }
 }
 
@@ -8192,8 +8197,8 @@ impl Tensor {
     }
 }
 
-// Kept for crate-local layout tests while tensor indexing helpers remain split
-// across tensor and CPU crates.
+// INVARIANT: retained for crate-local layout tests while tensor indexing
+// helpers remain split across the tensor and CPU crates.
 #[allow(dead_code)]
 pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize]) {
     for i in 0..shape.len() {

@@ -85,6 +85,6 @@ Callers upload CPU tensors before CUDA backend execution and download CUDA
 tensors before CPU execution or host value inspection.
 
 Result-returning backend APIs report placement mismatches with
-`BackendFailure` diagnostics. Direct host-inspection methods that return
-slices, such as `TypedTensor::host_data()`, may panic on backend buffers because
-they cannot return a `Result`.
+`BackendFailure` diagnostics. Direct host-inspection methods such as
+`TypedTensor::host_data()` and `host_data_mut()` return `Result` and report
+backend buffers as runtime-state failures.
