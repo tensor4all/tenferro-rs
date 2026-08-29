@@ -309,10 +309,7 @@ fn cuda_vdot_accepts_two_strided_operands() {
     let lhs = upload_tensor(cuda.runtime(), &host_lhs).unwrap();
     let rhs = upload_tensor(cuda.runtime(), &host_rhs).unwrap();
     let got = cuda
-        .vdot_read(
-            transposed_device_view(&lhs),
-            transposed_device_view(&rhs),
-        )
+        .vdot_read(transposed_device_view(&lhs), transposed_device_view(&rhs))
         .unwrap();
     let got = download_tensor(cuda.runtime(), &got).unwrap();
 
