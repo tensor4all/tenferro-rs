@@ -19,11 +19,11 @@ fn cutensor_loader_missing_library_is_typed_io_error() {
 }
 
 #[test]
-fn cutensor_volta_support_matches_vendor_version_boundary() {
+fn cutensor_sm70_guard_uses_reproduced_version_boundary() {
     let volta = super::CudaComputeCapability { major: 7, minor: 0 };
     let turing = super::CudaComputeCapability { major: 7, minor: 5 };
 
-    super::validate_device_support(20_100, volta).unwrap();
+    super::validate_device_support(20_199, volta).unwrap();
     super::validate_device_support(20_200, turing).unwrap();
 
     let error = super::validate_device_support(20_200, volta).unwrap_err();
@@ -31,4 +31,9 @@ fn cutensor_volta_support_matches_vendor_version_boundary() {
     assert!(error
         .to_string()
         .contains("cuTENSOR 2.2.0 is unsupported by tenferro on SM 7.0"));
+    assert!(matches!(
+        &error,
+        crate::Error::Extension { source, .. }
+            if source.downcast_ref::<super::CutensorArchitectureError>().is_some()
+    ));
 }
