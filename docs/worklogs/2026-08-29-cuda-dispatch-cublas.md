@@ -12,9 +12,10 @@ cuTENSOR plan one lazy workspace per physical stream, and retires all relevant
 streams before releasing resources.
 
 The complex zero-fill workaround was removed. CubeCL PR #17 fixes complex cast
-lowering at the emitter and this PR pins that fix. The independently observed
-cuTENSOR/Volta wrong-result boundary is handled separately by tenferro PR
-#1734.
+lowering at the emitter and this PR pins that fix. CubeK PR #12 advances its
+CubeCL pins to the same revision so workspace feature unions use one compatible
+type universe. The independently observed cuTENSOR/Volta wrong-result boundary
+is handled separately by tenferro PR #1734.
 
 ## Context read
 

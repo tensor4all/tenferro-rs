@@ -206,7 +206,7 @@ struct CudaRuntimeState {
     // Memoized raw CUDA stream handles keyed by the bounded CubeCL stream-pool
     // slot, not the process-global and monotonically increasing `StreamId`.
     //
-    // INVARIANT: in pinned CubeCL rev f274a76, the CUDA server maps each
+    // INVARIANT: in pinned CubeCL rev 5939d8e, the CUDA server maps each
     // `StreamId` to a fixed `StreamPool` slot whose `CUstream` is created once
     // and never destroyed or replaced while the server is alive, and the
     // server outlives the `ComputeClient` clone owned by this state. The table
