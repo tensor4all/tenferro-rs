@@ -107,6 +107,14 @@ name = "integration"
 path = "tests/integration.rs"
 
 [[test]]
+name = "blas1_thread_counts"
+path = "tests/blas1_thread_counts.rs"
+
+[[test]]
+name = "blas1_pool_aliasing"
+path = "tests/blas1_pool_aliasing.rs"
+
+[[test]]
 name = "install_allocation_tests"
 path = "tests/install_allocation_tests/main.rs"
 required-features = ["cpu-faer"]
