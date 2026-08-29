@@ -10,7 +10,7 @@ use num_complex::Complex64;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::backend::BackendSessionHost;
-use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorView, TypedTensorView};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 fn sample(len: usize) -> Vec<Complex64> {
     (0..len)
@@ -61,10 +61,7 @@ fn vdot_and_norm_squared_hold_across_thread_counts_and_lengths() {
             // Owned operands.
             let dot = backend
                 .with_backend_session(|session| {
-                    session.vdot_read(
-                        TensorRead::from_tensor(&lhs),
-                        TensorRead::from_tensor(&rhs),
-                    )
+                    session.vdot_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
                 })
                 .unwrap();
             let dot = dot.as_slice::<Complex64>().unwrap()[0];

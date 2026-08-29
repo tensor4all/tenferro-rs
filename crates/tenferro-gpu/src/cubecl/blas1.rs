@@ -39,12 +39,13 @@ use tenferro_tensor::backend::{
 use tenferro_tensor::{ContractionScalar, DType, TensorRead, TensorWrite};
 
 use super::dispatch::{
-    alloc_output, ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    alloc_output, cubecl_buffer, cubecl_view_buffer, cubecl_view_mut_buffer,
+    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
     ensure_view_resident_on_runtime, prepared_view_access, prepared_view_mut_access,
 };
 use super::error::unsupported_dtype;
 use super::gemm::typed_device_ptr;
-use super::interop::{cuda_device_ptr_from_addr, upload_typed_tensor};
+use super::interop::{alloc_zero_output, cuda_device_ptr_from_addr};
 use super::runtime::check_cublas;
 use super::{CudaBackend, CudaRuntime};
 use crate::backend::TensorStructural;
@@ -70,9 +71,24 @@ pub(super) fn vdot_read(
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     validate_vdot_read(&lhs, &rhs)?;
-    let lhs = DeviceContiguous::prepare(backend, lhs)?;
-    let rhs = DeviceContiguous::prepare(backend, rhs)?;
-    let (lhs, rhs) = (lhs.read(), rhs.read());
+    let lhs_materialized = if lhs.is_col_major_contiguous()? {
+        None
+    } else {
+        Some(Box::new(backend.to_contiguous_read(lhs.clone())?))
+    };
+    let rhs_materialized = if rhs.is_col_major_contiguous()? {
+        None
+    } else {
+        Some(Box::new(backend.to_contiguous_read(rhs.clone())?))
+    };
+    let lhs = lhs_materialized
+        .as_deref()
+        .map(TensorRead::from_tensor)
+        .unwrap_or(lhs);
+    let rhs = rhs_materialized
+        .as_deref()
+        .map(TensorRead::from_tensor)
+        .unwrap_or(rhs);
     match lhs.dtype() {
         DType::F32 => vdot_typed::<f32>(backend, &lhs, &rhs),
         DType::F64 => vdot_typed::<f64>(backend, &lhs, &rhs),
@@ -96,8 +112,15 @@ pub(super) fn norm_squared_read(
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     validate_norm_squared_read(&input)?;
-    let input = DeviceContiguous::prepare(backend, input)?;
-    let input = input.read();
+    let materialized = if input.is_col_major_contiguous()? {
+        None
+    } else {
+        Some(Box::new(backend.to_contiguous_read(input.clone())?))
+    };
+    let input = materialized
+        .as_deref()
+        .map(TensorRead::from_tensor)
+        .unwrap_or(input);
     match input.dtype() {
         DType::F32 => norm_squared_typed::<f32>(backend, &input),
         DType::F64 => norm_squared_typed::<f64>(backend, &input),
@@ -124,8 +147,15 @@ pub(super) fn axpby_read_into_accum(
     mut y: TensorWrite<'_>,
 ) -> crate::Result<()> {
     validate_axpby_read_into_accum(alpha, &x, beta, &y)?;
-    let x = DeviceContiguous::prepare(backend, x)?;
-    let x = x.read();
+    let materialized = if x.is_col_major_contiguous()? {
+        None
+    } else {
+        Some(Box::new(backend.to_contiguous_read(x.clone())?))
+    };
+    let x = materialized
+        .as_deref()
+        .map(TensorRead::from_tensor)
+        .unwrap_or(x);
     match x.dtype() {
         DType::F32 => axpby_typed::<f32>(backend, alpha, &x, beta, &mut y),
         DType::F64 => axpby_typed::<f64>(backend, alpha, &x, beta, &mut y),
@@ -133,35 +163,6 @@ pub(super) fn axpby_read_into_accum(
         DType::C64 => axpby_typed::<Complex64>(backend, alpha, &x, beta, &mut y),
         // INVARIANT: shared validation restricts the dtype to F32/F64/C32/C64.
         dtype => Err(unsupported_dtype(AXPBY_OP, dtype)),
-    }
-}
-
-/// A borrowed read that is proven column-major contiguous on the device.
-///
-/// Non-contiguous inputs are canonicalized once through the backend's
-/// same-placement `to_contiguous_read` path; the materialized tensor is owned
-/// here so its device allocation outlives the enqueued cuBLAS call site.
-enum DeviceContiguous<'a> {
-    Borrowed(TensorRead<'a>),
-    Materialized(Tensor),
-}
-
-impl<'a> DeviceContiguous<'a> {
-    fn prepare(backend: &mut CudaBackend, read: TensorRead<'a>) -> crate::Result<Self> {
-        if read.is_col_major_contiguous()? {
-            Ok(Self::Borrowed(read))
-        } else {
-            // Same-placement canonicalization on the device; the typed source
-            // error (residency, dtype, allocation) propagates unchanged.
-            Ok(Self::Materialized(backend.to_contiguous_read(read)?))
-        }
-    }
-
-    fn read(&self) -> TensorRead<'_> {
-        match self {
-            Self::Borrowed(read) => read.clone(),
-            Self::Materialized(tensor) => TensorRead::from_tensor(tensor),
-        }
     }
 }
 
@@ -188,11 +189,18 @@ impl<T: TensorScalar + 'static> ReadRef<'_, '_, T> {
 
     fn device_ptr(&self, rt: &CudaRuntime, op: &'static str) -> crate::Result<*mut c_void> {
         match self {
-            Self::Owned(tensor) => typed_device_ptr(rt, tensor),
+            Self::Owned(tensor) => typed_device_ptr(rt, tensor, op),
             Self::View(view) => {
                 let prepared = prepared_view_access(view, op)?;
                 offset_device_ptr::<T>(rt, prepared, view.offset(), op)
             }
+        }
+    }
+
+    fn handle<'a>(&'a self, op: &'static str) -> crate::Result<&'a cubecl_runtime::server::Handle> {
+        match self {
+            Self::Owned(tensor) => Ok(cubecl_buffer(tensor, op)?.handle()),
+            Self::View(view) => Ok(cubecl_view_buffer(view, op)?.handle()),
         }
     }
 }
@@ -213,7 +221,7 @@ impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
 
     fn device_ptr(&mut self, rt: &CudaRuntime, op: &'static str) -> crate::Result<*mut c_void> {
         match self {
-            Self::Owned(tensor) => typed_device_ptr(rt, tensor),
+            Self::Owned(tensor) => typed_device_ptr(rt, tensor, op),
             Self::View(view) => {
                 let offset = view.offset();
                 let prepared = prepared_view_mut_access(view, op)?;
@@ -221,6 +229,24 @@ impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
             }
         }
     }
+
+    fn handle<'a>(&'a self, op: &'static str) -> crate::Result<&'a cubecl_runtime::server::Handle> {
+        match self {
+            Self::Owned(tensor) => Ok(cubecl_buffer(tensor, op)?.handle()),
+            Self::View(view) => Ok(cubecl_view_mut_buffer(view, op)?.handle()),
+        }
+    }
+}
+
+fn cross_stream_handles<'a>(
+    rt: &CudaRuntime,
+    handles: impl IntoIterator<Item = &'a cubecl_runtime::server::Handle>,
+) -> Vec<cubecl_runtime::server::Handle> {
+    handles
+        .into_iter()
+        .filter(|handle| !rt.is_current_stream_slot(handle))
+        .cloned()
+        .collect()
 }
 
 /// Resolve a compact view region to `base + offset * size_of::<T>()`.
@@ -254,7 +280,9 @@ fn read_ref<'a, 'b, T: CublasScalar>(read: &'a TensorRead<'b>) -> Option<ReadRef
     }
 }
 
-fn write_ref<'a, 'b, T: CublasScalar>(write: &'a mut TensorWrite<'b>) -> Option<WriteRef<'a, 'b, T>> {
+fn write_ref<'a, 'b, T: CublasScalar>(
+    write: &'a mut TensorWrite<'b>,
+) -> Option<WriteRef<'a, 'b, T>> {
     match write {
         TensorWrite::Tensor(tensor) => T::unwrap_tensor_mut(tensor).map(WriteRef::Owned),
         TensorWrite::View(view) => T::unwrap_view_mut(view).map(WriteRef::View),
@@ -274,17 +302,6 @@ pub(super) fn blas1_len(n: usize, op: &'static str) -> crate::Result<i64> {
     })
 }
 
-fn set_pointer_mode(
-    handle: cublas::cublasHandle_t,
-    mode: cublas::cublasPointerMode_t,
-    op: &'static str,
-) -> crate::Result<()> {
-    // SAFETY: `handle` is a live handle owned by the runtime's per-stream cache.
-    check_cublas(op, "cublasSetPointerMode", unsafe {
-        cublas::cublasSetPointerMode_v2(handle, mode)
-    })
-}
-
 fn vdot_typed<T: CublasScalar>(
     backend: &CudaBackend,
     lhs: &TensorRead<'_>,
@@ -299,33 +316,34 @@ fn vdot_typed<T: CublasScalar>(
     rt.set_current_cuda_context(VDOT_OP)?;
     let len = lhs.n_elements();
     if len == 0 {
-        // Empty reduction: the rank-0 result is a semantic zero. This uploads
-        // the zero rather than calling `alloc_zero_output`, whose fill-zero
-        // kernel fails to compile for complex dtypes (CubeCL emits an invalid
-        // `cuDoubleComplex(uint32(0))` cast).
-        return Ok(T::wrap_tensor(upload_typed_tensor(
-            rt,
-            Vec::new(),
-            vec![T::default()],
-        )?));
+        return Ok(T::wrap_tensor(alloc_zero_output::<T>(rt, &[])?));
     }
     let out = alloc_output::<T>(rt, &[])?;
-    let out_ptr = typed_device_ptr(rt, &out)?;
+    let out_ptr = typed_device_ptr(rt, &out, VDOT_OP)?;
     let x = lhs.device_ptr(rt, VDOT_OP)?;
     let y = rhs.device_ptr(rt, VDOT_OP)?;
     let n = blas1_len(len, VDOT_OP)?;
-    let handle = rt.cublas_handle(VDOT_OP)?;
-    set_pointer_mode(
-        handle,
-        cublas::cublasPointerMode_t::CUBLAS_POINTER_MODE_DEVICE,
+    let cross_stream_handles = cross_stream_handles(
+        rt,
+        [
+            lhs.handle(VDOT_OP)?,
+            rhs.handle(VDOT_OP)?,
+            cubecl_buffer(&out, VDOT_OP)?.handle(),
+        ],
+    );
+    rt.with_cublas_handle(
         VDOT_OP,
+        cublas::cublasPointerMode_t::CUBLAS_POINTER_MODE_DEVICE,
+        cross_stream_handles,
+        |handle| {
+            // SAFETY: residency checks above tie `x`, `y`, and `out_ptr` to this
+            // runtime's device; shared validation proves compact spans of `n`
+            // elements and `out` is a fresh rank-0 allocation.
+            check_cublas(VDOT_OP, T::DOTC_NAME, unsafe {
+                T::dotc(handle, n, x, y, out_ptr)
+            })
+        },
     )?;
-    // SAFETY: residency checks above tie `x`, `y`, and `out_ptr` to this
-    // runtime's device; the shared validation proves both inputs are compact
-    // spans of exactly `n` elements and `out` is a fresh rank-0 allocation.
-    check_cublas(VDOT_OP, T::DOTC_NAME, unsafe {
-        T::dotc(handle, n, x, y, out_ptr)
-    })?;
     Ok(T::wrap_tensor(out))
 }
 
@@ -341,35 +359,38 @@ fn norm_squared_typed<T: CublasScalar>(
     rt.set_current_cuda_context(NORM_OP)?;
     let len = input.n_elements();
     if len == 0 {
-        // Empty reduction: see the note in `vdot_typed`.
-        return Ok(<T as CublasScalar>::Real::wrap_tensor(upload_typed_tensor(
-            rt,
-            Vec::new(),
-            vec![<T as CublasScalar>::Real::default()],
-        )?));
+        return Ok(<T as CublasScalar>::Real::wrap_tensor(alloc_zero_output::<
+            <T as CublasScalar>::Real,
+        >(rt, &[])?));
     }
     let out = alloc_output::<<T as CublasScalar>::Real>(rt, &[])?;
-    let out_ptr = typed_device_ptr(rt, &out)?;
+    let out_ptr = typed_device_ptr(rt, &out, NORM_OP)?;
     let x = input.device_ptr(rt, NORM_OP)?;
     let real_len = len.checked_mul(T::REAL_COMPONENTS).ok_or_else(|| {
         Error::invalid_argument(NORM_OP, "shape", "real component count overflows")
     })?;
     let n = blas1_len(real_len, NORM_OP)?;
-    let handle = rt.cublas_handle(NORM_OP)?;
-    set_pointer_mode(
-        handle,
-        cublas::cublasPointerMode_t::CUBLAS_POINTER_MODE_DEVICE,
+    let cross_stream_handles = cross_stream_handles(
+        rt,
+        [
+            input.handle(NORM_OP)?,
+            cubecl_buffer(&out, NORM_OP)?.handle(),
+        ],
+    );
+    rt.with_cublas_handle(
         NORM_OP,
+        cublas::cublasPointerMode_t::CUBLAS_POINTER_MODE_DEVICE,
+        cross_stream_handles,
+        |handle| {
+            // INVARIANT: `Complex32`/`Complex64` are `repr(C)` `[re, im]`
+            // pairs, so `2 * len` real components self-dot to `sum(|z|^2)`.
+            // SAFETY: residency checks tie `x`/`out_ptr` to this runtime; the
+            // spans hold `n` real components and one output scalar.
+            check_cublas(NORM_OP, <T as CublasScalar>::Real::DOT_NAME, unsafe {
+                <T as CublasScalar>::Real::dot(handle, n, x, x, out_ptr)
+            })
+        },
     )?;
-    // INVARIANT: `Complex32`/`Complex64` are `repr(C)` `[re, im]` pairs, so a
-    // compact complex span of `len` elements reinterprets as `2 * len` reals
-    // whose self-dot equals `sum(|z|^2)`; real dtypes reinterpret as themselves.
-    // SAFETY: residency checks above tie `x` and `out_ptr` to this runtime's
-    // device; the span holds exactly `n` real components and `out` is a fresh
-    // rank-0 allocation of the matching real dtype.
-    check_cublas(NORM_OP, <T as CublasScalar>::Real::DOT_NAME, unsafe {
-        <T as CublasScalar>::Real::dot(handle, n, x, x, out_ptr)
-    })?;
     Ok(<T as CublasScalar>::Real::wrap_tensor(out))
 }
 
@@ -400,21 +421,21 @@ fn axpby_typed<T: CublasScalar>(
     let x_ptr = x.device_ptr(rt, AXPBY_OP)?;
     let y_ptr = y.device_ptr(rt, AXPBY_OP)?;
     let n = blas1_len(len, AXPBY_OP)?;
-    let handle = rt.cublas_handle(AXPBY_OP)?;
-    set_pointer_mode(
-        handle,
-        cublas::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+    let cross_stream_handles = cross_stream_handles(rt, [x.handle(AXPBY_OP)?, y.handle(AXPBY_OP)?]);
+    rt.with_cublas_handle(
         AXPBY_OP,
+        cublas::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+        cross_stream_handles,
+        |handle| {
+            // SAFETY: residency checks tie both pointers to this runtime;
+            // shared validation proves compact same-shape, non-overlapping
+            // spans matching in-place geam (`C == B`, `ldb == ldc`). Host-mode
+            // coefficients are consumed synchronously during enqueue.
+            check_cublas(AXPBY_OP, T::GEAM_NAME, unsafe {
+                T::geam_accum(handle, n, &alpha, x_ptr, &beta, y_ptr)
+            })
+        },
     )?;
-    // SAFETY: residency checks above tie `x_ptr` and `y_ptr` to this runtime's
-    // device; shared validation proves compact same-shape spans of `n`
-    // elements, a compact injective destination, and x/y non-overlap, which
-    // matches the cuBLAS `geam` in-place contract (`C == B`, `ldb == ldc`).
-    // Host-mode coefficients are read at enqueue time from the live stack
-    // values `alpha` and `beta`.
-    check_cublas(AXPBY_OP, T::GEAM_NAME, unsafe {
-        T::geam_accum(handle, n, &alpha, x_ptr, &beta, y_ptr)
-    })?;
     Ok(())
 }
 
@@ -646,4 +667,3 @@ impl CublasRealScalar for f64 {
         <f64 as CublasScalar>::dotc(handle, n, x, y, result)
     }
 }
-

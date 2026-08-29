@@ -1200,8 +1200,8 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         "gemm::typed_device_ptr",
         gemm_ptr,
         &[
-            "ensure_resident_on_runtime(rt, tensor, OP)?;",
-            "let prepared = prepared_tensor_access(tensor, OP)?;",
+            "ensure_resident_on_runtime(rt, tensor, op)?;",
+            "let prepared = prepared_tensor_access(tensor, op)?;",
             "let handle = prepared.into_handle();",
             ".get_resource(handle)",
         ],
@@ -1437,7 +1437,7 @@ fn cubecl_scatter_reports_unsupported_integer_operand_dtypes() {
 }
 
 #[test]
-fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
+fn cubecl_runtime_initializes_context_before_client_and_retires_streams_on_drop() {
     let runtime_source = cubecl_source("runtime.rs");
     let new_source = source_section(
         &runtime_source,
@@ -1463,8 +1463,8 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
         "CudaRuntime::drop",
         drop_source,
         &[
-            "if let Err(err) = self.synchronize()",
-            "report_cuda_runtime_drop_error(&err);",
+            "if self.retire_initialized_streams()",
+            "self.release_cuda_library_resources();",
         ],
     );
 }

@@ -94,6 +94,19 @@ fn plan_cache_retained_bytes_track_insert_and_evict() {
 }
 
 #[test]
+fn plan_cache_retained_bytes_include_lazy_value_allocations() {
+    let base = std::mem::size_of::<TestCache>();
+    let mut cache = cache_with(2);
+    insert(&mut cache, 1, vec![1], "a", 10);
+
+    assert!(cache.add_retained_bytes(1, |stored| stored == &[1], 7));
+    assert_eq!(cache.retained_bytes(), base + 17);
+    assert!(!cache.add_retained_bytes(2, |_| true, 5));
+    assert!(!cache.add_retained_bytes(1, |stored| stored == &[2], 5));
+    assert_eq!(cache.stats().retained_bytes, base + 17);
+}
+
+#[test]
 fn plan_cache_hash_collision_replaces_entry() {
     let mut cache = cache_with(4);
     insert(&mut cache, 7, vec![1], "a", 10);

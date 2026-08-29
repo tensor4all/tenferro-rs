@@ -67,7 +67,7 @@ cubecl-wgpu = { workspace = true, optional = true }
 cubek-matmul = { workspace = true, optional = true }
 cubek-std = { workspace = true, optional = true }
 cubek-fft = { workspace = true, optional = true }
-cudarc = { workspace = true, optional = true }
+cudarc = { workspace = true, optional = true, features = ["cublas"] }
 libloading.workspace = true
 lru = { workspace = true, optional = true }
 num-complex.workspace = true

@@ -96,6 +96,24 @@ impl<K, V> LruPlanCache<K, V> {
         matches(&entry.key).then_some(&entry.value)
     }
 
+    /// Add retained bytes lazily allocated by an existing cache value.
+    pub(super) fn add_retained_bytes(
+        &mut self,
+        hash: u64,
+        matches: impl FnOnce(&K) -> bool,
+        added: usize,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(&hash) else {
+            return false;
+        };
+        if !matches(&entry.key) {
+            return false;
+        }
+        entry.retained_bytes = entry.retained_bytes.saturating_add(added);
+        self.entry_retained_bytes = self.entry_retained_bytes.saturating_add(added);
+        true
+    }
+
     pub(super) fn max_entries(&self) -> NonZeroUsize {
         self.entries.cap()
     }

@@ -105,7 +105,7 @@ pub(crate) struct CubeclBuffer {
     allocation_id: AllocationId,
     // Memoized device address resolved by the first raw-FFI access.
     //
-    // INVARIANT: in pinned CubeCL rev 1c88bb6, a retained handle's memory
+    // INVARIANT: in pinned CubeCL rev f274a76, a retained handle's memory
     // slice keeps its storage offset (pool coalescing merges only free
     // slices) and its backing storage is never deallocated while any of its
     // slices is live, so the resolved address is stable for this buffer's
