@@ -796,7 +796,8 @@ impl CudaBackend {
         if let Some(handle) = self.inner.cutensor.get() {
             return Ok(handle);
         }
-        let handle = ffi::cutensor::CutensorHandle::load()?;
+        let handle =
+            ffi::cutensor::CutensorHandle::load(self.inner.rt.device_info().compute_capability())?;
         let _ = self.inner.cutensor.set(handle);
         self.inner.cutensor.get().ok_or_else(|| {
             crate::Error::runtime_state(
