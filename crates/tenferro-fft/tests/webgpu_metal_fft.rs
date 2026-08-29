@@ -1,7 +1,6 @@
 #[cfg(target_os = "macos")]
 mod metal {
     use num_complex::{Complex32, Complex64};
-    use tenferro_cpu::CpuBackend;
     use tenferro_fft::{FftNorm, TensorFftExt};
     use tenferro_gpu::{
         apple::AppleContext, webgpu::interop as webgpu_interop, webgpu::upload_webgpu_tensor,
