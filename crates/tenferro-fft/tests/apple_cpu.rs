@@ -51,26 +51,21 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
     assert_eq!(context.transfer_stats(), before);
 
     let host_f64 = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, -2.0, 0.5]).unwrap();
-    let (reference_spectrum, reference_round_trip) =
-        reference_cpu.with_backend_session(|session| {
-            let spectrum = host_f64
-                .rfft(Some(4), 0, FftNorm::Forward, session)
-                .unwrap();
-            let round_trip = spectrum
-                .irfft(Some(4), 0, FftNorm::Forward, session)
-                .unwrap();
-            (spectrum, round_trip)
-        });
+    let reference_round_trip = reference_cpu.with_backend_session(|session| {
+        host_f64
+            .rfft(Some(4), 0, FftNorm::Forward, session)
+            .unwrap()
+            .irfft(Some(4), 0, FftNorm::Forward, session)
+            .unwrap()
+    });
     let managed_f64 = context.upload_tensor(&host_f64).unwrap();
     let before = context.transfer_stats();
-    let (spectrum, round_trip) = apple_cpu.with_backend_session(|session| {
-        let spectrum = managed_f64
+    let round_trip = apple_cpu.with_backend_session(|session| {
+        managed_f64
             .rfft(Some(4), 0, FftNorm::Forward, session)
-            .unwrap();
-        let round_trip = spectrum
+            .unwrap()
             .irfft(Some(4), 0, FftNorm::Forward, session)
-            .unwrap();
-        (spectrum, round_trip)
+            .unwrap()
     });
     let Tensor::F64(round_trip) = round_trip else {
         panic!("expected F64 output")

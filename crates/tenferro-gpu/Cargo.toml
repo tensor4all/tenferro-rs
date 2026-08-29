@@ -32,6 +32,7 @@ blas-mkl = ["tenferro-cpu/blas-mkl"]
 cpu-reference = []
 cuda = [
     "dep:cubecl",
+    "dep:lru",
     "cubecl/std",
     "cubecl/stdlib",
     "cubecl/cuda",
@@ -66,8 +67,9 @@ cubecl-wgpu = { workspace = true, optional = true }
 cubek-matmul = { workspace = true, optional = true }
 cubek-std = { workspace = true, optional = true }
 cubek-fft = { workspace = true, optional = true }
-cudarc = { workspace = true, optional = true }
+cudarc = { workspace = true, optional = true, features = ["cublas"] }
 libloading.workspace = true
+lru = { workspace = true, optional = true }
 num-complex.workspace = true
 num-traits.workspace = true
 smallvec.workspace = true
@@ -85,6 +87,10 @@ required-features = ["cuda"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "blas1_cuda"
+path = "tests/blas1_cuda.rs"
 
 [[test]]
 name = "storage_provider_cuda_progress"

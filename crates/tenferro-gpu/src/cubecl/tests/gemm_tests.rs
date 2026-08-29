@@ -63,8 +63,8 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
         "second contraction must evict the first plan"
     );
 
-    // Eviction drops the first plan while its launch may still be queued. The
-    // pinned CubeCL CUDA allocator retires async frees on the owning stream.
+    // Eviction retires the workspace's owning stream before releasing its
+    // CubeCL allocation handle, so the first queued launch remains valid.
     gpu.runtime().synchronize().unwrap();
     assert_tensor_close(&download(&gpu, &actual_a), &expected_a, 1e-4);
     assert_tensor_close(&download(&gpu, &actual_b), &expected_b, 1e-4);

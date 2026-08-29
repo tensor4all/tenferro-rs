@@ -1194,14 +1194,14 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     let gemm_ptr = source_section(
         &gemm_source,
         "fn typed_device_ptr<T: TensorScalar + 'static>(",
-        "fn zero_alloc<T>",
+        "fn build_layout(",
     );
     assert_ordered_needles(
         "gemm::typed_device_ptr",
         gemm_ptr,
         &[
-            "ensure_resident_on_runtime(rt, tensor, OP)?;",
-            "let prepared = prepared_tensor_access(tensor, OP)?;",
+            "ensure_resident_on_runtime(rt, tensor, op)?;",
+            "let prepared = prepared_tensor_access(tensor, op)?;",
             "let handle = prepared.into_handle();",
             ".get_resource(handle)",
         ],
@@ -1437,7 +1437,7 @@ fn cubecl_scatter_reports_unsupported_integer_operand_dtypes() {
 }
 
 #[test]
-fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
+fn cubecl_runtime_initializes_context_before_client_and_retires_streams_on_drop() {
     let runtime_source = cubecl_source("runtime.rs");
     let new_source = source_section(
         &runtime_source,
@@ -1463,8 +1463,8 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
         "CudaRuntime::drop",
         drop_source,
         &[
-            "if let Err(err) = self.synchronize()",
-            "report_cuda_runtime_drop_error(&err);",
+            "if self.retire_initialized_streams()",
+            "self.release_cuda_library_resources();",
         ],
     );
 }
@@ -1472,22 +1472,27 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
 #[test]
 fn cubecl_gemm_zero_contracting_path_stays_device_native() {
     let gemm_source = cubecl_source("gemm.rs");
-    let zero_alloc_source = source_section(&gemm_source, "fn zero_alloc<", "fn build_layout<");
+    let alloc_path_source = source_section(
+        &gemm_source,
+        "fn dot_general_typed_with_conj<",
+        "fn cutensor_conj_op<",
+    );
 
     for banned in [
         "vec![T::zero(); len]",
         "create_from_slice(T::as_bytes(&zeros))",
     ] {
         assert!(
-            !zero_alloc_source.contains(banned),
+            !alloc_path_source.contains(banned),
             "CubeCL GEMM zero-contracting fast path must not materialize host zeros: {banned}"
         );
     }
     assert_ordered_needles(
-        "gemm::zero_alloc",
-        zero_alloc_source,
+        "gemm::dot_general_typed_with_conj",
+        alloc_path_source,
         &[
-            "alloc_output::<T>(rt, shape)",
+            "alloc_output::<T>(backend.runtime(), &layout.output_shape)",
+            "layout.contracting_elements == 0",
             "structural::fill_zero_kernel",
         ],
     );

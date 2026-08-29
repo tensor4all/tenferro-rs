@@ -103,6 +103,15 @@ pub(crate) struct CubeclBuffer {
     device_ordinal: usize,
     allocation_domain: AllocationDomainId,
     allocation_id: AllocationId,
+    // Memoized device address resolved by the first raw-FFI access.
+    //
+    // INVARIANT: in pinned CubeCL rev 5939d8e, a retained handle's memory
+    // slice keeps its storage offset (pool coalescing merges only free
+    // slices) and its backing storage is never deallocated while any of its
+    // slices is live, so the resolved address is stable for this buffer's
+    // lifetime. Raw-FFI callers must still route cross-stream accesses
+    // through `get_resource` for CubeCL's stream alignment.
+    device_addr: std::sync::OnceLock<u64>,
 }
 
 #[cfg(feature = "cuda")]
@@ -136,11 +145,23 @@ impl CubeclBuffer {
             allocation_id: AllocationId::from_backend_id(
                 NEXT_CUDA_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ),
+            device_addr: std::sync::OnceLock::new(),
         }
     }
 
     pub(crate) fn handle(&self) -> &cubecl_runtime::server::Handle {
         &self.handle
+    }
+
+    /// Return the memoized device address, if one was resolved.
+    pub(crate) fn cached_device_addr(&self) -> Option<u64> {
+        self.device_addr.get().copied()
+    }
+
+    /// Memoize the device address resolved through `get_resource` for this
+    /// buffer's handle; later calls keep the first stored value.
+    pub(crate) fn memoize_device_addr(&self, addr: u64) {
+        let _ = self.device_addr.set(addr);
     }
 
     pub(crate) fn element_len<T: 'static>(&self) -> usize {

@@ -135,7 +135,7 @@ class BuildArtifactContracts(unittest.TestCase):
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         dependencies = manifest["workspace"]["dependencies"]
 
-        revision = "1c88bb6f1a47ffb11755e05048b7828a743f53e1"
+        revision = "5939d8e3b1c479ed6db31de5f01cb6d432178f2d"
         for name in (
             "cubecl",
             "cubecl-cuda",
@@ -162,6 +162,42 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertFalse(any("cubek" in item for item in features["cuda"]))
         self.assertIn("dep:cubek-matmul", features["webgpu"])
         self.assertIn("dep:cubek-std", features["webgpu"])
+
+    def test_sample_workspaces_patch_cubecl_to_the_workspace_revision(self) -> None:
+        """`samples/cubecl-kernel` sits outside the root workspace, so its
+        `[patch.crates-io]` block is the only thing holding it to the same
+        CubeCL fork revision `tenferro-gpu` pins. When the two drift apart both
+        revisions land in one dependency graph, and the sample fails against
+        same-named types from different crate versions: an `E0308` mismatch on
+        `ComputeClient` and `CubeDim` rather than a legible version conflict.
+        Comparing the manifests catches that at the source.
+        """
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        expected = workspace["workspace"]["dependencies"]["cubecl"]["rev"]
+
+        for sample in ("cubecl-kernel",):
+            manifest = tomllib.loads(
+                (ROOT / "samples" / sample / "Cargo.toml").read_text()
+            )
+            patches = manifest.get("patch", {}).get("crates-io", {})
+            cubecl_patches = {
+                name: spec
+                for name, spec in patches.items()
+                if name.startswith("t4a-cubecl")
+            }
+            self.assertTrue(
+                cubecl_patches,
+                f"samples/{sample} should patch its CubeCL line to the fork",
+            )
+            for name, spec in cubecl_patches.items():
+                self.assertEqual(
+                    spec.get("rev"),
+                    expected,
+                    f"samples/{sample} patches {name} at {spec.get('rev')}, but the "
+                    f"workspace pins CubeCL at {expected}; both revisions would end "
+                    "up in one dependency graph",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

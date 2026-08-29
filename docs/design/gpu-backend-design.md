@@ -185,6 +185,17 @@ WebGPU queue/device barrier. Higher-level eager GPU execution exposes the same
 barrier through `EagerRuntime::synchronize()`, with CPU eager runtimes treating
 the call as a no-op.
 
+CUDA vendor-library handles are indexed by CubeCL's bounded physical stream
+pool, not by process-global logical `StreamId` values. A cuBLAS handle is locked
+across pointer-mode selection and enqueue. A vendor call using an allocation
+owned by another physical stream synchronizes the enqueue stream before its
+retention guards are released; same-stream calls remain asynchronous. Runtime
+teardown retires every initialized physical stream before destroying library
+handles or releasing the retained primary context.
+The direct cuBLAS BLAS-1 hooks use the standard 32-bit interfaces for CUDA
+11/12 library compatibility and reject element counts above `i32::MAX` before
+enqueue.
+
 cuTENSOR, cuSOLVER, and cuBLAS are CUDA-only and are loaded lazily through the
 CUDA FFI layer. cuFFT follows a different ownership boundary: `tenferro-fft`
 loads it and owns its opaque plans and `cufft-plans` cache entries;
@@ -257,15 +268,17 @@ logical retained bytes, and event counters with
 Retained bytes are estimates of cache-owned payloads, not process RSS or
 allocator arena usage.
 
-CUDA `dot_general` stores cuTENSOR contraction descriptors, plans, and device
-workspace inside this backend-owned extension cache. The cuTENSOR plan key is
+CUDA `dot_general` stores cuTENSOR contraction descriptors, plans, and lazy
+per-physical-stream device workspaces inside this backend-owned extension
+cache. A workspace is locked through enqueue, and eviction retires its owning
+stream before releasing the workspace, plan, or descriptors. The cuTENSOR plan key is
 structural: dtype, extents, strides, modes, conjugation flags, descriptor
 alignment requirements, and workspace preference. It must not include
 allocation addresses or actual pointer-specific alignment. Whole-allocation
 operands keep the CUDA allocation alignment requirement; borrowed views use a
 conservative dtype-size descriptor alignment requirement so the cached plan
 remains valid across different view offsets without using pointer-specific
-alignment. Cached device workspace bytes are included in the logical
+alignment. Lazily allocated device workspace bytes are included in the logical
 retained-byte estimate and are released by normal extension-cache eviction or
 `CudaBackend::clear_cuda_extension_cache`. The overall extension cache stats
 report the retained typed cache entry. Use

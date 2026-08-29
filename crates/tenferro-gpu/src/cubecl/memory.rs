@@ -6,7 +6,7 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 
 use super::dispatch;
-use crate::cubecl::runtime::CudaRuntime;
+use crate::cubecl::runtime::{CudaRuntime, PINNED_SCALAR_BYTES};
 use crate::types::{
     CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
     Tensor, TensorScalar, TypedTensor,
@@ -109,6 +109,20 @@ fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     )
 }
 
+/// Read a compact tensor of at most `PINNED_SCALAR_BYTES` through the runtime's
+/// pinned staging slot.
+fn download_scalar<T: CubeElement + TensorScalar + Clone + 'static>(
+    rt: &CudaRuntime,
+    typed: &TypedTensor<T>,
+    byte_len: usize,
+) -> crate::Result<Vec<T>> {
+    let ptr = super::gemm::typed_device_ptr(rt, typed, "download")?;
+    let retained = dispatch::cubecl_buffer(typed, "download")?.handle().clone();
+    let mut bytes = vec![0_u8; byte_len];
+    rt.download_scalar_bytes(ptr as u64, &mut bytes, "download", retained)?;
+    Ok(T::from_bytes(&bytes).to_vec())
+}
+
 fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
     rt: &CudaRuntime,
     typed: &TypedTensor<T>,
@@ -127,6 +141,29 @@ fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
         return TypedTensor::from_buffer_col_major(
             typed.shape().to_vec(),
             StorageBuffer::Host(Vec::new()),
+            Placement::default(),
+        );
+    }
+
+    // Small-payload fast path. A Krylov loop reads back one reduction result
+    // per iteration. CubeCL's `read_one` already stages through pinned memory,
+    // so this is not a pageable-to-pinned conversion; what it avoids is
+    // CubeCL's staging-reservation machinery and one of two barriers. The
+    // general path below synchronizes the stream and then lets `read_one` wait
+    // on its own fence after the copy, while this issues the copy and waits
+    // once. Neither path synchronizes the device. The gate is a byte length, so
+    // a short vector takes it too, not only a scalar.
+    let byte_len = typed
+        .n_elements()
+        .checked_mul(size_of::<T>())
+        .ok_or_else(|| {
+            crate::Error::invalid_argument("download", "shape", "byte length overflows")
+        })?;
+    if byte_len <= PINNED_SCALAR_BYTES {
+        let data = download_scalar(rt, typed, byte_len)?;
+        return TypedTensor::from_buffer_col_major(
+            typed.shape().to_vec(),
+            StorageBuffer::Host(data),
             Placement::default(),
         );
     }
