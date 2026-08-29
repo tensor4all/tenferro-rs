@@ -192,6 +192,9 @@ owned by another physical stream synchronizes the enqueue stream before its
 retention guards are released; same-stream calls remain asynchronous. Runtime
 teardown retires every initialized physical stream before destroying library
 handles or releasing the retained primary context.
+The direct cuBLAS BLAS-1 hooks use the standard 32-bit interfaces for CUDA
+11/12 library compatibility and reject element counts above `i32::MAX` before
+enqueue.
 
 cuTENSOR, cuSOLVER, and cuBLAS are CUDA-only and are loaded lazily through the
 CUDA FFI layer. cuFFT follows a different ownership boundary: `tenferro-fft`

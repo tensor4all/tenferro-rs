@@ -295,10 +295,10 @@ fn validated_dtype_changed() -> Error {
     Error::Internal("validated BLAS1 dtype changed before execution".into())
 }
 
-/// Convert an element count to the cuBLAS 64-bit length parameter.
-pub(super) fn blas1_len(n: usize, op: &'static str) -> crate::Result<i64> {
-    i64::try_from(n).map_err(|_| {
-        Error::invalid_argument(op, "shape", format!("element count {n} exceeds i64::MAX"))
+/// Convert an element count to the portable cuBLAS length parameter.
+pub(super) fn blas1_len(n: usize, op: &'static str) -> crate::Result<i32> {
+    i32::try_from(n).map_err(|_| {
+        Error::invalid_argument(op, "shape", format!("element count {n} exceeds i32::MAX"))
     })
 }
 
@@ -471,7 +471,7 @@ pub(super) trait CublasScalar:
     /// device pointer to one `Self` (device pointer mode).
     unsafe fn dotc(
         handle: cublas::cublasHandle_t,
-        n: i64,
+        n: i32,
         x: *const c_void,
         y: *const c_void,
         result: *mut c_void,
@@ -486,7 +486,7 @@ pub(super) trait CublasScalar:
     /// `beta` must be live host pointers (host pointer mode).
     unsafe fn geam_accum(
         handle: cublas::cublasHandle_t,
-        n: i64,
+        n: i32,
         alpha: *const Self,
         x: *const c_void,
         beta: *const Self,
@@ -506,7 +506,7 @@ pub(super) trait CublasRealScalar: CublasScalar {
     /// Same contract as [`CublasScalar::dotc`].
     unsafe fn dot(
         handle: cublas::cublasHandle_t,
-        n: i64,
+        n: i32,
         x: *const c_void,
         y: *const c_void,
         result: *mut c_void,
@@ -569,7 +569,7 @@ macro_rules! impl_cublas_scalar {
 
             unsafe fn dotc(
                 handle: cublas::cublasHandle_t,
-                n: i64,
+                n: i32,
                 x: *const c_void,
                 y: *const c_void,
                 result: *mut c_void,
@@ -589,7 +589,7 @@ macro_rules! impl_cublas_scalar {
 
             unsafe fn geam_accum(
                 handle: cublas::cublasHandle_t,
-                n: i64,
+                n: i32,
                 alpha: *const Self,
                 x: *const c_void,
                 beta: *const Self,
@@ -619,16 +619,16 @@ macro_rules! impl_cublas_scalar {
     };
 }
 
-impl_cublas_scalar!(f32, F32, f32, 1, f32, cublasSdot_v2_64, cublasSgeam_64);
-impl_cublas_scalar!(f64, F64, f64, 1, f64, cublasDdot_v2_64, cublasDgeam_64);
+impl_cublas_scalar!(f32, F32, f32, 1, f32, cublasSdot_v2, cublasSgeam);
+impl_cublas_scalar!(f64, F64, f64, 1, f64, cublasDdot_v2, cublasDgeam);
 impl_cublas_scalar!(
     Complex32,
     C32,
     f32,
     2,
     cublas::cuComplex,
-    cublasCdotc_v2_64,
-    cublasCgeam_64
+    cublasCdotc_v2,
+    cublasCgeam
 );
 impl_cublas_scalar!(
     Complex64,
@@ -636,16 +636,16 @@ impl_cublas_scalar!(
     f64,
     2,
     cublas::cuDoubleComplex,
-    cublasZdotc_v2_64,
-    cublasZgeam_64
+    cublasZdotc_v2,
+    cublasZgeam
 );
 
 impl CublasRealScalar for f32 {
-    const DOT_NAME: &'static str = "cublasSdot_v2_64";
+    const DOT_NAME: &'static str = "cublasSdot_v2";
 
     unsafe fn dot(
         handle: cublas::cublasHandle_t,
-        n: i64,
+        n: i32,
         x: *const c_void,
         y: *const c_void,
         result: *mut c_void,
@@ -655,11 +655,11 @@ impl CublasRealScalar for f32 {
 }
 
 impl CublasRealScalar for f64 {
-    const DOT_NAME: &'static str = "cublasDdot_v2_64";
+    const DOT_NAME: &'static str = "cublasDdot_v2";
 
     unsafe fn dot(
         handle: cublas::cublasHandle_t,
-        n: i64,
+        n: i32,
         x: *const c_void,
         y: *const c_void,
         result: *mut c_void,

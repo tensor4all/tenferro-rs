@@ -11,6 +11,7 @@ use crate::{DType, Error, Tensor, TypedTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{backend::BackendSessionHost, ErrorKind, ValidationError, ValidationKind};
 
+mod blas1_tests;
 mod capability_tests;
 mod cubecl_session_tests;
 mod device_tests;

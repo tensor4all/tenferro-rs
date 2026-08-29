@@ -58,6 +58,9 @@ remeasured locally because this machine has no CUDA GPU.
    retain the involved allocation handle instead of permitting unproven reuse.
 6. Keep compact BLAS-1 inputs allocation-free; box only the noncontiguous
    materialization slow path.
+7. Use cuBLAS's standard 32-bit BLAS-1 interfaces. The CUDA 11.8 library on
+   hosted GPU CI does not export the optional `_64` symbols; calls with more
+   than `i32::MAX` elements return a shape error before enqueue.
 
 ## Verification
 
