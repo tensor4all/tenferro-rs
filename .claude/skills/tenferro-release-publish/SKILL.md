@@ -21,9 +21,11 @@ Keep the interaction incremental:
 1. Derive and present the canonical workflow's SemVer proposal before editing;
    stop for explicit confirmation when the requested target differs.
 2. Phase 1: version-bump PR (workspace version plus every internal
-   cross-crate `version = "..."` requirement) and the full pre-push
-   checklist.
-3. Phase 2: tag the merged commit and push the tag.
+   cross-crate `version = "..."` requirement), curated user-facing GitHub
+   release notes, and the full pre-push checklist. Release notes describe only
+   shipped outcomes, never experiments or implementation history.
+3. Phase 2: tag the merged commit, push the tag, and create the GitHub release
+   from the reviewed notes file.
 4. At Phase 3, stop after validation; a human maintainer runs Phase 3
    publication from the tag. The maintainer can generate a guarded handoff
    script with

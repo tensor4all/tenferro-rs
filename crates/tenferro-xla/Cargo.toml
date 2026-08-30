@@ -27,9 +27,9 @@ default = []
 pjrt = ["dep:libloading"]
 
 [dependencies]
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.3.0", default-features = false }
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.3.0", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.3.0", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.4.0", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.4.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.4.0", default-features = false }
 computegraph.workspace = true
 libloading = { workspace = true, optional = true }
 sha2.workspace = true
