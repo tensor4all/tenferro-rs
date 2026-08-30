@@ -79,7 +79,15 @@ Complete this phase before changing manifests or making any other release edit.
    must name the new version. A `"0.2"`-style pin never admits `0.3`, so a
    copy-paste user would resolve the previous minor against the current
    quickstart code.
-5. Verify locally:
+5. Add `.github/releases/vX.Y.Z.md` containing curated GitHub release notes
+   based on merged changes since the matching provenance tag. Describe only
+   shipped, user-visible outcomes: breaking changes and migration steps,
+   features, verified performance changes, fixes, documentation, and known
+   limitations. Do not include experiments, abandoned approaches, debugging or
+   CI history, agent activity, review rounds, or other implementation process.
+   Link relevant PRs for detail and include the full tag comparison URL. Review
+   this file as part of the version-bump PR.
+6. Verify locally:
 
    ```bash
    cargo metadata --format-version 1 > /dev/null   # resolution sanity
@@ -90,13 +98,23 @@ Complete this phase before changing manifests or making any other release edit.
    `cargo publish --dry-run` works only for crates whose internal
    dependencies are already on the registry at the new version, so deep
    crates are verified live in Phase 3; that is expected.
-6. Open the PR to `main` and merge it through the normal auto-merge flow.
+7. Open the PR to `main` and merge it through the normal auto-merge flow.
 
-## Phase 2 — Tag
+## Phase 2 — Tag And GitHub Release
 
 1. `git fetch origin main` and identify the merged bump commit.
 2. `git tag vX.Y.Z <merged-commit> && git push origin vX.Y.Z`.
-3. Recommended: `gh release create vX.Y.Z --generate-notes`.
+3. Publish the reviewed notes from the tagged tree:
+
+   ```bash
+   gh release create vX.Y.Z --verify-tag \
+     --title "tenferro vX.Y.Z" \
+     --notes-file .github/releases/vX.Y.Z.md
+   ```
+
+   Verify the resulting GitHub release body matches the reviewed file. Do not
+   replace curated notes with `--generate-notes`; generated notes may be used
+   only to check that no user-visible merged PR was omitted.
 4. Record the tag commit SHA (`git rev-parse vX.Y.Z`) and the required CI job
    names (the workspace gate jobs that must pass before publication, e.g.
    `workspace-faer`, `workspace-blas`, `extensions`, `docs`, `coverage`,
