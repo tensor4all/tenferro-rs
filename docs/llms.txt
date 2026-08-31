@@ -34,7 +34,7 @@
 - [Autodiff](https://tensor4all.org/tenferro-rs/guides/autodiff.html): Describes eager `backward()` and functional or traced `grad`, `vjp`, and `jvp` workflows.
 - [Parallelism and Caching](https://tensor4all.org/tenferro-rs/guides/parallelism-and-caching.html): WARNING — backend/runtime instances own thread pools and caches; per-call construction throws them away.
 - [Memory Order](https://tensor4all.org/tenferro-rs/guides/memory-order.html): WARNING — buffers are column-major; row-major data passed to `from_vec_col_major` is silently reinterpreted as column-major (wrong values), never rejected.
-- [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html): Documents explicit CPU/GPU placement and transfer boundaries plus CUDA and WebGPU capability coverage.
+- [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html): Documents explicit CPU/GPU placement, transfer boundaries, CUDA/WebGPU capability coverage, and the supported versus CI-tested CUDA, cuTENSOR, cuBLAS, cuSOLVER, and cuFFT compatibility matrix.
 - [Custom CUDA kernels](https://tensor4all.org/tenferro-rs/guides/custom-cuda-kernels.html): Downstream PTX, CUBIN, NVRTC, raw tensor borrowing, stream ordering, and launch safety through the public CUDA extension API.
 - [Troubleshooting](https://tensor4all.org/tenferro-rs/guides/troubleshooting.html): Covers feature selection, BLAS providers, CUDA setup, workspace traps, and common runtime failures.
 

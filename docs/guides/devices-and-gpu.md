@@ -142,11 +142,32 @@ the backend-owned cuTENSOR permutation plan cache. The source and destination
 must be distinct allocations. CUDA does not silently fall back when the
 required NVIDIA library stack is unavailable; the operation returns a typed
 library/provider error instead.
-CUDA 12.4 is the minimum supported driver/NVRTC runtime. CUDA 12.8 or newer
-enables all CubeCL features supported by the GPU, including the 12.8 tensor-map
-extensions. tenferro compiles against CUDA 12.8 cudarc bindings, but resolves
-driver functions dynamically and gates newer functions using the versions of
-the driver and NVRTC loaded at runtime.
+
+## CUDA and NVIDIA library compatibility
+
+“Supported” below is tenferro's runtime contract. “Loader ABI” only means the
+loader probes that soname and required symbols; it does not make every library
+with that soname, or a complete CUDA 11 stack, supported. “CI-tested” records
+the package family or exact archive used by the current GPU workflows.
+
+| Component | Supported runtime contract | Loader ABI | CI-tested setup | Override |
+| --- | --- | --- | --- | --- |
+| NVIDIA driver API | CUDA 12.4 minimum; CUDA 12.8 or newer enables the complete CubeCL feature set, including 12.8 tensor-map extensions | Loaded dynamically through `cudarc`; the selected NVRTC must not be newer than the driver API | RunPod accepts 12.4-or-newer drivers and selects a matching 12.4 or 12.8 runtime tier | System driver; no tenferro override |
+| CUDA runtime and NVRTC | 12.4 baseline; 12.8 full-capability tier | CUDA 12.x runtime/NVRTC libraries | `cuda-cudart-12-4`/`cuda-nvrtc-12-4` and `cuda-cudart-12-8`/`cuda-nvrtc-12-8` runtime trees | `CUDA_PATH`, `LD_LIBRARY_PATH` |
+| cuTENSOR | CUDA 12 build using the v2 API; on compute capability 7.0, use 2.1.x because tenferro rejects 2.2 and newer on that GPU | `libcutensor.so.2`, then `libcutensor.so` | cuTENSOR `2.6.0.4` CUDA 12 archive | `TENFERRO_CUTENSOR_PATH` |
+| cuBLAS | CUDA 12 library matching the selected runtime tier | `libcublas.so.12`, then `libcublas.so` | `libcublas-12-4` and `libcublas-12-8` package families; patch version follows NVIDIA's package repository | `TENFERRO_CUBLAS_PATH` |
+| cuSOLVER | CUDA 12 library matching the selected runtime tier | `libcusolver.so.12`, then `.so.11` and unversioned candidates; the `.so.11` probe alone does not make CUDA 11 a supported stack | `libcusolver-12-4` and `libcusolver-12-8` package families; patch version follows NVIDIA's package repository | `TENFERRO_CUSOLVER_PATH` |
+| cuFFT | CUDA 12 uses the cuFFT 11 ABI | `libcufft.so.11`, then `.so.10` and unversioned candidates; the `.so.10` probe alone does not make CUDA 11 a supported stack | Not separately version-pinned by GPU CI; loader tests verify the search order | `TENFERRO_CUFFT_PATH` |
+
+The current CI values are defined in
+[`ci-cache-publish.yml`](https://github.com/tensor4all/tenferro-rs/blob/main/.github/workflows/ci-cache-publish.yml)
+and [`runpod-gpu-test.yml`](https://github.com/tensor4all/tenferro-rs/blob/main/.github/workflows/runpod-gpu-test.yml).
+Use NVIDIA's [CUDA compatibility documentation](https://docs.nvidia.com/deploy/cuda-compatibility/)
+to map a driver release to the CUDA API levels it supports; tenferro's 12.4
+minimum can be narrower than NVIDIA's general minor-version compatibility.
+tenferro compiles against CUDA 12.8 `cudarc` bindings, resolves driver
+functions dynamically, and gates newer functions using the loaded driver and
+NVRTC versions.
 
 Use the installed CUDA root on your machine. If several roots exist, inspect
 them first:
@@ -164,6 +185,7 @@ export LD_LIBRARY_PATH=$CUDA_PATH/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12
 export TENFERRO_CUTENSOR_PATH=/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2
 export TENFERRO_CUSOLVER_PATH=$CUDA_PATH/lib64/libcusolver.so.12
 export TENFERRO_CUBLAS_PATH=$CUDA_PATH/lib64/libcublas.so.12
+export TENFERRO_CUFFT_PATH=$CUDA_PATH/lib64/libcufft.so.11
 export CUBECL_DEBUG_LOG=0
 ```
 

@@ -20,8 +20,9 @@ CUDA does not use a native CubeCL kernel as a silent fallback when a required
 NVIDIA library is unavailable. The operation returns a typed library/provider
 error instead. XLA likewise rejects an unavailable plugin or unsupported
 lowering instead of changing execution backends behind the caller's back. See
-[Devices and GPU](devices-and-gpu.md) and [XLA and PJRT](xla.md) for setup and
-operation coverage.
+the [CUDA and NVIDIA library compatibility matrix](devices-and-gpu.md#cuda-and-nvidia-library-compatibility)
+for supported and CI-tested CUDA stacks, [Devices and GPU](devices-and-gpu.md)
+for operation coverage, and [XLA and PJRT](xla.md) for PJRT setup.
 
 The hardware-gated two-CUDA-device identity and execution evidence can be run
 with:

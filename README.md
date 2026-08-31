@@ -297,7 +297,9 @@ Selected deep dives:
   — static-rank views, mutable disjointness, and explicit `duplicate()`.
 - [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html)
   — explicit CPU, CUDA, and experimental WebGPU control; tensors never move
-  between devices silently.
+  between devices silently. Its [CUDA compatibility matrix](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html#cuda-and-nvidia-library-compatibility)
+  lists the supported and CI-tested driver, runtime, cuTENSOR, cuBLAS,
+  cuSOLVER, and cuFFT combinations.
 - [Dynamic and symbolic shapes](https://tensor4all.org/tenferro-rs/design/dynamic-symbolic-shapes.html)
   — how runtime-dependent dimensions work in traced programs.
 - [XLA and PJRT](https://tensor4all.org/tenferro-rs/guides/xla.html)
