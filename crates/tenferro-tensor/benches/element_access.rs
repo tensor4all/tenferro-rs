@@ -11,7 +11,7 @@ const INDEX_COUNT: usize = 4096;
 #[no_mangle]
 pub extern "C" fn tensor_static_rank_read_probe(tensor: &TypedTensor<f64, Rank<2>>) -> f64 {
     tensor
-        .host_col_major()
+        .host_col_major_view()
         .expect("the probe uses a compact host tensor")
         .axis0_lanes()
         .flatten()
@@ -26,7 +26,7 @@ pub extern "C" fn tensor_static_rank_read_probe(tensor: &TypedTensor<f64, Rank<2
 #[no_mangle]
 pub extern "C" fn tensor_static_rank_write_probe(tensor: &mut TypedTensor<f64, Rank<2>>) {
     for value in tensor
-        .host_col_major_mut()
+        .host_col_major_view_mut()
         .expect("the probe uses a host tensor")
         .iter_mut()
     {
@@ -264,7 +264,7 @@ fn bench_rank2_fixed(c: &mut Criterion) {
     });
 
     group.bench_function("nested_col_major_get", |b| {
-        let view = static_tensor.host_col_major().unwrap();
+        let view = static_tensor.host_col_major_view().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for j in 0..shape[1] {
@@ -277,7 +277,7 @@ fn bench_rank2_fixed(c: &mut Criterion) {
     });
 
     group.bench_function("nested_col_major_unchecked", |b| {
-        let view = static_tensor.host_col_major().unwrap();
+        let view = static_tensor.host_col_major_view().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for j in 0..shape[1] {
@@ -291,7 +291,7 @@ fn bench_rank2_fixed(c: &mut Criterion) {
     });
 
     group.bench_function("col_major_axis0_lanes", |b| {
-        let view = static_tensor.host_col_major().unwrap();
+        let view = static_tensor.host_col_major_view().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for lane in view.axis0_lanes() {
@@ -307,7 +307,7 @@ fn bench_rank2_fixed(c: &mut Criterion) {
         b.iter_batched(
             || static_tensor.duplicate().unwrap(),
             |mut tensor| {
-                let mut view = tensor.host_col_major_mut().unwrap();
+                let mut view = tensor.host_col_major_view_mut().unwrap();
                 let mut sum = 0.0;
                 for lane in view.axis0_lanes_mut() {
                     for value in lane {
@@ -411,7 +411,7 @@ fn bench_rank3_fixed(c: &mut Criterion) {
     });
 
     group.bench_function("nested_col_major_get", |b| {
-        let view = static_tensor.host_col_major().unwrap();
+        let view = static_tensor.host_col_major_view().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for k in 0..shape[2] {
@@ -429,7 +429,7 @@ fn bench_rank3_fixed(c: &mut Criterion) {
     });
 
     group.bench_function("nested_col_major_unchecked", |b| {
-        let view = static_tensor.host_col_major().unwrap();
+        let view = static_tensor.host_col_major_view().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for k in 0..shape[2] {
@@ -445,7 +445,7 @@ fn bench_rank3_fixed(c: &mut Criterion) {
     });
 
     group.bench_function("col_major_axis0_lanes", |b| {
-        let view = static_tensor.host_col_major().unwrap();
+        let view = static_tensor.host_col_major_view().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for lane in view.axis0_lanes() {

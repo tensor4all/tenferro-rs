@@ -31,6 +31,10 @@ implementation candidate is commit `e70cdbfc`.
 - Reuse `TypedTensorView::as_slice()` for compact-offset range validation and
   zero-copy logical slicing.
 - Store only `[usize; N]` and the exact borrowed slice in the hot-loop wrapper.
+- Name the metadata-only constructor family `host_col_major_view()` and
+  `host_col_major_view_mut()` to follow the repository `_view` convention.
+- Preserve the rank-owned shape array through `TensorLayout<Rank<N>>::shape_array()`;
+  do not erase it to a slice and manufacture an unreachable rank check.
 - Use slice iteration and `ChunksExact`/`ChunksExactMut` as the guaranteed safe
   fast paths. Keep random checked `get`/`get_mut` access as a convenience path.
 - Do not implement `Index` or `IndexMut`: those traits cannot express a typed or
@@ -89,6 +93,8 @@ were removed in favor of `get`/`get_mut`.
 The hosted follow-up also required canonical `// INVARIANT:` markers beside the
 three unchecked slice-access blocks; each marker now names the constructor and
 `validate_slice_len` proof that preserves the hot-path safety contract.
+The next hosted review removed synthetic static-rank validation and aligned the
+metadata-only accessor names with the repository `_view` convention.
 `IntoIterator`, `Copy`/`Clone`, dynamic rank, and a mutable tensor-view
 constructor remain deferred API additions rather than requirements of this PoC.
 

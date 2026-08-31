@@ -8,7 +8,7 @@ use crate::{
 fn owned_view_preserves_static_shape_and_column_major_access() {
     let tensor =
         TypedTensor::<i32, Rank<3>>::from_vec_col_major([2, 2, 2], (0..8).collect()).unwrap();
-    let view = tensor.host_col_major().unwrap();
+    let view = tensor.host_col_major_view().unwrap();
 
     assert_eq!(view.shape(), &[2, 2, 2]);
     assert_eq!(view.get([1, 0, 0]), Some(&1));
@@ -30,7 +30,7 @@ fn mutable_view_iterators_keep_element_borrows_disjoint() {
     let mut tensor =
         TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
     {
-        let mut view = tensor.host_col_major_mut().unwrap();
+        let mut view = tensor.host_col_major_view_mut().unwrap();
         *view.get_mut([1, 0]).unwrap() = 20;
         *view.get_mut([0, 1]).unwrap() = 30;
         for lane in view.axis0_lanes_mut() {
@@ -47,7 +47,7 @@ fn mutable_view_iterators_keep_element_borrows_disjoint() {
 #[test]
 fn scalar_empty_and_singleton_shapes_have_defined_lane_behavior() {
     let scalar = TypedTensor::<i32, Rank<0>>::from_vec_col_major([], vec![7]).unwrap();
-    let scalar_view = scalar.host_col_major().unwrap();
+    let scalar_view = scalar.host_col_major_view().unwrap();
     assert_eq!(scalar_view.get([]), Some(&7));
     assert_eq!(
         scalar_view.axis0_lanes().collect::<Vec<_>>(),
@@ -55,7 +55,10 @@ fn scalar_empty_and_singleton_shapes_have_defined_lane_behavior() {
     );
 
     let empty = TypedTensor::<i32, Rank<2>>::from_vec_col_major([0, 3], vec![]).unwrap();
-    assert_eq!(empty.host_col_major().unwrap().axis0_lanes().count(), 0);
+    assert_eq!(
+        empty.host_col_major_view().unwrap().axis0_lanes().count(),
+        0
+    );
 
     let empty_data: [i32; 0] = [];
     let late_empty = TypedTensorView::<_, Rank<3>>::from_slice_ranked(
@@ -65,12 +68,16 @@ fn scalar_empty_and_singleton_shapes_have_defined_lane_behavior() {
         &empty_data,
     )
     .unwrap();
-    assert!(late_empty.host_col_major().unwrap().as_slice().is_empty());
+    assert!(late_empty
+        .host_col_major_view()
+        .unwrap()
+        .as_slice()
+        .is_empty());
 
     let singleton = TypedTensor::<i32, Rank<3>>::from_vec_col_major([1, 1, 2], vec![8, 9]).unwrap();
     assert_eq!(
         singleton
-            .host_col_major()
+            .host_col_major_view()
             .unwrap()
             .axis0_lanes()
             .collect::<Vec<_>>(),
@@ -84,7 +91,7 @@ fn compact_offset_view_is_zero_copy_and_noncompact_view_is_rejected() {
     let validated = {
         let offset =
             TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 1, &data).unwrap();
-        offset.host_col_major().unwrap()
+        offset.host_col_major_view().unwrap()
     };
     assert_eq!(validated.as_slice(), &[1, 2, 3, 4]);
     assert!(std::ptr::eq(
@@ -95,7 +102,7 @@ fn compact_offset_view_is_zero_copy_and_noncompact_view_is_rejected() {
     let noncompact =
         TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [2, 1], 0, &data[..4]).unwrap();
     assert!(matches!(
-        noncompact.host_col_major(),
+        noncompact.host_col_major_view(),
         Err(crate::Error::Validation { .. })
     ));
 }
@@ -110,10 +117,6 @@ fn constructor_rejects_overflow_and_length_mismatch() {
         ColMajorView::<u8, 1>::new(&[0], [2], "test"),
         Err(crate::Error::Validation { .. })
     ));
-    assert!(matches!(
-        static_shape::<2>(&[1], "test"),
-        Err(crate::Error::Validation { .. })
-    ));
 }
 
 #[test]
@@ -121,7 +124,7 @@ fn mutable_view_access_surface_covers_checked_and_unsafe_paths() {
     let mut tensor =
         TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
     {
-        let mut view = tensor.host_col_major_mut().unwrap();
+        let mut view = tensor.host_col_major_view_mut().unwrap();
 
         assert_eq!(view.shape(), &[2, 2]);
         assert_eq!(view.iter().copied().sum::<i32>(), 10);
@@ -142,7 +145,7 @@ fn mutable_view_access_surface_covers_checked_and_unsafe_paths() {
         assert_eq!(view.as_slice(), &[10, 2, 3, 40]);
     }
 
-    let shared_view = tensor.host_col_major().unwrap();
+    let shared_view = tensor.host_col_major_view().unwrap();
     assert_eq!(
         format!("{shared_view:?}"),
         "ColMajorView { shape: [2, 2], len: 4 }"
@@ -169,11 +172,11 @@ fn backend_storage_is_rejected_before_scalar_access() {
     .unwrap();
 
     assert!(matches!(
-        tensor.host_col_major(),
+        tensor.host_col_major_view(),
         Err(crate::Error::RuntimeState { .. })
     ));
     assert!(matches!(
-        tensor.host_col_major_mut(),
+        tensor.host_col_major_view_mut(),
         Err(crate::Error::RuntimeState { .. })
     ));
 }
@@ -186,11 +189,11 @@ fn poisson_jacobi_step_uses_first_axis_lanes() {
     let mut next =
         TypedTensor::<f64, Rank<2>>::from_vec_col_major([N, N], vec![0.0; N * N]).unwrap();
 
-    let u = u.host_col_major().unwrap();
-    let rhs = rhs.host_col_major().unwrap();
+    let u = u.host_col_major_view().unwrap();
+    let rhs = rhs.host_col_major_view().unwrap();
     let u_lanes = u.axis0_lanes().collect::<Vec<_>>();
     let rhs_lanes = rhs.axis0_lanes().collect::<Vec<_>>();
-    let mut next = next.host_col_major_mut().unwrap();
+    let mut next = next.host_col_major_view_mut().unwrap();
     let h2 = 0.04;
 
     for (j, next_lane) in next.axis0_lanes_mut().enumerate().skip(1).take(N - 2) {

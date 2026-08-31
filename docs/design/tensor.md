@@ -85,6 +85,11 @@ a `Rank<N>` tensor is host-resident and compact column-major. Construction
 checks the storage and layout boundary once and exposes the shape as
 `[usize; N]`. A compact `TypedTensorView<T, Rank<N>>` with a nonzero offset
 borrows its exact logical slice without copying.
+The metadata-only constructors are `host_col_major_view()` and
+`host_col_major_view_mut()`, following the repository `_view` naming contract.
+Static-rank constructors obtain `[usize; N]` directly from
+`TensorLayout<Rank<N>>::shape_array()` rather than erasing and revalidating the
+rank.
 
 Safe `iter()` and `axis0_lanes()` traversal operates on slices whose valid
 domain is encoded by the iterator. Mutable traversal uses `IterMut` and

@@ -2,21 +2,15 @@
 //!
 //! This prototype implements the API proposed by
 //! [tenferro-rs issue #1736](https://github.com/tensor4all/tenferro-rs/issues/1736).
-//! Construction validates host residency, static rank, compact column-major
-//! layout, shape arithmetic, and the exact logical slice once. Traversal then
-//! operates directly on the validated slice.
+//! Construction preserves the compile-time rank and validates host residency,
+//! compact column-major layout, shape arithmetic, and the exact logical slice
+//! once. Traversal then operates directly on the validated slice.
 
 use std::fmt;
 
 use tenferro_tensor_core::ValidationError;
 
 use super::{checked_view_element_count, Rank, TensorScalar, TypedTensor, TypedTensorView};
-
-fn static_shape<const N: usize>(shape: &[usize], op: &'static str) -> crate::Result<[usize; N]> {
-    shape
-        .try_into()
-        .map_err(|_| crate::Error::rank_mismatch(op, N, shape.len()))
-}
 
 #[inline(always)]
 fn in_bounds<const N: usize>(shape: &[usize; N], index: [usize; N]) -> bool {
@@ -62,7 +56,8 @@ fn validate_slice_len<const N: usize>(
 /// Shared view of a validated compact column-major host tensor with rank `N`.
 ///
 /// The first index varies fastest in memory. Construction is available through
-/// [`TypedTensor::host_col_major`] and [`TypedTensorView::host_col_major`].
+/// [`TypedTensor::host_col_major_view`] and
+/// [`TypedTensorView::host_col_major_view`].
 ///
 /// # Examples
 ///
@@ -73,7 +68,7 @@ fn validate_slice_len<const N: usize>(
 ///     [2, 2],
 ///     vec![1, 2, 3, 4],
 /// )?;
-/// let view = tensor.host_col_major()?;
+/// let view = tensor.host_col_major_view()?;
 /// assert_eq!(view.get([1, 0]), Some(&2));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -105,7 +100,7 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let tensor = TypedTensor::<f64, Rank<2>>::zeros([2, 3])?;
-    /// assert_eq!(tensor.host_col_major()?.shape(), &[2, 3]);
+    /// assert_eq!(tensor.host_col_major_view()?.shape(), &[2, 3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[inline(always)]
@@ -120,7 +115,7 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![4, 5])?;
-    /// assert_eq!(tensor.host_col_major()?.as_slice(), &[4, 5]);
+    /// assert_eq!(tensor.host_col_major_view()?.as_slice(), &[4, 5]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[inline(always)]
@@ -135,7 +130,7 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![4, 5])?;
-    /// assert_eq!(tensor.host_col_major()?.iter().copied().sum::<i32>(), 9);
+    /// assert_eq!(tensor.host_col_major_view()?.iter().copied().sum::<i32>(), 9);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[inline(always)]
@@ -150,7 +145,7 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
-    /// let view = tensor.host_col_major()?;
+    /// let view = tensor.host_col_major_view()?;
     /// assert_eq!(view.get([0, 1]), Some(&3));
     /// assert_eq!(view.get([2, 0]), None);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -178,7 +173,7 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![4, 5])?;
-    /// let view = tensor.host_col_major()?;
+    /// let view = tensor.host_col_major_view()?;
     /// // SAFETY: index 1 is below the only axis extent, 2.
     /// assert_eq!(unsafe { view.get_unchecked([1]) }, &5);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -203,7 +198,7 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
-    /// let view = tensor.host_col_major()?;
+    /// let view = tensor.host_col_major_view()?;
     /// let lanes = view.axis0_lanes().collect::<Vec<_>>();
     /// assert_eq!(lanes, vec![&[1, 2][..], &[3, 4][..]]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -232,7 +227,7 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
 /// ```rust
 /// use tenferro_tensor::{Rank, TypedTensor};
 /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![1, 2])?;
-/// let mut view = tensor.host_col_major_mut()?;
+/// let mut view = tensor.host_col_major_view_mut()?;
 /// if let Some(value) = view.get_mut([1]) { *value = 7; }
 /// assert_eq!(view.as_slice(), &[1, 7]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -265,7 +260,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<f64, Rank<2>>::zeros([2, 3])?;
-    /// assert_eq!(tensor.host_col_major_mut()?.shape(), &[2, 3]);
+    /// assert_eq!(tensor.host_col_major_view_mut()?.shape(), &[2, 3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[inline(always)]
@@ -280,7 +275,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![4, 5])?;
-    /// assert_eq!(tensor.host_col_major_mut()?.as_slice(), &[4, 5]);
+    /// assert_eq!(tensor.host_col_major_view_mut()?.as_slice(), &[4, 5]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[inline(always)]
@@ -295,7 +290,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([1], vec![4])?;
-    /// *tensor.host_col_major_mut()?.as_mut_slice().first_mut().unwrap() = 9;
+    /// *tensor.host_col_major_view_mut()?.as_mut_slice().first_mut().unwrap() = 9;
     /// assert_eq!(tensor.as_slice()?, &[9]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -311,7 +306,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![4, 5])?;
-    /// assert_eq!(tensor.host_col_major_mut()?.iter().copied().sum::<i32>(), 9);
+    /// assert_eq!(tensor.host_col_major_view_mut()?.iter().copied().sum::<i32>(), 9);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[inline(always)]
@@ -326,7 +321,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![1, 2])?;
-    /// for value in tensor.host_col_major_mut()?.iter_mut() { *value += 1; }
+    /// for value in tensor.host_col_major_view_mut()?.iter_mut() { *value += 1; }
     /// assert_eq!(tensor.as_slice()?, &[2, 3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -342,7 +337,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![4, 5])?;
-    /// assert_eq!(tensor.host_col_major_mut()?.get([1]), Some(&5));
+    /// assert_eq!(tensor.host_col_major_view_mut()?.get([1]), Some(&5));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[inline(always)]
@@ -363,7 +358,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![4, 5])?;
-    /// *tensor.host_col_major_mut()?.get_mut([1]).unwrap() = 8;
+    /// *tensor.host_col_major_view_mut()?.get_mut([1]).unwrap() = 8;
     /// assert_eq!(tensor.as_slice()?, &[4, 8]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -390,7 +385,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([1], vec![4])?;
-    /// let view = tensor.host_col_major_mut()?;
+    /// let view = tensor.host_col_major_view_mut()?;
     /// // SAFETY: index 0 is below the only axis extent, 1.
     /// assert_eq!(unsafe { view.get_unchecked([0]) }, &4);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -417,7 +412,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([1], vec![4])?;
-    /// let mut view = tensor.host_col_major_mut()?;
+    /// let mut view = tensor.host_col_major_view_mut()?;
     /// // SAFETY: index 0 is in bounds and this is the only active element borrow.
     /// *unsafe { view.get_unchecked_mut([0]) } = 7;
     /// assert_eq!(view.as_slice(), &[7]);
@@ -440,7 +435,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 1], vec![1, 2])?;
-    /// assert_eq!(tensor.host_col_major_mut()?.axis0_lanes().next(), Some(&[1, 2][..]));
+    /// assert_eq!(tensor.host_col_major_view_mut()?.axis0_lanes().next(), Some(&[1, 2][..]));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[inline(always)]
@@ -455,7 +450,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
-    /// for lane in tensor.host_col_major_mut()?.axis0_lanes_mut() { lane[0] *= 10; }
+    /// for lane in tensor.host_col_major_view_mut()?.axis0_lanes_mut() { lane[0] *= 10; }
     /// assert_eq!(tensor.as_slice()?, &[10, 2, 30, 4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -483,19 +478,19 @@ impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 1], vec![1, 2])?;
-    /// assert_eq!(tensor.host_col_major()?.get([1, 0]), Some(&2));
+    /// assert_eq!(tensor.host_col_major_view()?.get([1, 0]), Some(&2));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when storage is backend-owned,
-    /// or [`crate::Error::Validation`] when rank, compact layout, shape
-    /// arithmetic, or the logical host range is invalid.
-    pub fn host_col_major(&self) -> crate::Result<ColMajorView<'_, T, N>> {
-        const OP: &str = "TypedTensor::host_col_major";
+    /// or [`crate::Error::Validation`] when compact layout, shape arithmetic,
+    /// or the logical host range is invalid.
+    pub fn host_col_major_view(&self) -> crate::Result<ColMajorView<'_, T, N>> {
+        const OP: &str = "TypedTensor::host_col_major_view";
         self.assert_col_major_contiguous()?;
-        let shape = static_shape(self.shape(), OP)?;
+        let shape = *self.layout().shape_array();
         ColMajorView::new(self.as_slice()?, shape, OP)
     }
 
@@ -506,7 +501,7 @@ impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([1], vec![1])?;
-    /// if let Some(value) = tensor.host_col_major_mut()?.get_mut([0]) { *value = 3; }
+    /// if let Some(value) = tensor.host_col_major_view_mut()?.get_mut([0]) { *value = 3; }
     /// assert_eq!(tensor.as_slice()?, &[3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -514,12 +509,12 @@ impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when storage is backend-owned,
-    /// or [`crate::Error::Validation`] when rank, compact layout, shape
-    /// arithmetic, or the logical host range is invalid.
-    pub fn host_col_major_mut(&mut self) -> crate::Result<ColMajorViewMut<'_, T, N>> {
-        const OP: &str = "TypedTensor::host_col_major_mut";
+    /// or [`crate::Error::Validation`] when compact layout, shape arithmetic,
+    /// or the logical host range is invalid.
+    pub fn host_col_major_view_mut(&mut self) -> crate::Result<ColMajorViewMut<'_, T, N>> {
+        const OP: &str = "TypedTensor::host_col_major_view_mut";
         self.assert_col_major_contiguous()?;
-        let shape = static_shape(self.shape(), OP)?;
+        let shape = *self.layout().shape_array();
         ColMajorViewMut::new(self.host_data_mut()?, shape, OP)
     }
 }
@@ -536,18 +531,18 @@ impl<'a, T: 'static, const N: usize> TypedTensorView<'a, T, Rank<N>> {
     /// use tenferro_tensor::{Rank, TypedTensorView};
     /// let data = [0_i32, 1, 2, 3, 4];
     /// let view = TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 1, &data)?;
-    /// assert_eq!(view.host_col_major()?.as_slice(), &[1, 2, 3, 4]);
+    /// assert_eq!(view.host_col_major_view()?.as_slice(), &[1, 2, 3, 4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when storage is backend-owned,
-    /// or [`crate::Error::Validation`] when rank, compact layout, shape
-    /// arithmetic, or the logical host range is invalid.
-    pub fn host_col_major(&self) -> crate::Result<ColMajorView<'a, T, N>> {
-        const OP: &str = "TypedTensorView::host_col_major";
-        let shape = static_shape(self.shape(), OP)?;
+    /// or [`crate::Error::Validation`] when compact layout, shape arithmetic,
+    /// or the logical host range is invalid.
+    pub fn host_col_major_view(&self) -> crate::Result<ColMajorView<'a, T, N>> {
+        const OP: &str = "TypedTensorView::host_col_major_view";
+        let shape = *self.layout().shape_array();
         ColMajorView::new(self.as_slice()?, shape, OP)
     }
 }
