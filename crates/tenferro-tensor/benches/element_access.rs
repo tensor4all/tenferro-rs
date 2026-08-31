@@ -11,12 +11,11 @@ const INDEX_COUNT: usize = 4096;
 #[no_mangle]
 pub extern "C" fn tensor_static_rank_read_probe(tensor: &TypedTensor<f64, Rank<2>>) -> f64 {
     tensor
-        .as_view()
-        .as_slice()
+        .host_col_major()
         .expect("the probe uses a compact host tensor")
-        .iter()
-        .copied()
-        .sum()
+        .axis0_lanes()
+        .flatten()
+        .fold(0.0, |sum, value| sum + *value)
 }
 
 /// # Panics
@@ -27,8 +26,9 @@ pub extern "C" fn tensor_static_rank_read_probe(tensor: &TypedTensor<f64, Rank<2
 #[no_mangle]
 pub extern "C" fn tensor_static_rank_write_probe(tensor: &mut TypedTensor<f64, Rank<2>>) {
     for value in tensor
-        .host_data_mut()
+        .host_col_major_mut()
         .expect("the probe uses a host tensor")
+        .iter_mut()
     {
         *value *= 2.0;
     }
@@ -38,6 +38,12 @@ fn typed_tensor<const R: usize>(shape: [usize; R]) -> TypedTensor<f64> {
     let len = shape.iter().product();
     let data = (0..len).map(|value| value as f64).collect();
     TypedTensor::from_vec_col_major(shape.to_vec(), data).unwrap()
+}
+
+fn static_tensor<const R: usize>(shape: [usize; R]) -> TypedTensor<f64, Rank<R>> {
+    let len = shape.iter().product();
+    let data = (0..len).map(|value| value as f64).collect();
+    TypedTensor::from_vec_col_major(shape, data).unwrap()
 }
 
 fn dynamic_tensor<const R: usize>(shape: [usize; R]) -> Tensor {
@@ -206,6 +212,7 @@ fn bench_rank2_fixed(c: &mut Criterion) {
     let shape = [64usize, 64];
     let indices = index_workload(shape);
     let tensor = typed_tensor(shape);
+    let static_tensor = static_tensor(shape);
     let mut group = c.benchmark_group("rank_fixed/2d/col_major");
 
     group.bench_function(BenchmarkId::new("linear_offset2", INDEX_COUNT), |b| {
@@ -256,6 +263,64 @@ fn bench_rank2_fixed(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("nested_col_major_index", |b| {
+        let view = static_tensor.host_col_major().unwrap();
+        b.iter(|| {
+            let mut sum = 0.0;
+            for j in 0..shape[1] {
+                for i in 0..shape[0] {
+                    sum += black_box(view[[black_box(i), black_box(j)]]);
+                }
+            }
+            black_box(sum)
+        });
+    });
+
+    group.bench_function("nested_col_major_unchecked", |b| {
+        let view = static_tensor.host_col_major().unwrap();
+        b.iter(|| {
+            let mut sum = 0.0;
+            for j in 0..shape[1] {
+                for i in 0..shape[0] {
+                    // SAFETY: both loops use the validated shape bounds.
+                    sum += black_box(unsafe { view.get_unchecked([i, j]) });
+                }
+            }
+            black_box(sum)
+        });
+    });
+
+    group.bench_function("col_major_axis0_lanes", |b| {
+        let view = static_tensor.host_col_major().unwrap();
+        b.iter(|| {
+            let mut sum = 0.0;
+            for lane in view.axis0_lanes() {
+                for value in lane {
+                    sum += black_box(*value);
+                }
+            }
+            black_box(sum)
+        });
+    });
+
+    group.bench_function("col_major_axis0_lanes_mut", |b| {
+        b.iter_batched(
+            || static_tensor.duplicate().unwrap(),
+            |mut tensor| {
+                let mut view = tensor.host_col_major_mut().unwrap();
+                let mut sum = 0.0;
+                for lane in view.axis0_lanes_mut() {
+                    for value in lane {
+                        *value += black_box(1.0);
+                        sum += *value;
+                    }
+                }
+                black_box(sum)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
     group.bench_function(BenchmarkId::new("get_mut2", INDEX_COUNT), |b| {
         b.iter_batched(
             || tensor.duplicate().unwrap(),
@@ -279,6 +344,7 @@ fn bench_rank3_fixed(c: &mut Criterion) {
     let shape = [32usize, 16, 8];
     let indices = index_workload(shape);
     let tensor = typed_tensor(shape);
+    let static_tensor = static_tensor(shape);
     let mut group = c.benchmark_group("rank_fixed/3d/col_major");
 
     group.bench_function(BenchmarkId::new("linear_offset3", INDEX_COUNT), |b| {
@@ -325,6 +391,67 @@ fn bench_rank3_fixed(c: &mut Criterion) {
             },
             BatchSize::SmallInput,
         );
+    });
+
+    group.bench_function("nested_direct_slice_unchecked", |b| {
+        let data = static_tensor.as_slice().unwrap();
+        b.iter(|| {
+            let mut sum = 0.0;
+            for k in 0..shape[2] {
+                for j in 0..shape[1] {
+                    for i in 0..shape[0] {
+                        let offset = i + shape[0] * (j + shape[1] * k);
+                        // SAFETY: nested loops stay within the compact fixture.
+                        sum += black_box(unsafe { data.get_unchecked(offset) });
+                    }
+                }
+            }
+            black_box(sum)
+        });
+    });
+
+    group.bench_function("nested_col_major_index", |b| {
+        let view = static_tensor.host_col_major().unwrap();
+        b.iter(|| {
+            let mut sum = 0.0;
+            for k in 0..shape[2] {
+                for j in 0..shape[1] {
+                    for i in 0..shape[0] {
+                        sum += black_box(view[[black_box(i), black_box(j), black_box(k)]]);
+                    }
+                }
+            }
+            black_box(sum)
+        });
+    });
+
+    group.bench_function("nested_col_major_unchecked", |b| {
+        let view = static_tensor.host_col_major().unwrap();
+        b.iter(|| {
+            let mut sum = 0.0;
+            for k in 0..shape[2] {
+                for j in 0..shape[1] {
+                    for i in 0..shape[0] {
+                        // SAFETY: all loops use the validated shape bounds.
+                        sum += black_box(unsafe { view.get_unchecked([i, j, k]) });
+                    }
+                }
+            }
+            black_box(sum)
+        });
+    });
+
+    group.bench_function("col_major_axis0_lanes", |b| {
+        let view = static_tensor.host_col_major().unwrap();
+        b.iter(|| {
+            let mut sum = 0.0;
+            for lane in view.axis0_lanes() {
+                for value in lane {
+                    sum += black_box(*value);
+                }
+            }
+            black_box(sum)
+        });
     });
 
     group.finish();
