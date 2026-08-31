@@ -8,9 +8,8 @@ adds const-generic shared and mutable host views, constructors on static-rank
 owned tensors and shared tensor views, focused tests derived from the Poisson
 Jacobi example, Criterion cases, and fixed-rank code-generation probes.
 
-The worktree is based on commit
-`0e87f88eedf28545767b316a7795ed970069ac83`. The final PR must replace this
-working-tree identity with its exact candidate commit before review.
+The baseline is commit `0e87f88eedf28545767b316a7795ed970069ac83`, and the
+implementation candidate is commit `e70cdbfc`.
 
 ## Context reviewed
 
@@ -130,8 +129,7 @@ a closed gate.
 
 ## Remaining verification
 
-- Re-run the deterministic rules review against the final committed candidate
-  and record its exact commit.
+- Re-run the deterministic rules review against the final committed candidate.
 - Obtain a supported automated codegen report, or extend the checker for Mach-O
   labels, before treating the codegen gate as closed.
 - Run the complete documentation-site check in a Python 3.11+ environment.
