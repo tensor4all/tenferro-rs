@@ -10,8 +10,10 @@ CUDA_PATH=/usr/local/cuda-12.4
 LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
 ```
 
-CUDA 12.4 is the minimum runtime. Use a CUDA 12.8-or-newer driver and NVRTC to
-enable the complete CubeCL capability set.
+Choose a matched driver, runtime, NVRTC, and vendor-library stack from the
+[CUDA and NVIDIA library compatibility matrix](devices-and-gpu.md#cuda-and-nvidia-library-compatibility).
+The matrix distinguishes tenferro's minimum, loader ABI candidates, and the
+versions exercised by CI.
 
 For non-standard installs, set the exact library paths:
 
@@ -19,6 +21,7 @@ For non-standard installs, set the exact library paths:
 TENFERRO_CUTENSOR_PATH=/opt/cuda/lib64/libcutensor.so.2
 TENFERRO_CUSOLVER_PATH=/opt/cuda/lib64/libcusolver.so.12
 TENFERRO_CUBLAS_PATH=/opt/cuda/lib64/libcublas.so.12
+TENFERRO_CUFFT_PATH=/opt/cuda/lib64/libcufft.so.11
 ```
 
 ## Unsupported PTX Version
