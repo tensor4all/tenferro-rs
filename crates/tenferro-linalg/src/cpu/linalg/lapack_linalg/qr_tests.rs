@@ -4,7 +4,10 @@ use tenferro_tensor::TypedTensor;
 use super::{append_2d, compact_factor_2d, from_factors_2d, q_columns_2d, raw_r_2d};
 
 fn product(a: &[f64], a_rows: usize, a_cols: usize, b: &[f64], b_cols: usize) -> Vec<f64> {
-    let mut out = vec![0.0; a_rows * b_cols];
+    let output_len = a_rows
+        .checked_mul(b_cols)
+        .expect("test matrix product length fits usize");
+    let mut out = vec![0.0; output_len];
     for col in 0..b_cols {
         for inner in 0..a_cols {
             for row in 0..a_rows {
