@@ -86,6 +86,9 @@ compactness check, and cover shared-view `Debug`. A subsequent hosted review
 correctly identified the panicking `Index`/`IndexMut` surface as incompatible
 with the repository public-boundary contract, so those trait implementations
 were removed in favor of `get`/`get_mut`.
+The hosted follow-up also required canonical `// INVARIANT:` markers beside the
+three unchecked slice-access blocks; each marker now names the constructor and
+`validate_slice_len` proof that preserves the hot-path safety contract.
 `IntoIterator`, `Copy`/`Clone`, dynamic rank, and a mutable tensor-view
 constructor remain deferred API additions rather than requirements of this PoC.
 

@@ -186,6 +186,8 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
     #[inline(always)]
     pub unsafe fn get_unchecked(&self, index: [usize; N]) -> &T {
         let offset = linear_offset(&self.shape, index);
+        // INVARIANT: `ColMajorView::new` calls `validate_slice_len`, proving
+        // that the checked shape product equals `data.len()`.
         // SAFETY: the caller guarantees an in-bounds index. The checked
         // constructor proved the compact shape product equals `data.len()`.
         unsafe { self.data.get_unchecked(offset) }
@@ -396,6 +398,8 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     #[inline(always)]
     pub unsafe fn get_unchecked(&self, index: [usize; N]) -> &T {
         let offset = linear_offset(&self.shape, index);
+        // INVARIANT: `ColMajorViewMut::new` calls `validate_slice_len`, proving
+        // that the checked shape product equals `data.len()`.
         // SAFETY: the caller guarantees an in-bounds index. The checked
         // constructor proved the compact shape product equals `data.len()`.
         unsafe { self.data.get_unchecked(offset) }
@@ -422,6 +426,8 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     #[inline(always)]
     pub unsafe fn get_unchecked_mut(&mut self, index: [usize; N]) -> &mut T {
         let offset = linear_offset(&self.shape, index);
+        // INVARIANT: `ColMajorViewMut::new` calls `validate_slice_len`, proving
+        // that the checked shape product equals `data.len()`.
         // SAFETY: the caller guarantees an in-bounds index and exclusive
         // access to the selected element for the returned borrow.
         unsafe { self.data.get_unchecked_mut(offset) }
