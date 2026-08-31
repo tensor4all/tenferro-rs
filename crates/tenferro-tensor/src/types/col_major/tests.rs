@@ -81,9 +81,11 @@ fn scalar_empty_and_singleton_shapes_have_defined_lane_behavior() {
 #[test]
 fn compact_offset_view_is_zero_copy_and_noncompact_view_is_rejected() {
     let data = [99_i32, 1, 2, 3, 4, 88];
-    let offset =
-        TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 1, &data).unwrap();
-    let validated = offset.host_col_major().unwrap();
+    let validated = {
+        let offset =
+            TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 1, &data).unwrap();
+        offset.host_col_major().unwrap()
+    };
     assert_eq!(validated.as_slice(), &[1, 2, 3, 4]);
     assert!(std::ptr::eq(
         validated.as_slice().as_ptr(),
@@ -118,25 +120,33 @@ fn constructor_rejects_overflow_and_length_mismatch() {
 fn mutable_view_access_surface_covers_checked_and_unsafe_paths() {
     let mut tensor =
         TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
-    let mut view = tensor.host_col_major_mut().unwrap();
+    {
+        let mut view = tensor.host_col_major_mut().unwrap();
 
-    assert_eq!(view.shape(), &[2, 2]);
-    assert_eq!(view.iter().copied().sum::<i32>(), 10);
-    assert_eq!(view.axis0_lanes().count(), 2);
-    assert_eq!(view.get([0, 1]), Some(&3));
-    assert_eq!(view.get([2, 0]), None);
-    assert_eq!(view.get_mut([0, 2]), None);
-    view.as_mut_slice()[0] = 10;
-    // SAFETY: both indices are below extent 2 and no overlapping mutable
-    // borrow remains active across these statements.
-    assert_eq!(unsafe { view.get_unchecked([1, 0]) }, &2);
-    // SAFETY: index [1, 1] is in bounds and this is the only active borrow.
-    *unsafe { view.get_unchecked_mut([1, 1]) } = 40;
+        assert_eq!(view.shape(), &[2, 2]);
+        assert_eq!(view.iter().copied().sum::<i32>(), 10);
+        assert_eq!(view.axis0_lanes().count(), 2);
+        assert_eq!(view.get([0, 1]), Some(&3));
+        assert_eq!(view.get([2, 0]), None);
+        assert_eq!(view.get_mut([0, 2]), None);
+        view.as_mut_slice()[0] = 10;
+        // SAFETY: both indices are below extent 2 and no overlapping mutable
+        // borrow remains active across these statements.
+        assert_eq!(unsafe { view.get_unchecked([1, 0]) }, &2);
+        // SAFETY: index [1, 1] is in bounds and this is the only active borrow.
+        *unsafe { view.get_unchecked_mut([1, 1]) } = 40;
+        assert_eq!(
+            format!("{view:?}"),
+            "ColMajorViewMut { shape: [2, 2], len: 4 }"
+        );
+        assert_eq!(view.as_slice(), &[10, 2, 3, 40]);
+    }
+
+    let shared_view = tensor.host_col_major().unwrap();
     assert_eq!(
-        format!("{view:?}"),
-        "ColMajorViewMut { shape: [2, 2], len: 4 }"
+        format!("{shared_view:?}"),
+        "ColMajorView { shape: [2, 2], len: 4 }"
     );
-    assert_eq!(view.as_slice(), &[10, 2, 3, 40]);
 
     let shared = std::panic::catch_unwind(|| {
         let tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([1], vec![1]).unwrap();

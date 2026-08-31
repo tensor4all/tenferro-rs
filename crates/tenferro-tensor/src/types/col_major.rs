@@ -11,21 +11,7 @@ use std::ops::{Index, IndexMut};
 
 use tenferro_tensor_core::ValidationError;
 
-use super::{Rank, TensorScalar, TypedTensor, TypedTensorView};
-
-fn checked_shape_product<const N: usize>(
-    shape: &[usize; N],
-    op: &'static str,
-) -> crate::Result<usize> {
-    if shape.contains(&0) {
-        return Ok(0);
-    }
-    shape.iter().try_fold(1usize, |product, &extent| {
-        product
-            .checked_mul(extent)
-            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))
-    })
-}
+use super::{checked_view_element_count, Rank, TensorScalar, TypedTensor, TypedTensorView};
 
 fn static_shape<const N: usize>(shape: &[usize], op: &'static str) -> crate::Result<[usize; N]> {
     shape
@@ -63,7 +49,7 @@ fn validate_slice_len<const N: usize>(
     actual: usize,
     op: &'static str,
 ) -> crate::Result<()> {
-    let expected = checked_shape_product(shape, op)?;
+    let expected = checked_view_element_count(shape, op)?;
     if expected == actual {
         Ok(())
     } else {
@@ -92,6 +78,11 @@ fn validate_slice_len<const N: usize>(
 /// assert_eq!(view[[1, 0]], 2);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+///
+/// # Panics
+///
+/// Indexing with `view[index]` panics when any coordinate is out of bounds.
+/// Use [`Self::get`] when an out-of-bounds index should return `None`.
 pub struct ColMajorView<'a, T, const N: usize> {
     data: &'a [T],
     shape: [usize; N],
@@ -262,6 +253,12 @@ impl<T, const N: usize> Index<[usize; N]> for ColMajorView<'_, T, N> {
 /// assert_eq!(view.as_slice(), &[1, 7]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+///
+/// # Panics
+///
+/// Indexing with `view[index]` panics when any coordinate is out of bounds.
+/// Use [`Self::get`] or [`Self::get_mut`] when an out-of-bounds index should
+/// return `None`.
 pub struct ColMajorViewMut<'a, T, const N: usize> {
     data: &'a mut [T],
     shape: [usize; N],
@@ -589,9 +586,8 @@ impl<'a, T: 'static, const N: usize> TypedTensorView<'a, T, Rank<N>> {
     /// Returns [`crate::Error::RuntimeState`] when storage is backend-owned,
     /// or [`crate::Error::Validation`] when rank, compact layout, shape
     /// arithmetic, or the logical host range is invalid.
-    pub fn host_col_major(&self) -> crate::Result<ColMajorView<'_, T, N>> {
+    pub fn host_col_major(&self) -> crate::Result<ColMajorView<'a, T, N>> {
         const OP: &str = "TypedTensorView::host_col_major";
-        self.assert_col_major_contiguous()?;
         let shape = static_shape(self.shape(), OP)?;
         ColMajorView::new(self.as_slice()?, shape, OP)
     }

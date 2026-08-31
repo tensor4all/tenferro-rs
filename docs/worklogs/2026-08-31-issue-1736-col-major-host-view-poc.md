@@ -74,6 +74,15 @@ review and the added error-path test. `scripts/check-docs-site.py` completed its
 snippet check, then stopped because the active Python is older than the script's
 Python 3.11 requirement.
 
+Claude Fable reviewed the complete PR diff after it was opened. It reported no
+blocking findings and confirmed the unsafe proof chain, mutable iterator
+disjointness, compact offset validation, and backend rejection. Follow-up edits
+loosen the shared `TypedTensorView` constructor lifetime to the backing-data
+lifetime, reuse the existing view element-count helper, remove a duplicate
+compactness check, document indexing panics, and cover shared-view `Debug`.
+`IntoIterator`, `Copy`/`Clone`, dynamic rank, and a mutable tensor-view
+constructor remain deferred API additions rather than requirements of this PoC.
+
 ## Performance experiment
 
 The need gate was already established by the 2026-08-17 element-access record:

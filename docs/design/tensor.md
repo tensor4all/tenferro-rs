@@ -96,6 +96,8 @@ layout, or `Result` work.
 The first coordinate varies fastest. These views do not materialize storage,
 transfer device data, replace arbitrary-strided kernels, or promise removal of
 bounds checks for arbitrary safe random indices.
+The prototype does not yet add a constructor on `TypedTensorViewMut`; mutable
+validated access currently starts from an owned `TypedTensor`.
 
 ## Device Transfer
 
