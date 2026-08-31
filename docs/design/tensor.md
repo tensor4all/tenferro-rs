@@ -93,6 +93,10 @@ references. Checked random access accepts `[usize; N]`; the unsafe accessor
 requires every coordinate to be in bounds and repeats no rank, backend,
 layout, or `Result` work.
 
+Checked random access uses `get`/`get_mut` and returns `Option`; these views do
+not implement `Index` or `IndexMut`, because invalid user coordinates must not
+cross a public library boundary as a panic.
+
 The first coordinate varies fastest. These views do not materialize storage,
 transfer device data, replace arbitrary-strided kernels, or promise removal of
 bounds checks for arbitrary safe random indices.

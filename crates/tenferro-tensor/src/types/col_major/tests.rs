@@ -11,9 +11,9 @@ fn owned_view_preserves_static_shape_and_column_major_access() {
     let view = tensor.host_col_major().unwrap();
 
     assert_eq!(view.shape(), &[2, 2, 2]);
-    assert_eq!(view[[1, 0, 0]], 1);
-    assert_eq!(view[[0, 1, 0]], 2);
-    assert_eq!(view[[0, 0, 1]], 4);
+    assert_eq!(view.get([1, 0, 0]), Some(&1));
+    assert_eq!(view.get([0, 1, 0]), Some(&2));
+    assert_eq!(view.get([0, 0, 1]), Some(&4));
     assert_eq!(view.get([2, 0, 0]), None);
     assert_eq!(view.iter().copied().sum::<i32>(), 28);
     assert_eq!(
@@ -32,7 +32,7 @@ fn mutable_view_iterators_keep_element_borrows_disjoint() {
     {
         let mut view = tensor.host_col_major_mut().unwrap();
         *view.get_mut([1, 0]).unwrap() = 20;
-        view[[0, 1]] = 30;
+        *view.get_mut([0, 1]).unwrap() = 30;
         for lane in view.axis0_lanes_mut() {
             lane[1] += 1;
         }
@@ -48,7 +48,7 @@ fn mutable_view_iterators_keep_element_borrows_disjoint() {
 fn scalar_empty_and_singleton_shapes_have_defined_lane_behavior() {
     let scalar = TypedTensor::<i32, Rank<0>>::from_vec_col_major([], vec![7]).unwrap();
     let scalar_view = scalar.host_col_major().unwrap();
-    assert_eq!(scalar_view[[]], 7);
+    assert_eq!(scalar_view.get([]), Some(&7));
     assert_eq!(
         scalar_view.axis0_lanes().collect::<Vec<_>>(),
         vec![&[7][..]]
@@ -148,19 +148,7 @@ fn mutable_view_access_surface_covers_checked_and_unsafe_paths() {
         "ColMajorView { shape: [2, 2], len: 4 }"
     );
 
-    let shared = std::panic::catch_unwind(|| {
-        let tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([1], vec![1]).unwrap();
-        let view = tensor.host_col_major().unwrap();
-        let _ = view[[1]];
-    });
-    assert!(shared.is_err());
-
-    let mutable = std::panic::catch_unwind(|| {
-        let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([1], vec![1]).unwrap();
-        let mut view = tensor.host_col_major_mut().unwrap();
-        view[[1]] = 2;
-    });
-    assert!(mutable.is_err());
+    assert_eq!(shared_view.get([2, 0]), None);
 }
 
 #[test]
@@ -223,7 +211,7 @@ fn poisson_jacobi_step_uses_first_axis_lanes() {
             } else {
                 0.01
             };
-            assert_eq!(next[[i, j]], expected);
+            assert_eq!(next.get([i, j]), Some(&expected));
         }
     }
 }

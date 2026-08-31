@@ -263,13 +263,13 @@ fn bench_rank2_fixed(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("nested_col_major_index", |b| {
+    group.bench_function("nested_col_major_get", |b| {
         let view = static_tensor.host_col_major().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for j in 0..shape[1] {
                 for i in 0..shape[0] {
-                    sum += black_box(view[[black_box(i), black_box(j)]]);
+                    sum += black_box(view.get([black_box(i), black_box(j)]).unwrap());
                 }
             }
             black_box(sum)
@@ -410,14 +410,17 @@ fn bench_rank3_fixed(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("nested_col_major_index", |b| {
+    group.bench_function("nested_col_major_get", |b| {
         let view = static_tensor.host_col_major().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for k in 0..shape[2] {
                 for j in 0..shape[1] {
                     for i in 0..shape[0] {
-                        sum += black_box(view[[black_box(i), black_box(j), black_box(k)]]);
+                        sum += black_box(
+                            view.get([black_box(i), black_box(j), black_box(k)])
+                                .unwrap(),
+                        );
                     }
                 }
             }

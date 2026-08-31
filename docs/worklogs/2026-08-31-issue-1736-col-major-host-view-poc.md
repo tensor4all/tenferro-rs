@@ -32,7 +32,10 @@ implementation candidate is commit `e70cdbfc`.
   zero-copy logical slicing.
 - Store only `[usize; N]` and the exact borrowed slice in the hot-loop wrapper.
 - Use slice iteration and `ChunksExact`/`ChunksExactMut` as the guaranteed safe
-  fast paths. Keep random checked indexing as a convenience path.
+  fast paths. Keep random checked `get`/`get_mut` access as a convenience path.
+- Do not implement `Index` or `IndexMut`: those traits cannot express a typed or
+  optional out-of-bounds result, and the repository forbids turning invalid
+  public input into a panic.
 - Keep the unsafe accessor local to the validated wrapper. Its proof is the
   checked shape product, exact slice length, and caller-provided in-bounds
   coordinates.
@@ -79,7 +82,10 @@ blocking findings and confirmed the unsafe proof chain, mutable iterator
 disjointness, compact offset validation, and backend rejection. Follow-up edits
 loosen the shared `TypedTensorView` constructor lifetime to the backing-data
 lifetime, reuse the existing view element-count helper, remove a duplicate
-compactness check, document indexing panics, and cover shared-view `Debug`.
+compactness check, and cover shared-view `Debug`. A subsequent hosted review
+correctly identified the panicking `Index`/`IndexMut` surface as incompatible
+with the repository public-boundary contract, so those trait implementations
+were removed in favor of `get`/`get_mut`.
 `IntoIterator`, `Copy`/`Clone`, dynamic rank, and a mutable tensor-view
 constructor remain deferred API additions rather than requirements of this PoC.
 
@@ -96,8 +102,8 @@ The experiment was declared before the candidate run:
 - toolchain and target: Rust 1.98.0, `aarch64-apple-darwin`;
 - profile: Criterion release, one-second warm-up, two-second measurement,
   20 samples, scalar single-threaded loops, no CPU affinity control on macOS;
-- cases: rank-2/rank-3 raw nested slice, checked validated indexing, unchecked
-  validated indexing, safe axis-0 lanes, mutable lanes, and existing direct
+- cases: rank-2/rank-3 raw nested slice, checked validated `get`, unchecked
+  validated access, safe axis-0 lanes, mutable lanes, and existing direct
   slice/tensor iteration non-regression cases;
 - primary gate: safe axis-0 lanes no more than 5% slower than the corresponding
   raw slice median for rank 2 and rank 3;

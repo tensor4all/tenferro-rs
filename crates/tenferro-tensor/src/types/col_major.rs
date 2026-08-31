@@ -7,7 +7,6 @@
 //! operates directly on the validated slice.
 
 use std::fmt;
-use std::ops::{Index, IndexMut};
 
 use tenferro_tensor_core::ValidationError;
 
@@ -75,14 +74,9 @@ fn validate_slice_len<const N: usize>(
 ///     vec![1, 2, 3, 4],
 /// )?;
 /// let view = tensor.host_col_major()?;
-/// assert_eq!(view[[1, 0]], 2);
+/// assert_eq!(view.get([1, 0]), Some(&2));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-///
-/// # Panics
-///
-/// Indexing with `view[index]` panics when any coordinate is out of bounds.
-/// Use [`Self::get`] when an out-of-bounds index should return `None`.
 pub struct ColMajorView<'a, T, const N: usize> {
     data: &'a [T],
     shape: [usize; N],
@@ -227,18 +221,6 @@ impl<'a, T, const N: usize> ColMajorView<'a, T, N> {
     }
 }
 
-impl<T, const N: usize> Index<[usize; N]> for ColMajorView<'_, T, N> {
-    type Output = T;
-
-    #[inline(always)]
-    fn index(&self, index: [usize; N]) -> &Self::Output {
-        match self.get(index) {
-            Some(value) => value,
-            None => panic!("index {index:?} out of bounds for shape {:?}", self.shape),
-        }
-    }
-}
-
 /// Exclusive view of a validated compact column-major host tensor with rank `N`.
 ///
 /// Mutable traversal yields disjoint references through Rust slice iterators.
@@ -249,16 +231,10 @@ impl<T, const N: usize> Index<[usize; N]> for ColMajorView<'_, T, N> {
 /// use tenferro_tensor::{Rank, TypedTensor};
 /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![1, 2])?;
 /// let mut view = tensor.host_col_major_mut()?;
-/// view[[1]] = 7;
+/// if let Some(value) = view.get_mut([1]) { *value = 7; }
 /// assert_eq!(view.as_slice(), &[1, 7]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-///
-/// # Panics
-///
-/// Indexing with `view[index]` panics when any coordinate is out of bounds.
-/// Use [`Self::get`] or [`Self::get_mut`] when an out-of-bounds index should
-/// return `None`.
 pub struct ColMajorViewMut<'a, T, const N: usize> {
     data: &'a mut [T],
     shape: [usize; N],
@@ -493,29 +469,6 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     }
 }
 
-impl<T, const N: usize> Index<[usize; N]> for ColMajorViewMut<'_, T, N> {
-    type Output = T;
-
-    #[inline(always)]
-    fn index(&self, index: [usize; N]) -> &Self::Output {
-        match self.get(index) {
-            Some(value) => value,
-            None => panic!("index {index:?} out of bounds for shape {:?}", self.shape),
-        }
-    }
-}
-
-impl<T, const N: usize> IndexMut<[usize; N]> for ColMajorViewMut<'_, T, N> {
-    #[inline(always)]
-    fn index_mut(&mut self, index: [usize; N]) -> &mut Self::Output {
-        let shape = self.shape;
-        match self.get_mut(index) {
-            Some(value) => value,
-            None => panic!("index {index:?} out of bounds for shape {shape:?}"),
-        }
-    }
-}
-
 impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
     /// Validate and borrow this owned tensor as a compact column-major host view.
     ///
@@ -524,7 +477,7 @@ impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 1], vec![1, 2])?;
-    /// assert_eq!(tensor.host_col_major()?[[1, 0]], 2);
+    /// assert_eq!(tensor.host_col_major()?.get([1, 0]), Some(&2));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
@@ -547,7 +500,7 @@ impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     /// let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([1], vec![1])?;
-    /// tensor.host_col_major_mut()?[[0]] = 3;
+    /// if let Some(value) = tensor.host_col_major_mut()?.get_mut([0]) { *value = 3; }
     /// assert_eq!(tensor.as_slice()?, &[3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
