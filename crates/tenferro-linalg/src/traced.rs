@@ -79,6 +79,29 @@ pub trait TracedTensorLinalgExt {
     /// compile or execution time for symbolic inputs.
     fn qr(&self) -> Result<(TracedTensor, TracedTensor)>;
 
+    /// Build opaque compact Householder QR state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for known invalid graph metadata or
+    /// `Error::Extension` for an unsupported operation.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape and backend provider checks may fail at compile or execution.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_runtime::TracedTensor;
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// let qr = a.householder_qr()?;
+    /// assert!(format!("{qr:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn householder_qr(&self) -> Result<crate::HouseholderQr<TracedTensor>>;
+
     /// Build a traced QR operation with explicit gauge options.
     ///
     /// # Errors
@@ -365,6 +388,10 @@ impl TracedTensorLinalgExt for TracedTensor {
         qr(self)
     }
 
+    fn householder_qr(&self) -> Result<crate::HouseholderQr<TracedTensor>> {
+        householder_qr(self)
+    }
+
     fn qr_with_options(&self, options: QrOptions) -> Result<(TracedTensor, TracedTensor)> {
         qr_with_options(self, options)
     }
@@ -605,6 +632,32 @@ pub fn svd_full(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedT
 /// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     qr_with_options(a, QrOptions::default())
+}
+
+/// Build compact Householder QR state for a traced matrix.
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for known invalid graph metadata or
+/// `Error::Extension` for an unsupported operation.
+///
+/// # Deferred errors
+///
+/// Symbolic shape constraints and backend provider failures may be reported
+/// during compile or execution.
+pub fn householder_qr(a: &TracedTensor) -> Result<crate::HouseholderQr<TracedTensor>> {
+    ensure_float_or_complex("householder_qr", a.dtype)?;
+    let mut outputs = apply(
+        Arc::new(LinalgExtensionOp::new(LinalgOp::HouseholderQrFactor)),
+        &[a],
+    )?
+    .into_iter();
+    match (outputs.next(), outputs.next(), outputs.next()) {
+        (Some(packed), Some(coeff), None) => Ok(
+            crate::HouseholderQr::<TracedTensor>::from_traced_outputs(packed, coeff),
+        ),
+        _ => Err(unexpected_output_count("householder_qr", 2)),
+    }
 }
 
 /// Build a traced QR decomposition op with explicit options.

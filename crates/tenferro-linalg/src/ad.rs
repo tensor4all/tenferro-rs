@@ -143,6 +143,11 @@ impl LinalgAdRule {
             LinalgOp::EigVals { input_dtype } => {
                 rules::linearize_eig_values(builder, primal_in, tangent_in, input_dtype, ctx)
             }
+            LinalgOp::HouseholderQrFactor
+            | LinalgOp::HouseholderQrFromFactors
+            | LinalgOp::HouseholderQrAppend
+            | LinalgOp::HouseholderQrR { .. }
+            | LinalgOp::HouseholderQrQColumns { .. } => Ok(vec![None; op.output_count()]),
         }
     }
     fn linear_transpose(
@@ -228,7 +233,12 @@ impl LinalgAdRule {
             | LinalgOp::Eigh { .. }
             | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. }
-            | LinalgOp::EigVals { .. } => Ok(vec![None; op.input_count()]),
+            | LinalgOp::EigVals { .. }
+            | LinalgOp::HouseholderQrFactor
+            | LinalgOp::HouseholderQrFromFactors
+            | LinalgOp::HouseholderQrAppend
+            | LinalgOp::HouseholderQrR { .. }
+            | LinalgOp::HouseholderQrQColumns { .. } => Ok(vec![None; op.input_count()]),
         }
     }
 }

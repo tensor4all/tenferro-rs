@@ -96,10 +96,15 @@ pub enum LinalgAdOpKind {
     EigVals,
     TriangularSolve,
     SvdFull,
+    HouseholderQrFactor,
+    HouseholderQrFromFactors,
+    HouseholderQrAppend,
+    HouseholderQrR,
+    HouseholderQrQColumns,
 }
 
 impl LinalgAdOpKind {
-    pub const COUNT: usize = 17;
+    pub const COUNT: usize = 22;
 
     /// Return the manifest index for this operation kind.
     ///
@@ -129,6 +134,11 @@ impl LinalgAdOpKind {
             Self::EigVals => 14,
             Self::TriangularSolve => 15,
             Self::SvdFull => 16,
+            Self::HouseholderQrFactor => 17,
+            Self::HouseholderQrFromFactors => 18,
+            Self::HouseholderQrAppend => 19,
+            Self::HouseholderQrR => 20,
+            Self::HouseholderQrQColumns => 21,
         }
     }
 
@@ -151,6 +161,11 @@ impl LinalgAdOpKind {
             LinalgOp::SvdFull => Self::SvdFull,
             LinalgOp::SvdVals { .. } => Self::SvdVals,
             LinalgOp::Qr { .. } => Self::Qr,
+            LinalgOp::HouseholderQrFactor => Self::HouseholderQrFactor,
+            LinalgOp::HouseholderQrFromFactors => Self::HouseholderQrFromFactors,
+            LinalgOp::HouseholderQrAppend => Self::HouseholderQrAppend,
+            LinalgOp::HouseholderQrR { .. } => Self::HouseholderQrR,
+            LinalgOp::HouseholderQrQColumns { .. } => Self::HouseholderQrQColumns,
             LinalgOp::Eigh { .. } => Self::Eigh,
             LinalgOp::EighVals { .. } => Self::EighVals,
             LinalgOp::Eig { .. } => Self::Eig,
@@ -331,6 +346,12 @@ static QR_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "q", LinalgAdRuleSupport::SupportedViaLinearize),
     output(1, "r", LinalgAdRuleSupport::SupportedViaLinearize),
 ];
+static HOUSEHOLDER_QR_STATE_OUTPUTS: [LinalgAdOutputSupport; 2] = [
+    output(0, "packed", LinalgAdRuleSupport::Unsupported),
+    output(1, "coeff", LinalgAdRuleSupport::Unsupported),
+];
+static HOUSEHOLDER_QR_VALUE_OUTPUTS: [LinalgAdOutputSupport; 1] =
+    [output(0, "value", LinalgAdRuleSupport::Unsupported)];
 static EIGH_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "eigenvalues", LinalgAdRuleSupport::SupportedViaLinearize),
     output(
@@ -559,6 +580,51 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
         LinalgAdRuleSupport::Unsupported,
         &SVD_FULL_OUTPUTS,
         &[],
+    ),
+    support_entry(
+        LinalgAdOpKind::HouseholderQrFactor,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &HOUSEHOLDER_QR_STATE_OUTPUTS,
+        &["AD support requires the incremental QR oracle family."],
+    ),
+    support_entry(
+        LinalgAdOpKind::HouseholderQrFromFactors,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &HOUSEHOLDER_QR_STATE_OUTPUTS,
+        &["AD support requires the incremental QR oracle family."],
+    ),
+    support_entry(
+        LinalgAdOpKind::HouseholderQrAppend,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &HOUSEHOLDER_QR_STATE_OUTPUTS,
+        &["AD support requires the incremental QR oracle family."],
+    ),
+    support_entry(
+        LinalgAdOpKind::HouseholderQrR,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &HOUSEHOLDER_QR_VALUE_OUTPUTS,
+        &["AD support requires the incremental QR oracle family."],
+    ),
+    support_entry(
+        LinalgAdOpKind::HouseholderQrQColumns,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &HOUSEHOLDER_QR_VALUE_OUTPUTS,
+        &["AD support requires the incremental QR oracle family."],
     ),
 ];
 

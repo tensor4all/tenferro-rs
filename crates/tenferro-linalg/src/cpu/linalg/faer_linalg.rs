@@ -1,4 +1,5 @@
 use faer::dyn_stack::{MemBuffer, MemStack};
+use faer::prelude::ReborrowMut;
 use faer::{
     diag::{Diag, DiagRef},
     Conj, Mat, MatMut, MatRef,
@@ -10,10 +11,43 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor, TypedTensorView, TypedTensorViewMut};
 
-pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
+pub(crate) trait FaerLinalg:
+    Copy + Clone + Default + PartialEq + PoolScalar + std::ops::Mul<Output = Self>
+{
     type Real: Copy + Clone + PoolScalar;
 
     fn parity_one() -> Self;
+    fn compact_factor_data(
+        ctx: &CpuExecutionContext<'_>,
+        data: &mut [Self],
+        rows: usize,
+        cols: usize,
+    ) -> tenferro_tensor::Result<Vec<Self>>;
+    // INVARIANT: these buffers and dimensions mirror the provider reflector ABI.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_reflectors_data(
+        ctx: &CpuExecutionContext<'_>,
+        a: &[Self],
+        a_cols: usize,
+        coeff: &[Self],
+        c: &mut [Self],
+        rows: usize,
+        cols: usize,
+        k: usize,
+        transpose: bool,
+    ) -> tenferro_tensor::Result<()>;
+    fn gemm_data(
+        ctx: &CpuExecutionContext<'_>,
+        a: &[Self],
+        a_rows: usize,
+        a_cols: usize,
+        b: &[Self],
+        b_cols: usize,
+        c: &mut [Self],
+    ) -> tenferro_tensor::Result<()>;
+    fn one() -> Self;
+    fn r_phase(diagonal: Self) -> Self;
+    fn q_phase(diagonal: Self) -> Self;
     fn cholesky_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -407,6 +441,288 @@ fn checked_slice_range(
         .checked_add(slice_size)
         .ok_or_else(|| invalid_config(op, "batch slice end overflows usize"))?;
     Ok(start..end)
+}
+
+fn validate_compact_state<T>(
+    packed: &TypedTensor<T>,
+    coeff: &TypedTensor<T>,
+    op: &'static str,
+) -> tenferro_tensor::Result<(usize, usize, usize)> {
+    let (rows, cols) = matrix_dims(packed, op)?;
+    if coeff.shape().len() != 1 {
+        return Err(tenferro_tensor::Error::rank_mismatch(
+            op,
+            1,
+            coeff.shape().len(),
+        ));
+    }
+    let k = rows.min(cols);
+    if coeff.shape()[0] != k {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            op,
+            vec![k],
+            vec![coeff.shape()[0]],
+        ));
+    }
+    Ok((rows, cols, k))
+}
+
+pub(crate) fn compact_factor_2d<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
+    let (rows, cols) = matrix_dims(input, "compact_factor_2d")?;
+    let input_data = input.host_data()?;
+    let mut packed = buffers.acquire_with_capacity::<T>(input_data.len());
+    packed.extend_from_slice(input_data);
+    let coeff = T::compact_factor_data(ctx, &mut packed, rows, cols)?;
+    let k = rows.min(cols);
+    if coeff.len() != k {
+        return Err(invalid_config(
+            "compact_factor_2d",
+            "coefficients: provider returned an invalid coefficient count",
+        ));
+    }
+    Ok((
+        tensor_from_vec_with_template(vec![rows, cols], packed, input.placement())?,
+        tensor_from_vec_with_template(vec![k], coeff, input.placement())?,
+    ))
+}
+
+pub(crate) fn append_2d<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    packed: &TypedTensor<T>,
+    coeff: &TypedTensor<T>,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
+    let (rows, old_cols, old_k) = validate_compact_state(packed, coeff, "append_2d")?;
+    let (input_rows, block_cols) = matrix_dims(input, "append_2d")?;
+    if input_rows != rows {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "append_2d",
+            vec![rows, block_cols],
+            vec![input_rows, block_cols],
+        ));
+    }
+    if block_cols == 0 {
+        return Ok((
+            tensor_from_vec_with_template(
+                packed.shape().to_vec(),
+                packed.host_data()?.to_vec(),
+                packed.placement(),
+            )?,
+            tensor_from_vec_with_template(
+                coeff.shape().to_vec(),
+                coeff.host_data()?.to_vec(),
+                coeff.placement(),
+            )?,
+        ));
+    }
+    let new_cols = old_cols
+        .checked_add(block_cols)
+        .ok_or_else(|| invalid_config("append_2d", "shape: column count overflows usize"))?;
+    let new_k = rows.min(new_cols);
+    let mut transformed = buffers.acquire_with_capacity::<T>(checked_product(
+        "append_2d",
+        "transformed block",
+        &[rows, block_cols],
+    )?);
+    transformed.extend_from_slice(input.host_data()?);
+    T::apply_reflectors_data(
+        ctx,
+        packed.host_data()?,
+        old_cols,
+        coeff.host_data()?,
+        &mut transformed,
+        rows,
+        block_cols,
+        old_k,
+        true,
+    )?;
+    let trailing_rows = rows - old_k;
+    let trailing_len =
+        checked_product("append_2d", "trailing block", &[trailing_rows, block_cols])?;
+    let mut trailing = buffers.acquire_with_capacity::<T>(trailing_len);
+    for col in 0..block_cols {
+        trailing.extend_from_slice(&transformed[col * rows + old_k..(col + 1) * rows]);
+    }
+    let new_coeff = if trailing_rows == 0 {
+        Vec::new()
+    } else {
+        T::compact_factor_data(ctx, &mut trailing, trailing_rows, block_cols)?
+    };
+    let mut output = buffers.acquire_with_capacity::<T>(checked_product(
+        "append_2d",
+        "packed state",
+        &[rows, new_cols],
+    )?);
+    output.extend_from_slice(packed.host_data()?);
+    for col in 0..block_cols {
+        output.extend_from_slice(&transformed[col * rows..col * rows + old_k]);
+        output.extend_from_slice(&trailing[col * trailing_rows..(col + 1) * trailing_rows]);
+    }
+    let mut output_coeff = buffers.acquire_with_capacity::<T>(new_k);
+    output_coeff.extend_from_slice(coeff.host_data()?);
+    output_coeff.extend_from_slice(&new_coeff);
+    if output_coeff.len() != new_k {
+        return Err(invalid_config(
+            "append_2d",
+            "coefficients: provider returned an invalid coefficient count",
+        ));
+    }
+    Ok((
+        tensor_from_vec_with_template(vec![rows, new_cols], output, packed.placement())?,
+        tensor_from_vec_with_template(vec![new_k], output_coeff, packed.placement())?,
+    ))
+}
+
+pub(crate) fn from_factors_2d<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    q: &TypedTensor<T>,
+    r: &TypedTensor<T>,
+) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
+    let (rows, q_cols) = matrix_dims(q, "from_factors_2d")?;
+    let (r_rows, cols) = matrix_dims(r, "from_factors_2d")?;
+    if r_rows != q_cols {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "from_factors_2d",
+            vec![q_cols, cols],
+            vec![r_rows, cols],
+        ));
+    }
+    if q_cols > rows.min(cols) {
+        return Err(invalid_config(
+            "from_factors_2d",
+            "shape: Q column count must not exceed min(Q rows, R columns)",
+        ));
+    }
+    let k = rows.min(cols);
+    let r_data = r.host_data()?;
+    for col in 0..cols.min(q_cols) {
+        for row in col + 1..q_cols {
+            if r_data[row + col * q_cols] != T::default() {
+                return Err(invalid_config(
+                    "from_factors_2d",
+                    "R must be upper trapezoidal",
+                ));
+            }
+        }
+    }
+    let q_data = q.host_data()?;
+    let mut q_packed = buffers.acquire_with_capacity::<T>(q_data.len());
+    q_packed.extend_from_slice(q_data);
+    let q_coeff = T::compact_factor_data(ctx, &mut q_packed, rows, q_cols)?;
+    let folded_len = checked_product("from_factors_2d", "folded R", &[q_cols, cols])?;
+    let mut folded = buffers.acquire_with_capacity::<T>(folded_len);
+    folded.resize(folded_len, T::default());
+    let triangular_len =
+        checked_product("from_factors_2d", "triangular factor", &[q_cols, q_cols])?;
+    let mut t = buffers.acquire_with_capacity::<T>(triangular_len);
+    t.resize(triangular_len, T::default());
+    for col in 0..q_cols {
+        for row in 0..q_cols {
+            if row <= col {
+                t[row + col * q_cols] = q_packed[row + col * rows];
+            }
+        }
+    }
+    T::gemm_data(ctx, &t, q_cols, q_cols, r_data, cols, &mut folded)?;
+    let output_len = checked_product("from_factors_2d", "packed state", &[rows, cols])?;
+    let mut output = buffers.acquire_with_capacity::<T>(output_len);
+    output.resize(output_len, T::default());
+    for col in 0..cols {
+        for row in 0..rows {
+            output[row + col * rows] = if col < q_cols && row > col {
+                q_packed[row + col * rows]
+            } else if row < q_cols {
+                folded[row + col * q_cols]
+            } else {
+                T::default()
+            };
+        }
+    }
+    let mut output_coeff = buffers.acquire_with_capacity::<T>(k);
+    output_coeff.resize(k, T::default());
+    output_coeff[..q_cols].copy_from_slice(&q_coeff);
+    Ok((
+        tensor_from_vec_with_template(vec![rows, cols], output, q.placement())?,
+        tensor_from_vec_with_template(vec![k], output_coeff, q.placement())?,
+    ))
+}
+
+pub(crate) fn raw_r_2d<T: FaerLinalg + 'static>(
+    packed: &TypedTensor<T>,
+    coeff: &TypedTensor<T>,
+    positive_diagonal: bool,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let (rows, cols, k) = validate_compact_state(packed, coeff, "raw_r_2d")?;
+    let mut r = vec![T::default(); checked_product("raw_r_2d", "R", &[k, cols])?];
+    let packed_data = packed.host_data()?;
+    for col in 0..cols {
+        for row in 0..k.min(col + 1) {
+            r[row + col * k] = packed_data[row + col * rows];
+        }
+    }
+    if positive_diagonal {
+        for diag in 0..k {
+            let phase = T::r_phase(r[diag + diag * k]);
+            for col in 0..cols {
+                r[diag + col * k] = r[diag + col * k] * phase;
+            }
+        }
+    }
+    tensor_from_vec_with_template(vec![k, cols], r, packed.placement())
+}
+
+pub(crate) fn q_columns_2d<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    packed: &TypedTensor<T>,
+    coeff: &TypedTensor<T>,
+    start: usize,
+    end: usize,
+    positive_diagonal: bool,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let (rows, _cols, k) = validate_compact_state(packed, coeff, "q_columns_2d")?;
+    if start > end || end > k {
+        return Err(invalid_config(
+            "q_columns_2d",
+            format!("range: range {start}..{end} is outside 0..{k}"),
+        ));
+    }
+    let columns = end - start;
+    let q_len = checked_product("q_columns_2d", "Q", &[rows, columns])?;
+    let mut q = buffers.acquire_with_capacity::<T>(q_len);
+    q.resize(q_len, T::default());
+    for col in 0..columns {
+        q[start + col + col * rows] = T::one();
+    }
+    if columns != 0 {
+        T::apply_reflectors_data(
+            ctx,
+            packed.host_data()?,
+            packed.shape()[1],
+            coeff.host_data()?,
+            &mut q,
+            rows,
+            columns,
+            k,
+            false,
+        )?;
+        if positive_diagonal {
+            let packed_data = packed.host_data()?;
+            for col in 0..columns {
+                let phase = T::q_phase(packed_data[(start + col) + (start + col) * rows]);
+                for row in 0..rows {
+                    q[row + col * rows] = q[row + col * rows] * phase;
+                }
+            }
+        }
+    }
+    tensor_from_vec_with_template(vec![rows, columns], q, packed.placement())
 }
 
 macro_rules! impl_complex_vec_helpers {
@@ -1197,6 +1513,128 @@ macro_rules! impl_faer_linalg_for_real {
         1.0
     }
 
+    fn compact_factor_data(
+        ctx: &CpuExecutionContext<'_>,
+        data: &mut [Self],
+        rows: usize,
+        cols: usize,
+    ) -> tenferro_tensor::Result<Vec<Self>> {
+        let expected = checked_product("compact_factor_2d", "matrix", &[rows, cols])?;
+        if data.len() != expected {
+            return Err(invalid_config("compact_factor_2d", "matrix: input buffer length does not match dimensions"));
+        }
+        let k = rows.min(cols);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        let mut qr = MatMut::from_column_major_slice_mut(data, rows, cols);
+        let mut coeff = Vec::with_capacity(k);
+        for j in 0..k {
+            let mut column = qr.as_mut().col_mut(j).subrows_mut(j, rows - j);
+            let (mut head, tail) = column.rb_mut().split_at_row_mut(1);
+            let info = faer::linalg::householder::make_householder_in_place(&mut head[0], tail);
+            let beta = head[0];
+            head[0] = 1.0 as $scalar;
+            // Faer stores H = I - vv^H/tau; compact state stores 1/tau.
+            coeff.push((1.0 as $scalar) / info.tau);
+            if j + 1 < cols {
+                let mut basis = Mat::<$scalar>::zeros(rows - j, 1);
+                basis[(0, 0)] = 1.0 as $scalar;
+                for row in 1..rows - j {
+                    basis[(row, 0)] = qr[(j + row, j)];
+                }
+                let factor = Mat::from_fn(1, 1, |_, _| info.tau);
+                let mut mem = MemBuffer::new(faer::linalg::householder::apply_block_householder_on_the_left_in_place_scratch::<$scalar>(rows - j, 1, cols - j - 1));
+                let stack = MemStack::new(&mut mem);
+                faer::linalg::householder::apply_block_householder_on_the_left_in_place_with_conj(
+                    basis.as_ref(), factor.as_ref(), Conj::No,
+                    qr.as_mut().submatrix_mut(j, j + 1, rows - j, cols - j - 1),
+                    ctx.faer_parallelism(), stack,
+                );
+            }
+            qr[(j, j)] = beta;
+        }
+        Ok(coeff)
+    }
+
+    // INVARIANT: these buffers and dimensions mirror the provider reflector ABI.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_reflectors_data(
+        ctx: &CpuExecutionContext<'_>,
+        a: &[Self],
+        a_cols: usize,
+        coeff: &[Self],
+        c: &mut [Self],
+        rows: usize,
+        cols: usize,
+        k: usize,
+        transpose: bool,
+    ) -> tenferro_tensor::Result<()> {
+        if k > rows || k > a_cols || coeff.len() != k {
+            return Err(invalid_config("apply_reflectors_2d", "dimensions: reflector count exceeds matrix dimensions"));
+        }
+        if a.len() != checked_product("apply_reflectors_2d", "A", &[rows, a_cols])?
+            || c.len() != checked_product("apply_reflectors_2d", "C", &[rows, cols])?
+        {
+            return Err(invalid_config("apply_reflectors_2d", "matrix: input buffer length does not match dimensions"));
+        }
+        if rows == 0 || cols == 0 || k == 0 {
+            return Ok(());
+        }
+        let basis = MatRef::from_column_major_slice(a, rows, a_cols).subcols(0, k);
+        let factors = Mat::from_fn(1, k, |_, col| {
+            // Rebuild Faer's denominator form transiently from state coeff.
+            (1.0 as $scalar) / coeff[col]
+        });
+        let mut matrix = MatMut::from_column_major_slice_mut(c, rows, cols);
+        let scratch = if transpose {
+            faer::linalg::householder::apply_block_householder_sequence_transpose_on_the_left_in_place_scratch::<$scalar>(rows, 1, cols)
+        } else {
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<$scalar>(rows, 1, cols)
+        };
+        let mut mem = MemBuffer::new(scratch);
+        let stack = MemStack::new(&mut mem);
+        if transpose {
+            faer::linalg::householder::apply_block_householder_sequence_transpose_on_the_left_in_place_with_conj(
+                basis.as_ref(), factors.as_ref(), Conj::No, matrix.as_mut(), ctx.faer_parallelism(), stack,
+            );
+        } else {
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
+                basis.as_ref(), factors.as_ref(), Conj::No, matrix.as_mut(), ctx.faer_parallelism(), stack,
+            );
+        }
+        Ok(())
+    }
+
+    fn gemm_data(
+        ctx: &CpuExecutionContext<'_>,
+        a: &[Self],
+        a_rows: usize,
+        a_cols: usize,
+        b: &[Self],
+        b_cols: usize,
+        c: &mut [Self],
+    ) -> tenferro_tensor::Result<()> {
+        if a.len() != checked_product("from_factors_2d", "T", &[a_rows, a_cols])?
+            || b.len() != checked_product("from_factors_2d", "R", &[a_cols, b_cols])?
+            || c.len() != checked_product("from_factors_2d", "folded R", &[a_rows, b_cols])?
+        {
+            return Err(invalid_config("from_factors_2d", "matrix: input buffer length does not match dimensions"));
+        }
+        if a_rows == 0 || a_cols == 0 || b_cols == 0 {
+            return Ok(());
+        }
+        let lhs = MatRef::from_column_major_slice(a, a_rows, a_cols);
+        let rhs = MatRef::from_column_major_slice(b, a_cols, b_cols);
+        let out = MatMut::from_column_major_slice_mut(c, a_rows, b_cols);
+        faer::linalg::matmul::matmul(out, faer::Accum::Replace, lhs, rhs, 1.0 as $scalar, ctx.faer_parallelism());
+        Ok(())
+    }
+
+    fn one() -> Self { 1.0 }
+    fn r_phase(diagonal: Self) -> Self { if diagonal < 0.0 { -1.0 } else { 1.0 } }
+    fn q_phase(diagonal: Self) -> Self { Self::r_phase(diagonal) }
+
     fn cholesky_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -1973,6 +2411,144 @@ macro_rules! impl_faer_linalg_for_complex {
 
     fn parity_one() -> Self {
         <$complex>::new(1.0, 0.0)
+    }
+
+    fn compact_factor_data(
+        ctx: &CpuExecutionContext<'_>,
+        data: &mut [Self],
+        rows: usize,
+        cols: usize,
+    ) -> tenferro_tensor::Result<Vec<Self>> {
+        let expected = checked_product("compact_factor_2d", "matrix", &[rows, cols])?;
+        if data.len() != expected {
+            return Err(invalid_config("compact_factor_2d", "matrix: input buffer length does not match dimensions"));
+        }
+        let k = rows.min(cols);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        let mut qr = MatMut::from_column_major_slice_mut(
+            $to_faer_slice_mut(data),
+            rows,
+            cols,
+        );
+        let mut coeff = Vec::with_capacity(k);
+        for j in 0..k {
+            let mut column = qr.as_mut().col_mut(j).subrows_mut(j, rows - j);
+            let (mut head, tail) = column.rb_mut().split_at_row_mut(1);
+            let info = faer::linalg::householder::make_householder_in_place(&mut head[0], tail);
+            let beta = head[0];
+            head[0] = <$faer_complex>::new(1.0, 0.0);
+            // Faer stores H = I - vv^H/tau; compact state stores 1/tau.
+            coeff.push(<$complex>::new(1.0 / info.tau, 0.0));
+            if j + 1 < cols {
+                let mut basis = Mat::<$faer_complex>::zeros(rows - j, 1);
+                basis[(0, 0)] = <$faer_complex>::new(1.0, 0.0);
+                for row in 1..rows - j {
+                    basis[(row, 0)] = qr[(j + row, j)];
+                }
+                let factor = Mat::from_fn(1, 1, |_, _| <$faer_complex>::new(info.tau, 0.0));
+                let mut mem = MemBuffer::new(faer::linalg::householder::apply_block_householder_on_the_left_in_place_scratch::<$faer_complex>(rows - j, 1, cols - j - 1));
+                let stack = MemStack::new(&mut mem);
+                faer::linalg::householder::apply_block_householder_on_the_left_in_place_with_conj(
+                    basis.as_ref(), factor.as_ref(), Conj::No,
+                    qr.as_mut().submatrix_mut(j, j + 1, rows - j, cols - j - 1),
+                    ctx.faer_parallelism(), stack,
+                );
+            }
+            qr[(j, j)] = beta;
+        }
+        Ok(coeff)
+    }
+
+    // INVARIANT: these buffers and dimensions mirror the provider reflector ABI.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_reflectors_data(
+        ctx: &CpuExecutionContext<'_>,
+        a: &[Self],
+        a_cols: usize,
+        coeff: &[Self],
+        c: &mut [Self],
+        rows: usize,
+        cols: usize,
+        k: usize,
+        transpose: bool,
+    ) -> tenferro_tensor::Result<()> {
+        if k > rows || k > a_cols || coeff.len() != k {
+            return Err(invalid_config("apply_reflectors_2d", "dimensions: reflector count exceeds matrix dimensions"));
+        }
+        if a.len() != checked_product("apply_reflectors_2d", "A", &[rows, a_cols])?
+            || c.len() != checked_product("apply_reflectors_2d", "C", &[rows, cols])?
+        {
+            return Err(invalid_config("apply_reflectors_2d", "matrix: input buffer length does not match dimensions"));
+        }
+        if rows == 0 || cols == 0 || k == 0 {
+            return Ok(());
+        }
+        let basis = MatRef::from_column_major_slice($to_faer_slice(a), rows, a_cols)
+            .subcols(0, k);
+        let coeff = $to_faer_slice(coeff);
+        let factors = Mat::from_fn(1, k, |_, col| {
+            // Rebuild Faer's denominator form transiently from state coeff.
+            <$faer_complex>::new(1.0 / coeff[col].re, 0.0)
+        });
+        let mut matrix = MatMut::from_column_major_slice_mut(
+            $to_faer_slice_mut(c),
+            rows,
+            cols,
+        );
+        let scratch = if transpose {
+            faer::linalg::householder::apply_block_householder_sequence_transpose_on_the_left_in_place_scratch::<$faer_complex>(rows, 1, cols)
+        } else {
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<$faer_complex>(rows, 1, cols)
+        };
+        let mut mem = MemBuffer::new(scratch);
+        let stack = MemStack::new(&mut mem);
+        if transpose {
+            faer::linalg::householder::apply_block_householder_sequence_transpose_on_the_left_in_place_with_conj(
+                basis.as_ref(), factors.as_ref(), Conj::Yes, matrix.as_mut(), ctx.faer_parallelism(), stack,
+            );
+        } else {
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
+                basis.as_ref(), factors.as_ref(), Conj::No, matrix.as_mut(), ctx.faer_parallelism(), stack,
+            );
+        }
+        Ok(())
+    }
+
+    fn gemm_data(
+        ctx: &CpuExecutionContext<'_>,
+        a: &[Self],
+        a_rows: usize,
+        a_cols: usize,
+        b: &[Self],
+        b_cols: usize,
+        c: &mut [Self],
+    ) -> tenferro_tensor::Result<()> {
+        if a.len() != checked_product("from_factors_2d", "T", &[a_rows, a_cols])?
+            || b.len() != checked_product("from_factors_2d", "R", &[a_cols, b_cols])?
+            || c.len() != checked_product("from_factors_2d", "folded R", &[a_rows, b_cols])?
+        {
+            return Err(invalid_config("from_factors_2d", "matrix: input buffer length does not match dimensions"));
+        }
+        if a_rows == 0 || a_cols == 0 || b_cols == 0 {
+            return Ok(());
+        }
+        let lhs = MatRef::from_column_major_slice($to_faer_slice(a), a_rows, a_cols);
+        let rhs = MatRef::from_column_major_slice($to_faer_slice(b), a_cols, b_cols);
+        let out = MatMut::from_column_major_slice_mut($to_faer_slice_mut(c), a_rows, b_cols);
+        faer::linalg::matmul::matmul(out, faer::Accum::Replace, lhs, rhs, <$faer_complex>::new(1.0, 0.0), ctx.faer_parallelism());
+        Ok(())
+    }
+
+    fn one() -> Self { <$complex>::new(1.0, 0.0) }
+    fn r_phase(diagonal: Self) -> Self {
+        let norm = diagonal.norm();
+        if norm == 0.0 { Self::one() } else { diagonal.conj() / norm }
+    }
+    fn q_phase(diagonal: Self) -> Self {
+        let norm = diagonal.norm();
+        if norm == 0.0 { Self::one() } else { diagonal / norm }
     }
 
     fn cholesky_2d(
