@@ -45,6 +45,32 @@ fn manifest_internal_mapping_covers_linalg_op_variants() {
             LinalgAdOpKind::Qr,
         ),
         (
+            LinalgOp::HouseholderQrFactor,
+            LinalgAdOpKind::HouseholderQrFactor,
+        ),
+        (
+            LinalgOp::HouseholderQrFromFactors,
+            LinalgAdOpKind::HouseholderQrFromFactors,
+        ),
+        (
+            LinalgOp::HouseholderQrAppend,
+            LinalgAdOpKind::HouseholderQrAppend,
+        ),
+        (
+            LinalgOp::HouseholderQrR {
+                gauge: QrGauge::Raw,
+            },
+            LinalgAdOpKind::HouseholderQrR,
+        ),
+        (
+            LinalgOp::HouseholderQrQColumns {
+                start: 0,
+                end: 1,
+                gauge: QrGauge::Raw,
+            },
+            LinalgAdOpKind::HouseholderQrQColumns,
+        ),
+        (
             LinalgOp::Eigh {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                 gauge: EighGauge::Raw,

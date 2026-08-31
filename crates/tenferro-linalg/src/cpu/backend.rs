@@ -1,4 +1,4 @@
-use crate::backend::{unsupported_dtype, LinalgBackend};
+use crate::backend::{unsupported_dtype, CompactQrResult, LinalgBackend};
 
 use super::linalg;
 
@@ -39,6 +39,13 @@ impl FreshLinalgOutput for Vec<Tensor> {
         for output in self {
             output.tag_fresh(domain);
         }
+    }
+}
+
+impl FreshLinalgOutput for CompactQrResult {
+    fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId) {
+        self.packed.tag_fresh(domain);
+        self.coeff.tag_fresh(domain);
     }
 }
 
@@ -410,6 +417,73 @@ impl LinalgBackend for CpuExecSession<'_> {
             context.with_materialized_tensor_read(buffers, "qr", input, |input, buffers| {
                 qr_entered(provider, context, buffers, input)
             })
+        })
+    }
+
+    fn householder_qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<CompactQrResult> {
+        ensure_host_tensor("householder_qr", input)?;
+        let provider = linalg_provider_kind(self.kind(), "householder_qr")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            householder_qr_entered(provider, context, buffers, input)
+        })
+    }
+
+    fn householder_qr_from_factors(
+        &mut self,
+        q: &Tensor,
+        r: &Tensor,
+    ) -> tenferro_tensor::Result<CompactQrResult> {
+        ensure_host_tensor("householder_qr_from_factors", q)?;
+        ensure_host_tensor("householder_qr_from_factors", r)?;
+        let provider = linalg_provider_kind(self.kind(), "householder_qr_from_factors")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            householder_qr_from_factors_entered(provider, context, buffers, q, r)
+        })
+    }
+
+    fn householder_qr_append(
+        &mut self,
+        packed: &Tensor,
+        coeff: &Tensor,
+        block: &Tensor,
+    ) -> tenferro_tensor::Result<CompactQrResult> {
+        ensure_host_tensor("householder_qr_append", packed)?;
+        ensure_host_tensor("householder_qr_append", coeff)?;
+        ensure_host_tensor("householder_qr_append", block)?;
+        let provider = linalg_provider_kind(self.kind(), "householder_qr_append")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            householder_qr_append_entered(provider, context, buffers, packed, coeff, block)
+        })
+    }
+
+    fn householder_qr_r(
+        &mut self,
+        packed: &Tensor,
+        coeff: &Tensor,
+        options: crate::QrOptions,
+    ) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("householder_qr_r", packed)?;
+        ensure_host_tensor("householder_qr_r", coeff)?;
+        let provider = linalg_provider_kind(self.kind(), "householder_qr_r")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            householder_qr_r_entered(provider, context, buffers, packed, coeff, options)
+        })
+    }
+
+    fn householder_qr_q_columns(
+        &mut self,
+        packed: &Tensor,
+        coeff: &Tensor,
+        columns: std::ops::Range<usize>,
+        options: crate::QrOptions,
+    ) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("householder_qr_q_columns", packed)?;
+        ensure_host_tensor("householder_qr_q_columns", coeff)?;
+        let provider = linalg_provider_kind(self.kind(), "householder_qr_q_columns")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            householder_qr_q_columns_entered(
+                provider, context, buffers, packed, coeff, columns, options,
+            )
         })
     }
 
@@ -1715,6 +1789,382 @@ fn qr_entered(
                 Err(unsupported_provider("qr", CpuBackendKind::Blas))
             }
         }
+    }
+}
+
+fn householder_qr_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+) -> tenferro_tensor::Result<CompactQrResult> {
+    match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                macro_rules! factor {
+                    ($tensor:expr, $variant:ident) => {{
+                        let (packed, coeff) =
+                            linalg::faer::compact_factor_2d(context, buffers, $tensor)?;
+                        Ok(CompactQrResult {
+                            packed: Tensor::$variant(packed),
+                            coeff: Tensor::$variant(coeff),
+                        })
+                    }};
+                }
+                match input {
+                    Tensor::F32(t) => factor!(t, F32),
+                    Tensor::F64(t) => factor!(t, F64),
+                    Tensor::C32(t) => factor!(t, C32),
+                    Tensor::C64(t) => factor!(t, C64),
+                    _ => Err(unsupported_dtype("householder_qr", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("householder_qr", CpuBackendKind::Faer))
+            }
+        }
+        CpuLinalgProvider::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                macro_rules! factor {
+                    ($tensor:expr, $variant:ident) => {{
+                        let (packed, coeff) = linalg::blas::householder_qr(buffers, $tensor)?;
+                        Ok(CompactQrResult {
+                            packed: Tensor::$variant(packed),
+                            coeff: Tensor::$variant(coeff),
+                        })
+                    }};
+                }
+                match input {
+                    Tensor::F32(t) => factor!(t, F32),
+                    Tensor::F64(t) => factor!(t, F64),
+                    Tensor::C32(t) => factor!(t, C32),
+                    Tensor::C64(t) => factor!(t, C64),
+                    _ => Err(unsupported_dtype("householder_qr", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("householder_qr", CpuBackendKind::Blas))
+            }
+        }
+    }
+}
+
+fn householder_qr_from_factors_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    q: &Tensor,
+    r: &Tensor,
+) -> tenferro_tensor::Result<CompactQrResult> {
+    if q.dtype() != r.dtype() {
+        return Err(Error::dtype_mismatch(
+            "householder_qr_from_factors",
+            q.dtype(),
+            r.dtype(),
+        ));
+    }
+    if provider == CpuLinalgProvider::Faer {
+        #[cfg(feature = "cpu-faer")]
+        {
+            macro_rules! import {
+                ($q:expr, $r:expr, $variant:ident) => {{
+                    let (packed, coeff) = linalg::faer::from_factors_2d(context, buffers, $q, $r)?;
+                    return Ok(CompactQrResult {
+                        packed: Tensor::$variant(packed),
+                        coeff: Tensor::$variant(coeff),
+                    });
+                }};
+            }
+            match (q, r) {
+                (Tensor::F32(q), Tensor::F32(r)) => import!(q, r, F32),
+                (Tensor::F64(q), Tensor::F64(r)) => import!(q, r, F64),
+                (Tensor::C32(q), Tensor::C32(r)) => import!(q, r, C32),
+                (Tensor::C64(q), Tensor::C64(r)) => import!(q, r, C64),
+                _ => return Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
+            }
+        }
+        #[cfg(not(feature = "cpu-faer"))]
+        return Err(unsupported_provider(
+            "householder_qr_from_factors",
+            CpuBackendKind::Faer,
+        ));
+    }
+    #[cfg(feature = "cpu-blas")]
+    {
+        let _ = context;
+        macro_rules! import {
+            ($q:expr, $r:expr, $variant:ident) => {{
+                let (packed, coeff) = linalg::blas::householder_qr_from_factors(buffers, $q, $r)?;
+                Ok(CompactQrResult {
+                    packed: Tensor::$variant(packed),
+                    coeff: Tensor::$variant(coeff),
+                })
+            }};
+        }
+        match (q, r) {
+            (Tensor::F32(q), Tensor::F32(r)) => import!(q, r, F32),
+            (Tensor::F64(q), Tensor::F64(r)) => import!(q, r, F64),
+            (Tensor::C32(q), Tensor::C32(r)) => import!(q, r, C32),
+            (Tensor::C64(q), Tensor::C64(r)) => import!(q, r, C64),
+            _ => Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
+        }
+    }
+    #[cfg(not(feature = "cpu-blas"))]
+    {
+        let _ = (context, buffers, q, r);
+        Err(unsupported_provider(
+            "householder_qr_from_factors",
+            CpuBackendKind::Blas,
+        ))
+    }
+}
+
+fn householder_qr_append_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    packed: &Tensor,
+    coeff: &Tensor,
+    block: &Tensor,
+) -> tenferro_tensor::Result<CompactQrResult> {
+    if packed.dtype() != coeff.dtype() || packed.dtype() != block.dtype() {
+        return Err(Error::dtype_mismatch(
+            "householder_qr_append",
+            packed.dtype(),
+            block.dtype(),
+        ));
+    }
+    if provider == CpuLinalgProvider::Faer {
+        #[cfg(feature = "cpu-faer")]
+        {
+            macro_rules! append {
+                ($packed:expr, $coeff:expr, $block:expr, $variant:ident) => {{
+                    let (packed, coeff) =
+                        linalg::faer::append_2d(context, buffers, $packed, $coeff, $block)?;
+                    return Ok(CompactQrResult {
+                        packed: Tensor::$variant(packed),
+                        coeff: Tensor::$variant(coeff),
+                    });
+                }};
+            }
+            match (packed, coeff, block) {
+                (Tensor::F32(p), Tensor::F32(c), Tensor::F32(b)) => append!(p, c, b, F32),
+                (Tensor::F64(p), Tensor::F64(c), Tensor::F64(b)) => append!(p, c, b, F64),
+                (Tensor::C32(p), Tensor::C32(c), Tensor::C32(b)) => append!(p, c, b, C32),
+                (Tensor::C64(p), Tensor::C64(c), Tensor::C64(b)) => append!(p, c, b, C64),
+                _ => return Err(unsupported_dtype("householder_qr_append", packed.dtype())),
+            }
+        }
+        #[cfg(not(feature = "cpu-faer"))]
+        return Err(unsupported_provider(
+            "householder_qr_append",
+            CpuBackendKind::Faer,
+        ));
+    }
+    #[cfg(feature = "cpu-blas")]
+    {
+        let _ = context;
+        macro_rules! append {
+            ($packed:expr, $coeff:expr, $block:expr, $variant:ident) => {{
+                let (packed, coeff) =
+                    linalg::blas::householder_qr_append(buffers, $packed, $coeff, $block)?;
+                Ok(CompactQrResult {
+                    packed: Tensor::$variant(packed),
+                    coeff: Tensor::$variant(coeff),
+                })
+            }};
+        }
+        match (packed, coeff, block) {
+            (Tensor::F32(p), Tensor::F32(c), Tensor::F32(b)) => append!(p, c, b, F32),
+            (Tensor::F64(p), Tensor::F64(c), Tensor::F64(b)) => append!(p, c, b, F64),
+            (Tensor::C32(p), Tensor::C32(c), Tensor::C32(b)) => append!(p, c, b, C32),
+            (Tensor::C64(p), Tensor::C64(c), Tensor::C64(b)) => append!(p, c, b, C64),
+            _ => Err(unsupported_dtype("householder_qr_append", packed.dtype())),
+        }
+    }
+    #[cfg(not(feature = "cpu-blas"))]
+    {
+        let _ = (context, buffers, packed, coeff, block);
+        Err(unsupported_provider(
+            "householder_qr_append",
+            CpuBackendKind::Blas,
+        ))
+    }
+}
+
+fn householder_qr_r_entered(
+    provider: CpuLinalgProvider,
+    _context: &CpuExecutionContext<'_>,
+    _buffers: &mut BufferPool,
+    packed: &Tensor,
+    coeff: &Tensor,
+    options: crate::QrOptions,
+) -> tenferro_tensor::Result<Tensor> {
+    let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
+    if provider == CpuLinalgProvider::Faer {
+        #[cfg(feature = "cpu-faer")]
+        return match (packed, coeff) {
+            (Tensor::F32(p), Tensor::F32(c)) => {
+                linalg::faer::raw_r_2d(p, c, positive).map(Tensor::F32)
+            }
+            (Tensor::F64(p), Tensor::F64(c)) => {
+                linalg::faer::raw_r_2d(p, c, positive).map(Tensor::F64)
+            }
+            (Tensor::C32(p), Tensor::C32(c)) => {
+                linalg::faer::raw_r_2d(p, c, positive).map(Tensor::C32)
+            }
+            (Tensor::C64(p), Tensor::C64(c)) => {
+                linalg::faer::raw_r_2d(p, c, positive).map(Tensor::C64)
+            }
+            _ => Err(Error::dtype_mismatch(
+                "householder_qr_r",
+                packed.dtype(),
+                coeff.dtype(),
+            )),
+        };
+        #[cfg(not(feature = "cpu-faer"))]
+        return Err(unsupported_provider(
+            "householder_qr_r",
+            CpuBackendKind::Faer,
+        ));
+    }
+    #[cfg(feature = "cpu-blas")]
+    {
+        match (packed, coeff) {
+            (Tensor::F32(p), Tensor::F32(c)) => {
+                linalg::blas::householder_qr_r(p, c, positive).map(Tensor::F32)
+            }
+            (Tensor::F64(p), Tensor::F64(c)) => {
+                linalg::blas::householder_qr_r(p, c, positive).map(Tensor::F64)
+            }
+            (Tensor::C32(p), Tensor::C32(c)) => {
+                linalg::blas::householder_qr_r(p, c, positive).map(Tensor::C32)
+            }
+            (Tensor::C64(p), Tensor::C64(c)) => {
+                linalg::blas::householder_qr_r(p, c, positive).map(Tensor::C64)
+            }
+            _ => Err(Error::dtype_mismatch(
+                "householder_qr_r",
+                packed.dtype(),
+                coeff.dtype(),
+            )),
+        }
+    }
+    #[cfg(not(feature = "cpu-blas"))]
+    {
+        let _ = (_context, packed, coeff, options);
+        Err(unsupported_provider(
+            "householder_qr_r",
+            CpuBackendKind::Blas,
+        ))
+    }
+}
+
+fn householder_qr_q_columns_entered(
+    provider: CpuLinalgProvider,
+    _context: &CpuExecutionContext<'_>,
+    _buffers: &mut BufferPool,
+    packed: &Tensor,
+    coeff: &Tensor,
+    columns: std::ops::Range<usize>,
+    options: crate::QrOptions,
+) -> tenferro_tensor::Result<Tensor> {
+    let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
+    if provider == CpuLinalgProvider::Faer {
+        #[cfg(feature = "cpu-faer")]
+        return match (packed, coeff) {
+            (Tensor::F32(p), Tensor::F32(c)) => linalg::faer::q_columns_2d(
+                _context,
+                _buffers,
+                p,
+                c,
+                columns.start,
+                columns.end,
+                positive,
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(p), Tensor::F64(c)) => linalg::faer::q_columns_2d(
+                _context,
+                _buffers,
+                p,
+                c,
+                columns.start,
+                columns.end,
+                positive,
+            )
+            .map(Tensor::F64),
+            (Tensor::C32(p), Tensor::C32(c)) => linalg::faer::q_columns_2d(
+                _context,
+                _buffers,
+                p,
+                c,
+                columns.start,
+                columns.end,
+                positive,
+            )
+            .map(Tensor::C32),
+            (Tensor::C64(p), Tensor::C64(c)) => linalg::faer::q_columns_2d(
+                _context,
+                _buffers,
+                p,
+                c,
+                columns.start,
+                columns.end,
+                positive,
+            )
+            .map(Tensor::C64),
+            _ => Err(Error::dtype_mismatch(
+                "householder_qr_q_columns",
+                packed.dtype(),
+                coeff.dtype(),
+            )),
+        };
+        #[cfg(not(feature = "cpu-faer"))]
+        return Err(unsupported_provider(
+            "householder_qr_q_columns",
+            CpuBackendKind::Faer,
+        ));
+    }
+    #[cfg(feature = "cpu-blas")]
+    {
+        macro_rules! columns {
+            ($packed:expr, $coeff:expr, $variant:ident) => {
+                linalg::blas::householder_qr_q_columns(
+                    $packed,
+                    $coeff,
+                    columns.start,
+                    columns.end,
+                    positive,
+                )
+                .map(Tensor::$variant)
+            };
+        }
+        match (packed, coeff) {
+            (Tensor::F32(p), Tensor::F32(c)) => columns!(p, c, F32),
+            (Tensor::F64(p), Tensor::F64(c)) => columns!(p, c, F64),
+            (Tensor::C32(p), Tensor::C32(c)) => columns!(p, c, C32),
+            (Tensor::C64(p), Tensor::C64(c)) => columns!(p, c, C64),
+            _ => Err(Error::dtype_mismatch(
+                "householder_qr_q_columns",
+                packed.dtype(),
+                coeff.dtype(),
+            )),
+        }
+    }
+    #[cfg(not(feature = "cpu-blas"))]
+    {
+        let _ = (_context, packed, coeff, columns, options);
+        Err(unsupported_provider(
+            "householder_qr_q_columns",
+            CpuBackendKind::Blas,
+        ))
     }
 }
 

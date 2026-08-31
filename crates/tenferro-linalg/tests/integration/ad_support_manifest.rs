@@ -33,6 +33,11 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         LinalgAdOpKind::EigVals,
         LinalgAdOpKind::TriangularSolve,
         LinalgAdOpKind::SvdFull,
+        LinalgAdOpKind::HouseholderQrFactor,
+        LinalgAdOpKind::HouseholderQrFromFactors,
+        LinalgAdOpKind::HouseholderQrAppend,
+        LinalgAdOpKind::HouseholderQrR,
+        LinalgAdOpKind::HouseholderQrQColumns,
     ];
 
     let manifest = all_linalg_ad_support();
@@ -46,6 +51,25 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         for (output_index, output) in entry.outputs.iter().enumerate() {
             assert_eq!(output.index, output_index);
         }
+    }
+}
+
+#[test]
+fn incremental_householder_qr_is_explicitly_unsupported_before_oracles() {
+    for kind in [
+        LinalgAdOpKind::HouseholderQrFactor,
+        LinalgAdOpKind::HouseholderQrFromFactors,
+        LinalgAdOpKind::HouseholderQrAppend,
+        LinalgAdOpKind::HouseholderQrR,
+        LinalgAdOpKind::HouseholderQrQColumns,
+    ] {
+        let entry = linalg_ad_support(kind);
+        assert_eq!(entry.jvp.status, LinalgAdRuleSupport::Unsupported);
+        assert_eq!(entry.vjp.status, LinalgAdRuleSupport::Unsupported);
+        assert!(entry
+            .outputs
+            .iter()
+            .all(|output| output.status == LinalgAdRuleSupport::Unsupported));
     }
 }
 

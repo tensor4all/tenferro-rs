@@ -137,6 +137,30 @@ pub trait EagerTensorLinalgExt {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     fn qr(&self) -> Result<(EagerTensor, EagerTensor)>;
+
+    /// Initialize opaque compact Householder QR state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for known invalid metadata,
+    /// `Error::Extension` for unsupported or provider failures, or
+    /// `Error::RuntimeState` when eager execution is unavailable.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?, runtime)?;
+    /// let qr = a.householder_qr()?;
+    /// assert!(format!("{qr:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    fn householder_qr(&self) -> Result<crate::HouseholderQr<EagerTensor>>;
+
     /// # Errors
     ///
     /// Returns `Error::Validation` for invalid matrix rank or shape,
@@ -626,6 +650,10 @@ impl EagerTensorLinalgExt for EagerTensor {
         qr(self)
     }
 
+    fn householder_qr(&self) -> Result<crate::HouseholderQr<EagerTensor>> {
+        householder_qr(self)
+    }
+
     fn qr_with_options(&self, options: QrOptions) -> Result<(EagerTensor, EagerTensor)> {
         qr_with_options(self, options)
     }
@@ -928,6 +956,25 @@ pub fn svd_full(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTenso
 /// `Error::RuntimeState` when the eager runtime or backend is unavailable.
 pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     qr_with_options(a, QrOptions::default())
+}
+
+/// Initialize compact Householder QR state for an eager matrix.
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for known invalid metadata,
+/// `Error::Extension` for unsupported or provider failures, or
+/// `Error::RuntimeState` when eager execution is unavailable.
+pub fn householder_qr(a: &EagerTensor) -> Result<crate::HouseholderQr<EagerTensor>> {
+    let mut outputs = apply_linalg_eager(LinalgOp::HouseholderQrFactor, &[a])?.into_iter();
+    match (outputs.next(), outputs.next(), outputs.next()) {
+        (Some(packed), Some(coeff), None) => Ok(
+            crate::HouseholderQr::<EagerTensor>::from_eager_outputs(packed, coeff),
+        ),
+        _ => Err(Error::Internal(
+            "householder_qr returned an unexpected output count".into(),
+        )),
+    }
 }
 
 /// QR decomposition for eager tensors with explicit options.

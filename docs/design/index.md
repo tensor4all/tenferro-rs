@@ -31,6 +31,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [inplace-indexing.md](./inplace-indexing.md) | Partial in-place updates design |
 | [linalg.md](./linalg.md) | Linalg public/composite layer |
 | [linalg-prims.md](./linalg-prims.md) | Backend-facing factorization and solve contracts |
+| [incremental-householder-qr.md](./incremental-householder-qr.md) | Opaque compact QR state, column append, provider execution, and semantic AD contract (#1735) |
 | [capi.md](./capi.md) | C-API: opaque handles, DLPack, einsum + SVD + AD |
 | [capi-error-handling.md](./capi-error-handling.md) | C-API error handling policy |
 | [testing.md](./testing.md) | Testing and performance verification strategy |

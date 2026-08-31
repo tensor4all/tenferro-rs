@@ -63,6 +63,20 @@ impl SemanticLinearizeRule for LinalgAdRule {
         builder: &mut SemanticProgramBuilder,
     ) -> Result<SemanticLinearizeResult, SemanticAdError> {
         let op = semantic_linalg_op(request.op(), SemanticAdRuleRole::Linearize)?;
+        if matches!(
+            op.op(),
+            LinalgOp::HouseholderQrFactor
+                | LinalgOp::HouseholderQrFromFactors
+                | LinalgOp::HouseholderQrAppend
+                | LinalgOp::HouseholderQrR { .. }
+                | LinalgOp::HouseholderQrQColumns { .. }
+        ) {
+            return Err(SemanticAdError::Unsupported {
+                family_id: LINALG_EXTENSION_FAMILY_ID,
+                role: SemanticAdRuleRole::Linearize,
+                message: format!("semantic linearize is unsupported for {:?}", op.op()),
+            });
+        }
         if matches!(op.op(), LinalgOp::LuFactor | LinalgOp::SvdFull) {
             // These value-only operations can appear inside a differentiable
             // composite (for example, `solve` uses `LuFactor` outputs as
@@ -202,7 +216,13 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
                 builder,
                 SemanticAdRuleRole::LinearTranspose,
             ),
-            LinalgOp::LuFactor | LinalgOp::SvdFull => Err(SemanticAdError::Unsupported {
+            LinalgOp::LuFactor
+            | LinalgOp::SvdFull
+            | LinalgOp::HouseholderQrFactor
+            | LinalgOp::HouseholderQrFromFactors
+            | LinalgOp::HouseholderQrAppend
+            | LinalgOp::HouseholderQrR { .. }
+            | LinalgOp::HouseholderQrQColumns { .. } => Err(SemanticAdError::Unsupported {
                 family_id: LINALG_EXTENSION_FAMILY_ID,
                 role: SemanticAdRuleRole::LinearTranspose,
                 message: format!("semantic linear transpose is unsupported for {:?}", op.op()),

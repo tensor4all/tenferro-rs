@@ -1,4 +1,14 @@
+use std::ops::Range;
+
 use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorWrite};
+
+/// Compact provider-neutral Householder QR payload used by backend hooks.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CompactQrResult {
+    pub(crate) packed: Tensor,
+    pub(crate) coeff: Tensor,
+}
 
 pub(crate) use crate::error::unsupported_dtype;
 use crate::extension::{
@@ -404,6 +414,66 @@ pub trait LinalgBackend: BackendSession {
         Err(tenferro_tensor::Error::unsupported(
             "qr",
             "backend does not accept tensor reads at this execution boundary",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr(&mut self, _input: &Tensor) -> tenferro_tensor::Result<CompactQrResult> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr",
+            "backend does not implement compact Householder QR",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr_from_factors(
+        &mut self,
+        _q: &Tensor,
+        _r: &Tensor,
+    ) -> tenferro_tensor::Result<CompactQrResult> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr_from_factors",
+            "backend does not implement compact Householder QR factor import",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr_append(
+        &mut self,
+        _packed: &Tensor,
+        _coeff: &Tensor,
+        _block: &Tensor,
+    ) -> tenferro_tensor::Result<CompactQrResult> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr_append",
+            "backend does not implement compact Householder QR append",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr_r(
+        &mut self,
+        _packed: &Tensor,
+        _coeff: &Tensor,
+        _options: QrOptions,
+    ) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr_r",
+            "backend does not implement compact Householder QR extraction",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr_q_columns(
+        &mut self,
+        _packed: &Tensor,
+        _coeff: &Tensor,
+        _columns: Range<usize>,
+        _options: QrOptions,
+    ) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr_q_columns",
+            "backend does not implement compact Householder Q-column materialization",
         ))
     }
 
