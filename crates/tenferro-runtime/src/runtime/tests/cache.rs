@@ -354,6 +354,72 @@ fn same_key_has_one_producer_and_shared_result() {
 }
 
 #[test]
+fn same_key_waiter_does_not_miss_publication_before_first_wait() {
+    let cache = Arc::new(PreparedPlanCache::<TestKey, TestValue>::new(limits(
+        8, 4096, 2, 2,
+    )));
+    let producer_entered = Arc::new(Barrier::new(2));
+    let producer_release = Arc::new(Barrier::new(2));
+    let waiter_before_wait = Arc::new(Barrier::new(2));
+    let waiter_release = Arc::new(Barrier::new(2));
+
+    let producer = {
+        let cache = Arc::clone(&cache);
+        let producer_entered = Arc::clone(&producer_entered);
+        let producer_release = Arc::clone(&producer_release);
+        thread::spawn(move || {
+            cache
+                .get_or_prepare(TestKey(8), CacheInFlightBehavior::Wait, 0, || {
+                    producer_entered.wait();
+                    producer_release.wait();
+                    CacheProduced::Ready {
+                        value: TestValue::new(16),
+                        shared: None,
+                    }
+                })
+                .unwrap()
+        })
+    };
+    producer_entered.wait();
+
+    let waiter = {
+        let cache = Arc::clone(&cache);
+        let waiter_before_wait = Arc::clone(&waiter_before_wait);
+        let waiter_release = Arc::clone(&waiter_release);
+        thread::spawn(move || {
+            let lookup = cache
+                .get_or_prepare_with_entry_wait_hooks_for_test(
+                    TestKey(8),
+                    CacheInFlightBehavior::Wait,
+                    0,
+                    || panic!("same-key waiter must not become the producer"),
+                    move || {
+                        waiter_before_wait.wait();
+                        waiter_release.wait();
+                    },
+                    || panic!("waiter must not sleep after producer publication"),
+                )
+                .unwrap();
+            lookup
+        })
+    };
+    waiter_before_wait.wait();
+
+    producer_release.wait();
+    let produced = match producer.join().unwrap() {
+        CacheLookup::Ready(value) => value,
+        other => panic!("expected producer ready lookup, got {other:?}"),
+    };
+    waiter_release.wait();
+
+    let waited = match waiter.join().unwrap() {
+        CacheLookup::Ready(value) => value,
+        other => panic!("expected waiter ready lookup, got {other:?}"),
+    };
+    assert!(Arc::ptr_eq(&produced, &waited));
+}
+
+#[test]
 fn digest_collision_uses_exact_equality_outside_lock() {
     let cache = Arc::new(PreparedPlanCache::<BlockingKey, TestValue>::new(limits(
         4, 4096, 1, 4,
