@@ -26,16 +26,20 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 scripts/ci/run_profile.py docs", text)
         self.assertIn("name: CI configuration checks", text)
 
-    def test_macos_workspace_tests_run_after_linux_gate(self) -> None:
+    def test_macos_workspace_tests_run_in_parallel_with_linux(self) -> None:
         text = read(".github/workflows/ci-pr-workspace-tests.yml")
         start = text.index("  macos:")
         block = text[start:]
         self.assertIn("name: macOS workspace tests", block)
-        self.assertIn("needs: [changes, ci-gate]", block)
+        self.assertIn("needs: changes", block)
+        self.assertNotIn("needs: [changes, ci-gate]", block)
         self.assertIn("run_macos: ${{ steps.policy.outputs.run_macos }}", text)
         self.assertIn("'macos-15' || 'ubuntu-latest'", block)
         self.assertIn("python3 scripts/ci/run_profile.py workspace-faer", block)
-        self.assertIn("Linux workspace gate failed", block)
+        self.assertIn("needs.changes.result == 'success'", block)
+        self.assertIn("Change classification failed", block)
+        self.assertNotIn("needs.ci-gate", block)
+        self.assertNotIn("Linux workspace gate failed", block)
 
         fast = read(".github/workflows/ci.yml")
         self.assertNotIn("macOS-gated GPU type-check", fast)

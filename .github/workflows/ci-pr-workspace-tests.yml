@@ -184,30 +184,30 @@ jobs:
 
   macos:
     name: macOS workspace tests
-    needs: [changes, ci-gate]
+    needs: changes
     if: always()
-    runs-on: ${{ needs.ci-gate.result == 'success' && needs.changes.outputs.run_macos == 'true' && 'macos-15' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true' && 'macos-15' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
-        if: needs.ci-gate.result == 'success' && needs.changes.outputs.run_macos == 'true'
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.ci-gate.result == 'success' && needs.changes.outputs.run_macos == 'true'
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: needs.ci-gate.result == 'success' && needs.changes.outputs.run_macos == 'true'
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
       - uses: taiki-e/install-action@nextest
-        if: needs.ci-gate.result == 'success' && needs.changes.outputs.run_macos == 'true'
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
       - name: Run macOS workspace profile
-        if: needs.ci-gate.result == 'success' && needs.changes.outputs.run_macos == 'true'
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
         run: python3 scripts/ci/run_profile.py workspace-faer
       - name: Report macOS disposition
         if: always()
         env:
-          LINUX_GATE_RESULT: ${{ needs.ci-gate.result }}
+          CHANGE_RESULT: ${{ needs.changes.result }}
           RUN_MACOS: ${{ needs.changes.outputs.run_macos }}
           REASON: ${{ needs.changes.outputs.reason }}
         run: |
-          if [ "${LINUX_GATE_RESULT}" != success ]; then
-            echo "Linux workspace gate failed: ${LINUX_GATE_RESULT}"
+          if [ "${CHANGE_RESULT}" != success ]; then
+            echo "Change classification failed: ${CHANGE_RESULT}"
             exit 1
           fi
           if [ "${RUN_MACOS}" != true ]; then echo "macOS tests not required - ${REASON}"; fi
