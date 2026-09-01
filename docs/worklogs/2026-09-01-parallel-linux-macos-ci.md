@@ -52,7 +52,9 @@ for the Linux aggregate gate, extending pull-request wall-clock time.
   release-publish handoff tests fail under this macOS checkout's local command
   environment; the directly affected CI test suite and `actionlint` pass
   independently as listed above.
-- Deterministic repository-rules review on the committed head
+- `python3 scripts/repository-rules-review.py --base origin/main --head HEAD
+  --dry-run --llm-skipped-reason "local deterministic review"`: pass; external
+  LLM review intentionally skipped
 
 ## Residual risks
 
