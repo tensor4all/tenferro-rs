@@ -143,6 +143,30 @@ impl LinalgAdRule {
             LinalgOp::EigVals { input_dtype } => {
                 rules::linearize_eig_values(builder, primal_in, tangent_in, input_dtype, ctx)
             }
+            LinalgOp::HouseholderQrFactor => {
+                rules::linearize_householder_qr_factor(primal_out, tangent_in, ctx)
+            }
+            LinalgOp::HouseholderQrFromFactors => rules::linearize_householder_qr_from_factors(
+                builder, primal_in, primal_out, tangent_in, ctx,
+            ),
+            LinalgOp::HouseholderQrAppend => rules::linearize_householder_qr_append(
+                builder, primal_in, primal_out, tangent_in, ctx,
+            ),
+            LinalgOp::HouseholderQrR { gauge } => rules::linearize_householder_qr_r(
+                builder, primal_in, primal_out, tangent_in, gauge, ctx,
+            ),
+            LinalgOp::HouseholderQrQColumns { start, end, gauge } => {
+                rules::linearize_householder_qr_q_columns(
+                    builder, primal_in, primal_out, tangent_in, start, end, gauge, ctx,
+                )
+            }
+            LinalgOp::HouseholderQrThinQ { .. } => Err(ADRuleError::unsupported(
+                "tenferro-linalg.householder_qr_thin_q",
+                ADRuleKind::Jvp,
+            )),
+            LinalgOp::HouseholderQrAppendTangent | LinalgOp::HouseholderQrSplitTangent { .. } => {
+                Ok(vec![None; op.output_count()])
+            }
         }
     }
     fn linear_transpose(
@@ -215,6 +239,34 @@ impl LinalgAdRule {
                     ctx,
                 )
             }
+            LinalgOp::HouseholderQrAppendTangent => {
+                let Some(cotangent) = cotangent_out[0] else {
+                    return Ok(vec![None; op.input_count()]);
+                };
+                let left = fixed_transpose_value("householder_qr_append_tangent", 2, &inputs[2])?;
+                let right = fixed_transpose_value("householder_qr_append_tangent", 3, &inputs[3])?;
+                let mut result = vec![None; 4];
+                for (index, take_right) in [(0, false), (1, true)] {
+                    if active_mask[index] {
+                        result[index] = Some(
+                            builder.add_operation(
+                                rules::linalg_std_op(LinalgOp::HouseholderQrSplitTangent {
+                                    right: take_right,
+                                }),
+                                vec![ValueRef::Local(cotangent), left.clone(), right.clone()],
+                                OperationRole::Linearized {
+                                    active_mask: vec![true, false, false],
+                                },
+                            )[0],
+                        );
+                    }
+                }
+                Ok(result)
+            }
+            LinalgOp::HouseholderQrThinQ { .. } => Err(ADRuleError::unsupported(
+                "tenferro-linalg.householder_qr_thin_q",
+                ADRuleKind::Transpose,
+            )),
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
@@ -228,7 +280,13 @@ impl LinalgAdRule {
             | LinalgOp::Eigh { .. }
             | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. }
-            | LinalgOp::EigVals { .. } => Ok(vec![None; op.input_count()]),
+            | LinalgOp::EigVals { .. }
+            | LinalgOp::HouseholderQrFactor
+            | LinalgOp::HouseholderQrFromFactors
+            | LinalgOp::HouseholderQrAppend
+            | LinalgOp::HouseholderQrR { .. }
+            | LinalgOp::HouseholderQrQColumns { .. }
+            | LinalgOp::HouseholderQrSplitTangent { .. } => Ok(vec![None; op.input_count()]),
         }
     }
 }

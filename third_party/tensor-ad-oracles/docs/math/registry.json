@@ -368,6 +368,36 @@
       "anchor": "op-imag"
     },
     {
+      "op": "incremental_householder_qr",
+      "family": "factor_qr",
+      "note_path": "docs/math/qr.md",
+      "anchor": "family-incremental-householder-qr-factor"
+    },
+    {
+      "op": "incremental_householder_qr",
+      "family": "append_qr",
+      "note_path": "docs/math/qr.md",
+      "anchor": "family-incremental-householder-qr-append"
+    },
+    {
+      "op": "incremental_householder_qr",
+      "family": "from_factors_qr",
+      "note_path": "docs/math/qr.md",
+      "anchor": "family-incremental-householder-qr-from-factors"
+    },
+    {
+      "op": "incremental_householder_qr",
+      "family": "selected_q_columns",
+      "note_path": "docs/math/qr.md",
+      "anchor": "family-incremental-householder-qr-selected-q"
+    },
+    {
+      "op": "incremental_householder_qr",
+      "family": "r",
+      "note_path": "docs/math/qr.md",
+      "anchor": "family-incremental-householder-qr-r"
+    },
+    {
       "op": "inv",
       "family": "identity",
       "note_path": "docs/math/inv.md",

@@ -50,6 +50,7 @@ pub mod error;
 mod extension;
 #[cfg(feature = "cuda")]
 mod gpu;
+mod householder;
 pub mod prelude;
 mod tensor_ext;
 mod traced;
@@ -70,6 +71,7 @@ pub use extension::{
     extension_module, EighGauge, EighOptions, QrGauge, QrOptions, SvdGauge, SvdOptions,
     DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
 };
+pub use householder::HouseholderQr;
 pub use tensor_ext::{
     LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu,
     TypedSvd, TypedTensorLinalgExt,

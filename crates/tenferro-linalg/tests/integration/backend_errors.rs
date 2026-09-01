@@ -3,7 +3,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::{LinalgBackend, TensorLinalgExt};
+use tenferro_linalg::{LinalgBackend, QrOptions, TensorLinalgExt};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
     BackendStorageHandle, CompareDir, DType, DotGeneralConfig, Error, ErrorKind, GatherConfig,
@@ -285,6 +285,55 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         eig_values_result: None,
         eig_values_calls: 0,
     };
+    let state_tensor = Tensor::F64(input.duplicate().unwrap());
+    let unsupported = [
+        (
+            LinalgBackend::householder_qr(&mut backend, &state_tensor).unwrap_err(),
+            "householder_qr",
+        ),
+        (
+            LinalgBackend::householder_qr_from_factors(&mut backend, &state_tensor, &state_tensor)
+                .unwrap_err(),
+            "householder_qr_from_factors",
+        ),
+        (
+            LinalgBackend::householder_qr_append(
+                &mut backend,
+                &state_tensor,
+                &state_tensor,
+                &state_tensor,
+            )
+            .unwrap_err(),
+            "householder_qr_append",
+        ),
+        (
+            LinalgBackend::householder_qr_r(
+                &mut backend,
+                &state_tensor,
+                &state_tensor,
+                QrOptions::default(),
+            )
+            .unwrap_err(),
+            "householder_qr_r",
+        ),
+        (
+            LinalgBackend::householder_qr_q_columns(
+                &mut backend,
+                &state_tensor,
+                &state_tensor,
+                0..1,
+                QrOptions::default(),
+            )
+            .unwrap_err(),
+            "householder_qr_q_columns",
+        ),
+    ];
+    for (error, expected_op) in unsupported {
+        assert!(matches!(
+            error,
+            Error::Unsupported { op, .. } if op == expected_op
+        ));
+    }
 
     // The concrete linalg traits dispatch internally to the built-in
     // CPU/CUDA execution sessions; a session without a linalg capability

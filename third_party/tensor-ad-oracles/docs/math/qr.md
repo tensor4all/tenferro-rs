@@ -341,3 +341,49 @@ with random Hermitian operators independent of $A$.
 ### `identity`
 
 The DB publishes the differentiable reduced-QR outputs directly.
+
+## Incremental Householder QR Families
+
+All incremental families use reduced QR with the canonical gauge
+
+$$
+R_{ii} \in \mathbb{R}_{>0}.
+$$
+
+For complex factors, if $p_i = R_{ii}/|R_{ii}|$, the observable replaces
+$Q_{:,i}$ by $p_i Q_{:,i}$ and row $R_{i,:}$ by $\overline{p_i}R_{i,:}$.
+The published deterministic inputs are full rank; rank-deficient states remain
+outside the differentiable oracle domain.
+
+<a id="family-incremental-householder-qr-factor"></a>
+### `factor_qr`
+
+Publishes canonical $(Q,R)=\operatorname{qr}(A)$ for tall, square, and wide
+inputs.
+
+<a id="family-incremental-householder-qr-append"></a>
+### `append_qr`
+
+Publishes canonical
+$(Q,R)=\operatorname{qr}([A\;B])$, including an append that changes a tall
+factorization into a wide one.
+
+<a id="family-incremental-householder-qr-from-factors"></a>
+### `from_factors_qr`
+
+Publishes canonical $(Q,R)=\operatorname{qr}(Q_0\operatorname{triu}(R_0))$.
+Directions below the diagonal of $R_0$ are zero because the factor-import API's
+domain requires an upper-trapezoidal factor. The $Q_0$ input is treated as a
+general full-column-rank matrix, so its tangent is Euclidean rather than
+projected onto the Stiefel manifold.
+
+<a id="family-incremental-householder-qr-selected-q"></a>
+### `selected_q_columns`
+
+Publishes the statically selected columns `start:end` of canonical reduced
+$Q$.
+
+<a id="family-incremental-householder-qr-r"></a>
+### `r`
+
+Publishes canonical reduced $R$ without materializing a public $Q$ output.

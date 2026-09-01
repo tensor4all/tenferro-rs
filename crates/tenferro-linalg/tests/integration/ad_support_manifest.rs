@@ -33,6 +33,14 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         LinalgAdOpKind::EigVals,
         LinalgAdOpKind::TriangularSolve,
         LinalgAdOpKind::SvdFull,
+        LinalgAdOpKind::HouseholderQrFactor,
+        LinalgAdOpKind::HouseholderQrFromFactors,
+        LinalgAdOpKind::HouseholderQrAppend,
+        LinalgAdOpKind::HouseholderQrR,
+        LinalgAdOpKind::HouseholderQrQColumns,
+        LinalgAdOpKind::HouseholderQrThinQ,
+        LinalgAdOpKind::HouseholderQrAppendTangent,
+        LinalgAdOpKind::HouseholderQrSplitTangent,
     ];
 
     let manifest = all_linalg_ad_support();
@@ -47,6 +55,34 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
             assert_eq!(output.index, output_index);
         }
     }
+}
+
+#[test]
+fn incremental_householder_qr_is_oracle_backed_via_linearize() {
+    for kind in [
+        LinalgAdOpKind::HouseholderQrFactor,
+        LinalgAdOpKind::HouseholderQrFromFactors,
+        LinalgAdOpKind::HouseholderQrAppend,
+        LinalgAdOpKind::HouseholderQrR,
+        LinalgAdOpKind::HouseholderQrQColumns,
+    ] {
+        let entry = linalg_ad_support(kind);
+        assert_eq!(entry.jvp.status, LinalgAdRuleSupport::SupportedViaLinearize);
+        assert_eq!(entry.vjp.status, LinalgAdRuleSupport::SupportedViaLinearize);
+        assert_eq!(entry.vjp.route, LinalgAdRoute::LinearizeThenTranspose);
+    }
+    for kind in [
+        LinalgAdOpKind::HouseholderQrFactor,
+        LinalgAdOpKind::HouseholderQrFromFactors,
+        LinalgAdOpKind::HouseholderQrAppend,
+    ] {
+        let entry = linalg_ad_support(kind);
+        assert_output_status(entry, "packed", LinalgAdRuleSupport::SupportedViaLinearize);
+        assert_output_status(entry, "coeff", LinalgAdRuleSupport::NonDifferentiable);
+    }
+    let residual = linalg_ad_support(LinalgAdOpKind::HouseholderQrThinQ);
+    assert_eq!(residual.jvp.status, LinalgAdRuleSupport::Unsupported);
+    assert_eq!(residual.vjp.status, LinalgAdRuleSupport::Unsupported);
 }
 
 #[test]

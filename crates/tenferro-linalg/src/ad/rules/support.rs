@@ -612,6 +612,69 @@ pub(super) fn leading_column_selector_fixed(
     )
 }
 
+pub(super) fn column_range_selector_symbolic(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    total_cols: DimExpr,
+    start: usize,
+    end: usize,
+    batch_shape: &[DimExpr],
+    anchor: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    let selected = end - start;
+    let selected_dim = DimExpr::Const(selected);
+    let one = ad_support::one_like(builder, dtype, anchor.clone(), 0);
+    let ones = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape: vector_shape(selected_dim.clone(), batch_shape),
+            dims: vec![],
+        },
+        vec![ValueRef::Local(one)],
+        OperationRole::Primary,
+    )[0];
+    let identity = fixed_unary(
+        builder,
+        StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        ValueRef::Local(ones),
+    );
+    let zero = ad_support::zero_like(builder, dtype, anchor, 0);
+    let left = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape: matrix_shape(selected_dim.clone(), DimExpr::Const(start), batch_shape),
+            dims: vec![],
+        },
+        vec![ValueRef::Local(zero)],
+        OperationRole::Primary,
+    )[0];
+    let right = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape: matrix_shape(
+                selected_dim,
+                DimExpr::sub(total_cols, DimExpr::Const(end)),
+                batch_shape,
+            ),
+            dims: vec![],
+        },
+        vec![ValueRef::Local(zero)],
+        OperationRole::Primary,
+    )[0];
+    builder.add_operation(
+        StdTensorOp::Concatenate {
+            axis: 1,
+            input_count: 3,
+        },
+        vec![
+            ValueRef::Local(left),
+            ValueRef::Local(identity),
+            ValueRef::Local(right),
+        ],
+        OperationRole::Primary,
+    )[0]
+}
+
 pub(super) fn leading_column_selector_symbolic(
     builder: &mut dyn PrimitiveRuleBuilder,
     dtype: DType,

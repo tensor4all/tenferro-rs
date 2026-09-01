@@ -1,4 +1,14 @@
+use std::ops::Range;
+
 use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorWrite};
+
+/// Compact provider-neutral Householder QR payload used by backend hooks.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CompactQrResult {
+    pub(crate) packed: Tensor,
+    pub(crate) coeff: Tensor,
+}
 
 pub(crate) use crate::error::unsupported_dtype;
 use crate::extension::{
@@ -404,6 +414,108 @@ pub trait LinalgBackend: BackendSession {
         Err(tenferro_tensor::Error::unsupported(
             "qr",
             "backend does not accept tensor reads at this execution boundary",
+        ))
+    }
+
+    /// Compute public QR outputs `(Q, R)` from a tensor read target with options.
+    ///
+    /// Device backends override this hook to keep gauge processing in the input
+    /// placement. The default is appropriate for host backends.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_linalg::{LinalgBackend, QrGauge, QrOptions};
+    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    ///
+    /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+    /// let mut host = CpuBackend::new();
+    /// let outputs = host.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |backend| {
+    ///         backend.qr_with_options_read(
+    ///             TensorRead::from_tensor(&input),
+    ///             QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+    ///         )
+    ///     })
+    ///     .expect("CpuBackend must expose a CpuExecSession")
+    /// })?;
+    /// assert_eq!(outputs[0].shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation, unsupported-dtype, numerical, placement, or
+    /// typed backend/provider errors from [`LinalgBackend::qr_read`], plus
+    /// gauge metadata and host-access errors from the default host gauge path.
+    fn qr_with_options_read(
+        &mut self,
+        input: TensorRead<'_>,
+        options: QrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let mut outputs = self.qr_read(input)?;
+        apply_qr_gauge(options.gauge, &mut outputs)?;
+        Ok(outputs)
+    }
+
+    #[doc(hidden)]
+    fn householder_qr(&mut self, _input: &Tensor) -> tenferro_tensor::Result<CompactQrResult> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr",
+            "backend does not implement compact Householder QR",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr_from_factors(
+        &mut self,
+        _q: &Tensor,
+        _r: &Tensor,
+    ) -> tenferro_tensor::Result<CompactQrResult> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr_from_factors",
+            "backend does not implement compact Householder QR factor import",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr_append(
+        &mut self,
+        _packed: &Tensor,
+        _coeff: &Tensor,
+        _block: &Tensor,
+    ) -> tenferro_tensor::Result<CompactQrResult> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr_append",
+            "backend does not implement compact Householder QR append",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr_r(
+        &mut self,
+        _packed: &Tensor,
+        _coeff: &Tensor,
+        _options: QrOptions,
+    ) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr_r",
+            "backend does not implement compact Householder QR extraction",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn householder_qr_q_columns(
+        &mut self,
+        _packed: &Tensor,
+        _coeff: &Tensor,
+        _columns: Range<usize>,
+        _options: QrOptions,
+    ) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "householder_qr_q_columns",
+            "backend does not implement compact Householder Q-column materialization",
         ))
     }
 

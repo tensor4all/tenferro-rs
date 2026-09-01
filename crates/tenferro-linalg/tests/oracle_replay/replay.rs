@@ -8,7 +8,7 @@ use num_complex::{Complex32, Complex64};
 use serde_json::Value;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{HouseholderQr, QrGauge, QrOptions, TracedTensorLinalgExt};
 use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor, TracedTensor};
 
 use super::db::{self, CaseRecord, ComparisonTolerance, DbTensor};
@@ -478,6 +478,9 @@ fn cpu_runtime_with_linalg() -> Result<Runtime, String> {
 
 fn dispatch_case(case: &CaseRecord) -> Result<CaseExecution, String> {
     let inputs = decode_case_inputs(case)?;
+    if case.op == "incremental_householder_qr" {
+        return dispatch_incremental_householder_qr(case, inputs);
+    }
     let a = required_input(&inputs, "a", case)?;
     match case.op.as_str() {
         "solve" | "solve_ex" => {
@@ -680,6 +683,89 @@ fn dispatch_case(case: &CaseRecord) -> Result<CaseExecution, String> {
             case.case_id
         )),
     }
+}
+
+fn dispatch_incremental_householder_qr(
+    case: &CaseRecord,
+    inputs: BTreeMap<String, TracedTensor>,
+) -> Result<CaseExecution, String> {
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let state = match case.family.as_str() {
+        "factor_qr" | "selected_q_columns" | "r" => {
+            let a = oracle_to_tenferro(required_input(&inputs, "a", case)?, 2)?;
+            a.householder_qr().map_err(to_string)?
+        }
+        "append_qr" => {
+            let a = oracle_to_tenferro(required_input(&inputs, "a", case)?, 2)?;
+            let b = oracle_to_tenferro(required_input(&inputs, "b", case)?, 2)?;
+            a.householder_qr()
+                .map_err(to_string)?
+                .append_columns(&b)
+                .map_err(to_string)?
+        }
+        "from_factors_qr" => {
+            let q = oracle_to_tenferro(required_input(&inputs, "q", case)?, 2)?;
+            let r = oracle_to_tenferro(required_input(&inputs, "r", case)?, 2)?;
+            HouseholderQr::<TracedTensor>::from_factors(&q, &r).map_err(to_string)?
+        }
+        other => {
+            return Err(format!(
+                "{}: incremental Householder QR family {other} is not implemented",
+                case.case_id
+            ));
+        }
+    };
+
+    let outputs = match case.family.as_str() {
+        "selected_q_columns" => {
+            let start = required_usize_kwarg(case, "start")?;
+            let end = required_usize_kwarg(case, "end")?;
+            let q = state.q_columns(start..end, options).map_err(to_string)?;
+            vec![named("q", tenferro_to_oracle(&q, 2)?)]
+        }
+        "r" => {
+            let r = state.r(options).map_err(to_string)?;
+            vec![named("r", tenferro_to_oracle(&r, 2)?)]
+        }
+        "factor_qr" | "append_qr" | "from_factors_qr" => {
+            let width = incremental_qr_thin_width(case)?;
+            let q = state.q_columns(0..width, options).map_err(to_string)?;
+            let r = state.r(options).map_err(to_string)?;
+            vec![
+                named("q", tenferro_to_oracle(&q, 2)?),
+                named("r", tenferro_to_oracle(&r, 2)?),
+            ]
+        }
+        _ => unreachable!("family was validated while constructing the state"),
+    };
+    Ok(CaseExecution { inputs, outputs })
+}
+
+fn incremental_qr_thin_width(case: &CaseRecord) -> Result<usize, String> {
+    let shape = |name: &str| {
+        case.inputs
+            .get(name)
+            .map(|tensor| tensor.shape.as_slice())
+            .ok_or_else(|| format!("{}: missing input {name}", case.case_id))
+    };
+    let (rows, cols) = match case.family.as_str() {
+        "factor_qr" => {
+            let a = shape("a")?;
+            (a[0], a[1])
+        }
+        "append_qr" => {
+            let a = shape("a")?;
+            let b = shape("b")?;
+            (a[0], a[1] + b[1])
+        }
+        "from_factors_qr" => {
+            let q = shape("q")?;
+            let r = shape("r")?;
+            (q[0], r[1])
+        }
+        other => return Err(format!("{}: no thin-Q width for {other}", case.case_id)),
+    };
+    Ok(rows.min(cols))
 }
 
 fn svd_observable_execution(
@@ -1486,6 +1572,15 @@ fn adjoint_tenferro_matrix_axes(tensor: &TracedTensor) -> Result<TracedTensor, S
 fn hermitian_wrapper_tenferro(tensor: &TracedTensor) -> Result<TracedTensor, String> {
     let tensor_h = adjoint_tenferro_matrix_axes(tensor)?;
     (tensor + &tensor_h).map_err(to_string)
+}
+
+fn required_usize_kwarg(case: &CaseRecord, key: &str) -> Result<usize, String> {
+    let value = case
+        .op_kwargs
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{}: missing or invalid usize kwarg {key}", case.case_id))?;
+    usize::try_from(value).map_err(|_| format!("{}: kwarg {key} exceeds usize", case.case_id))
 }
 
 fn bool_kwarg(case: &CaseRecord, key: &str) -> Result<Option<bool>, String> {

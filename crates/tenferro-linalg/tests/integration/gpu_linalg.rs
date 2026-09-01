@@ -7,8 +7,8 @@ use tenferro_gpu::{
     cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session,
     cuda::CudaBackend, cuda::CudaDeviceId, cuda::CudaExecSession,
 };
-use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{BackendSessionHost, Error, Tensor, TypedTensor};
+use tenferro_linalg::{HouseholderQr, LinalgBackend, QrGauge, QrOptions, TensorLinalgExt};
+use tenferro_tensor::{BackendSessionHost, Error, Tensor, TensorRead, TypedTensor};
 
 fn cpu_backend() -> CpuBackend {
     CpuBackend::new()
@@ -700,6 +700,470 @@ fn test_cubecl_svd_gesvd_tall_f64_retains_direct_route() {
     let expected_values =
         with_cpu_linalg_session(&mut cpu, |session| session.svd_values(&input)).unwrap();
     assert_tensor_close(&s, &expected_values, 1e-9);
+}
+
+#[test]
+#[ignore]
+fn test_cuda_compact_householder_qr_f64_reconstructs_input() {
+    if !gpu_available() {
+        return;
+    }
+    let input = tensor_f64(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 2.0, -1.0, 0.5, 3.0]);
+    let mut gpu = gpu_backend();
+    let device_input = upload(&gpu, &input);
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let (q, r) = with_cuda_linalg_session(&mut gpu, |session| {
+        let state = device_input.householder_qr(session).unwrap();
+        (
+            state.q_columns(0..2, options, session).unwrap(),
+            state.r(options, session).unwrap(),
+        )
+    });
+    let q = download(&gpu, &q);
+    let r = download(&gpu, &r);
+    let reconstructed = matmul_f64(
+        q.as_slice::<f64>().unwrap(),
+        r.as_slice::<f64>().unwrap(),
+        4,
+        2,
+        2,
+    );
+    assert_tensor_close(&tensor_f64(vec![4, 2], reconstructed), &input, 1.0e-10);
+}
+
+#[test]
+#[ignore]
+fn test_cuda_compact_householder_qr_append_and_from_factors_f64() {
+    if !gpu_available() {
+        return;
+    }
+    let a = tensor_f64(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 2.0, -1.0, 0.5, 3.0]);
+    let b = tensor_f64(vec![4, 2], vec![0.5, 1.0, -2.0, 1.5, 2.0, 0.0, 1.0, -1.0]);
+    let c = tensor_f64(vec![4, 1], vec![1.0, -0.5, 2.0, 0.25]);
+    let q_factor = tensor_f64(vec![4, 2], vec![1.0, 0.0, 1.0, 2.0, 0.5, 1.0, -1.0, 0.0]);
+    let r_factor = tensor_f64(vec![2, 3], vec![2.0, 0.0, -1.0, 3.0, 0.5, 2.0]);
+    let invalid_r = tensor_f64(vec![2, 2], vec![2.0, 1.0, 0.5, 3.0]);
+    let mut gpu = gpu_backend();
+    let a_gpu = upload(&gpu, &a);
+    let b_gpu = upload(&gpu, &b);
+    let c_gpu = upload(&gpu, &c);
+    let q_gpu = upload(&gpu, &q_factor);
+    let r_gpu = upload(&gpu, &r_factor);
+    let invalid_r_gpu = upload(&gpu, &invalid_r);
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let (append_q, append_r, factor_q, factor_r) = with_cuda_linalg_session(&mut gpu, |session| {
+        let appended = a_gpu
+            .householder_qr(session)
+            .unwrap()
+            .append_columns(&b_gpu, session)
+            .unwrap()
+            .append_columns(&c_gpu, session)
+            .unwrap();
+        let invalid =
+            HouseholderQr::<Tensor>::from_factors(&q_gpu, &invalid_r_gpu, session).unwrap_err();
+        assert!(matches!(invalid, Error::Validation { .. }));
+        let imported = HouseholderQr::<Tensor>::from_factors(&q_gpu, &r_gpu, session).unwrap();
+        (
+            appended.q_columns(0..4, options, session).unwrap(),
+            appended.r(options, session).unwrap(),
+            imported.q_columns(0..3, options, session).unwrap(),
+            imported.r(options, session).unwrap(),
+        )
+    });
+    let append_q = download(&gpu, &append_q);
+    let append_r = download(&gpu, &append_r);
+    let factor_q = download(&gpu, &factor_q);
+    let factor_r = download(&gpu, &factor_r);
+    let append_actual = matmul_f64(
+        append_q.as_slice::<f64>().unwrap(),
+        append_r.as_slice::<f64>().unwrap(),
+        4,
+        4,
+        5,
+    );
+    let mut combined = a.as_slice::<f64>().unwrap().to_vec();
+    combined.extend_from_slice(b.as_slice::<f64>().unwrap());
+    combined.extend_from_slice(c.as_slice::<f64>().unwrap());
+    assert_tensor_close(
+        &tensor_f64(vec![4, 5], append_actual),
+        &tensor_f64(vec![4, 5], combined),
+        1.0e-9,
+    );
+    let factor_actual = matmul_f64(
+        factor_q.as_slice::<f64>().unwrap(),
+        factor_r.as_slice::<f64>().unwrap(),
+        4,
+        3,
+        3,
+    );
+    let factor_expected = matmul_f64(
+        q_factor.as_slice::<f64>().unwrap(),
+        r_factor.as_slice::<f64>().unwrap(),
+        4,
+        2,
+        3,
+    );
+    assert_tensor_close(
+        &tensor_f64(vec![4, 3], factor_actual),
+        &tensor_f64(vec![4, 3], factor_expected),
+        1.0e-9,
+    );
+}
+
+#[test]
+#[ignore]
+fn test_cuda_compact_householder_qr_complex64_append_reconstructs() {
+    if !gpu_available() {
+        return;
+    }
+    let c = |re, im| Complex64::new(re, im);
+    let a = tensor_c64(
+        vec![3, 2],
+        vec![
+            c(1.0, 0.2),
+            c(2.0, -0.1),
+            c(0.5, 0.3),
+            c(-1.0, 0.4),
+            c(0.2, 0.1),
+            c(2.0, -0.5),
+        ],
+    );
+    let b = tensor_c64(vec![3, 1], vec![c(0.5, -0.2), c(1.5, 0.4), c(-0.7, 0.3)]);
+    let mut gpu = gpu_backend();
+    let a_gpu = upload(&gpu, &a);
+    let b_gpu = upload(&gpu, &b);
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let (q, selected, r) = with_cuda_linalg_session(&mut gpu, |session| {
+        let state = a_gpu
+            .householder_qr(session)
+            .unwrap()
+            .append_columns(&b_gpu, session)
+            .unwrap();
+        (
+            state.q_columns(0..3, options, session).unwrap(),
+            state.q_columns(1..2, options, session).unwrap(),
+            state.r(options, session).unwrap(),
+        )
+    });
+    let q = download(&gpu, &q);
+    let selected = download(&gpu, &selected);
+    let r = download(&gpu, &r);
+    assert_tensor_close(
+        &tensor_c64(
+            vec![3, 1],
+            q.as_slice::<Complex64>().unwrap()[3..6].to_vec(),
+        ),
+        &selected,
+        1.0e-12,
+    );
+    let actual = matmul_c64(
+        q.as_slice::<Complex64>().unwrap(),
+        r.as_slice::<Complex64>().unwrap(),
+        3,
+        3,
+        3,
+    );
+    let mut expected = a.as_slice::<Complex64>().unwrap().to_vec();
+    expected.extend_from_slice(b.as_slice::<Complex64>().unwrap());
+    assert_tensor_close(
+        &tensor_c64(vec![3, 3], actual),
+        &tensor_c64(vec![3, 3], expected),
+        1.0e-9,
+    );
+}
+
+#[test]
+#[ignore]
+fn test_cuda_compact_householder_qr_f32_and_c32_reconstruct() {
+    if !gpu_available() {
+        return;
+    }
+    let a = tensor_f32(vec![3, 2], vec![1.0, 2.0, 0.5, -1.0, 0.2, 2.0]);
+    let b = tensor_f32(vec![3, 2], vec![0.5, 1.0, -2.0, 2.0, 0.0, 1.0]);
+    let c = |re, im| Complex32::new(re, im);
+    let complex = tensor_c32(
+        vec![3, 2],
+        vec![
+            c(1.0, 0.2),
+            c(2.0, -0.1),
+            c(0.5, 0.3),
+            c(-1.0, 0.4),
+            c(0.2, 0.1),
+            c(2.0, -0.5),
+        ],
+    );
+    let complex_r = tensor_c32(
+        vec![2, 2],
+        vec![c(1.5, 0.2), c(0.0, 0.0), c(-0.5, 0.3), c(2.0, -0.1)],
+    );
+    let mut gpu = gpu_backend();
+    let a_gpu = upload(&gpu, &a);
+    let b_gpu = upload(&gpu, &b);
+    let complex_gpu = upload(&gpu, &complex);
+    let complex_r_gpu = upload(&gpu, &complex_r);
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let (q, r, cq, cr, imported_q, imported_r) = with_cuda_linalg_session(&mut gpu, |session| {
+        let state = a_gpu
+            .householder_qr(session)
+            .unwrap()
+            .append_columns(&b_gpu, session)
+            .unwrap();
+        let complex_state = complex_gpu.householder_qr(session).unwrap();
+        let imported =
+            HouseholderQr::<Tensor>::from_factors(&complex_gpu, &complex_r_gpu, session).unwrap();
+        (
+            state.q_columns(0..3, options, session).unwrap(),
+            state.r(options, session).unwrap(),
+            complex_state.q_columns(0..2, options, session).unwrap(),
+            complex_state.r(options, session).unwrap(),
+            imported.q_columns(0..2, options, session).unwrap(),
+            imported.r(options, session).unwrap(),
+        )
+    });
+    let q = download(&gpu, &q);
+    let r = download(&gpu, &r);
+    let cq = download(&gpu, &cq);
+    let cr = download(&gpu, &cr);
+    let imported_q = download(&gpu, &imported_q);
+    let imported_r = download(&gpu, &imported_r);
+    let actual = matmul_f32(
+        q.as_slice::<f32>().unwrap(),
+        r.as_slice::<f32>().unwrap(),
+        3,
+        3,
+        4,
+    );
+    let mut expected = a.as_slice::<f32>().unwrap().to_vec();
+    expected.extend_from_slice(b.as_slice::<f32>().unwrap());
+    assert_tensor_close(
+        &tensor_f32(vec![3, 4], actual),
+        &tensor_f32(vec![3, 4], expected),
+        2.0e-5,
+    );
+    let complex_actual = matmul_c32(
+        cq.as_slice::<Complex32>().unwrap(),
+        cr.as_slice::<Complex32>().unwrap(),
+        3,
+        2,
+        2,
+    );
+    assert_tensor_close(&tensor_c32(vec![3, 2], complex_actual), &complex, 2.0e-5);
+    let imported_actual = matmul_c32(
+        imported_q.as_slice::<Complex32>().unwrap(),
+        imported_r.as_slice::<Complex32>().unwrap(),
+        3,
+        2,
+        2,
+    );
+    let imported_expected = matmul_c32(
+        complex.as_slice::<Complex32>().unwrap(),
+        complex_r.as_slice::<Complex32>().unwrap(),
+        3,
+        2,
+        2,
+    );
+    assert_tensor_close(
+        &tensor_c32(vec![3, 2], imported_actual),
+        &tensor_c32(vec![3, 2], imported_expected),
+        3.0e-5,
+    );
+}
+
+#[test]
+#[ignore]
+fn test_cuda_compact_householder_qr_rank_deficient_zero_append_and_placement() {
+    if !gpu_available() {
+        return;
+    }
+    let input = tensor_f64(vec![3, 2], vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0]);
+    let empty = tensor_f64(vec![3, 0], vec![]);
+    let mut gpu = gpu_backend();
+    let input_gpu = upload(&gpu, &input);
+    let empty_gpu = upload(&gpu, &empty);
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let (q, selected, r) = with_cuda_linalg_session(&mut gpu, |session| {
+        let placement_error = input.householder_qr(session).unwrap_err();
+        assert!(matches!(placement_error, Error::RuntimeState { .. }));
+        let state = input_gpu
+            .householder_qr(session)
+            .unwrap()
+            .append_columns(&empty_gpu, session)
+            .unwrap();
+        (
+            state.q_columns(0..2, options, session).unwrap(),
+            state.q_columns(1..2, options, session).unwrap(),
+            state.r(options, session).unwrap(),
+        )
+    });
+    let q = download(&gpu, &q);
+    let selected = download(&gpu, &selected);
+    let r = download(&gpu, &r);
+    assert_eq!(selected.shape(), &[3, 1]);
+    assert_tensor_close(
+        &tensor_f64(vec![3, 1], q.as_slice::<f64>().unwrap()[3..6].to_vec()),
+        &selected,
+        1.0e-12,
+    );
+    let actual = matmul_f64(
+        q.as_slice::<f64>().unwrap(),
+        r.as_slice::<f64>().unwrap(),
+        3,
+        2,
+        2,
+    );
+    assert_tensor_close(&tensor_f64(vec![3, 2], actual), &input, 1.0e-9);
+}
+
+#[test]
+#[ignore]
+fn test_cuda_qr_positive_diagonal_owned_and_read_paths_stay_on_device() {
+    if !gpu_available() {
+        return;
+    }
+    let c = |re, im| Complex64::new(re, im);
+    let input = tensor_c64(
+        vec![2, 2],
+        vec![c(-1.0, 0.5), c(2.0, 0.1), c(0.3, -0.7), c(-2.0, 0.4)],
+    );
+    let mut gpu = gpu_backend();
+    let input_gpu = upload(&gpu, &input);
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let (owned, read) = with_cuda_linalg_session(&mut gpu, |session| {
+        (
+            session.qr_with_options(&input_gpu, options).unwrap(),
+            session
+                .qr_with_options_read(TensorRead::from_tensor(&input_gpu), options)
+                .unwrap(),
+        )
+    });
+    for outputs in [owned, read] {
+        let r = download(&gpu, &outputs[1]);
+        let values = r.as_slice::<Complex64>().unwrap();
+        for index in 0..2 {
+            let diagonal = values[index + index * 2];
+            assert!(diagonal.re >= 0.0, "negative QR diagonal: {diagonal}");
+            assert!(
+                diagonal.im.abs() < 1.0e-12,
+                "complex QR diagonal: {diagonal}"
+            );
+        }
+    }
+
+    let batched = tensor_c64(
+        vec![2, 2, 2],
+        vec![
+            c(-1.0, 0.5),
+            c(2.0, 0.1),
+            c(0.3, -0.7),
+            c(-2.0, 0.4),
+            c(0.2, -1.5),
+            c(-0.4, 0.8),
+            c(2.0, 0.3),
+            c(-0.5, -2.0),
+        ],
+    );
+    let batched = upload(&gpu, &batched);
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.qr_with_options(&batched, options).unwrap()
+    });
+    let r = download(&gpu, &outputs[1]);
+    let values = r.as_slice::<Complex64>().unwrap();
+    for batch in 0..2 {
+        for index in 0..2 {
+            let diagonal = values[batch * 4 + index + index * 2];
+            assert!(
+                diagonal.re >= 0.0,
+                "negative batched QR diagonal: {diagonal}"
+            );
+            assert!(
+                diagonal.im.abs() < 1.0e-12,
+                "complex batched QR diagonal: {diagonal}"
+            );
+        }
+    }
+
+    let real_batched = tensor_f64(
+        vec![2, 2, 2, 2],
+        vec![
+            -1.0, 0.0, 0.0, 2.0, 1.0, 0.0, 0.0, -3.0, -2.0, 1.0, 0.0, 1.0, 0.5, 0.0, 0.0, -0.25,
+        ],
+    );
+    let real_batched = upload(&gpu, &real_batched);
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.qr_with_options(&real_batched, options).unwrap()
+    });
+    let r = download(&gpu, &outputs[1]);
+    let values = r.as_slice::<f64>().unwrap();
+    for batch in 0..4 {
+        for index in 0..2 {
+            assert!(values[batch * 4 + index + index * 2] >= 0.0);
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn test_cuda_compact_householder_qr_wide_empty_range_and_rank_deficient_import() {
+    if !gpu_available() {
+        return;
+    }
+    let wide = tensor_f64(vec![2, 4], vec![1.0, 2.0, -1.0, 0.5, 2.0, -0.5, 0.25, 1.5]);
+    let rank_q = tensor_f64(vec![3, 2], vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0]);
+    let rank_r = tensor_f64(vec![2, 2], vec![1.0, 0.0, -0.5, 2.0]);
+    let mut gpu = gpu_backend();
+    let wide_gpu = upload(&gpu, &wide);
+    let rank_q_gpu = upload(&gpu, &rank_q);
+    let rank_r_gpu = upload(&gpu, &rank_r);
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let (q, empty_q, r, imported_q, imported_r) = with_cuda_linalg_session(&mut gpu, |session| {
+        let state = wide_gpu.householder_qr(session).unwrap();
+        let imported =
+            HouseholderQr::<Tensor>::from_factors(&rank_q_gpu, &rank_r_gpu, session).unwrap();
+        (
+            state.q_columns(0..2, options, session).unwrap(),
+            state.q_columns(0..0, options, session).unwrap(),
+            state.r(options, session).unwrap(),
+            imported.q_columns(0..2, options, session).unwrap(),
+            imported.r(options, session).unwrap(),
+        )
+    });
+    let q = download(&gpu, &q);
+    let empty_q = download(&gpu, &empty_q);
+    let r = download(&gpu, &r);
+    let imported_q = download(&gpu, &imported_q);
+    let imported_r = download(&gpu, &imported_r);
+    assert_eq!(empty_q.shape(), &[2, 0]);
+    let q_data = q.as_slice::<f64>().unwrap();
+    for lhs in 0..2 {
+        for rhs in 0..2 {
+            let dot = (0..2)
+                .map(|row| q_data[row + lhs * 2] * q_data[row + rhs * 2])
+                .sum::<f64>();
+            let expected = if lhs == rhs { 1.0 } else { 0.0 };
+            assert!((dot - expected).abs() < 1.0e-10);
+        }
+    }
+    let actual = matmul_f64(q_data, r.as_slice::<f64>().unwrap(), 2, 2, 4);
+    assert_tensor_close(&tensor_f64(vec![2, 4], actual), &wide, 1.0e-9);
+    let imported_actual = matmul_f64(
+        imported_q.as_slice::<f64>().unwrap(),
+        imported_r.as_slice::<f64>().unwrap(),
+        3,
+        2,
+        2,
+    );
+    let imported_expected = matmul_f64(
+        rank_q.as_slice::<f64>().unwrap(),
+        rank_r.as_slice::<f64>().unwrap(),
+        3,
+        2,
+        2,
+    );
+    assert_tensor_close(
+        &tensor_f64(vec![3, 2], imported_actual),
+        &tensor_f64(vec![3, 2], imported_expected),
+        1.0e-9,
+    );
 }
 
 #[test]

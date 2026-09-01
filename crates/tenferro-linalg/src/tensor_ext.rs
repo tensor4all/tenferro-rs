@@ -18,8 +18,7 @@ use tenferro_tensor::{
 };
 
 use crate::extension::{
-    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions,
-    QrOptions, SvdOptions,
+    apply_eigh_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions, QrOptions, SvdOptions,
 };
 use crate::LinalgBackend;
 
@@ -202,6 +201,31 @@ pub trait TensorLinalgExt {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn qr(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+
+    /// Initialize opaque compact Householder QR state.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation errors for non-matrix or unsupported-dtype input and
+    /// typed provider errors when compact QR is unavailable.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::TensorLinalgExt;
+    /// use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// let a = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// let mut host = CpuBackend::new();
+    /// let qr = host.with_backend_session(|session| a.householder_qr(session))?;
+    /// assert!(format!("{qr:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn householder_qr(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<crate::HouseholderQr<Tensor>>;
+
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for matrix metadata or options, plus QR backend errors.
@@ -1537,6 +1561,16 @@ impl TensorLinalgExt for Tensor {
     fn qr(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)> {
         with_linalg_backend(session, "qr", |backend| two(backend.qr(self)?, "qr"))
     }
+    fn householder_qr(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<crate::HouseholderQr<Tensor>> {
+        with_linalg_backend(session, "householder_qr", |backend| {
+            backend
+                .householder_qr(self)
+                .map(crate::HouseholderQr::from_backend)
+        })
+    }
     fn qr_with_options(
         &self,
         options: QrOptions,
@@ -1698,9 +1732,10 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
         with_linalg_backend(session, "qr_with_options_read", |backend| {
-            let mut out = backend.qr_read(self)?;
-            apply_qr_gauge(options.gauge, &mut out)?;
-            two(out, "qr_with_options_read")
+            two(
+                backend.qr_with_options_read(self, options)?,
+                "qr_with_options_read",
+            )
         })
     }
     fn lu_read(
@@ -2143,7 +2178,7 @@ fn typed_eigh<T: LinalgScalar>(
 /// [`LinalgBackend`] implementations remain supported through the SPI trait,
 /// but the concrete op path is built-in-session only. The composite bodies
 /// run on the borrowed `&mut dyn LinalgBackend` exactly as before.
-fn with_linalg_backend<X>(
+pub(crate) fn with_linalg_backend<X>(
     session: &mut dyn BackendSession,
     op: &'static str,
     f: impl FnOnce(&mut dyn LinalgBackend) -> tenferro_tensor::Result<X>,

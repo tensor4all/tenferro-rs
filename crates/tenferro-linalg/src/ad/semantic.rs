@@ -63,6 +63,13 @@ impl SemanticLinearizeRule for LinalgAdRule {
         builder: &mut SemanticProgramBuilder,
     ) -> Result<SemanticLinearizeResult, SemanticAdError> {
         let op = semantic_linalg_op(request.op(), SemanticAdRuleRole::Linearize)?;
+        if matches!(op.op(), LinalgOp::HouseholderQrThinQ { .. }) {
+            return Err(SemanticAdError::Unsupported {
+                family_id: LINALG_EXTENSION_FAMILY_ID,
+                role: SemanticAdRuleRole::Linearize,
+                message: "internal thin-Q residual is not differentiable".into(),
+            });
+        }
         if matches!(op.op(), LinalgOp::LuFactor | LinalgOp::SvdFull) {
             // These value-only operations can appear inside a differentiable
             // composite (for example, `solve` uses `LuFactor` outputs as
@@ -202,11 +209,13 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
                 builder,
                 SemanticAdRuleRole::LinearTranspose,
             ),
-            LinalgOp::LuFactor | LinalgOp::SvdFull => Err(SemanticAdError::Unsupported {
-                family_id: LINALG_EXTENSION_FAMILY_ID,
-                role: SemanticAdRuleRole::LinearTranspose,
-                message: format!("semantic linear transpose is unsupported for {:?}", op.op()),
-            }),
+            LinalgOp::LuFactor | LinalgOp::SvdFull | LinalgOp::HouseholderQrThinQ { .. } => {
+                Err(SemanticAdError::Unsupported {
+                    family_id: LINALG_EXTENSION_FAMILY_ID,
+                    role: SemanticAdRuleRole::LinearTranspose,
+                    message: format!("semantic linear transpose is unsupported for {:?}", op.op()),
+                })
+            }
             _ => semantic_linearized_transpose(
                 request.op(),
                 &primal_inputs,
@@ -1735,6 +1744,7 @@ fn transpose_linalg_extension(
             | LinalgOp::LuSolvePrepared { .. }
             | LinalgOp::FullPivLuSolve { .. }
             | LinalgOp::Solve
+            | LinalgOp::HouseholderQrAppendTangent
     ) {
         return Err(semantic_internal(
             role,

@@ -1,5 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::ext_op::invoke_extension_shape_inference;
+use tenferro_ops::SymDim;
 use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 
@@ -71,6 +72,23 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
             transpose_a: false,
             unit_diagonal: false,
         },
+        LinalgOp::HouseholderQrFactor,
+        LinalgOp::HouseholderQrFromFactors,
+        LinalgOp::HouseholderQrAppend,
+        LinalgOp::HouseholderQrR {
+            gauge: QrGauge::Raw,
+        },
+        LinalgOp::HouseholderQrQColumns {
+            start: 0,
+            end: 1,
+            gauge: QrGauge::Raw,
+        },
+        LinalgOp::HouseholderQrThinQ {
+            gauge: QrGauge::Raw,
+        },
+        LinalgOp::HouseholderQrAppendTangent,
+        LinalgOp::HouseholderQrSplitTangent { right: false },
+        LinalgOp::HouseholderQrSplitTangent { right: true },
     ];
     for op in ops {
         let admitted = super::linalg_session_supported::<CpuBackend>(&LinalgExtensionOp::new(op));
@@ -103,6 +121,58 @@ fn infer_output_meta_returns_error_on_input_count_mismatch() {
             source,
         } if source.to_string().contains(LINALG_EXTENSION_FAMILY_ID)
     ));
+}
+
+#[test]
+fn compact_qr_metadata_enforces_state_and_factor_invariants() {
+    let packed = [SymDim::from(4), SymDim::from(3)];
+    let coeff = [SymDim::from(3)];
+    let thin_q = LinalgExtensionOp::new(LinalgOp::HouseholderQrThinQ {
+        gauge: QrGauge::PositiveDiagonal,
+    });
+    let inferred =
+        invoke_extension_shape_inference(&thin_q, &[DType::F64, DType::F64], &[&packed, &coeff])
+            .unwrap();
+    assert_eq!(
+        inferred.output_metas[0].1,
+        vec![SymDim::from(4), SymDim::from(3)]
+    );
+
+    let bad_coeff = [SymDim::from(2)];
+    assert!(invoke_extension_shape_inference(
+        &thin_q,
+        &[DType::F64, DType::F64],
+        &[&packed, &bad_coeff],
+    )
+    .is_err());
+
+    let q = [SymDim::from(4), SymDim::from(2)];
+    let bad_r = [SymDim::from(3), SymDim::from(3)];
+    let from_factors = LinalgExtensionOp::new(LinalgOp::HouseholderQrFromFactors);
+    assert!(invoke_extension_shape_inference(
+        &from_factors,
+        &[DType::F64, DType::F64],
+        &[&q, &bad_r],
+    )
+    .is_err());
+
+    let bad_block = [SymDim::from(3), SymDim::from(1)];
+    let append = LinalgExtensionOp::new(LinalgOp::HouseholderQrAppend);
+    assert!(invoke_extension_shape_inference(
+        &append,
+        &[DType::F64, DType::F64, DType::F64],
+        &[&q, &[SymDim::from(2)], &bad_block],
+    )
+    .is_err());
+
+    let block_tangent = [SymDim::from(4), SymDim::from(1)];
+    let append_tangent = LinalgExtensionOp::new(LinalgOp::HouseholderQrAppendTangent);
+    assert!(invoke_extension_shape_inference(
+        &append_tangent,
+        &[DType::F64; 4],
+        &[&q, &block_tangent, &q, &bad_block],
+    )
+    .is_err());
 }
 
 #[test]
