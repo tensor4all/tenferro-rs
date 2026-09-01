@@ -8,8 +8,8 @@ or nightly execution rather than default PR CI.
 
 ## Summary
 
-- Total published records: 9585
-- Supported success records: 2090
+- Total published records: 9645
+- Supported success records: 2150
 - Supported success records with HVP payloads: 1339
 - Expected error records: 2
 - Unsupported success records: 7493
@@ -41,6 +41,7 @@ finite-difference tests because the public oracle family is not yet replayable.
 | FFT C2C extension | finite-difference | `fft(...).jvp(...)` | `cargo test -p tenferro-fft --features autodiff --test fft_ops fft_c64_jvp_matches_finite_diff` |
 | Lu | finite-difference | `grad(sum(l) + sum(u))` | `cargo test -p tenferro-linalg --features autodiff --test integration lu_qr_sum_grads_match_finite_diff` |
 | Qr | finite-difference | `grad(sum(q) + sum(r))` | `cargo test -p tenferro-linalg --features autodiff --test integration lu_qr_sum_grads_match_finite_diff` |
+| Incremental Householder QR | Torch JVP/VJP + finite-difference replay | factor, append, factor import, selected Q, and R | `RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_OP=incremental_householder_qr cargo test -p tenferro-linalg --features autodiff,cpu-faer --test integration oracle_replays_supported_db_cases_when_requested -- --nocapture` |
 | SvdVals | finite-difference | `norm(..., ord=2)` | `cargo test -p tenferro-linalg --features autodiff --test integration spectral_norm_jvp_matches_finite_diff_through_values_only_svd` |
 | Eigh | finite-difference | `grad(sum(values) + sum(vectors))` | `cargo test -p tenferro-linalg --features autodiff --test integration full_eigh_sum_grad_matches_finite_diff` |
 | EighVals | finite-difference | `eigvalsh` | `cargo test -p tenferro-linalg --features autodiff --test integration eigvalsh_jvp_matches_finite_diff_through_values_only_eigh` |
@@ -55,6 +56,11 @@ finite-difference tests because the public oracle family is not yet replayable.
 | det | identity | identity | 36 |
 | eigh | values_vectors_abs | eigh_values_vectors_abs | 32 |
 | full_pivot_lu | identity | identity | 4 |
+| incremental_householder_qr | append_qr | identity | 12 |
+| incremental_householder_qr | factor_qr | identity | 12 |
+| incremental_householder_qr | from_factors_qr | identity | 12 |
+| incremental_householder_qr | r | identity | 12 |
+| incremental_householder_qr | selected_q_columns | identity | 12 |
 | inv | identity | identity | 24 |
 | inv_ex | identity | identity | 24 |
 | lstsq_grad_oriented | identity | identity | 42 |

@@ -101,10 +101,13 @@ pub enum LinalgAdOpKind {
     HouseholderQrAppend,
     HouseholderQrR,
     HouseholderQrQColumns,
+    HouseholderQrThinQ,
+    HouseholderQrAppendTangent,
+    HouseholderQrSplitTangent,
 }
 
 impl LinalgAdOpKind {
-    pub const COUNT: usize = 22;
+    pub const COUNT: usize = 25;
 
     /// Return the manifest index for this operation kind.
     ///
@@ -139,6 +142,9 @@ impl LinalgAdOpKind {
             Self::HouseholderQrAppend => 19,
             Self::HouseholderQrR => 20,
             Self::HouseholderQrQColumns => 21,
+            Self::HouseholderQrThinQ => 22,
+            Self::HouseholderQrAppendTangent => 23,
+            Self::HouseholderQrSplitTangent => 24,
         }
     }
 
@@ -166,6 +172,9 @@ impl LinalgAdOpKind {
             LinalgOp::HouseholderQrAppend => Self::HouseholderQrAppend,
             LinalgOp::HouseholderQrR { .. } => Self::HouseholderQrR,
             LinalgOp::HouseholderQrQColumns { .. } => Self::HouseholderQrQColumns,
+            LinalgOp::HouseholderQrThinQ { .. } => Self::HouseholderQrThinQ,
+            LinalgOp::HouseholderQrAppendTangent => Self::HouseholderQrAppendTangent,
+            LinalgOp::HouseholderQrSplitTangent { .. } => Self::HouseholderQrSplitTangent,
             LinalgOp::Eigh { .. } => Self::Eigh,
             LinalgOp::EighVals { .. } => Self::EighVals,
             LinalgOp::Eig { .. } => Self::Eig,
@@ -347,11 +356,21 @@ static QR_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(1, "r", LinalgAdRuleSupport::SupportedViaLinearize),
 ];
 static HOUSEHOLDER_QR_STATE_OUTPUTS: [LinalgAdOutputSupport; 2] = [
-    output(0, "packed", LinalgAdRuleSupport::Unsupported),
-    output(1, "coeff", LinalgAdRuleSupport::Unsupported),
+    output(0, "packed", LinalgAdRuleSupport::SupportedViaLinearize),
+    output(1, "coeff", LinalgAdRuleSupport::NonDifferentiable),
 ];
-static HOUSEHOLDER_QR_VALUE_OUTPUTS: [LinalgAdOutputSupport; 1] =
-    [output(0, "value", LinalgAdRuleSupport::Unsupported)];
+static HOUSEHOLDER_QR_VALUE_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
+    0,
+    "value",
+    LinalgAdRuleSupport::SupportedViaLinearize,
+)];
+static HOUSEHOLDER_QR_RESIDUAL_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
+    0,
+    "internal_value",
+    LinalgAdRuleSupport::Unsupported,
+)];
+static HOUSEHOLDER_QR_CAVEATS: [&str; 1] =
+    ["Rank-deficient states are outside the differentiable domain."];
 static EIGH_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "eigenvalues", LinalgAdRuleSupport::SupportedViaLinearize),
     output(
@@ -583,48 +602,90 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     ),
     support_entry(
         LinalgAdOpKind::HouseholderQrFactor,
+        LinalgAdRuleSupport::SupportedViaLinearize,
         LinalgAdRuleSupport::Unsupported,
-        LinalgAdRuleSupport::Unsupported,
-        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
         LinalgAdRuleSupport::Unsupported,
         &HOUSEHOLDER_QR_STATE_OUTPUTS,
-        &["AD support requires the incremental QR oracle family."],
+        &HOUSEHOLDER_QR_CAVEATS,
     ),
     support_entry(
         LinalgAdOpKind::HouseholderQrFromFactors,
+        LinalgAdRuleSupport::SupportedViaLinearize,
         LinalgAdRuleSupport::Unsupported,
-        LinalgAdRuleSupport::Unsupported,
-        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
         LinalgAdRuleSupport::Unsupported,
         &HOUSEHOLDER_QR_STATE_OUTPUTS,
-        &["AD support requires the incremental QR oracle family."],
+        &HOUSEHOLDER_QR_CAVEATS,
     ),
     support_entry(
         LinalgAdOpKind::HouseholderQrAppend,
+        LinalgAdRuleSupport::SupportedViaLinearize,
         LinalgAdRuleSupport::Unsupported,
-        LinalgAdRuleSupport::Unsupported,
-        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
         LinalgAdRuleSupport::Unsupported,
         &HOUSEHOLDER_QR_STATE_OUTPUTS,
-        &["AD support requires the incremental QR oracle family."],
+        &HOUSEHOLDER_QR_CAVEATS,
     ),
     support_entry(
         LinalgAdOpKind::HouseholderQrR,
+        LinalgAdRuleSupport::SupportedViaLinearize,
         LinalgAdRuleSupport::Unsupported,
-        LinalgAdRuleSupport::Unsupported,
-        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
         LinalgAdRuleSupport::Unsupported,
         &HOUSEHOLDER_QR_VALUE_OUTPUTS,
-        &["AD support requires the incremental QR oracle family."],
+        &HOUSEHOLDER_QR_CAVEATS,
     ),
     support_entry(
         LinalgAdOpKind::HouseholderQrQColumns,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &HOUSEHOLDER_QR_VALUE_OUTPUTS,
+        &HOUSEHOLDER_QR_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::HouseholderQrThinQ,
         LinalgAdRuleSupport::Unsupported,
         LinalgAdRuleSupport::Unsupported,
         mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
         LinalgAdRuleSupport::Unsupported,
-        &HOUSEHOLDER_QR_VALUE_OUTPUTS,
-        &["AD support requires the incremental QR oracle family."],
+        &HOUSEHOLDER_QR_RESIDUAL_OUTPUTS,
+        &["Internal fixed residual; no public differentiable surface."],
+    ),
+    support_entry(
+        LinalgAdOpKind::HouseholderQrAppendTangent,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Supported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Supported,
+        &HOUSEHOLDER_QR_RESIDUAL_OUTPUTS,
+        &["Internal linear append operation; no public differentiable surface."],
+    ),
+    support_entry(
+        LinalgAdOpKind::HouseholderQrSplitTangent,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &HOUSEHOLDER_QR_RESIDUAL_OUTPUTS,
+        &["Internal transpose residual; no public differentiable surface."],
     ),
 ];
 

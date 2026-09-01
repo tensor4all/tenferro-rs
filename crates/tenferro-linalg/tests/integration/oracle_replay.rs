@@ -74,8 +74,8 @@ fn oracle_support_snapshot_counts() {
     if env::var("DUMP_ORACLE_SUPPORT_MARKDOWN").is_ok() {
         dump_oracle_support_markdown(&counts);
     }
-    assert_eq!(counts.total_records, 9585);
-    assert_eq!(counts.supported_records, 2090);
+    assert_eq!(counts.total_records, 9645);
+    assert_eq!(counts.supported_records, 2150);
     assert_eq!(counts.unsupported_records, 7493);
     if counts.supported_hvp_records != 1339 {
         eprintln!("supported_by_key = {:#?}", counts.supported_by_key);
@@ -136,6 +136,27 @@ fn oracle_db_every_record_is_classified() {
 fn oracle_replays_solve_jvp_vjp_hvp() {
     replay::replay_case_id("solve", "identity", "solve_f64_identity_001")
         .expect("solve oracle replay should pass");
+}
+
+#[test]
+fn oracle_replays_incremental_householder_qr_families() {
+    for family in [
+        "factor_qr",
+        "append_qr",
+        "from_factors_qr",
+        "selected_q_columns",
+        "r",
+    ] {
+        let case_id = format!("incremental_householder_qr_f64_{family}_001");
+        replay::replay_case_id("incremental_householder_qr", family, &case_id)
+            .unwrap_or_else(|error| panic!("{family} oracle replay failed: {error}"));
+    }
+    replay::replay_case_id(
+        "incremental_householder_qr",
+        "append_qr",
+        "incremental_householder_qr_c128_append_qr_001",
+    )
+    .expect("complex append oracle replay should pass");
 }
 
 #[test]

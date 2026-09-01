@@ -58,6 +58,19 @@ read-only, high thinking.
 
 No Rust implementation started before the Round-3 verdict.
 
+### Phase 3 amendment review
+
+Before AD implementation, `reviewer-flash` reviewed the Phase-3 amendment for
+symbolic thin-Q recovery, fixed `Primary` residual roles, exact oracle families,
+and metadata invariants. The bounded closure review returned
+**Correct-to-merge** with no Critical or Important findings. Its Minor clarity
+notes were folded into the durable design before implementation.
+
+The oracle-first prerequisite merged separately as
+`tensor4all/tensor-ad-oracles#25` (`8a4f95cd`). Its exact head passed the
+`replay` and `regenerate` required checks; the oracle family covers all five
+operations and all four scalar dtypes.
+
 ## Verification
 
 ```text

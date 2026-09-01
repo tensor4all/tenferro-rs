@@ -316,6 +316,16 @@ pub(crate) enum LinalgOp {
         end: usize,
         gauge: QrGauge,
     },
+    /// Internal AD residual operation for symbolic full thin-Q recovery.
+    HouseholderQrThinQ {
+        gauge: QrGauge,
+    },
+    /// Internal linear operation for abstract-state column append.
+    HouseholderQrAppendTangent,
+    /// Internal transpose operation that splits an appended state cotangent.
+    HouseholderQrSplitTangent {
+        right: bool,
+    },
     Eigh {
         derivative_eps: f64,
         gauge: EighGauge,
@@ -357,7 +367,11 @@ impl LinalgOp {
             | Self::HouseholderQrAppend
             | Self::Eigh { .. }
             | Self::Eig { .. } => 2,
-            Self::HouseholderQrR { .. } | Self::HouseholderQrQColumns { .. } => 1,
+            Self::HouseholderQrR { .. }
+            | Self::HouseholderQrQColumns { .. }
+            | Self::HouseholderQrThinQ { .. }
+            | Self::HouseholderQrAppendTangent
+            | Self::HouseholderQrSplitTangent { .. } => 1,
             Self::LuFactor => 3,
             Self::Lu => 4,
             Self::FullPivLu => 5,
@@ -371,9 +385,12 @@ impl LinalgOp {
             | Self::TriangularSolve { .. }
             | Self::HouseholderQrFromFactors
             | Self::HouseholderQrR { .. }
-            | Self::HouseholderQrQColumns { .. } => 2,
+            | Self::HouseholderQrQColumns { .. }
+            | Self::HouseholderQrThinQ { .. } => 2,
             Self::LogAbsDetFromLuFactor => 2,
             Self::SignDetFromLuFactor | Self::HouseholderQrAppend => 3,
+            Self::HouseholderQrAppendTangent => 4,
+            Self::HouseholderQrSplitTangent { .. } => 3,
             Self::LuSolvePrepared { .. } => 4,
             _ => 1,
         }
@@ -404,6 +421,9 @@ impl LinalgOp {
             Self::HouseholderQrAppend => 21,
             Self::HouseholderQrR { .. } => 22,
             Self::HouseholderQrQColumns { .. } => 23,
+            Self::HouseholderQrThinQ { .. } => 24,
+            Self::HouseholderQrAppendTangent => 25,
+            Self::HouseholderQrSplitTangent { .. } => 26,
         }
     }
 }
@@ -442,7 +462,9 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::SvdVals { derivative_eps } | LinalgOp::EighVals { derivative_eps } => {
                 hasher.write_u64(derivative_eps.to_bits());
             }
-            LinalgOp::Qr { gauge } | LinalgOp::HouseholderQrR { gauge } => {
+            LinalgOp::Qr { gauge }
+            | LinalgOp::HouseholderQrR { gauge }
+            | LinalgOp::HouseholderQrThinQ { gauge } => {
                 hash_qr_gauge(hasher, gauge);
             }
             LinalgOp::HouseholderQrQColumns { start, end, gauge } => {
@@ -460,7 +482,8 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::Eig { input_dtype } | LinalgOp::EigVals { input_dtype } => {
                 hash_dtype(hasher, input_dtype);
             }
-            LinalgOp::FullPivLuSolve { transpose_a } => {
+            LinalgOp::FullPivLuSolve { transpose_a }
+            | LinalgOp::HouseholderQrSplitTangent { right: transpose_a } => {
                 hasher.write_u8(u8::from(transpose_a));
             }
             LinalgOp::LuSolvePrepared {
@@ -491,7 +514,8 @@ impl ExtensionOp for LinalgExtensionOp {
             | LinalgOp::Solve
             | LinalgOp::HouseholderQrFactor
             | LinalgOp::HouseholderQrFromFactors
-            | LinalgOp::HouseholderQrAppend => {}
+            | LinalgOp::HouseholderQrAppend
+            | LinalgOp::HouseholderQrAppendTangent => {}
         }
     }
 
@@ -613,17 +637,37 @@ impl ExtensionOp for LinalgExtensionOp {
                 householder_qr_append_meta(&input_dtypes, &input_shapes)?
             }
             LinalgOp::HouseholderQrR { .. } => vec![householder_qr_r_meta(
-                input_dtypes[0],
+                &input_dtypes,
                 input_shapes[0],
                 input_shapes[1],
             )?],
             LinalgOp::HouseholderQrQColumns { start, end, .. } => {
                 vec![householder_qr_q_columns_meta(
-                    input_dtypes[0],
+                    &input_dtypes,
                     input_shapes[0],
                     input_shapes[1],
                     start,
                     end,
+                )?]
+            }
+            LinalgOp::HouseholderQrThinQ { .. } => {
+                vec![householder_qr_thin_q_meta(
+                    &input_dtypes,
+                    input_shapes[0],
+                    input_shapes[1],
+                )?]
+            }
+            LinalgOp::HouseholderQrAppendTangent => {
+                vec![householder_qr_append_tangent_meta(
+                    &input_dtypes,
+                    &input_shapes,
+                )?]
+            }
+            LinalgOp::HouseholderQrSplitTangent { right } => {
+                vec![householder_qr_split_tangent_meta(
+                    &input_dtypes,
+                    &input_shapes,
+                    right,
                 )?]
             }
             LinalgOp::Eigh { .. } => eigh_meta(input_dtypes[0], input_shapes[0])?,
@@ -684,6 +728,20 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
     inputs: &[TensorRead<'_>],
     session: &mut S,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    if op.op() == LinalgOp::HouseholderQrAppendTangent {
+        let left = session.to_contiguous_read(inputs[0].clone())?;
+        let right = session.to_contiguous_read(inputs[1].clone())?;
+        return Ok(vec![session.concatenate(&[&left, &right], 1)?]);
+    }
+    if let LinalgOp::HouseholderQrSplitTangent { right } = op.op() {
+        let cotangent_shape = inputs[0].clone().tensor_view().shape().to_vec();
+        let left_shape = inputs[1].clone().tensor_view().shape().to_vec();
+        let right_shape = inputs[2].clone().tensor_view().shape().to_vec();
+        let config =
+            householder_qr_split_config(&cotangent_shape, &left_shape, &right_shape, right)?;
+        let cotangent = session.to_contiguous_read(inputs[0].clone())?;
+        return Ok(vec![session.slice(&cotangent, &config)?]);
+    }
     if op.op() == LinalgOp::Cholesky {
         return Ok(vec![session.cholesky_read(inputs[0].clone())?]);
     }
@@ -745,7 +803,8 @@ fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp)
                 | LinalgOp::HouseholderQrFromFactors
                 | LinalgOp::HouseholderQrAppend
                 | LinalgOp::HouseholderQrR { .. }
-                | LinalgOp::HouseholderQrQColumns { .. } => false,
+                | LinalgOp::HouseholderQrQColumns { .. }
+                | LinalgOp::HouseholderQrThinQ { .. } => false,
                 // Plain partial-pivot solve runs in-session via cuSOLVER
                 // getrf plus prepared pivot/triangular solves
                 // (`gpu/linalg.rs::solve` = lu_factor + lu_solve_prepared, no
@@ -855,6 +914,29 @@ fn execute_linalg<B: LinalgBackend>(
         )?]),
         LinalgOp::HouseholderQrQColumns { start, end, gauge } => Ok(vec![backend
             .householder_qr_q_columns(inputs[0], inputs[1], start..end, QrOptions { gauge })?]),
+        LinalgOp::HouseholderQrThinQ { gauge } => {
+            let end = inputs[1].shape().first().copied().ok_or_else(|| {
+                Error::rank_mismatch("tenferro-linalg.householder_qr_thin_q", 1, 0)
+            })?;
+            Ok(vec![backend.householder_qr_q_columns(
+                inputs[0],
+                inputs[1],
+                0..end,
+                QrOptions { gauge },
+            )?])
+        }
+        LinalgOp::HouseholderQrAppendTangent => {
+            Ok(vec![backend.concatenate(&[inputs[0], inputs[1]], 1)?])
+        }
+        LinalgOp::HouseholderQrSplitTangent { right } => {
+            let config = householder_qr_split_config(
+                inputs[0].shape(),
+                inputs[1].shape(),
+                inputs[2].shape(),
+                right,
+            )?;
+            Ok(vec![backend.slice(inputs[0], &config)?])
+        }
         LinalgOp::Eigh {
             derivative_eps,
             gauge,
@@ -1397,14 +1479,25 @@ fn householder_qr_from_factors_meta(
     dtypes: &[DType],
     shapes: &[&[SymDim]],
 ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-    require_householder_rank2("tenferro-linalg.householder_qr_from_factors", shapes[0])?;
-    require_householder_rank2("tenferro-linalg.householder_qr_from_factors", shapes[1])?;
+    const OP: &str = "tenferro-linalg.householder_qr_from_factors";
+    require_householder_rank2(OP, shapes[0])?;
+    require_householder_rank2(OP, shapes[1])?;
     if dtypes[0] != dtypes[1] {
-        return Err(Error::dtype_mismatch(
-            "tenferro-linalg.householder_qr_from_factors",
-            dtypes[0],
-            dtypes[1],
-        ));
+        return Err(Error::dtype_mismatch(OP, dtypes[0], dtypes[1]));
+    }
+    require_static_extent_equal(OP, "q.cols/r.rows", &shapes[0][1], &shapes[1][0])?;
+    if let (Some(q_cols), Some(q_rows), Some(r_cols)) = (
+        shapes[0][1].constant_value(),
+        shapes[0][0].constant_value(),
+        shapes[1][1].constant_value(),
+    ) {
+        if q_cols > q_rows.min(r_cols) {
+            return Err(Error::invalid_argument(
+                OP,
+                "shape",
+                "Q column count exceeds min(Q rows, R columns)",
+            ));
+        }
     }
     let m = shapes[0][0].clone();
     let n = shapes[1][1].clone();
@@ -1416,53 +1509,77 @@ fn householder_qr_append_meta(
     dtypes: &[DType],
     shapes: &[&[SymDim]],
 ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-    require_householder_rank2("tenferro-linalg.householder_qr_append", shapes[0])?;
-    require_householder_rank2("tenferro-linalg.householder_qr_append", shapes[2])?;
-    if shapes[1].len() != 1 {
-        return Err(Error::rank_mismatch(
-            "tenferro-linalg.householder_qr_append",
-            1,
-            shapes[1].len(),
-        ));
+    const OP: &str = "tenferro-linalg.householder_qr_append";
+    require_householder_state_meta(OP, dtypes, shapes[0], shapes[1])?;
+    require_householder_rank2(OP, shapes[2])?;
+    if dtypes[0] != dtypes[2] {
+        return Err(Error::dtype_mismatch(OP, dtypes[0], dtypes[2]));
     }
-    if dtypes[0] != dtypes[1] || dtypes[0] != dtypes[2] {
-        return Err(Error::dtype_mismatch(
-            "tenferro-linalg.householder_qr_append",
-            dtypes[0],
-            dtypes[2],
-        ));
-    }
+    require_static_extent_equal(OP, "rows", &shapes[0][0], &shapes[2][0])?;
     let m = shapes[0][0].clone();
     let width = shapes[0][1].clone() + shapes[2][1].clone();
     let k = m.clone().min(width.clone());
     Ok(vec![(dtypes[0], vec![m, width]), (dtypes[0], vec![k])])
 }
 
+fn require_static_extent_equal(
+    op: &'static str,
+    field: &'static str,
+    lhs: &SymDim,
+    rhs: &SymDim,
+) -> tenferro_tensor::Result<()> {
+    if let (Some(lhs), Some(rhs)) = (lhs.constant_value(), rhs.constant_value()) {
+        if lhs != rhs {
+            return Err(Error::invalid_argument(
+                op,
+                field,
+                format!("expected equal extents, got {lhs} and {rhs}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn require_householder_state_meta(
+    op: &'static str,
+    dtypes: &[DType],
+    packed: &[SymDim],
+    coeff: &[SymDim],
+) -> tenferro_tensor::Result<()> {
+    require_householder_rank2(op, packed)?;
+    if coeff.len() != 1 {
+        return Err(Error::rank_mismatch(op, 1, coeff.len()));
+    }
+    if dtypes[0] != dtypes[1] {
+        return Err(Error::dtype_mismatch(op, dtypes[0], dtypes[1]));
+    }
+    let expected = packed[0].clone().min(packed[1].clone());
+    require_static_extent_equal(op, "coeff", &coeff[0], &expected)
+}
+
 fn householder_qr_r_meta(
-    dtype: DType,
+    dtypes: &[DType],
     packed: &[SymDim],
     coeff: &[SymDim],
 ) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
-    require_householder_rank2("tenferro-linalg.householder_qr_r", packed)?;
-    if coeff.len() != 1 {
-        return Err(Error::rank_mismatch(
-            "tenferro-linalg.householder_qr_r",
-            1,
-            coeff.len(),
-        ));
-    }
-    Ok((dtype, vec![coeff[0].clone(), packed[1].clone()]))
+    require_householder_state_meta("tenferro-linalg.householder_qr_r", dtypes, packed, coeff)?;
+    Ok((dtypes[0], vec![coeff[0].clone(), packed[1].clone()]))
 }
 
 fn householder_qr_q_columns_meta(
-    dtype: DType,
+    dtypes: &[DType],
     packed: &[SymDim],
     coeff: &[SymDim],
     start: usize,
     end: usize,
 ) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
-    require_householder_rank2("tenferro-linalg.householder_qr_q_columns", packed)?;
-    if coeff.len() != 1 || start > end {
+    require_householder_state_meta(
+        "tenferro-linalg.householder_qr_q_columns",
+        dtypes,
+        packed,
+        coeff,
+    )?;
+    if start > end {
         return Err(Error::invalid_argument(
             "tenferro-linalg.householder_qr_q_columns",
             "range",
@@ -1476,7 +1593,102 @@ fn householder_qr_q_columns_meta(
             format!("Q-column range {start}..{end} exceeds thin-Q width"),
         ));
     }
-    Ok((dtype, vec![packed[0].clone(), SymDim::from(end - start)]))
+    Ok((
+        dtypes[0],
+        vec![packed[0].clone(), SymDim::from(end - start)],
+    ))
+}
+
+fn householder_qr_thin_q_meta(
+    dtypes: &[DType],
+    packed: &[SymDim],
+    coeff: &[SymDim],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    require_householder_state_meta(
+        "tenferro-linalg.householder_qr_thin_q",
+        dtypes,
+        packed,
+        coeff,
+    )?;
+    Ok((dtypes[0], vec![packed[0].clone(), coeff[0].clone()]))
+}
+
+fn householder_qr_split_config(
+    cotangent: &[usize],
+    left: &[usize],
+    right_shape: &[usize],
+    take_right: bool,
+) -> tenferro_tensor::Result<tenferro_tensor::SliceConfig> {
+    const OP: &str = "tenferro-linalg.householder_qr_split_tangent";
+    for shape in [cotangent, left, right_shape] {
+        if shape.len() != 2 {
+            return Err(Error::rank_mismatch(OP, 2, shape.len()));
+        }
+    }
+    let total_width = left[1]
+        .checked_add(right_shape[1])
+        .ok_or_else(|| Error::invalid_argument(OP, "shape", "column range overflow"))?;
+    if cotangent[0] != left[0] || cotangent[0] != right_shape[0] || cotangent[1] != total_width {
+        return Err(Error::invalid_argument(
+            OP,
+            "shape",
+            "cotangent shape does not match appended factors",
+        ));
+    }
+    let selected = if take_right { right_shape } else { left };
+    let start = if take_right { left[1] } else { 0 };
+    let end = start
+        .checked_add(selected[1])
+        .ok_or_else(|| Error::invalid_argument(OP, "shape", "column range overflow"))?;
+    Ok(tenferro_tensor::SliceConfig {
+        starts: vec![0, start],
+        limits: vec![selected[0], end],
+        strides: vec![1, 1],
+    })
+}
+
+fn householder_qr_append_tangent_meta(
+    dtypes: &[DType],
+    shapes: &[&[SymDim]],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    const OP: &str = "tenferro-linalg.householder_qr_append_tangent";
+    for shape in shapes {
+        require_householder_rank2(OP, shape)?;
+    }
+    if dtypes.iter().any(|dtype| *dtype != dtypes[0]) {
+        return Err(Error::dtype_mismatch(OP, dtypes[0], dtypes[1]));
+    }
+    require_static_extent_equal(OP, "rows", &shapes[0][0], &shapes[1][0])?;
+    require_static_extent_equal(OP, "left tangent", &shapes[0][0], &shapes[2][0])?;
+    require_static_extent_equal(OP, "right tangent", &shapes[1][0], &shapes[3][0])?;
+    require_static_extent_equal(OP, "anchor rows", &shapes[2][0], &shapes[3][0])?;
+    Ok((
+        dtypes[0],
+        vec![
+            shapes[2][0].clone(),
+            shapes[2][1].clone() + shapes[3][1].clone(),
+        ],
+    ))
+}
+
+fn householder_qr_split_tangent_meta(
+    dtypes: &[DType],
+    shapes: &[&[SymDim]],
+    right: bool,
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    const OP: &str = "tenferro-linalg.householder_qr_split_tangent";
+    for shape in shapes {
+        require_householder_rank2(OP, shape)?;
+    }
+    if dtypes.iter().any(|dtype| *dtype != dtypes[0]) {
+        return Err(Error::dtype_mismatch(OP, dtypes[0], dtypes[1]));
+    }
+    require_static_extent_equal(OP, "left rows", &shapes[0][0], &shapes[1][0])?;
+    require_static_extent_equal(OP, "right rows", &shapes[0][0], &shapes[2][0])?;
+    let expected_width = shapes[1][1].clone() + shapes[2][1].clone();
+    require_static_extent_equal(OP, "width", &shapes[0][1], &expected_width)?;
+    let selected = if right { shapes[2] } else { shapes[1] };
+    Ok((dtypes[0], selected.to_vec()))
 }
 
 fn eigh_meta(dtype: DType, shape: &[SymDim]) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
