@@ -8,10 +8,12 @@ use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
 use super::ffi::cusolver::{
-    CublasDiagType, CublasFillMode, CublasOperation, CublasSideMode, CudaDataType,
-    CudaLinalgHandles, CudaStream, CusolverEigMode,
+    CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode,
+    CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode,
 };
 use super::kernels as cubecl_linalg;
+use crate::backend::CompactQrResult;
+use crate::extension::{QrGauge, QrOptions};
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, magnitude,
 // reduce_min/reduce_max) then downloads scalar summaries — no bulk host
 // roundtrip.
@@ -40,6 +42,20 @@ trait LinalgScalar:
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>>;
+
+    fn conjugate_coeff(
+        backend: &mut CudaExecSession<'_>,
+        coeff: &TypedTensor<Self>,
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>>;
+
+    fn apply_positive_qr_gauge(
+        backend: &mut CudaExecSession<'_>,
+        q: &mut TypedTensor<Self>,
+        r: &mut TypedTensor<Self>,
+        q_start: usize,
+        op: &'static str,
+    ) -> Result<()>;
 }
 
 impl LinalgScalar for f32 {
@@ -55,6 +71,24 @@ impl LinalgScalar for f32 {
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
         copy_matrix_adjoint_real(backend, v, vt_shape, op)
+    }
+
+    fn conjugate_coeff(
+        backend: &mut CudaExecSession<'_>,
+        coeff: &TypedTensor<Self>,
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>> {
+        clone_device_tensor(backend, coeff, op)
+    }
+
+    fn apply_positive_qr_gauge(
+        backend: &mut CudaExecSession<'_>,
+        q: &mut TypedTensor<Self>,
+        r: &mut TypedTensor<Self>,
+        q_start: usize,
+        op: &'static str,
+    ) -> Result<()> {
+        apply_positive_qr_gauge_real(backend, q, r, q_start, op)
     }
 }
 
@@ -72,6 +106,24 @@ impl LinalgScalar for f64 {
     ) -> Result<TypedTensor<Self>> {
         copy_matrix_adjoint_real(backend, v, vt_shape, op)
     }
+
+    fn conjugate_coeff(
+        backend: &mut CudaExecSession<'_>,
+        coeff: &TypedTensor<Self>,
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>> {
+        clone_device_tensor(backend, coeff, op)
+    }
+
+    fn apply_positive_qr_gauge(
+        backend: &mut CudaExecSession<'_>,
+        q: &mut TypedTensor<Self>,
+        r: &mut TypedTensor<Self>,
+        q_start: usize,
+        op: &'static str,
+    ) -> Result<()> {
+        apply_positive_qr_gauge_real(backend, q, r, q_start, op)
+    }
 }
 
 impl LinalgScalar for Complex32 {
@@ -88,6 +140,24 @@ impl LinalgScalar for Complex32 {
     ) -> Result<TypedTensor<Self>> {
         copy_matrix_adjoint_complex(backend, v, vt_shape, op)
     }
+
+    fn conjugate_coeff(
+        backend: &mut CudaExecSession<'_>,
+        coeff: &TypedTensor<Self>,
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>> {
+        conjugate_coeff_complex(backend, coeff, op)
+    }
+
+    fn apply_positive_qr_gauge(
+        backend: &mut CudaExecSession<'_>,
+        q: &mut TypedTensor<Self>,
+        r: &mut TypedTensor<Self>,
+        q_start: usize,
+        op: &'static str,
+    ) -> Result<()> {
+        apply_positive_qr_gauge_c32(backend, q, r, q_start, op)
+    }
 }
 
 impl LinalgScalar for Complex64 {
@@ -103,6 +173,24 @@ impl LinalgScalar for Complex64 {
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
         copy_matrix_adjoint_complex(backend, v, vt_shape, op)
+    }
+
+    fn conjugate_coeff(
+        backend: &mut CudaExecSession<'_>,
+        coeff: &TypedTensor<Self>,
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>> {
+        conjugate_coeff_complex(backend, coeff, op)
+    }
+
+    fn apply_positive_qr_gauge(
+        backend: &mut CudaExecSession<'_>,
+        q: &mut TypedTensor<Self>,
+        r: &mut TypedTensor<Self>,
+        q_start: usize,
+        op: &'static str,
+    ) -> Result<()> {
+        apply_positive_qr_gauge_c64(backend, q, r, q_start, op)
     }
 }
 
@@ -357,6 +445,302 @@ pub(super) fn qr(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Ve
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("qr", input))
         }
+    }
+}
+
+pub(super) fn householder_qr(
+    backend: &mut CudaExecSession<'_>,
+    input: &Tensor,
+) -> Result<CompactQrResult> {
+    let (packed, coeff) = match input {
+        Tensor::F32(input) => {
+            let (packed, coeff) = compact_qr_typed(backend, input, "householder_qr")?;
+            (Tensor::F32(packed), Tensor::F32(coeff))
+        }
+        Tensor::F64(input) => {
+            let (packed, coeff) = compact_qr_typed(backend, input, "householder_qr")?;
+            (Tensor::F64(packed), Tensor::F64(coeff))
+        }
+        Tensor::C32(input) => {
+            let (packed, coeff) = compact_qr_typed(backend, input, "householder_qr")?;
+            (Tensor::C32(packed), Tensor::C32(coeff))
+        }
+        Tensor::C64(input) => {
+            let (packed, coeff) = compact_qr_typed(backend, input, "householder_qr")?;
+            (Tensor::C64(packed), Tensor::C64(coeff))
+        }
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            return Err(unsupported_linalg_dtype("householder_qr", input));
+        }
+    };
+    Ok(CompactQrResult { packed, coeff })
+}
+
+fn upper_trapezoidal_violation_typed<T>(
+    backend: &mut CudaExecSession<'_>,
+    input: &TypedTensor<T>,
+    op: &'static str,
+) -> Result<TypedTensor<i32>>
+where
+    T: LinalgScalar + TensorScalar + PartialEq,
+{
+    backend.with_cubecl(op, |cubecl| {
+        let output = cubecl.alloc_output::<i32>(input.shape())?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let output_arg = cubecl.tensor_binding(&output, op)?;
+        let input_arg = cubecl.tensor_binding(input, op)?;
+        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
+        // SAFETY: bindings are live device tensors and each thread writes one
+        // independent validation flag.
+        unsafe {
+            cubecl_linalg::upper_trapezoidal_violation::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                output_arg.into_tensor_arg(),
+                input_arg.into_tensor_arg(),
+            );
+        }
+        Ok(output)
+    })
+}
+
+fn validate_upper_trapezoidal_gpu(
+    backend: &mut CudaExecSession<'_>,
+    r: &Tensor,
+    op: &'static str,
+) -> Result<()> {
+    if r.shape().len() != 2 {
+        return Err(Error::rank_mismatch(op, 2, r.shape().len()));
+    }
+    if r.shape().contains(&0) {
+        return Ok(());
+    }
+    let flags = match r {
+        Tensor::F32(r) => upper_trapezoidal_violation_typed(backend, r, op)?,
+        Tensor::F64(r) => upper_trapezoidal_violation_typed(backend, r, op)?,
+        Tensor::C32(r) => upper_trapezoidal_violation_typed(backend, r, op)?,
+        Tensor::C64(r) => upper_trapezoidal_violation_typed(backend, r, op)?,
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            return Err(unsupported_linalg_dtype(op, r));
+        }
+    };
+    let maximum = backend.reduce_max(&Tensor::I32(flags), &[0, 1])?;
+    backend.runtime().synchronize()?;
+    let host = download_tensor(backend.runtime(), &maximum)?;
+    let Tensor::I32(value) = host else {
+        return Err(Error::Internal(format!(
+            "{op}: unexpected upper-trapezoidal validation dtype"
+        )));
+    };
+    if value.host_data()?[0] == 0 {
+        Ok(())
+    } else {
+        Err(Error::invalid_argument(
+            op,
+            "r",
+            "R must be exactly upper trapezoidal",
+        ))
+    }
+}
+
+pub(super) fn householder_qr_from_factors(
+    backend: &mut CudaExecSession<'_>,
+    q: &Tensor,
+    r: &Tensor,
+) -> Result<CompactQrResult> {
+    const OP: &str = "householder_qr_from_factors";
+    ensure_supported_linalg_pair(OP, q, r)?;
+    validate_upper_trapezoidal_gpu(backend, r, OP)?;
+    let (packed, coeff) = match (q, r) {
+        (Tensor::F32(q), Tensor::F32(r)) => {
+            let (packed, coeff) = compact_qr_from_factors_typed(backend, q, r, OP)?;
+            (Tensor::F32(packed), Tensor::F32(coeff))
+        }
+        (Tensor::F64(q), Tensor::F64(r)) => {
+            let (packed, coeff) = compact_qr_from_factors_typed(backend, q, r, OP)?;
+            (Tensor::F64(packed), Tensor::F64(coeff))
+        }
+        (Tensor::C32(q), Tensor::C32(r)) => {
+            let (packed, coeff) = compact_qr_from_factors_typed(backend, q, r, OP)?;
+            (Tensor::C32(packed), Tensor::C32(coeff))
+        }
+        (Tensor::C64(q), Tensor::C64(r)) => {
+            let (packed, coeff) = compact_qr_from_factors_typed(backend, q, r, OP)?;
+            (Tensor::C64(packed), Tensor::C64(coeff))
+        }
+        _ => return Err(Error::dtype_mismatch(OP, q.dtype(), r.dtype())),
+    };
+    Ok(CompactQrResult { packed, coeff })
+}
+
+pub(super) fn householder_qr_append(
+    backend: &mut CudaExecSession<'_>,
+    packed: &Tensor,
+    coeff: &Tensor,
+    block: &Tensor,
+) -> Result<CompactQrResult> {
+    ensure_supported_linalg_pair("householder_qr_append", packed, coeff)?;
+    ensure_supported_linalg_pair("householder_qr_append", packed, block)?;
+    let (packed, coeff) = match (packed, coeff, block) {
+        (Tensor::F32(packed), Tensor::F32(coeff), Tensor::F32(block)) => {
+            let (packed, coeff) =
+                compact_qr_append_typed(backend, packed, coeff, block, "householder_qr_append")?;
+            (Tensor::F32(packed), Tensor::F32(coeff))
+        }
+        (Tensor::F64(packed), Tensor::F64(coeff), Tensor::F64(block)) => {
+            let (packed, coeff) =
+                compact_qr_append_typed(backend, packed, coeff, block, "householder_qr_append")?;
+            (Tensor::F64(packed), Tensor::F64(coeff))
+        }
+        (Tensor::C32(packed), Tensor::C32(coeff), Tensor::C32(block)) => {
+            let (packed, coeff) =
+                compact_qr_append_typed(backend, packed, coeff, block, "householder_qr_append")?;
+            (Tensor::C32(packed), Tensor::C32(coeff))
+        }
+        (Tensor::C64(packed), Tensor::C64(coeff), Tensor::C64(block)) => {
+            let (packed, coeff) =
+                compact_qr_append_typed(backend, packed, coeff, block, "householder_qr_append")?;
+            (Tensor::C64(packed), Tensor::C64(coeff))
+        }
+        _ => {
+            return Err(Error::dtype_mismatch(
+                "householder_qr_append",
+                packed.dtype(),
+                block.dtype(),
+            ));
+        }
+    };
+    Ok(CompactQrResult { packed, coeff })
+}
+
+pub(super) fn householder_qr_q_columns(
+    backend: &mut CudaExecSession<'_>,
+    packed: &Tensor,
+    coeff: &Tensor,
+    start: usize,
+    end: usize,
+    options: QrOptions,
+) -> Result<Tensor> {
+    ensure_supported_linalg_pair("householder_qr_q_columns", packed, coeff)?;
+    match (packed, coeff) {
+        (Tensor::F32(packed), Tensor::F32(coeff)) => compact_qr_q_columns_typed(
+            backend,
+            packed,
+            coeff,
+            start,
+            end,
+            options,
+            "householder_qr_q_columns",
+        )
+        .map(Tensor::F32),
+        (Tensor::F64(packed), Tensor::F64(coeff)) => compact_qr_q_columns_typed(
+            backend,
+            packed,
+            coeff,
+            start,
+            end,
+            options,
+            "householder_qr_q_columns",
+        )
+        .map(Tensor::F64),
+        (Tensor::C32(packed), Tensor::C32(coeff)) => compact_qr_q_columns_typed(
+            backend,
+            packed,
+            coeff,
+            start,
+            end,
+            options,
+            "householder_qr_q_columns",
+        )
+        .map(Tensor::C32),
+        (Tensor::C64(packed), Tensor::C64(coeff)) => compact_qr_q_columns_typed(
+            backend,
+            packed,
+            coeff,
+            start,
+            end,
+            options,
+            "householder_qr_q_columns",
+        )
+        .map(Tensor::C64),
+        _ => Err(Error::dtype_mismatch(
+            "householder_qr_q_columns",
+            packed.dtype(),
+            coeff.dtype(),
+        )),
+    }
+}
+
+pub(super) fn householder_qr_r(
+    backend: &mut CudaExecSession<'_>,
+    packed: &Tensor,
+    coeff: &Tensor,
+    options: QrOptions,
+) -> Result<Tensor> {
+    ensure_supported_linalg_pair("householder_qr_r", packed, coeff)?;
+    match (packed, coeff) {
+        (Tensor::F32(packed), Tensor::F32(coeff)) => {
+            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r").map(Tensor::F32)
+        }
+        (Tensor::F64(packed), Tensor::F64(coeff)) => {
+            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r").map(Tensor::F64)
+        }
+        (Tensor::C32(packed), Tensor::C32(coeff)) => {
+            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r").map(Tensor::C32)
+        }
+        (Tensor::C64(packed), Tensor::C64(coeff)) => {
+            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r").map(Tensor::C64)
+        }
+        _ => Err(Error::dtype_mismatch(
+            "householder_qr_r",
+            packed.dtype(),
+            coeff.dtype(),
+        )),
+    }
+}
+
+pub(super) fn qr_with_options(
+    backend: &mut CudaExecSession<'_>,
+    input: &Tensor,
+    options: QrOptions,
+) -> Result<Vec<Tensor>> {
+    let mut outputs = qr(backend, input)?;
+    if options.gauge == QrGauge::PositiveDiagonal {
+        apply_qr_gauge_device(backend, &mut outputs, 0, "qr")?;
+    }
+    Ok(outputs)
+}
+
+fn apply_qr_gauge_device(
+    backend: &mut CudaExecSession<'_>,
+    outputs: &mut [Tensor],
+    q_start: usize,
+    op: &'static str,
+) -> Result<()> {
+    if outputs.len() != 2 {
+        return Err(Error::Internal(format!(
+            "{op}: CUDA QR returned {} outputs",
+            outputs.len()
+        )));
+    }
+    let (q, r) = outputs.split_at_mut(1);
+    match (&mut q[0], &mut r[0]) {
+        (Tensor::F32(q), Tensor::F32(r)) => {
+            f32::apply_positive_qr_gauge(backend, q, r, q_start, op)
+        }
+        (Tensor::F64(q), Tensor::F64(r)) => {
+            f64::apply_positive_qr_gauge(backend, q, r, q_start, op)
+        }
+        (Tensor::C32(q), Tensor::C32(r)) => {
+            Complex32::apply_positive_qr_gauge(backend, q, r, q_start, op)
+        }
+        (Tensor::C64(q), Tensor::C64(r)) => {
+            Complex64::apply_positive_qr_gauge(backend, q, r, q_start, op)
+        }
+        (q, r) => Err(Error::dtype_mismatch(op, q.dtype(), r.dtype())),
     }
 }
 
@@ -1081,6 +1465,219 @@ where
         let vt = cubecl.alloc_output::<T>(vt_shape)?;
         launch_matrix_adjoint_complex(cubecl, v, &vt, op)?;
         Ok(vt)
+    })
+}
+
+fn clone_device_tensor<T>(
+    backend: &mut CudaExecSession<'_>,
+    input: &TypedTensor<T>,
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar + TensorScalar,
+{
+    backend.with_raw(op, |raw| {
+        let mut output = raw.alloc_output::<T>(input.shape())?;
+        let input_ref = raw.tensor(input)?;
+        let output_ref = raw.tensor_mut(&mut output)?;
+        // SAFETY: both spans are validated on this runtime, output is freshly
+        // allocated and exclusively borrowed, and the copy is stream ordered.
+        unsafe {
+            raw.copy_bytes(
+                output_ref.raw_ptr(),
+                input_ref.raw_ptr() as *const _,
+                input_ref.byte_len(),
+                op,
+            )?;
+        }
+        Ok(output)
+    })
+}
+
+fn conjugate_coeff_complex<T>(
+    backend: &mut CudaExecSession<'_>,
+    coeff: &TypedTensor<T>,
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar + TensorScalar + ComplexCore,
+{
+    backend.with_cubecl(op, |cubecl| {
+        let output = cubecl.alloc_output::<T>(coeff.shape())?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let output_arg = cubecl.array_arg(&output, op)?;
+        let input_arg = cubecl.array_arg(coeff, op)?;
+        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
+        // SAFETY: bindings describe live device arrays and the launch covers
+        // every coefficient exactly once.
+        unsafe {
+            cubecl_linalg::conjugate_vector::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    })
+}
+
+fn apply_positive_qr_gauge_real<T>(
+    backend: &mut CudaExecSession<'_>,
+    q: &mut TypedTensor<T>,
+    r: &mut TypedTensor<T>,
+    q_start: usize,
+    op: &'static str,
+) -> Result<()>
+where
+    T: LinalgScalar + TensorScalar + PartialOrd + std::ops::Mul<Output = T>,
+{
+    backend.with_cubecl(op, |cubecl| {
+        let mut phase_shape = vec![r.shape()[0]];
+        phase_shape.extend_from_slice(&r.shape()[2..]);
+        let phase = cubecl.alloc_output::<T>(&phase_shape)?;
+        let launch_len = q.n_elements().max(r.n_elements());
+        if launch_len == 0 {
+            return Ok(());
+        }
+        let phase_output_arg = cubecl.tensor_binding(&phase, op)?;
+        let r_input_arg = cubecl.tensor_binding(r, op)?;
+        let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
+        // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
+        unsafe {
+            cubecl_linalg::qr_phase_real::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                phase_count,
+                cubecl.cube_dim_1d(),
+                phase_output_arg.into_tensor_arg(),
+                r_input_arg.into_tensor_arg(),
+                r.shape().len(),
+            );
+        }
+        let phase_arg = cubecl.tensor_binding(&phase, op)?;
+        let q_arg = cubecl.tensor_binding(q, op)?;
+        let r_arg = cubecl.tensor_binding(r, op)?;
+        let launch_count = cubecl.cube_count_1d(launch_len)?;
+        // SAFETY: phase computation is stream-ordered before scaling, Q/R are
+        // live mutable outputs, and the launch covers both domains.
+        unsafe {
+            cubecl_linalg::qr_apply_phase_real::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                q_arg.into_tensor_arg(),
+                r_arg.into_tensor_arg(),
+                phase_arg.into_tensor_arg(),
+                q_start,
+                r.shape().len(),
+            );
+        }
+        Ok(())
+    })
+}
+
+fn apply_positive_qr_gauge_c32(
+    backend: &mut CudaExecSession<'_>,
+    q: &mut TypedTensor<Complex32>,
+    r: &mut TypedTensor<Complex32>,
+    q_start: usize,
+    op: &'static str,
+) -> Result<()> {
+    backend.with_cubecl(op, |cubecl| {
+        let mut phase_shape = vec![r.shape()[0]];
+        phase_shape.extend_from_slice(&r.shape()[2..]);
+        let phase = cubecl.alloc_output::<Complex32>(&phase_shape)?;
+        let launch_len = q.n_elements().max(r.n_elements());
+        if launch_len == 0 {
+            return Ok(());
+        }
+        let phase_output_arg = cubecl.tensor_binding(&phase, op)?;
+        let r_input_arg = cubecl.tensor_binding(r, op)?;
+        let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
+        // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
+        unsafe {
+            cubecl_linalg::qr_phase_c32::launch_unchecked::<CubeclCudaRuntime>(
+                cubecl.client(),
+                phase_count,
+                cubecl.cube_dim_1d(),
+                phase_output_arg.into_tensor_arg(),
+                r_input_arg.into_tensor_arg(),
+                r.shape().len(),
+            );
+        }
+        let phase_arg = cubecl.tensor_binding(&phase, op)?;
+        let q_arg = cubecl.tensor_binding(q, op)?;
+        let r_arg = cubecl.tensor_binding(r, op)?;
+        let launch_count = cubecl.cube_count_1d(launch_len)?;
+        // SAFETY: phase computation is stream-ordered before scaling and the
+        // second launch covers Q/R exactly.
+        unsafe {
+            cubecl_linalg::qr_apply_phase_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                q_arg.into_tensor_arg(),
+                r_arg.into_tensor_arg(),
+                phase_arg.into_tensor_arg(),
+                q_start,
+                r.shape().len(),
+            );
+        }
+        Ok(())
+    })
+}
+
+fn apply_positive_qr_gauge_c64(
+    backend: &mut CudaExecSession<'_>,
+    q: &mut TypedTensor<Complex64>,
+    r: &mut TypedTensor<Complex64>,
+    q_start: usize,
+    op: &'static str,
+) -> Result<()> {
+    backend.with_cubecl(op, |cubecl| {
+        let mut phase_shape = vec![r.shape()[0]];
+        phase_shape.extend_from_slice(&r.shape()[2..]);
+        let phase = cubecl.alloc_output::<Complex64>(&phase_shape)?;
+        let launch_len = q.n_elements().max(r.n_elements());
+        if launch_len == 0 {
+            return Ok(());
+        }
+        let phase_output_arg = cubecl.tensor_binding(&phase, op)?;
+        let r_input_arg = cubecl.tensor_binding(r, op)?;
+        let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
+        // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
+        unsafe {
+            cubecl_linalg::qr_phase_c64::launch_unchecked::<CubeclCudaRuntime>(
+                cubecl.client(),
+                phase_count,
+                cubecl.cube_dim_1d(),
+                phase_output_arg.into_tensor_arg(),
+                r_input_arg.into_tensor_arg(),
+                r.shape().len(),
+            );
+        }
+        let phase_arg = cubecl.tensor_binding(&phase, op)?;
+        let q_arg = cubecl.tensor_binding(q, op)?;
+        let r_arg = cubecl.tensor_binding(r, op)?;
+        let launch_count = cubecl.cube_count_1d(launch_len)?;
+        // SAFETY: phase computation is stream-ordered before scaling and the
+        // second launch covers Q/R exactly.
+        unsafe {
+            cubecl_linalg::qr_apply_phase_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                q_arg.into_tensor_arg(),
+                r_arg.into_tensor_arg(),
+                phase_arg.into_tensor_arg(),
+                q_start,
+                r.shape().len(),
+            );
+        }
+        Ok(())
     })
 }
 
@@ -1864,6 +2461,9 @@ where
         }
     }
 }
+
+mod householder_qr;
+use householder_qr::*;
 
 fn qr_typed<T>(
     backend: &mut CudaExecSession<'_>,

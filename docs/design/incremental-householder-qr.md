@@ -239,11 +239,41 @@ R rows consistently. Phase 4 shares that kernel with existing CUDA
 path. The kernel launches over the output domains and does not download scalar
 phases.
 
+Phase 4 extends the cuBLAS vtable and typed wrappers with `S/D/C/Zgemv`,
+`S/Dger`, `C/Zgeru`, and `S/D/C/Zgemm`. Reflector updates fold `-tau` into the
+GER/GERU alpha, so no separate SCAL binding is needed. Dynamic symbol loads and
+wrapper calls return typed load/provider/status errors and use the session-owned
+handle and stream.
+
+CUDA `from_factors(Q, R)` factors Q with `geqrf`, extracts its upper factor T,
+computes `T * R` with typed cuBLAS GEMM, and assembles the provider-neutral
+`m x n` packed state on device. It stores the folded upper factor in the packed
+upper region, Q reflectors below the diagonal where defined, zeroes padding,
+and emits `min(m,n)` coefficients with semantic zeros for padded reflector
+positions. It never forms `Q * R` for a full QR.
+
+The backend contract includes a narrow `qr_with_options_read` hook. Its default
+preserves the CPU `qr_read` plus host-gauge path; CUDA overrides both owned and
+read hooks with the shared device gauge kernel. Concrete owned, `TensorRead`,
+and typed QR-with-options surfaces dispatch through these hooks and never apply
+the host gauge to backend-resident outputs.
+
 All CUDA work runs inside the scoped `CudaExecSession::with_raw` or typed
 CubeCL session appropriate to the call. Workspace and stream-retention behavior
 follow `gpu-backend-design.md`; synchronization failure must not release
 allocations that an unfinished vendor call can still access. Missing cuSOLVER
-or cuBLAS symbols are typed provider errors, not fallback triggers.
+or cuBLAS symbols are typed provider errors, not fallback triggers. Only `i32` cuSOLVER and input-validation status tensors may
+be synchronized and downloaded for error reporting; matrix, reflector,
+coefficient, gauge, and factor payloads stay device-local.
+
+Required implementation seams are `backend.rs`/`tensor_ext.rs` for owned/read/
+typed QR routing, `gpu/ffi/cusolver.rs` for cuBLAS wrappers, `gpu/linalg.rs` and
+`gpu/mod.rs` for the five compact hooks and existing QR overrides, and
+`gpu/kernels.rs` for device gauge/assembly kernels. Portable CI compiles CUDA;
+hardware tests cover all four dtypes, reconstruction, factor import, multiple
+append, rank deficiency, zero columns, tall/square/wide and tall-to-wide,
+selected Q, gauge parity, placement errors, stream retention, no host payload
+transfer, and no full refactorization.
 
 ## AD semantics
 

@@ -1,13 +1,35 @@
 use std::{fs, path::Path};
 
 fn linalg_source() -> String {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gpu/linalg");
+    let mut source = fs::read_to_string(root.with_extension("rs"))
+        .unwrap_or_else(|err| panic!("GPU linalg source should be readable: {err}"));
+    source.push_str(
+        &fs::read_to_string(root.join("householder_qr.rs"))
+            .unwrap_or_else(|err| panic!("GPU Householder QR source should be readable: {err}")),
+    );
+    source
+}
+
+fn gpu_ffi_source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("gpu")
-            .join("linalg.rs"),
+            .join("ffi")
+            .join("cusolver.rs"),
     )
-    .unwrap_or_else(|err| panic!("GPU linalg source should be readable: {err}"))
+    .unwrap_or_else(|err| panic!("GPU linalg FFI source should be readable: {err}"))
+}
+
+fn extension_source() -> String {
+    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/extension.rs"))
+        .unwrap_or_else(|err| panic!("linalg extension source should be readable: {err}"))
+}
+
+fn tensor_ext_source() -> String {
+    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor_ext.rs"))
+        .unwrap_or_else(|err| panic!("tensor extension source should be readable: {err}"))
 }
 
 fn gpu_mod_source() -> String {
@@ -81,6 +103,68 @@ fn assert_unsafe_blocks_have_safety_comments(path: &str, source: &str) {
 #[test]
 fn gpu_linalg_unsafe_blocks_document_safety_invariants() {
     assert_unsafe_blocks_have_safety_comments("src/gpu/linalg.rs", &linalg_source());
+}
+
+#[test]
+fn compact_householder_cuda_uses_incremental_device_native_paths() {
+    let source = linalg_source();
+    let append = source_section(
+        &source,
+        "fn compact_qr_append_typed",
+        "fn compact_qr_state_dims",
+    );
+    assert!(append.contains("apply_householder_reflectors_typed"));
+    assert!(append.contains("geqrf_trailing_typed"));
+    assert!(!append.contains("\n    qr_typed("));
+    assert!(!append.contains("download_tensor"));
+
+    let from_factors = source_section(
+        &source,
+        "fn compact_qr_from_factors_typed",
+        "fn compact_qr_append_typed",
+    );
+    assert!(from_factors.contains("gemm_nn_typed"));
+    assert!(from_factors.contains("assemble_from_factors_typed"));
+    assert!(!from_factors.contains("\n    qr_typed("));
+    assert!(!from_factors.contains("download_tensor"));
+
+    let ffi = gpu_ffi_source();
+    for symbol in [
+        "cublasSgemv_v2",
+        "cublasDgemv_v2",
+        "cublasCgemv_v2",
+        "cublasZgemv_v2",
+        "cublasSger_v2",
+        "cublasDger_v2",
+        "cublasCgeru_v2",
+        "cublasZgeru_v2",
+        "cublasSgemm_v2",
+        "cublasDgemm_v2",
+        "cublasCgemm_v2",
+        "cublasZgemm_v2",
+        "cublasSetPointerMode_v2",
+    ] {
+        assert!(ffi.contains(symbol), "missing CUDA FFI symbol {symbol}");
+    }
+}
+
+#[test]
+fn qr_options_routes_owned_read_and_typed_surfaces_through_backend_hooks() {
+    let backend = read_workspace_source("tenferro-linalg/src/backend.rs");
+    assert!(backend.contains("fn qr_with_options_read("));
+    let tensor_ext = tensor_ext_source();
+    assert!(tensor_ext.contains("backend.qr_with_options_read("));
+    assert!(!tensor_ext.contains("apply_qr_gauge"));
+    let gpu = gpu_mod_source();
+    assert!(gpu.contains("fn qr_with_options("));
+    assert!(gpu.contains("fn qr_with_options_read("));
+    let extension = extension_source();
+    let cuda_admission = source_section(
+        &extension,
+        "if type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()",
+        "false\n}",
+    );
+    assert!(!cuda_admission.contains("HouseholderQrFactor"));
 }
 
 #[test]

@@ -112,6 +112,209 @@ pub fn complex64_magnitude(out: &mut Array<f64>, input: &Array<Complex64>) {
 }
 
 #[cube(launch_unchecked)]
+pub fn householder_q_columns_identity<E: CubePrimitive>(out: &mut Tensor<E>, start: usize) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        let row = out.coordinate(pos, 0usize);
+        let col = out.coordinate(pos, 1usize);
+        out[pos] = if row == start + col {
+            one_value::<E>()
+        } else {
+            zero_value::<E>()
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn conjugate_vector<C: ComplexCore>(out: &mut Array<C>, input: &Array<C>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].conj();
+    }
+}
+
+#[cube]
+fn positive_phase_real<E: CubePrimitive + core::ops::Neg<Output = E> + PartialOrd>(
+    diagonal: E,
+) -> E {
+    if diagonal < zero_value::<E>() {
+        -one_value::<E>()
+    } else {
+        one_value::<E>()
+    }
+}
+
+#[cube]
+fn positive_phase_c32(diagonal: Complex32) -> Complex32 {
+    let magnitude = diagonal.abs();
+    if magnitude == 0.0f32 {
+        Complex32::cast_from(1.0f32)
+    } else {
+        diagonal / Complex32::cast_from(magnitude)
+    }
+}
+
+#[cube]
+fn positive_phase_c64(diagonal: Complex64) -> Complex64 {
+    let magnitude = diagonal.abs();
+    if magnitude == 0.0f64 {
+        Complex64::cast_from(1.0f64)
+    } else {
+        diagonal / Complex64::cast_from(magnitude)
+    }
+}
+
+#[cube]
+fn qr_diagonal_offset<E: CubePrimitive>(
+    phase: &Tensor<E>,
+    r: &Tensor<E>,
+    pos: usize,
+    index: usize,
+    #[comptime] rank: usize,
+) -> usize {
+    let mut offset = index * r.stride(0usize) + index * r.stride(1usize);
+    #[unroll]
+    for axis in 2usize..rank {
+        offset += phase.coordinate(pos, axis - 1usize) * r.stride(axis);
+    }
+    offset
+}
+
+#[cube]
+fn qr_phase_offset<E: CubePrimitive>(
+    out: &Tensor<E>,
+    phase: &Tensor<E>,
+    pos: usize,
+    index: usize,
+    #[comptime] rank: usize,
+) -> usize {
+    let mut offset = index * phase.stride(0usize);
+    #[unroll]
+    for axis in 2usize..rank {
+        offset += out.coordinate(pos, axis) * phase.stride(axis - 1usize);
+    }
+    offset
+}
+
+#[cube(launch_unchecked)]
+pub fn qr_phase_real<E: CubePrimitive + core::ops::Neg<Output = E> + PartialOrd>(
+    phase: &mut Tensor<E>,
+    r: &Tensor<E>,
+    #[comptime] rank: usize,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < phase.len() {
+        let index = phase.coordinate(pos, 0usize);
+        let diagonal = r[qr_diagonal_offset(phase, r, pos, index, rank)];
+        phase[pos] = positive_phase_real::<E>(diagonal);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn qr_phase_c32(phase: &mut Tensor<Complex32>, r: &Tensor<Complex32>, #[comptime] rank: usize) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < phase.len() {
+        let index = phase.coordinate(pos, 0usize);
+        let diagonal = r[qr_diagonal_offset(phase, r, pos, index, rank)];
+        phase[pos] = positive_phase_c32(diagonal);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn qr_phase_c64(phase: &mut Tensor<Complex64>, r: &Tensor<Complex64>, #[comptime] rank: usize) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < phase.len() {
+        let index = phase.coordinate(pos, 0usize);
+        let diagonal = r[qr_diagonal_offset(phase, r, pos, index, rank)];
+        phase[pos] = positive_phase_c64(diagonal);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn qr_apply_phase_real<E: CubePrimitive + core::ops::Mul<Output = E>>(
+    q: &mut Tensor<E>,
+    r: &mut Tensor<E>,
+    phase: &Tensor<E>,
+    q_start: usize,
+    #[comptime] rank: usize,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < q.len() {
+        let index = q_start + q.coordinate(pos, 1usize);
+        q[pos] = q[pos] * phase[qr_phase_offset(q, phase, pos, index, rank)];
+    }
+    if pos < r.len() {
+        let index = r.coordinate(pos, 0usize);
+        r[pos] = r[pos] * phase[qr_phase_offset(r, phase, pos, index, rank)];
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn qr_apply_phase_complex<C: ComplexCore>(
+    q: &mut Tensor<C>,
+    r: &mut Tensor<C>,
+    phase: &Tensor<C>,
+    q_start: usize,
+    #[comptime] rank: usize,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < q.len() {
+        let index = q_start + q.coordinate(pos, 1usize);
+        q[pos] = q[pos] * phase[qr_phase_offset(q, phase, pos, index, rank)];
+    }
+    if pos < r.len() {
+        let index = r.coordinate(pos, 0usize);
+        r[pos] = r[pos] * phase[qr_phase_offset(r, phase, pos, index, rank)].conj();
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn upper_trapezoidal_violation<E: CubePrimitive + PartialEq>(
+    violation: &mut Tensor<i32>,
+    input: &Tensor<E>,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < violation.len() {
+        let row = input.coordinate(pos, 0usize);
+        let col = input.coordinate(pos, 1usize);
+        violation[pos] = if row > col && input[pos] != zero_value::<E>() {
+            1i32
+        } else {
+            0i32
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn householder_from_factors_assemble<E: CubePrimitive>(
+    packed_out: &mut Tensor<E>,
+    coeff_out: &mut Tensor<E>,
+    packed_q: &Tensor<E>,
+    coeff_q: &Tensor<E>,
+    folded_r: &Tensor<E>,
+    factor_width: usize,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < packed_out.len() {
+        let row = packed_out.coordinate(pos, 0usize);
+        let col = packed_out.coordinate(pos, 1usize);
+        packed_out[pos] = if row < factor_width && row <= col {
+            folded_r[row * folded_r.stride(0usize) + col * folded_r.stride(1usize)]
+        } else if col < factor_width && row > col {
+            packed_q[row * packed_q.stride(0usize) + col * packed_q.stride(1usize)]
+        } else {
+            zero_value::<E>()
+        };
+    }
+    if pos < coeff_out.len() {
+        coeff_out[pos] = if pos < factor_width {
+            coeff_q[pos]
+        } else {
+            zero_value::<E>()
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
     p_out: &mut Tensor<E>,
     l_out: &mut Tensor<E>,

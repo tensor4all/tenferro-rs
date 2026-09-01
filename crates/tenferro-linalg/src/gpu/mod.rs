@@ -6,6 +6,7 @@ use tenferro_gpu::cuda::CudaExecSession;
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
+use crate::QrOptions;
 
 impl LinalgBackend for CudaExecSession<'_> {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
@@ -107,6 +108,14 @@ impl LinalgBackend for CudaExecSession<'_> {
         linalg::qr(self, input)
     }
 
+    fn qr_with_options(
+        &mut self,
+        input: &Tensor,
+        options: QrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        linalg::qr_with_options(self, input, options)
+    }
+
     fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.tensor_view();
         match input {
@@ -132,6 +141,78 @@ impl LinalgBackend for CudaExecSession<'_> {
             }
             TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
                 Err(unsupported_dtype("qr", input.dtype()))
+            }
+        }
+    }
+
+    fn householder_qr(
+        &mut self,
+        input: &Tensor,
+    ) -> tenferro_tensor::Result<crate::backend::CompactQrResult> {
+        linalg::householder_qr(self, input)
+    }
+
+    fn householder_qr_from_factors(
+        &mut self,
+        q: &Tensor,
+        r: &Tensor,
+    ) -> tenferro_tensor::Result<crate::backend::CompactQrResult> {
+        linalg::householder_qr_from_factors(self, q, r)
+    }
+
+    fn householder_qr_append(
+        &mut self,
+        packed: &Tensor,
+        coeff: &Tensor,
+        block: &Tensor,
+    ) -> tenferro_tensor::Result<crate::backend::CompactQrResult> {
+        linalg::householder_qr_append(self, packed, coeff, block)
+    }
+
+    fn householder_qr_q_columns(
+        &mut self,
+        packed: &Tensor,
+        coeff: &Tensor,
+        range: std::ops::Range<usize>,
+        options: QrOptions,
+    ) -> tenferro_tensor::Result<Tensor> {
+        linalg::householder_qr_q_columns(self, packed, coeff, range.start, range.end, options)
+    }
+
+    fn householder_qr_r(
+        &mut self,
+        packed: &Tensor,
+        coeff: &Tensor,
+        options: QrOptions,
+    ) -> tenferro_tensor::Result<Tensor> {
+        linalg::householder_qr_r(self, packed, coeff, options)
+    }
+
+    fn qr_with_options_read(
+        &mut self,
+        input: TensorRead<'_>,
+        options: QrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                linalg::qr_with_options(self, &Tensor::F32(compact), options)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                linalg::qr_with_options(self, &Tensor::F64(compact), options)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                linalg::qr_with_options(self, &Tensor::C32(compact), options)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                linalg::qr_with_options(self, &Tensor::C64(compact), options)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("qr_with_options_read", input.dtype()))
             }
         }
     }

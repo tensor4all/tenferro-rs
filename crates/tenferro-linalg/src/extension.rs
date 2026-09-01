@@ -799,12 +799,6 @@ fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp)
                 // Complete-pivoting LU and general eig have no CUDA kernels.
                 LinalgOp::FullPivLu | LinalgOp::FullPivLuSolve { .. } => false,
                 LinalgOp::Eig { .. } | LinalgOp::EigVals { .. } => false,
-                LinalgOp::HouseholderQrFactor
-                | LinalgOp::HouseholderQrFromFactors
-                | LinalgOp::HouseholderQrAppend
-                | LinalgOp::HouseholderQrR { .. }
-                | LinalgOp::HouseholderQrQColumns { .. }
-                | LinalgOp::HouseholderQrThinQ { .. } => false,
                 // Plain partial-pivot solve runs in-session via cuSOLVER
                 // getrf plus prepared pivot/triangular solves
                 // (`gpu/linalg.rs::solve` = lu_factor + lu_solve_prepared, no

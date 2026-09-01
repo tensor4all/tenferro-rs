@@ -71,6 +71,16 @@ The oracle-first prerequisite merged separately as
 `replay` and `regenerate` required checks; the oracle family covers all five
 operations and all four scalar dtypes.
 
+### Phase 4 amendment review
+
+Before CUDA implementation, `reviewer-flash` identified missing concrete
+cuBLAS GEMV/GER/GERU/GEMM bindings, an unspecified device-native
+`from_factors` fold, and owned/read/typed QR gauge routing as Important design
+gaps. The amendment names each FFI and backend seam, the packed assembly,
+metadata-only solver-info downloads, the shared device gauge, and the
+`qr_with_options_read` hook. Closure review returned **Correct-to-merge** with
+no remaining Critical or Important findings.
+
 ## Verification
 
 ```text
