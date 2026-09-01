@@ -49,9 +49,9 @@ for the Linux aggregate gate, extending pull-request wall-clock time.
 - `actionlint .github/workflows/ci-pr-workspace-tests.yml .github/workflows/runpod-gpu-test.yml`: pass
 - `bash scripts/check-pr-fast.sh --test '<focused CI contract tests>'`: pass
 - `python3 scripts/ci/run_profile.py ci-config`: attempted, but the unrelated
-  release-publish handoff tests fail under this macOS checkout's local command
-  environment; the directly affected CI test suite and `actionlint` pass
-  independently as listed above.
+  release-publish and storage-ownership helper fixtures fail under this macOS
+  checkout's local command environment; the directly affected CI test suite
+  and `actionlint` pass independently as listed above.
 - `python3 scripts/repository-rules-review.py --base origin/main --head HEAD
   --dry-run --llm-skipped-reason "local deterministic review"`: pass; external
   LLM review intentionally skipped
