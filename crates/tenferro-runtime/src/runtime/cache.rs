@@ -411,6 +411,29 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
         signature_bytes: usize,
         producer: impl FnOnce() -> CacheProduced<K, V>,
     ) -> Result<CacheLookup<K, V>, Arc<PrepareError>> {
+        self.get_or_prepare_inner(key, behavior, signature_bytes, producer, || {})
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_or_prepare_with_entry_wait_hook_for_test(
+        &self,
+        key: K,
+        behavior: CacheInFlightBehavior,
+        signature_bytes: usize,
+        producer: impl FnOnce() -> CacheProduced<K, V>,
+        before_entry_wait: impl FnMut(),
+    ) -> Result<CacheLookup<K, V>, Arc<PrepareError>> {
+        self.get_or_prepare_inner(key, behavior, signature_bytes, producer, before_entry_wait)
+    }
+
+    fn get_or_prepare_inner(
+        &self,
+        key: K,
+        behavior: CacheInFlightBehavior,
+        signature_bytes: usize,
+        producer: impl FnOnce() -> CacheProduced<K, V>,
+        mut before_entry_wait: impl FnMut(),
+    ) -> Result<CacheLookup<K, V>, Arc<PrepareError>> {
         let summary = key.summary();
         check_preparation_stack::<K>(summary)?;
         let digest = key.compact_digest();
@@ -419,10 +442,13 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
             match self.probe(&key, digest)? {
                 ProbeResult::Entry(entry_id) => match self.handle_entry(entry_id)? {
                     EntryAction::Return(lookup) => return Ok(lookup),
-                    EntryAction::Wait(waiter) => match waiter.wait_once()? {
-                        WaitOutcome::RetryProbe => continue,
-                        WaitOutcome::Return(lookup) => return Ok(lookup),
-                    },
+                    EntryAction::Wait(waiter) => {
+                        before_entry_wait();
+                        match waiter.wait_once()? {
+                            WaitOutcome::RetryProbe => continue,
+                            WaitOutcome::Return(lookup) => return Ok(lookup),
+                        }
+                    }
                     EntryAction::ReturnRetry => continue,
                 },
                 ProbeResult::Queue(queue_id) => {
@@ -867,6 +893,11 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
             panic!("poison prepared cache state for test");
         }));
     }
+
+    #[cfg(test)]
+    pub(crate) fn notify_entry_waiters_for_test(&self) {
+        self.changed.notify_all();
+    }
 }
 
 #[derive(Debug)]
@@ -1056,22 +1087,34 @@ struct EntryWaitGuard<'a, K: PreparedCacheKey, V: PreparedValue> {
 
 impl<K: PreparedCacheKey, V: PreparedValue> EntryWaitGuard<'_, K, V> {
     fn wait_once(mut self) -> Result<WaitOutcome<K, V>, Arc<PrepareError>> {
-        let state = self.cache.lock_state()?;
-        let mut state = match self.cache.changed.wait(state) {
-            Ok(state) => state,
-            Err(error) => {
-                drop(error.into_inner());
-                return Err(Arc::new(PrepareError::CacheState {
-                    source: poisoned_state_error(),
-                }));
-            }
-        };
+        let mut state = self.cache.lock_state()?;
+        while self.same_attempt_is_preparing(&state) {
+            state = match self.cache.changed.wait(state) {
+                Ok(state) => state,
+                Err(error) => {
+                    drop(error.into_inner());
+                    return Err(Arc::new(PrepareError::CacheState {
+                        source: poisoned_state_error(),
+                    }));
+                }
+            };
+        }
         let outcome = self.complete_with_locked_state(&mut state);
         drop(state);
         if matches!(outcome, WaitOutcome::RetryProbe) {
             self.cache.changed.notify_all();
         }
         Ok(outcome)
+    }
+
+    fn same_attempt_is_preparing(&self, state: &CacheState<K, V>) -> bool {
+        matches!(
+            state.entries.get(&self.entry_id),
+            Some(EntryRecord {
+                state: PreparedEntryState::Preparing { attempt_id, .. },
+                ..
+            }) if *attempt_id == self.attempt_id
+        )
     }
 
     fn complete_with_locked_state(&mut self, state: &mut CacheState<K, V>) -> WaitOutcome<K, V> {
