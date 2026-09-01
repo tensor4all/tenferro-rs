@@ -411,19 +411,27 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
         signature_bytes: usize,
         producer: impl FnOnce() -> CacheProduced<K, V>,
     ) -> Result<CacheLookup<K, V>, Arc<PrepareError>> {
-        self.get_or_prepare_inner(key, behavior, signature_bytes, producer, || {})
+        self.get_or_prepare_inner(key, behavior, signature_bytes, producer, || {}, || {})
     }
 
     #[cfg(test)]
-    pub(crate) fn get_or_prepare_with_entry_wait_hook_for_test(
+    pub(crate) fn get_or_prepare_with_entry_wait_hooks_for_test(
         &self,
         key: K,
         behavior: CacheInFlightBehavior,
         signature_bytes: usize,
         producer: impl FnOnce() -> CacheProduced<K, V>,
         before_entry_wait: impl FnMut(),
+        before_condvar_wait: impl FnMut(),
     ) -> Result<CacheLookup<K, V>, Arc<PrepareError>> {
-        self.get_or_prepare_inner(key, behavior, signature_bytes, producer, before_entry_wait)
+        self.get_or_prepare_inner(
+            key,
+            behavior,
+            signature_bytes,
+            producer,
+            before_entry_wait,
+            before_condvar_wait,
+        )
     }
 
     fn get_or_prepare_inner(
@@ -433,6 +441,7 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
         signature_bytes: usize,
         producer: impl FnOnce() -> CacheProduced<K, V>,
         mut before_entry_wait: impl FnMut(),
+        mut before_condvar_wait: impl FnMut(),
     ) -> Result<CacheLookup<K, V>, Arc<PrepareError>> {
         let summary = key.summary();
         check_preparation_stack::<K>(summary)?;
@@ -444,7 +453,7 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
                     EntryAction::Return(lookup) => return Ok(lookup),
                     EntryAction::Wait(waiter) => {
                         before_entry_wait();
-                        match waiter.wait_once()? {
+                        match waiter.wait_once(&mut before_condvar_wait)? {
                             WaitOutcome::RetryProbe => continue,
                             WaitOutcome::Return(lookup) => return Ok(lookup),
                         }
@@ -893,11 +902,6 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
             panic!("poison prepared cache state for test");
         }));
     }
-
-    #[cfg(test)]
-    pub(crate) fn notify_entry_waiters_for_test(&self) {
-        self.changed.notify_all();
-    }
 }
 
 #[derive(Debug)]
@@ -1086,9 +1090,13 @@ struct EntryWaitGuard<'a, K: PreparedCacheKey, V: PreparedValue> {
 }
 
 impl<K: PreparedCacheKey, V: PreparedValue> EntryWaitGuard<'_, K, V> {
-    fn wait_once(mut self) -> Result<WaitOutcome<K, V>, Arc<PrepareError>> {
+    fn wait_once(
+        mut self,
+        before_condvar_wait: &mut impl FnMut(),
+    ) -> Result<WaitOutcome<K, V>, Arc<PrepareError>> {
         let mut state = self.cache.lock_state()?;
         while self.same_attempt_is_preparing(&state) {
+            before_condvar_wait();
             state = match self.cache.changed.wait(state) {
                 Ok(state) => state,
                 Err(error) => {

@@ -35,14 +35,12 @@ cached `Arc`, but it did not control the registration-to-wait interval.
   spurious Condvar wakeups.
 - Keep retained and ephemeral completion accounting in the existing
   `complete_with_locked_state` path.
-- Add a test-only callback around the real entry-wait boundary rather than a
-  probabilistic repetition test. The regression pauses the waiter after
-  registration, completes producer publication, and then permits the first
-  wait attempt.
-- After the bounded observation window, repeatedly issue replacement
-  notifications while polling for completion up to a rescue deadline. Use an
-  unscoped waiter so even deadline exhaustion cannot block failure reporting on
-  an implicit scoped-thread join.
+- Add test-only callbacks around the real entry-wait boundary and immediately
+  before `Condvar::wait` rather than a probabilistic repetition or timeout
+  test. The regression pauses the waiter after registration, completes producer
+  publication, and then permits the predicate check. Entering the condition
+  variable after publication panics directly, so a broken implementation fails
+  without sleeping.
 - Do not change cache ownership, limits, statistics, public APIs, dependencies,
   backends, feature flags, or CI workflow policy.
 
@@ -55,8 +53,8 @@ instance was found in those paths.
 ## Verification
 
 - The deterministic regression failed against the old unconditional wait in
-  about one second with `waiter missed publication before its first
-  condition-variable wait` and completed without hanging.
+  0.03 seconds with `waiter must not sleep after producer publication` and
+  completed without hanging.
 - `cargo nextest run -p tenferro-runtime --cargo-profile ci 'same_key_'
   --no-fail-fast`: 2 passed.
 - `cargo nextest run -p tenferro-runtime --cargo-profile ci --no-fail-fast`:
@@ -69,9 +67,7 @@ instance was found in those paths.
 
 ## Residual risk
 
-The regression uses a one-second bounded observation only to distinguish the
-fixed path from an old waiter that needs rescue notifications. The ordering of
-waiter registration, producer publication, and waiter release is controlled by
-barriers, so correctness does not depend on probabilistically hitting the race.
-The ten-second rescue deadline is failure containment for a broken
-implementation, not part of the passing-path correctness criterion.
+The ordering of waiter registration, producer publication, predicate checking,
+and any attempted condition-variable wait is controlled by barriers and a
+test-only hook. The regression has no scheduling deadline, so correctness does
+not depend on how quickly the waiter runs after it is released.

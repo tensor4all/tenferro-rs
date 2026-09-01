@@ -1,9 +1,9 @@
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Barrier, Mutex, Weak};
+use std::sync::{Arc, Barrier, Mutex, Weak};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tenferro_cpu::CpuBackend;
 
@@ -382,14 +382,13 @@ fn same_key_waiter_does_not_miss_publication_before_first_wait() {
     };
     producer_entered.wait();
 
-    let (completed_tx, completed_rx) = mpsc::channel();
     let waiter = {
         let cache = Arc::clone(&cache);
         let waiter_before_wait = Arc::clone(&waiter_before_wait);
         let waiter_release = Arc::clone(&waiter_release);
         thread::spawn(move || {
             let lookup = cache
-                .get_or_prepare_with_entry_wait_hook_for_test(
+                .get_or_prepare_with_entry_wait_hooks_for_test(
                     TestKey(8),
                     CacheInFlightBehavior::Wait,
                     0,
@@ -398,9 +397,9 @@ fn same_key_waiter_does_not_miss_publication_before_first_wait() {
                         waiter_before_wait.wait();
                         waiter_release.wait();
                     },
+                    || panic!("waiter must not sleep after producer publication"),
                 )
                 .unwrap();
-            completed_tx.send(()).unwrap();
             lookup
         })
     };
@@ -413,38 +412,10 @@ fn same_key_waiter_does_not_miss_publication_before_first_wait() {
     };
     waiter_release.wait();
 
-    let completed_without_rescue = completed_rx.recv_timeout(Duration::from_secs(1)).is_ok();
-    let waiter_completed = if completed_without_rescue {
-        true
-    } else {
-        // Repeated notifications let the old unconditional wait exit regardless of whether the
-        // waiter is descheduled before or after any individual notification.
-        let rescue_deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            cache.notify_entry_waiters_for_test();
-            let remaining = rescue_deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break false;
-            }
-            match completed_rx.recv_timeout(remaining.min(Duration::from_millis(10))) {
-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break true,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-            }
-        }
-    };
-    assert!(
-        waiter_completed,
-        "waiter did not finish within the rescue deadline"
-    );
-
     let waited = match waiter.join().unwrap() {
         CacheLookup::Ready(value) => value,
         other => panic!("expected waiter ready lookup, got {other:?}"),
     };
-    assert!(
-        completed_without_rescue,
-        "waiter missed publication before its first condition-variable wait"
-    );
     assert!(Arc::ptr_eq(&produced, &waited));
 }
 
