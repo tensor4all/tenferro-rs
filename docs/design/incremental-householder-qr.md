@@ -379,6 +379,11 @@ is outside the differentiable test domain.
 
 ## Performance gate
 
+The frozen Phase-5 cases, measurement order, validity gates, statistics, and
+acceptance thresholds are specified in the
+[performance-gate protocol](incremental-householder-qr-performance-gate.md).
+They may not be changed after candidate measurements begin.
+
 The primary comparison is compact Householder append against tensor4all's
 current explicit-Q BCGS2 append, not only against one-shot QR. The paired
 experiment also records one-shot QR as a diagnostic baseline.

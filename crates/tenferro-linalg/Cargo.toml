@@ -116,6 +116,10 @@ name = "eager_extension_dispatch"
 harness = false
 required-features = ["autodiff"]
 
+[[bench]]
+name = "incremental_householder_qr"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"

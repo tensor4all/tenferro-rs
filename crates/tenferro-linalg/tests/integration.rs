@@ -23,6 +23,8 @@ mod gpu_linalg;
 mod gpu_linalg_source_contract;
 #[path = "integration/householder_qr.rs"]
 mod householder_qr;
+#[path = "integration/incremental_qr_performance_contract.rs"]
+mod incremental_qr_performance_contract;
 #[path = "integration/inject_dual_abi_tests.rs"]
 mod inject_dual_abi_tests;
 #[path = "integration/inject_tests.rs"]

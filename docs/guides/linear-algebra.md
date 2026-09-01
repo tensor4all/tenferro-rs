@@ -64,6 +64,7 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Cholesky | `cholesky` | `cholesky` | `cholesky` |
 | SVD | `svd`, `svdvals`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
 | QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
+| Incremental compact QR | `householder_qr`, `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` | same state operations on `EagerTensor` | same state operations on `TracedTensor` |
 | Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` | `eigh`, `eigh_with_options`, `eigvalsh` |
 | General eigen | `eig` | `eig`, `eigvals` | `eig`, `eigvals` |
 | LU | `lu` | `lu` | `lu` |
@@ -337,6 +338,70 @@ assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
 assert!(max_abs_diff(&qtq, &identity)? < 1.0e-12);
 ```
 <!-- end-snippet-source -->
+
+## Incremental compact Householder QR
+
+Use compact Householder state when columns arrive in blocks and retaining an
+explicit Q would be wasteful. The state owns private packed reflectors and
+coefficients on the input device. `append_columns` factors only the new trailing
+residual; it never refactorizes old columns. Materialize R or only the Q columns
+you need:
+
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#incremental_householder_qr -->
+```rust
+use tenferro_cpu::CpuBackend;
+use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
+use tenferro_runtime::{BackendSessionHost, Tensor, TensorSessionOpsExt};
+
+let initial = Tensor::from_vec_col_major(
+    vec![3, 2],
+    vec![1.0_f64, 2.0, 0.5, -1.0, 0.2, 2.0],
+)?;
+let block = Tensor::from_vec_col_major(vec![3, 1], vec![0.5_f64, 1.0, -2.0])?;
+let accumulated = Tensor::from_vec_col_major(
+    vec![3, 3],
+    vec![1.0_f64, 2.0, 0.5, -1.0, 0.2, 2.0, 0.5, 1.0, -2.0],
+)?;
+let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+let mut backend = CpuBackend::new();
+let (q, r, reconstructed) = backend.with_backend_session(|session| {
+    let state = initial
+        .householder_qr(session)?
+        .append_columns(&block, session)?;
+    let q = state.q_columns(0..3, options, session)?;
+    let r = state.r(options, session)?;
+    let reconstructed = q.matmul(&r, session)?;
+    Ok::<_, tenferro_runtime::Error>((q, r, reconstructed))
+})?;
+
+assert_eq!(q.shape(), &[3, 3]);
+assert_eq!(r.shape(), &[3, 3]);
+let error = reconstructed
+    .as_slice::<f64>()?
+    .iter()
+    .zip(accumulated.as_slice::<f64>()?)
+    .map(|(actual, expected)| (actual - expected).abs())
+    .fold(0.0_f64, f64::max);
+assert!(error < 1.0e-12);
+```
+<!-- end-snippet-source -->
+
+The API is rank-2 and supports F32, F64, C32, and C64. Inputs in one state must
+share dtype, placement, and row count. `from_factors` requires an exactly upper-
+trapezoidal R. Rank-deficient primal states are supported, while AD is defined
+on the full-rank differentiable domain. JVP/VJP propagate to the initial matrix,
+factors, and every appended block through the accumulated-matrix tangent.
+
+CUDA follows the normal explicit transfer rule: upload all inputs before state
+construction and download only outputs you need. Compact state, append,
+selected-Q extraction, R extraction, and positive-diagonal gauge remain on the
+device; no CPU fallback is used. CUDA requires the same vendor-library setup as
+other linalg operations. See [Devices and GPU](devices-and-gpu.md).
+
+The frozen benchmark scope and acceptance thresholds are documented in the
+[Phase-5 performance gate](../design/incremental-householder-qr-performance-gate.md).
+They describe SRC-derived F64 matrices and do not imply equal speedups for every
+shape, dtype, provider, or thread count.
 
 ## Hermitian eigenvalue decomposition
 

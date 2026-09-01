@@ -239,6 +239,48 @@ assert!(max_abs_diff(&qtq, &identity)? < 1.0e-12);
         Ok(())
     }
 
+    snippet_incremental_householder_qr()?;
+
+    fn snippet_incremental_householder_qr() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:incremental_householder_qr
+use tenferro_cpu::CpuBackend;
+use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
+use tenferro_runtime::{BackendSessionHost, Tensor, TensorSessionOpsExt};
+
+let initial = Tensor::from_vec_col_major(
+    vec![3, 2],
+    vec![1.0_f64, 2.0, 0.5, -1.0, 0.2, 2.0],
+)?;
+let block = Tensor::from_vec_col_major(vec![3, 1], vec![0.5_f64, 1.0, -2.0])?;
+let accumulated = Tensor::from_vec_col_major(
+    vec![3, 3],
+    vec![1.0_f64, 2.0, 0.5, -1.0, 0.2, 2.0, 0.5, 1.0, -2.0],
+)?;
+let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+let mut backend = CpuBackend::new();
+let (q, r, reconstructed) = backend.with_backend_session(|session| {
+    let state = initial
+        .householder_qr(session)?
+        .append_columns(&block, session)?;
+    let q = state.q_columns(0..3, options, session)?;
+    let r = state.r(options, session)?;
+    let reconstructed = q.matmul(&r, session)?;
+    Ok::<_, tenferro_runtime::Error>((q, r, reconstructed))
+})?;
+
+assert_eq!(q.shape(), &[3, 3]);
+assert_eq!(r.shape(), &[3, 3]);
+let error = reconstructed
+    .as_slice::<f64>()?
+    .iter()
+    .zip(accumulated.as_slice::<f64>()?)
+    .map(|(actual, expected)| (actual - expected).abs())
+    .fold(0.0_f64, f64::max);
+assert!(error < 1.0e-12);
+        // snippet-end:incremental_householder_qr
+        Ok(())
+    }
+
     snippet_linear_algebra_8()?;
 
     // snippet source: docs/guides/linear-algebra.md:312
