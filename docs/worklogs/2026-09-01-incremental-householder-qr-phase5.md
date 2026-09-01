@@ -152,8 +152,50 @@ source hashes, and historical disclosure. Its two optional Minor findings were
 fixed by pinning every record's shape/repetition fields to the frozen case and
 clarifying CUDA synchronization occurs around each aggregate sample.
 
+## Third full-suite result and frequency-boundary correction
+
+Clean candidate `958cdb3` completed all 336 processes with no performance,
+correctness, scaling, or source finding. CUDA bond-128 compact/full-QR was
+0.449. The report was still `INCONCLUSIVE`: the one CPU0 frequency read happened
+after all timed work and raced schedutil decay between 3.7 and 3.1 GHz, and one
+faer label had CoV 0.117. The artifacts remain under
+`target/iqr-performance-958cdb3/`.
+
+A focused pre-implementation `reviewer-flash` review returned
+**Correct-to-merge** for moving frequency observation to the actual measurement
+boundary. Each measured repetition now records CPU0 `scaling_cur_freq` in the
+canonical untimed order: 50 ms warm, frequency read, backend synchronization,
+then `Instant::now`. The record uses the median of complete measured samples; any
+read failure emits no frequency and remains fail-safe `INCONCLUSIVE`. The
+independent `cpuinfo_max_freq` reference and +/-10% threshold are unchanged.
+All other gates and the mandatory complete rerun are unchanged.
+
+## Pinned-core active calibration
+
+A pre-commit probe showed the peak `cpuinfo_max_freq` reference was itself
+invalid for schedutil: CPU0 did not stabilize at peak after 50 ms to 1 s warms.
+The original protocol froze one logical CPU, not CPU0. An environmental survey
+ran three 80 ms active samples on all 64 allowed logical CPUs and selected
+same-NUMA core 17 using a <5% spread criterion. Representative retained probes:
+
+| CPU | probe | active MHz samples | max/min spread |
+|---:|---|---|---:|
+| 0 | five 50 ms follow-up samples | 3099.907, 3099.881, 3099.911, 3699.926, 3147.619 | 19.36% |
+| 17 | all-core survey, three 80 ms samples | 3099.960, 3099.961, 3099.958 | <0.01% |
+
+A new `reviewer-flash` design round first required fail-closed affinity parsing,
+missing-calibration handling, distinct artifact keys, and this survey record.
+After those fixes it returned **Correct-to-merge**. The runner now refuses any
+affinity other than exactly one decimal CPU, derives that CPU's sysfs path, and
+stores five complete 50 ms calibration samples in
+`cpu_calibration_samples_mhz` plus their independent median in
+`cpu_active_reference_mhz`. Any missing calibration or measured sample remains
+`INCONCLUSIVE`; there is no peak or partial-sample fallback. The unchanged 10%
+gate compares measured process medians with that pre-run active reference.
+
 ## Measurement status
 
 Thresholds, cases, cycles, repetitions, and source correspondence remain
-frozen. A new clean exact candidate must rerun the entire paired suite;
-Phase-5 acceptance remains pending until its deterministic report is PASS.
+frozen. A new clean exact candidate must rerun the entire paired suite under
+`taskset -c 17`; Phase-5 acceptance remains pending until its deterministic
+report is PASS.

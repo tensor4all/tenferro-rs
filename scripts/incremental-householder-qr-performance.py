@@ -12,6 +12,7 @@ import random
 import statistics
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,8 @@ BOOTSTRAP_SEED = 1735
 BOOTSTRAP_SAMPLES = 10_000
 SOURCE_COMMIT = "da0775a208006352f6e5eab18bc6bb09ca39a1f6"
 SAMPLE_BATCH = 4
+CPU_CALIBRATION_SAMPLES = 5
+CPU_WARM_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -83,10 +86,10 @@ def capture(command: list[str]) -> str | None:
         return None
 
 
-def cpu0_frequency_mhz(name: str) -> float | None:
+def pinned_cpu_frequency_mhz(cpu: int, name: str = "scaling_cur_freq") -> float | None:
     try:
         khz = float(
-            Path(f"/sys/devices/system/cpu/cpu0/cpufreq/{name}")
+            Path(f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/{name}")
             .read_text(encoding="utf-8")
             .strip()
         )
@@ -103,6 +106,29 @@ def process_affinity() -> str | None:
     except OSError:
         pass
     return None
+
+
+def single_pinned_cpu(affinity: str | None) -> int | None:
+    if affinity is None or not affinity.isdecimal():
+        return None
+    return int(affinity)
+
+
+def complete_calibration_median(samples: list[float | None]) -> float | None:
+    if len(samples) != CPU_CALIBRATION_SAMPLES or any(sample is None for sample in samples):
+        return None
+    return statistics.median(float(sample) for sample in samples if sample is not None)
+
+
+def active_cpu_calibration(cpu: int) -> tuple[list[float | None], float | None]:
+    samples: list[float | None] = []
+    state = 1
+    for _ in range(CPU_CALIBRATION_SAMPLES):
+        deadline = time.perf_counter() + CPU_WARM_SECONDS
+        while time.perf_counter() < deadline:
+            state = (state * 6_364_136_223_846_793_005 + 1) & ((1 << 64) - 1)
+        samples.append(pinned_cpu_frequency_mhz(cpu))
+    return samples, complete_calibration_median(samples)
 
 
 def environment_observation() -> dict[str, object]:
@@ -128,7 +154,11 @@ def environment_observation() -> dict[str, object]:
         pass
     return {
         "load1": load1,
-        "cpu_mhz": cpu0_frequency_mhz("scaling_cur_freq"),
+        "cpu_mhz": (
+            pinned_cpu_frequency_mhz(cpu)
+            if (cpu := single_pinned_cpu(process_affinity())) is not None
+            else None
+        ),
         "gpu_clock_mhz": gpu_clock,
         "gpu_throttle": gpu_throttle,
     }
@@ -162,6 +192,11 @@ def run_suite(root: Path, artifact_dir: Path, backends: list[str]) -> None:
     benchmark = root / "crates/tenferro-linalg/benches/incremental_householder_qr.rs"
     benchmark_sha256 = hashlib.sha256(benchmark.read_bytes()).hexdigest()
     checker = Path(__file__).resolve()
+    runner_affinity = process_affinity()
+    pinned_cpu = single_pinned_cpu(runner_affinity)
+    if pinned_cpu is None:
+        raise ValueError(f"runner must be pinned to exactly one decimal CPU: {runner_affinity!r}")
+    calibration_samples, active_reference = active_cpu_calibration(pinned_cpu)
     environment_path = artifact_dir / "environment.json"
     environment_path.write_text(
         json.dumps(
@@ -173,8 +208,10 @@ def run_suite(root: Path, artifact_dir: Path, backends: list[str]) -> None:
                 "benchmark_sha256": benchmark_sha256,
                 "checker_sha256": hashlib.sha256(checker.read_bytes()).hexdigest(),
                 "ledger_sha256": hashlib.sha256(ledger.read_bytes()).hexdigest(),
-                "cpu_reference_mhz": cpu0_frequency_mhz("cpuinfo_max_freq"),
-                "runner_affinity": process_affinity(),
+                "pinned_cpu": pinned_cpu,
+                "cpu_calibration_samples_mhz": calibration_samples,
+                "cpu_active_reference_mhz": active_reference,
+                "runner_affinity": runner_affinity,
                 "release_profile": "release",
                 "thread_environment": {
                     "RAYON_NUM_THREADS": "1",
@@ -408,7 +445,7 @@ def observation_issues(
     record: dict,
     pre: dict,
     backend: str,
-    cpu_reference_mhz: float | None,
+    cpu_active_reference_mhz: float | None,
     runner_affinity: str | None,
     gpu_reference_mhz: float | None,
 ) -> list[str]:
@@ -417,9 +454,9 @@ def observation_issues(
     if observation["load1"] > 1.5 * max(float(pre["load1"]), 0.1):
         issues.append("system load validity gate failed")
     cpu_mhz = record.get("cpu_frequency_mhz")
-    if cpu_reference_mhz is None or cpu_mhz is None:
+    if cpu_active_reference_mhz is None or cpu_mhz is None:
         issues.append("CPU frequency observation unavailable")
-    elif abs(float(cpu_mhz) / cpu_reference_mhz - 1.0) > 0.10:
+    elif abs(float(cpu_mhz) / cpu_active_reference_mhz - 1.0) > 0.10:
         issues.append("CPU frequency validity gate failed")
     if runner_affinity is None or record.get("cpu_affinity") != runner_affinity:
         issues.append("CPU affinity validity gate failed")
@@ -468,7 +505,13 @@ def check_suite(artifact_dir: Path, backends: list[str]) -> int:
     if not (artifact_dir / "source-contract.log").exists():
         findings.append("missing exact-candidate source-contract log")
     pre = environment["pre_run"]
-    cpu_reference_mhz = environment.get("cpu_reference_mhz")
+    calibration_samples = environment.get("cpu_calibration_samples_mhz")
+    if not isinstance(calibration_samples, list):
+        raise ValueError("missing CPU calibration samples")
+    expected_active_reference = complete_calibration_median(calibration_samples)
+    cpu_active_reference_mhz = environment.get("cpu_active_reference_mhz")
+    if cpu_active_reference_mhz != expected_active_reference:
+        raise ValueError("CPU active reference does not match calibration median")
     runner_affinity = environment.get("runner_affinity")
     gpu_clocks = [
         float(record["environment"]["gpu_clock_mhz"])
@@ -511,7 +554,7 @@ def check_suite(artifact_dir: Path, backends: list[str]) -> int:
                         record,
                         pre,
                         backend,
-                        cpu_reference_mhz,
+                        cpu_active_reference_mhz,
                         runner_affinity,
                         gpu_reference_mhz,
                     )
@@ -622,6 +665,14 @@ def self_test() -> None:
     assert not normalized_scaling_grows_too_much([3.0, 2.0, 1.0])
     assert normalized_scaling_grows_too_much([1.0, 1.36, 0.9])
     assert SAMPLE_BATCH == 4
+    assert CPU_CALIBRATION_SAMPLES == 5
+    assert single_pinned_cpu("0") == 0
+    assert single_pinned_cpu("17") == 17
+    for rejected in (None, "", "0-63", "0,1", "ff", "0x11"):
+        assert single_pinned_cpu(rejected) is None
+    assert complete_calibration_median([3_100.0] * 5) == 3_100.0
+    assert complete_calibration_median([3_100.0, 3_100.0, None, 3_100.0, 3_100.0]) is None
+    assert complete_calibration_median([3_100.0] * 4) is None
     record = {
         "cpu_frequency_mhz": 2_000.0,
         "cpu_affinity": "0",

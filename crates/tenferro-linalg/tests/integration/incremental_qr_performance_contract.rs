@@ -53,7 +53,8 @@ fn incremental_qr_performance_gate_contract() {
         "checker_sha256",
         "ledger_sha256",
         "SAMPLE_BATCH = 4",
-        "cpu_reference_mhz",
+        "cpu_active_reference_mhz",
+        "cpu_calibration_samples_mhz",
         "runner_affinity",
         "target = inconclusive if environment_issues else findings",
         "not (backend == \"cuda\" and bond == 32)",
@@ -66,8 +67,20 @@ fn incremental_qr_performance_gate_contract() {
     assert!(benchmark.contains("sample_batch: SAMPLE_BATCH"));
     assert!(benchmark.contains("CPU_CLOCK_WARMUP_MS: u64 = 50"));
     assert!(benchmark.contains("warm_cpu_clock();"));
-    assert!(benchmark.contains("cpu0_frequency_mhz()"));
+    assert!(benchmark.contains("pinned_cpu_frequency_mhz()"));
+    let timing_loop = benchmark
+        .split_once("for iteration in 0..total")
+        .expect("benchmark should contain timing loop")
+        .1;
+    let warm = timing_loop.find("warm_cpu_clock();").unwrap();
+    let sample = timing_loop
+        .find("let cpu_frequency_sample = pinned_cpu_frequency_mhz();")
+        .unwrap();
+    let start = timing_loop.find("let start = Instant::now();").unwrap();
+    assert!(warm < sample && sample < start);
     assert!(benchmark.contains("process_affinity()"));
+    assert!(benchmark.contains("cpu{cpu}/cpufreq/scaling_cur_freq"));
+    assert!(!script.contains("cpu_reference_mhz"));
     assert!(protocol.contains("A batched process median below 1 ms is"));
     assert!(protocol.contains("`INCONCLUSIVE`"));
     assert!(protocol.contains("same batch"));

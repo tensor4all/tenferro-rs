@@ -68,8 +68,8 @@ objects and GPU contexts/handles are constructed once and reused.
   independently reset append sequences; initial-state preparation remains
   outside timing. The aggregate batch time is recorded and all arms of every
   case use the same batch. The reported statistic is the median of the seven
-  per-process medians. A fixed untimed 50 ms CPU0 spin immediately before each
-  aggregate sample stabilizes the pinned core's frequency.
+  per-process medians. A fixed untimed 50 ms spin on the single pinned logical
+  CPU immediately before each aggregate sample stabilizes its frequency.
 - Record every raw aggregate timing and a fixed-seed 10,000-resample 95%
   bootstrap confidence interval for each reported median and paired ratio. No
   selective reruns or case omission. A batched process median below 1 ms is
@@ -77,9 +77,11 @@ objects and GPU contexts/handles are constructed once and reused.
 
 A case is `INCONCLUSIVE` if process-median coefficient of variation exceeds
 10%, system load exceeds 1.5× `max(pre-run load, 0.1)` in any cycle, or
-thermal/frequency observations differ by more than 10%. CPU frequency is read
-by the pinned benchmark process for CPU0 and compared with CPU0's independent
-hardware `cpuinfo_max_freq`; process affinity must equal the runner affinity. GPU clock
+thermal/frequency observations differ by more than 10%. Before measured
+subprocesses start, five 50 ms active samples on the single pinned CPU define an
+independent median reference. Each benchmark process reads the same CPU after
+each warm and before timing; its median must remain within 10% of the active
+reference, and process affinity must exactly equal runner affinity. GPU clock
 variation is compared with the median active process clock because the pre-run
 clock is idle; every nonzero throttle reason remains invalid. CUDA errors, or a
 correctness check fails solely for a demonstrated environmental reason. A

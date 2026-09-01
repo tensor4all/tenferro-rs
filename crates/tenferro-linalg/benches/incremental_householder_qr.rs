@@ -315,6 +315,7 @@ fn run_session_outputs<B: BenchSession>(
         .checked_add(config.repetitions)
         .ok_or_else(|| "warmup/repetition count overflowed".to_string())?;
     let mut timings_ms = Vec::with_capacity(config.repetitions);
+    let mut cpu_frequency_samples = Vec::with_capacity(config.repetitions);
     let mut final_factors = None;
     for iteration in 0..total {
         let mut prepared_batch = Vec::with_capacity(SAMPLE_BATCH);
@@ -322,6 +323,7 @@ fn run_session_outputs<B: BenchSession>(
             prepared_batch.push(prepare(config.algorithm, session, initial)?);
         }
         warm_cpu_clock();
+        let cpu_frequency_sample = pinned_cpu_frequency_mhz();
         session
             .benchmark_synchronize()
             .map_err(|error| error.to_string())?;
@@ -337,9 +339,10 @@ fn run_session_outputs<B: BenchSession>(
         let elapsed = start.elapsed().as_secs_f64() * 1.0e3;
         if iteration >= config.warmups {
             timings_ms.push(elapsed);
+            cpu_frequency_samples.push(cpu_frequency_sample);
         }
     }
-    let cpu_frequency_mhz = cpu0_frequency_mhz();
+    let cpu_frequency_mhz = median_complete_samples(&cpu_frequency_samples);
     let cpu_affinity = process_affinity();
     let (q, r) = canonical_factors(session, final_factors.unwrap())?;
     let reference = session
@@ -395,13 +398,26 @@ fn warm_cpu_clock() {
     black_box(state);
 }
 
-fn cpu0_frequency_mhz() -> Option<f64> {
-    fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
-        .ok()?
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .map(|khz| khz / 1_000.0)
+fn pinned_cpu_frequency_mhz() -> Option<f64> {
+    let affinity = process_affinity()?;
+    if !affinity.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    let cpu = affinity.parse::<usize>().ok()?;
+    fs::read_to_string(format!(
+        "/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_cur_freq"
+    ))
+    .ok()?
+    .trim()
+    .parse::<f64>()
+    .ok()
+    .map(|khz| khz / 1_000.0)
+}
+
+fn median_complete_samples(samples: &[Option<f64>]) -> Option<f64> {
+    let mut values = samples.iter().copied().collect::<Option<Vec<_>>>()?;
+    values.sort_by(f64::total_cmp);
+    Some(values[values.len() / 2])
 }
 
 fn process_affinity() -> Option<String> {
