@@ -1164,7 +1164,7 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 
     let download_backend =
         CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
-    let x_host = download_tensor(download_backend.runtime(), x.to_tensor().unwrap()).unwrap();
+    let x_host = download_tensor(download_backend.runtime(), &x.to_tensor().unwrap()).unwrap();
     assert_eq!(x_host.shape(), &[2, 1]);
     assert_close_slice(f64_data(&x_host), &[1.8, -0.4], 1.0e-9);
 }

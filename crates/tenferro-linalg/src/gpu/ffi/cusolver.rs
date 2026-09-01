@@ -93,6 +93,13 @@ pub enum CublasOperation {
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug)]
+pub enum CublasPointerMode {
+    Host = 0,
+    Device = 1,
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug)]
 pub enum CusolverEigMode {
     NoVector = 0,
     Vector = 1,
@@ -696,6 +703,8 @@ type SyevdC64Fn = unsafe extern "C" fn(
 type CublasCreateFn = unsafe extern "C" fn(*mut CublasHandleRaw) -> CublasStatus;
 type CublasDestroyFn = unsafe extern "C" fn(CublasHandleRaw) -> CublasStatus;
 type CublasSetStreamFn = unsafe extern "C" fn(CublasHandleRaw, CudaStream) -> CublasStatus;
+type CublasSetPointerModeFn =
+    unsafe extern "C" fn(CublasHandleRaw, CublasPointerMode) -> CublasStatus;
 type TrsmF32Fn = unsafe extern "C" fn(
     CublasHandleRaw,
     CublasSideMode,
@@ -945,10 +954,56 @@ impl CusolverVtable {
     }
 }
 
+type GemvFn = unsafe extern "C" fn(
+    CublasHandleRaw,
+    CublasOperation,
+    i32,
+    i32,
+    *const c_void,
+    *const c_void,
+    i32,
+    *const c_void,
+    i32,
+    *const c_void,
+    *mut c_void,
+    i32,
+) -> CublasStatus;
+
+type GerFn = unsafe extern "C" fn(
+    CublasHandleRaw,
+    i32,
+    i32,
+    *const c_void,
+    *const c_void,
+    i32,
+    *const c_void,
+    i32,
+    *mut c_void,
+    i32,
+) -> CublasStatus;
+
+type GemmFn = unsafe extern "C" fn(
+    CublasHandleRaw,
+    CublasOperation,
+    CublasOperation,
+    i32,
+    i32,
+    i32,
+    *const c_void,
+    *const c_void,
+    i32,
+    *const c_void,
+    i32,
+    *const c_void,
+    *mut c_void,
+    i32,
+) -> CublasStatus;
+
 struct CublasVtable {
     create: CublasCreateFn,
     destroy: CublasDestroyFn,
     set_stream: CublasSetStreamFn,
+    set_pointer_mode: CublasSetPointerModeFn,
     strsm: TrsmF32Fn,
     dtrsm: TrsmF64Fn,
     ctrsm: TrsmC32Fn,
@@ -957,6 +1012,18 @@ struct CublasVtable {
     dtrsm_batched: TrsmBatchedF64Fn,
     ctrsm_batched: TrsmBatchedC32Fn,
     ztrsm_batched: TrsmBatchedC64Fn,
+    sgemv: GemvFn,
+    dgemv: GemvFn,
+    cgemv: GemvFn,
+    zgemv: GemvFn,
+    sger: GerFn,
+    dger: GerFn,
+    cgeru: GerFn,
+    zgeru: GerFn,
+    sgemm: GemmFn,
+    dgemm: GemmFn,
+    cgemm: GemmFn,
+    zgemm: GemmFn,
 }
 
 impl CublasVtable {
@@ -965,6 +1032,7 @@ impl CublasVtable {
             create: load_symbol(lib, b"cublasCreate_v2\0", "cuBLAS")?,
             destroy: load_symbol(lib, b"cublasDestroy_v2\0", "cuBLAS")?,
             set_stream: load_symbol(lib, b"cublasSetStream_v2\0", "cuBLAS")?,
+            set_pointer_mode: load_symbol(lib, b"cublasSetPointerMode_v2\0", "cuBLAS")?,
             strsm: load_symbol(lib, b"cublasStrsm_v2\0", "cuBLAS")?,
             dtrsm: load_symbol(lib, b"cublasDtrsm_v2\0", "cuBLAS")?,
             ctrsm: load_symbol(lib, b"cublasCtrsm_v2\0", "cuBLAS")?,
@@ -973,6 +1041,18 @@ impl CublasVtable {
             dtrsm_batched: load_symbol(lib, b"cublasDtrsmBatched\0", "cuBLAS")?,
             ctrsm_batched: load_symbol(lib, b"cublasCtrsmBatched\0", "cuBLAS")?,
             ztrsm_batched: load_symbol(lib, b"cublasZtrsmBatched\0", "cuBLAS")?,
+            sgemv: load_symbol(lib, b"cublasSgemv_v2\0", "cuBLAS")?,
+            dgemv: load_symbol(lib, b"cublasDgemv_v2\0", "cuBLAS")?,
+            cgemv: load_symbol(lib, b"cublasCgemv_v2\0", "cuBLAS")?,
+            zgemv: load_symbol(lib, b"cublasZgemv_v2\0", "cuBLAS")?,
+            sger: load_symbol(lib, b"cublasSger_v2\0", "cuBLAS")?,
+            dger: load_symbol(lib, b"cublasDger_v2\0", "cuBLAS")?,
+            cgeru: load_symbol(lib, b"cublasCgeru_v2\0", "cuBLAS")?,
+            zgeru: load_symbol(lib, b"cublasZgeru_v2\0", "cuBLAS")?,
+            sgemm: load_symbol(lib, b"cublasSgemm_v2\0", "cuBLAS")?,
+            dgemm: load_symbol(lib, b"cublasDgemm_v2\0", "cuBLAS")?,
+            cgemm: load_symbol(lib, b"cublasCgemm_v2\0", "cuBLAS")?,
+            zgemm: load_symbol(lib, b"cublasZgemm_v2\0", "cuBLAS")?,
         })
     }
 }
@@ -2331,6 +2411,140 @@ impl CublasHandle {
     pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> Result<()> {
         let status = unsafe { (self.lib.vtable.set_stream)(self.raw, stream) };
         self.lib.check_status(status, op, "cublasSetStream_v2")
+    }
+
+    /// Select whether scalar pointers refer to host or device memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuBLAS rejects the pointer mode.
+    pub fn set_pointer_mode(&self, mode: CublasPointerMode, op: &'static str) -> Result<()> {
+        let status = unsafe { (self.lib.vtable.set_pointer_mode)(self.raw, mode) };
+        self.lib.check_status(status, op, "cublasSetPointerMode_v2")
+    }
+
+    /// Execute a matrix-vector product through cuBLAS.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers and dimensions for the
+    /// selected scalar dtype. Scalar pointers must match the handle's current
+    /// host/device pointer mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuBLAS rejects the operation,
+    /// pointers, dimensions, or leading dimensions.
+    // INVARIANT: arguments mirror the fixed cuBLAS GEMV ABI.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn gemv(
+        &self,
+        dtype: CudaDataType,
+        trans: CublasOperation,
+        m: i32,
+        n: i32,
+        alpha: *const c_void,
+        a: *const c_void,
+        lda: i32,
+        x: *const c_void,
+        incx: i32,
+        beta: *const c_void,
+        y: *mut c_void,
+        incy: i32,
+        op: &'static str,
+    ) -> Result<()> {
+        let function = match dtype {
+            CudaDataType::F32 => self.lib.vtable.sgemv,
+            CudaDataType::F64 => self.lib.vtable.dgemv,
+            CudaDataType::Complex32 => self.lib.vtable.cgemv,
+            CudaDataType::Complex64 => self.lib.vtable.zgemv,
+        };
+        let status = function(self.raw, trans, m, n, alpha, a, lda, x, incx, beta, y, incy);
+        self.lib.check_status(status, op, "cublas*gemv_v2")
+    }
+
+    /// Execute an unconjugated rank-1 update through cuBLAS.
+    ///
+    /// Complex dtypes dispatch to `geru`; real dtypes dispatch to `ger`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device matrix/vector pointers and a valid
+    /// scalar pointer for `alpha` matching the handle's current host/device
+    /// pointer mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuBLAS rejects the operation,
+    /// pointers, dimensions, increments, or leading dimension.
+    // INVARIANT: arguments mirror the fixed cuBLAS GER/GERU ABI.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn geru(
+        &self,
+        dtype: CudaDataType,
+        m: i32,
+        n: i32,
+        alpha: *const c_void,
+        x: *const c_void,
+        incx: i32,
+        y: *const c_void,
+        incy: i32,
+        a: *mut c_void,
+        lda: i32,
+        op: &'static str,
+    ) -> Result<()> {
+        let function = match dtype {
+            CudaDataType::F32 => self.lib.vtable.sger,
+            CudaDataType::F64 => self.lib.vtable.dger,
+            CudaDataType::Complex32 => self.lib.vtable.cgeru,
+            CudaDataType::Complex64 => self.lib.vtable.zgeru,
+        };
+        let status = function(self.raw, m, n, alpha, x, incx, y, incy, a, lda);
+        self.lib.check_status(status, op, "cublas*ger/geru_v2")
+    }
+
+    /// Execute a matrix-matrix product through cuBLAS.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device matrix pointers, scalar pointers
+    /// matching the handle's current host/device pointer mode, and dimensions
+    /// accepted by cuBLAS.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuBLAS rejects the operation,
+    /// pointers, dimensions, or leading dimensions.
+    // INVARIANT: arguments mirror the fixed cuBLAS GEMM ABI.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn gemm(
+        &self,
+        dtype: CudaDataType,
+        trans_a: CublasOperation,
+        trans_b: CublasOperation,
+        m: i32,
+        n: i32,
+        k: i32,
+        alpha: *const c_void,
+        a: *const c_void,
+        lda: i32,
+        b: *const c_void,
+        ldb: i32,
+        beta: *const c_void,
+        c: *mut c_void,
+        ldc: i32,
+        op: &'static str,
+    ) -> Result<()> {
+        let function = match dtype {
+            CudaDataType::F32 => self.lib.vtable.sgemm,
+            CudaDataType::F64 => self.lib.vtable.dgemm,
+            CudaDataType::Complex32 => self.lib.vtable.cgemm,
+            CudaDataType::Complex64 => self.lib.vtable.zgemm,
+        };
+        let status = function(
+            self.raw, trans_a, trans_b, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc,
+        );
+        self.lib.check_status(status, op, "cublas*gemm_v2")
     }
 
     /// Execute a triangular solve through cuBLAS.

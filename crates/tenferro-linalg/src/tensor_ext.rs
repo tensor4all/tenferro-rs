@@ -18,8 +18,7 @@ use tenferro_tensor::{
 };
 
 use crate::extension::{
-    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions,
-    QrOptions, SvdOptions,
+    apply_eigh_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions, QrOptions, SvdOptions,
 };
 use crate::LinalgBackend;
 
@@ -1733,9 +1732,10 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
         with_linalg_backend(session, "qr_with_options_read", |backend| {
-            let mut out = backend.qr_read(self)?;
-            apply_qr_gauge(options.gauge, &mut out)?;
-            two(out, "qr_with_options_read")
+            two(
+                backend.qr_with_options_read(self, options)?,
+                "qr_with_options_read",
+            )
         })
     }
     fn lu_read(
