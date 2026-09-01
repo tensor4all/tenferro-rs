@@ -43,18 +43,21 @@ execute once. Hosted Rust compile/test commands use workspace `[profile.ci]`
 `macOS workspace tests` is a required Apple Silicon execution gate for code
 changes and `main` pushes. It runs the shared `workspace-faer` profile on
 `macos-15`, covering workspace tests and doctests including macOS-only
-Apple/Metal paths. The job starts only after `CI gate (PR workspace tests)` has
-accepted the selected Linux workspace and extension lanes. This keeps macOS
-runner use off failed Linux revisions. The RunPod GPU workflow remains further
-downstream, so a failed macOS run also prevents paid GPU allocation.
+Apple/Metal paths. After change classification, the job starts in parallel with
+the selected Linux workspace and extension lanes. Linux and macOS remain
+independent required checks, reducing pull-request wall-clock time while still
+failing closed on either platform. The RunPod GPU workflow remains further
+downstream of the completed workspace workflow, so a failed Linux or macOS run
+still prevents paid GPU allocation.
 
 The change policy also runs this gate when its workflow, shared profile, or
 classifier changes, so CI-only edits can validate the native lane. Other
 CI-only and docs-only changes run an explicit successful no-op on
 `ubuntu-latest` instead of allocating a macOS runner. A Linux gate failure also
-stays on Ubuntu and fails closed. The older Linux-hosted Apple cross-target
-type-check is removed because the real macOS workspace run compiles and
-executes the same target-gated code.
+does not cancel an already-running macOS lane; both results remain visible and
+merge-blocking. The older Linux-hosted Apple cross-target type-check is removed
+because the real macOS workspace run compiles and executes the same
+target-gated code.
 
 ## RunPod trust boundary
 
