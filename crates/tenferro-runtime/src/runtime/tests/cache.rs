@@ -3,7 +3,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tenferro_cpu::CpuBackend;
 
@@ -363,77 +363,89 @@ fn same_key_waiter_does_not_miss_publication_before_first_wait() {
     let waiter_before_wait = Arc::new(Barrier::new(2));
     let waiter_release = Arc::new(Barrier::new(2));
 
-    thread::scope(|scope| {
-        let producer = {
-            let cache = Arc::clone(&cache);
-            let producer_entered = Arc::clone(&producer_entered);
-            let producer_release = Arc::clone(&producer_release);
-            scope.spawn(move || {
-                cache
-                    .get_or_prepare(TestKey(8), CacheInFlightBehavior::Wait, 0, || {
-                        producer_entered.wait();
-                        producer_release.wait();
-                        CacheProduced::Ready {
-                            value: TestValue::new(16),
-                            shared: None,
-                        }
-                    })
-                    .unwrap()
-            })
-        };
-        producer_entered.wait();
+    let producer = {
+        let cache = Arc::clone(&cache);
+        let producer_entered = Arc::clone(&producer_entered);
+        let producer_release = Arc::clone(&producer_release);
+        thread::spawn(move || {
+            cache
+                .get_or_prepare(TestKey(8), CacheInFlightBehavior::Wait, 0, || {
+                    producer_entered.wait();
+                    producer_release.wait();
+                    CacheProduced::Ready {
+                        value: TestValue::new(16),
+                        shared: None,
+                    }
+                })
+                .unwrap()
+        })
+    };
+    producer_entered.wait();
 
-        let (completed_tx, completed_rx) = mpsc::channel();
-        let waiter = {
-            let cache = Arc::clone(&cache);
-            let waiter_before_wait = Arc::clone(&waiter_before_wait);
-            let waiter_release = Arc::clone(&waiter_release);
-            scope.spawn(move || {
-                let lookup = cache
-                    .get_or_prepare_with_entry_wait_hook_for_test(
-                        TestKey(8),
-                        CacheInFlightBehavior::Wait,
-                        0,
-                        || panic!("same-key waiter must not become the producer"),
-                        move || {
-                            waiter_before_wait.wait();
-                            waiter_release.wait();
-                        },
-                    )
-                    .unwrap();
-                completed_tx.send(()).unwrap();
-                lookup
-            })
-        };
-        waiter_before_wait.wait();
+    let (completed_tx, completed_rx) = mpsc::channel();
+    let waiter = {
+        let cache = Arc::clone(&cache);
+        let waiter_before_wait = Arc::clone(&waiter_before_wait);
+        let waiter_release = Arc::clone(&waiter_release);
+        thread::spawn(move || {
+            let lookup = cache
+                .get_or_prepare_with_entry_wait_hook_for_test(
+                    TestKey(8),
+                    CacheInFlightBehavior::Wait,
+                    0,
+                    || panic!("same-key waiter must not become the producer"),
+                    move || {
+                        waiter_before_wait.wait();
+                        waiter_release.wait();
+                    },
+                )
+                .unwrap();
+            completed_tx.send(()).unwrap();
+            lookup
+        })
+    };
+    waiter_before_wait.wait();
 
-        producer_release.wait();
-        let produced = match producer.join().unwrap() {
-            CacheLookup::Ready(value) => value,
-            other => panic!("expected producer ready lookup, got {other:?}"),
-        };
-        waiter_release.wait();
+    producer_release.wait();
+    let produced = match producer.join().unwrap() {
+        CacheLookup::Ready(value) => value,
+        other => panic!("expected producer ready lookup, got {other:?}"),
+    };
+    waiter_release.wait();
 
-        let completed_without_rescue = completed_rx.recv_timeout(Duration::from_secs(1)).is_ok();
-        cache.notify_entry_waiters_for_test();
-        if !completed_without_rescue {
-            // Let a broken unconditional wait exit so the scoped thread can be joined and the
-            // regression reports a normal assertion failure instead of hanging the test suite.
-            completed_rx
-                .recv_timeout(Duration::from_secs(1))
-                .expect("rescued waiter should finish after a replacement notification");
+    let completed_without_rescue = completed_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+    let waiter_completed = if completed_without_rescue {
+        true
+    } else {
+        // Repeated notifications let the old unconditional wait exit regardless of whether the
+        // waiter is descheduled before or after any individual notification.
+        let rescue_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            cache.notify_entry_waiters_for_test();
+            let remaining = rescue_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break false;
+            }
+            match completed_rx.recv_timeout(remaining.min(Duration::from_millis(10))) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break true,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
         }
+    };
+    assert!(
+        waiter_completed,
+        "waiter did not finish within the rescue deadline"
+    );
 
-        let waited = match waiter.join().unwrap() {
-            CacheLookup::Ready(value) => value,
-            other => panic!("expected waiter ready lookup, got {other:?}"),
-        };
-        assert!(
-            completed_without_rescue,
-            "waiter missed publication before its first condition-variable wait"
-        );
-        assert!(Arc::ptr_eq(&produced, &waited));
-    });
+    let waited = match waiter.join().unwrap() {
+        CacheLookup::Ready(value) => value,
+        other => panic!("expected waiter ready lookup, got {other:?}"),
+    };
+    assert!(
+        completed_without_rescue,
+        "waiter missed publication before its first condition-variable wait"
+    );
+    assert!(Arc::ptr_eq(&produced, &waited));
 }
 
 #[test]

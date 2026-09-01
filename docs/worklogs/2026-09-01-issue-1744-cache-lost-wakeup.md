@@ -39,9 +39,10 @@ cached `Arc`, but it did not control the registration-to-wait interval.
   probabilistic repetition test. The regression pauses the waiter after
   registration, completes producer publication, and then permits the first
   wait attempt.
-- Give the regression a replacement notification after its bounded observation
-  window so the old implementation reports a normal assertion failure instead
-  of hanging the whole suite.
+- After the bounded observation window, repeatedly issue replacement
+  notifications while polling for completion up to a rescue deadline. Use an
+  unscoped waiter so even deadline exhaustion cannot block failure reporting on
+  an implicit scoped-thread join.
 - Do not change cache ownership, limits, statistics, public APIs, dependencies,
   backends, feature flags, or CI workflow policy.
 
@@ -69,6 +70,8 @@ instance was found in those paths.
 ## Residual risk
 
 The regression uses a one-second bounded observation only to distinguish the
-fixed path from an old waiter that needs a rescue notification. The ordering of
+fixed path from an old waiter that needs rescue notifications. The ordering of
 waiter registration, producer publication, and waiter release is controlled by
 barriers, so correctness does not depend on probabilistically hitting the race.
+The ten-second rescue deadline is failure containment for a broken
+implementation, not part of the passing-path correctness criterion.
