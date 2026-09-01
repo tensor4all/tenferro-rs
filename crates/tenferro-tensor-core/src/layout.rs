@@ -1,6 +1,7 @@
 use crate::{
     checked_logical_element_count, checked_product, col_major_strides, validate_permutation,
-    DynRank, Result, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRank, ValidationError,
+    DynRank, Rank, Result, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRank,
+    ValidationError,
 };
 use smallvec::SmallVec;
 use std::collections::HashSet;
@@ -639,6 +640,23 @@ impl<R: TensorRank> TensorLayout<R> {
             self.offset,
             buffer_len,
         )
+    }
+}
+
+impl<const N: usize> TensorLayout<Rank<N>> {
+    /// Return the compile-time-rank shape without erasing its array type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{Rank, TensorLayout};
+    ///
+    /// let layout = TensorLayout::<Rank<2>>::compact([2, 3])?;
+    /// assert_eq!(layout.shape_array(), &[2, 3]);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
+    pub fn shape_array(&self) -> &[usize; N] {
+        &self.shape
     }
 }
 

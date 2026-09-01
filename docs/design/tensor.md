@@ -78,6 +78,36 @@ and `BackendCachedDot`; non-cached `TensorDot` methods do not take cache slots.
 Metadata-only APIs that produce views use `_view`. APIs that allocate,
 execute kernels, canonicalize buffers, or move data must not use `_view`.
 
+## Validated Column-Major Host Access
+
+`ColMajorView<'a, T, N>` and `ColMajorViewMut<'a, T, N>` retain the proof that
+a `Rank<N>` tensor is host-resident and compact column-major. Construction
+checks the storage and layout boundary once and exposes the shape as
+`[usize; N]`. A compact `TypedTensorView<T, Rank<N>>` with a nonzero offset
+borrows its exact logical slice without copying.
+The metadata-only constructors are `host_col_major_view()` and
+`host_col_major_view_mut()`, following the repository `_view` naming contract.
+Static-rank constructors obtain `[usize; N]` directly from
+`TensorLayout<Rank<N>>::shape_array()` rather than erasing and revalidating the
+rank.
+
+Safe `iter()` and `axis0_lanes()` traversal operates on slices whose valid
+domain is encoded by the iterator. Mutable traversal uses `IterMut` and
+`ChunksExactMut`, so safe callers cannot produce overlapping mutable element
+references. Checked random access accepts `[usize; N]`; the unsafe accessor
+requires every coordinate to be in bounds and repeats no rank, backend,
+layout, or `Result` work.
+
+Checked random access uses `get`/`get_mut` and returns `Option`; these views do
+not implement `Index` or `IndexMut`, because invalid user coordinates must not
+cross a public library boundary as a panic.
+
+The first coordinate varies fastest. These views do not materialize storage,
+transfer device data, replace arbitrary-strided kernels, or promise removal of
+bounds checks for arbitrary safe random indices.
+The prototype does not yet add a constructor on `TypedTensorViewMut`; mutable
+validated access currently starts from an owned `TypedTensor`.
+
 ## Device Transfer
 
 tenferro never silently transfers tensor payloads between CPU and GPU.

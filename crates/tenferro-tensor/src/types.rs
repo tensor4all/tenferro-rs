@@ -18,11 +18,13 @@ use crate::storage::{
 };
 
 mod accessors;
+mod col_major;
 mod shape_packing;
 mod strided_view;
 #[cfg(test)]
 mod tests;
 
+pub use col_major::{ColMajorView, ColMajorViewMut};
 pub use strided_view::StridedSliceSpec;
 
 fn shape_vec(shape: &[usize]) -> ShapeVec {
