@@ -2431,11 +2431,11 @@ impl CublasHandle {
     /// selected scalar dtype. Scalar pointers must match the handle's current
     /// host/device pointer mode.
     ///
+    // INVARIANT: arguments mirror the fixed cuBLAS GEMV ABI.
     /// # Errors
     ///
     /// Returns `Error::BackendFailure` when cuBLAS rejects the operation,
     /// pointers, dimensions, or leading dimensions.
-    // INVARIANT: arguments mirror the fixed cuBLAS GEMV ABI.
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn gemv(
         &self,
@@ -2473,11 +2473,11 @@ impl CublasHandle {
     /// scalar pointer for `alpha` matching the handle's current host/device
     /// pointer mode.
     ///
+    // INVARIANT: arguments mirror the fixed cuBLAS GER/GERU ABI.
     /// # Errors
     ///
     /// Returns `Error::BackendFailure` when cuBLAS rejects the operation,
     /// pointers, dimensions, increments, or leading dimension.
-    // INVARIANT: arguments mirror the fixed cuBLAS GER/GERU ABI.
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn geru(
         &self,
@@ -2511,11 +2511,11 @@ impl CublasHandle {
     /// matching the handle's current host/device pointer mode, and dimensions
     /// accepted by cuBLAS.
     ///
+    // INVARIANT: arguments mirror the fixed cuBLAS GEMM ABI.
     /// # Errors
     ///
     /// Returns `Error::BackendFailure` when cuBLAS rejects the operation,
     /// pointers, dimensions, or leading dimensions.
-    // INVARIANT: arguments mirror the fixed cuBLAS GEMM ABI.
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn gemm(
         &self,
