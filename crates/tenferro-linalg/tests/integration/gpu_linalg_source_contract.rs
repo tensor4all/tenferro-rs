@@ -118,6 +118,19 @@ fn compact_householder_cuda_uses_incremental_device_native_paths() {
     assert!(!append.contains("\n    qr_typed("));
     assert!(!append.contains("download_tensor"));
 
+    let apply = source_section(
+        &source,
+        "fn apply_householder_reflectors_typed",
+        "fn geqrf_trailing_typed",
+    );
+    assert!(apply.contains("build_explicit_v"));
+    assert!(apply.contains("larft_buffer_size"));
+    assert!(apply.contains(".larft("));
+    assert_eq!(apply.matches(".gemm(").count(), 3);
+    assert!(!apply.contains("for reflector"));
+    assert!(!apply.contains("copy_bytes"));
+    assert!(source.contains("householder_explicit_v::launch_unchecked"));
+
     let from_factors = source_section(
         &source,
         "fn compact_qr_from_factors_typed",
@@ -130,14 +143,10 @@ fn compact_householder_cuda_uses_incremental_device_native_paths() {
 
     let ffi = gpu_ffi_source();
     for symbol in [
-        "cublasSgemv_v2",
-        "cublasDgemv_v2",
-        "cublasCgemv_v2",
-        "cublasZgemv_v2",
-        "cublasSger_v2",
-        "cublasDger_v2",
-        "cublasCgeru_v2",
-        "cublasZgeru_v2",
+        "cusolverDnCreateParams",
+        "cusolverDnDestroyParams",
+        "cusolverDnXlarft_bufferSize",
+        "cusolverDnXlarft",
         "cublasSgemm_v2",
         "cublasDgemm_v2",
         "cublasCgemm_v2",
@@ -349,6 +358,15 @@ fn cuda_linalg_drop_paths_report_destroy_status() {
             "CUDA linalg Drop paths must inspect destroy status instead of discarding it: found {banned}"
         );
     }
+    let handle_drop = source_section(
+        &source,
+        "impl Drop for CusolverDnHandle",
+        "pub struct CublasHandle",
+    );
+    assert_before(handle_drop, "destroy_params", "vtable.destroy)(self.raw)");
+    assert!(source.contains("if let Err(error) = lib.check_status"));
+    assert!(source.contains("let destroy_status = unsafe { (lib.vtable.destroy)(raw) }"));
+
     for helper in [
         "report_cusolver_destroy_status",
         "report_cublas_destroy_status",

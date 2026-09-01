@@ -112,6 +112,22 @@ pub fn complex64_magnitude(out: &mut Array<f64>, input: &Array<Complex64>) {
 }
 
 #[cube(launch_unchecked)]
+pub fn householder_explicit_v<E: CubePrimitive>(out: &mut Tensor<E>, packed: &Tensor<E>) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        let row = out.coordinate(pos, 0usize);
+        let col = out.coordinate(pos, 1usize);
+        out[pos] = if row < col {
+            zero_value::<E>()
+        } else if row == col {
+            one_value::<E>()
+        } else {
+            packed[row * packed.stride(0usize) + col * packed.stride(1usize)]
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn householder_q_columns_identity<E: CubePrimitive>(out: &mut Tensor<E>, start: usize) {
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() {
@@ -122,13 +138,6 @@ pub fn householder_q_columns_identity<E: CubePrimitive>(out: &mut Tensor<E>, sta
         } else {
             zero_value::<E>()
         };
-    }
-}
-
-#[cube(launch_unchecked)]
-pub fn conjugate_vector<C: ComplexCore>(out: &mut Array<C>, input: &Array<C>) {
-    if ABSOLUTE_POS < out.len() {
-        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].conj();
     }
 }
 

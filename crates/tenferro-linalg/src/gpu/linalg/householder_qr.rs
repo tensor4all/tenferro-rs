@@ -35,6 +35,38 @@ where
     })
 }
 
+fn build_explicit_v<T>(
+    backend: &mut CudaExecSession<'_>,
+    packed: &TypedTensor<T>,
+    columns: usize,
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar + TensorScalar,
+{
+    backend.with_cubecl(op, |cubecl| {
+        let output = cubecl.alloc_output::<T>(&[packed.shape()[0], columns])?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let output_arg = cubecl.tensor_binding(&output, op)?;
+        let packed_arg = cubecl.tensor_binding(packed, op)?;
+        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
+        // SAFETY: bindings are live device tensors and each thread writes one
+        // explicit reflector-vector entry. The output is function-local scratch.
+        unsafe {
+            cubecl_linalg::householder_explicit_v::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                output_arg.into_tensor_arg(),
+                packed_arg.into_tensor_arg(),
+            );
+        }
+        Ok(output)
+    })
+}
+
 fn linalg_scalar_bytes<T: LinalgScalar>(value: &T) -> &[u8] {
     // SAFETY: LinalgScalar is sealed in this module to f32/f64/Complex32/
     // Complex64, all of which have initialized byte representations without
@@ -71,12 +103,16 @@ where
     if k == 0 || columns == 0 {
         return Ok(());
     }
-    let coeff_adjoint = adjoint
-        .then(|| T::conjugate_coeff(backend, coeff, op))
-        .transpose()?;
-    let apply_coeff = coeff_adjoint.as_ref().unwrap_or(coeff);
+    // The explicit reflector vectors are device-local function scratch, not Q.
+    // `with_raw` flushes this CubeCL build before the vendor calls below.
+    let v = build_explicit_v(backend, packed, k, op)?;
     let m_i32 = as_i32(m, op, "m")?;
+    let k_i32 = as_i32(k, op, "k")?;
     let columns_i32 = as_i32(columns, op, "columns")?;
+    let m_i64 =
+        i64::try_from(m).map_err(|_| Error::invalid_argument(op, "m", "dimension exceeds i64"))?;
+    let k_i64 =
+        i64::try_from(k).map_err(|_| Error::invalid_argument(op, "k", "dimension exceeds i64"))?;
     let one = T::one();
     let zero = T::zero();
     let minus_one = -one;
@@ -85,6 +121,7 @@ where
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: stream handle is valid for this raw-session scope.
         let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        handles.cusolver().set_stream(stream, op)?;
         handles.cublas().set_stream(stream, op)?;
 
         let one_device = raw.upload_bytes(linalg_scalar_bytes(&one), op)?;
@@ -97,116 +134,142 @@ where
         zero_device.with_ptr(|ptr| zero_ptr = ptr);
         minus_one_device.with_ptr(|ptr| minus_one_ptr = ptr);
 
-        let mut v = raw.alloc_output::<T>(&[m])?;
-        let mut w = raw.alloc_output::<T>(&[columns])?;
-        let packed_ref = raw.tensor(packed)?;
-        let coeff_ref = raw.tensor(apply_coeff)?;
+        let mut t = raw.alloc_output::<T>(&[k, k])?;
+        let mut w = raw.alloc_output::<T>(&[k, columns])?;
+        let mut w2 = raw.alloc_output::<T>(&[k, columns])?;
+        let coeff_ref = raw.tensor(coeff)?;
         let target_ref = raw.tensor_mut(target)?;
-        let v_ref = raw.tensor_mut(&mut v)?;
+        let v_ref = raw.tensor(&v)?;
+        let t_ref = raw.tensor_mut(&mut t)?;
         let w_ref = raw.tensor_mut(&mut w)?;
+        let w2_ref = raw.tensor_mut(&mut w2)?;
         // SAFETY: every handle is a validated live device span in this raw
         // session; pointers are retained only for stream-ordered calls below.
-        let (packed_ptr, coeff_ptr, target_ptr, v_ptr, w_ptr) = unsafe {
+        let (coeff_ptr, target_ptr, v_ptr, t_ptr, w_ptr, w2_ptr) = unsafe {
             (
-                packed_ref.raw_ptr().cast_const(),
                 coeff_ref.raw_ptr().cast_const(),
                 target_ref.raw_ptr(),
-                v_ref.raw_ptr(),
+                v_ref.raw_ptr().cast_const(),
+                t_ref.raw_ptr(),
                 w_ref.raw_ptr(),
+                w2_ref.raw_ptr(),
             )
         };
-        let indices: Box<dyn Iterator<Item = usize>> = if adjoint {
-            Box::new(0..k)
+        let (device_workspace_bytes, host_workspace_bytes) = handles.cusolver().larft_buffer_size(
+            T::DATA_TYPE,
+            m_i64,
+            k_i64,
+            v_ptr,
+            m_i64,
+            coeff_ptr,
+            t_ptr,
+            k_i64,
+            op,
+        )?;
+        let device_workspace = (device_workspace_bytes > 0)
+            .then(|| raw.alloc_bytes(device_workspace_bytes, op))
+            .transpose()?;
+        let mut device_workspace_ptr = std::ptr::null_mut::<c_void>();
+        if let Some(workspace) = &device_workspace {
+            workspace.with_ptr(|ptr| device_workspace_ptr = ptr);
+        }
+        let mut host_workspace = Vec::new();
+        host_workspace
+            .try_reserve_exact(host_workspace_bytes)
+            .map_err(|error| Error::backend_source(op, error))?;
+        host_workspace.resize(host_workspace_bytes, 0u8);
+        let host_workspace_ptr = if host_workspace.is_empty() {
+            std::ptr::null_mut()
         } else {
-            Box::new((0..k).rev())
+            host_workspace.as_mut_ptr().cast::<c_void>()
         };
+        // SAFETY: V, tau, T, and both workspaces are live and match the sizes
+        // accepted by the preceding Xlarft workspace query.
+        unsafe {
+            handles.cusolver().larft(
+                T::DATA_TYPE,
+                m_i64,
+                k_i64,
+                v_ptr,
+                m_i64,
+                coeff_ptr,
+                t_ptr,
+                k_i64,
+                device_workspace_ptr,
+                device_workspace_bytes,
+                host_workspace_ptr,
+                host_workspace_bytes,
+                op,
+            )?;
+        }
+
         handles
             .cublas()
             .set_pointer_mode(CublasPointerMode::Device, op)?;
         let computation = (|| -> Result<()> {
-            for reflector in indices {
-                let len = m - reflector;
-                let len_i32 = as_i32(len, op, "reflector length")?;
-                let packed_column =
-                    checked_mul_usize(op, "reflector packed column offset", reflector, m)?;
-                let packed_tail_offset =
-                    packed_column.checked_add(reflector + 1).ok_or_else(|| {
-                        Error::invalid_argument(op, "reflector offset", "offset overflowed")
-                    })?;
-                let tail_bytes = checked_mul_usize(
+            let adjoint_v = match T::DATA_TYPE {
+                CudaDataType::F32 | CudaDataType::F64 => CublasOperation::T,
+                CudaDataType::Complex32 | CudaDataType::Complex64 => CublasOperation::C,
+            };
+            let apply_t = if adjoint {
+                adjoint_v
+            } else {
+                CublasOperation::N
+            };
+            // SAFETY: dimensions and leading dimensions describe live
+            // column-major V, T, W, W2, and target device allocations.
+            unsafe {
+                handles.cublas().gemm(
+                    T::DATA_TYPE,
+                    adjoint_v,
+                    CublasOperation::N,
+                    k_i32,
+                    columns_i32,
+                    m_i32,
+                    one_ptr.cast_const(),
+                    v_ptr,
+                    m_i32,
+                    target_ptr.cast_const(),
+                    m_i32,
+                    zero_ptr.cast_const(),
+                    w_ptr,
+                    k_i32,
                     op,
-                    "reflector tail bytes",
-                    len - 1,
-                    std::mem::size_of::<T>(),
                 )?;
-                // SAFETY: checked reflector offsets remain within the packed,
-                // coefficient, target, and scratch allocations.
-                let (packed_tail, tau, target_sub) = unsafe {
-                    (
-                        batch_const_ptr::<T>(packed_ptr, packed_tail_offset),
-                        batch_const_ptr::<T>(coeff_ptr, reflector),
-                        batch_ptr::<T>(target_ptr, reflector),
-                    )
-                };
-                // SAFETY: scalar and tail copies target disjoint live scratch
-                // spans and are ordered on the session stream.
-                unsafe {
-                    raw.copy_bytes(v_ptr, one_ptr.cast_const(), std::mem::size_of::<T>(), op)?;
-                    if len > 1 {
-                        raw.copy_bytes(batch_ptr::<T>(v_ptr, 1), packed_tail, tail_bytes, op)?;
-                    }
-                    match T::DATA_TYPE {
-                        CudaDataType::F32 | CudaDataType::F64 => {
-                            handles.cublas().gemv(
-                                T::DATA_TYPE,
-                                CublasOperation::T,
-                                len_i32,
-                                columns_i32,
-                                tau,
-                                target_sub.cast_const(),
-                                m_i32,
-                                v_ptr.cast_const(),
-                                1,
-                                zero_ptr.cast_const(),
-                                w_ptr,
-                                1,
-                                op,
-                            )?;
-                        }
-                        CudaDataType::Complex32 | CudaDataType::Complex64 => {
-                            handles.cublas().gemm(
-                                T::DATA_TYPE,
-                                CublasOperation::C,
-                                CublasOperation::N,
-                                1,
-                                columns_i32,
-                                len_i32,
-                                tau,
-                                v_ptr.cast_const(),
-                                len_i32,
-                                target_sub.cast_const(),
-                                m_i32,
-                                zero_ptr.cast_const(),
-                                w_ptr,
-                                1,
-                                op,
-                            )?;
-                        }
-                    }
-                    handles.cublas().geru(
-                        T::DATA_TYPE,
-                        len_i32,
-                        columns_i32,
-                        minus_one_ptr.cast_const(),
-                        v_ptr.cast_const(),
-                        1,
-                        w_ptr.cast_const(),
-                        1,
-                        target_sub,
-                        m_i32,
-                        op,
-                    )?;
-                }
+                handles.cublas().gemm(
+                    T::DATA_TYPE,
+                    apply_t,
+                    CublasOperation::N,
+                    k_i32,
+                    columns_i32,
+                    k_i32,
+                    one_ptr.cast_const(),
+                    t_ptr.cast_const(),
+                    k_i32,
+                    w_ptr.cast_const(),
+                    k_i32,
+                    zero_ptr.cast_const(),
+                    w2_ptr,
+                    k_i32,
+                    op,
+                )?;
+                handles.cublas().gemm(
+                    T::DATA_TYPE,
+                    CublasOperation::N,
+                    CublasOperation::N,
+                    m_i32,
+                    columns_i32,
+                    k_i32,
+                    minus_one_ptr.cast_const(),
+                    v_ptr,
+                    m_i32,
+                    w2_ptr.cast_const(),
+                    k_i32,
+                    one_ptr.cast_const(),
+                    target_ptr,
+                    m_i32,
+                    op,
+                )?;
             }
             Ok(())
         })();

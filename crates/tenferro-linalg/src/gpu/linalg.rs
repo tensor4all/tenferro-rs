@@ -43,12 +43,6 @@ trait LinalgScalar:
         op: &'static str,
     ) -> Result<TypedTensor<Self>>;
 
-    fn conjugate_coeff(
-        backend: &mut CudaExecSession<'_>,
-        coeff: &TypedTensor<Self>,
-        op: &'static str,
-    ) -> Result<TypedTensor<Self>>;
-
     fn apply_positive_qr_gauge(
         backend: &mut CudaExecSession<'_>,
         q: &mut TypedTensor<Self>,
@@ -71,14 +65,6 @@ impl LinalgScalar for f32 {
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
         copy_matrix_adjoint_real(backend, v, vt_shape, op)
-    }
-
-    fn conjugate_coeff(
-        backend: &mut CudaExecSession<'_>,
-        coeff: &TypedTensor<Self>,
-        op: &'static str,
-    ) -> Result<TypedTensor<Self>> {
-        clone_device_tensor(backend, coeff, op)
     }
 
     fn apply_positive_qr_gauge(
@@ -107,14 +93,6 @@ impl LinalgScalar for f64 {
         copy_matrix_adjoint_real(backend, v, vt_shape, op)
     }
 
-    fn conjugate_coeff(
-        backend: &mut CudaExecSession<'_>,
-        coeff: &TypedTensor<Self>,
-        op: &'static str,
-    ) -> Result<TypedTensor<Self>> {
-        clone_device_tensor(backend, coeff, op)
-    }
-
     fn apply_positive_qr_gauge(
         backend: &mut CudaExecSession<'_>,
         q: &mut TypedTensor<Self>,
@@ -141,14 +119,6 @@ impl LinalgScalar for Complex32 {
         copy_matrix_adjoint_complex(backend, v, vt_shape, op)
     }
 
-    fn conjugate_coeff(
-        backend: &mut CudaExecSession<'_>,
-        coeff: &TypedTensor<Self>,
-        op: &'static str,
-    ) -> Result<TypedTensor<Self>> {
-        conjugate_coeff_complex(backend, coeff, op)
-    }
-
     fn apply_positive_qr_gauge(
         backend: &mut CudaExecSession<'_>,
         q: &mut TypedTensor<Self>,
@@ -173,14 +143,6 @@ impl LinalgScalar for Complex64 {
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
         copy_matrix_adjoint_complex(backend, v, vt_shape, op)
-    }
-
-    fn conjugate_coeff(
-        backend: &mut CudaExecSession<'_>,
-        coeff: &TypedTensor<Self>,
-        op: &'static str,
-    ) -> Result<TypedTensor<Self>> {
-        conjugate_coeff_complex(backend, coeff, op)
     }
 
     fn apply_positive_qr_gauge(
@@ -1489,37 +1451,6 @@ where
                 input_ref.byte_len(),
                 op,
             )?;
-        }
-        Ok(output)
-    })
-}
-
-fn conjugate_coeff_complex<T>(
-    backend: &mut CudaExecSession<'_>,
-    coeff: &TypedTensor<T>,
-    op: &'static str,
-) -> Result<TypedTensor<T>>
-where
-    T: LinalgScalar + TensorScalar + ComplexCore,
-{
-    backend.with_cubecl(op, |cubecl| {
-        let output = cubecl.alloc_output::<T>(coeff.shape())?;
-        if output.n_elements() == 0 {
-            return Ok(output);
-        }
-        let output_arg = cubecl.array_arg(&output, op)?;
-        let input_arg = cubecl.array_arg(coeff, op)?;
-        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
-        // SAFETY: bindings describe live device arrays and the launch covers
-        // every coefficient exactly once.
-        unsafe {
-            cubecl_linalg::conjugate_vector::launch_unchecked::<T, CubeclCudaRuntime>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                output_arg,
-                input_arg,
-            );
         }
         Ok(output)
     })

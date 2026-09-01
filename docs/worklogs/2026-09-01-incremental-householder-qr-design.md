@@ -81,6 +81,17 @@ metadata-only solver-info downloads, the shared device gauge, and the
 `qr_with_options_read` hook. Closure review returned **Correct-to-merge** with
 no remaining Critical or Important findings.
 
+### Phase 5 performance-protocol review
+
+Before any benchmark implementation or measurement, `reviewer-flash` required
+an exact tensor4all-rs#694 BCGS2 provenance anchor and correspondence ledger,
+a fixed scaling `m`/provider set, exact process ordering, confidence intervals,
+and deterministic FAIL/INCONCLUSIVE rules. The frozen protocol records commit
+`da0775a208006352f6e5eab18bc6bb09ca39a1f6`, all cases and thresholds, and
+source-contract evidence. Closure review returned **Correct-to-merge** with no
+Critical or Important findings. The width-8 secondary schedule is explicitly
+three full appends to rank 26, avoiding a synthetic partial block.
+
 ## Verification
 
 ```text
