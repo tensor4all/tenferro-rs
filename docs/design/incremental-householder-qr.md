@@ -215,26 +215,22 @@ zero reflectors must be preserved.
 
 ### CUDA
 
-cuSOLVER provides `*geqrf` and `*orgqr`/`*ungqr`, but not LAPACK's
-`*ormqr`/`*unmqr`. V1 therefore uses cuSOLVER `*geqrf` for new reflectors and
-applies the stored sequence on the active stream with cuBLAS:
+cuSOLVER provides `*geqrf` and, from the CUDA 12.4 baseline,
+`cusolverDnXlarft`. New reflectors use `*geqrf`; stored reflectors are applied
+on the active stream in blocked-WY form. Phase 5 builds the implicit-unit
+reflector columns once into function-local device scratch V and asks Xlarft in
+Forward/Columnwise mode for T, giving `Q = I - V T V^H`. Three typed cuBLAS
+GEMMs then compute
 
-1. `gemv` with conjugate transpose computes `w = v^H C`;
-2. scale by `tau` (or `conj(tau)` for the adjoint reflector application);
-3. real `ger` or complex unconjugated `geru` performs `C -= v w`.
+1. `W = V^H C`;
+2. `W2 = T^H W` for `Q^H C`, or `W2 = T W` for `Q C`;
+3. `C = C - V W2`.
 
-Reflectors are enqueued one at a time in the mathematically required order:
-`Q^H C` applies `j = 0, ..., k - 1` with `conj(tau[j])`, while `Q C`
-applies `j = k - 1, ..., 0` with `tau[j]`. Each `gemv`/rank-1 update covers the
-matrix block in parallel and no GPU thread loops over an unbounded tensor
-domain. Phase 5 builds the implicit-unit reflector columns once into
-function-local device scratch V, then points each vendor call at checked
-`V[j,j]`; this removes per-reflector scalar and tail copies without retaining V
-in public state. V is reflector storage, not Q. The same routine applies `Q^H`
-during append and applies `Q` to requested identity columns. A later blocked-WY
-optimization may replace the elementary-reflector routine only under a newly
-reviewed performance protocol; there is no full-Q, one-shot-QR, host, or CPU
-fallback.
+V, T, W, W2, and both Xlarft workspaces are function-local scratch and are not
+retained in public state. V is reflector storage, not Q. Append uses the
+adjoint form; selected-Q extraction uses the forward form. This reduces the
+old per-reflector GEMV/reduction/GER launch sequence without materializing Q.
+There is no full-Q, one-shot-QR, payload host transfer, or CPU fallback.
 
 `QrGauge::PositiveDiagonal` is also provider-owned on CUDA: a linalg-owned
 same-device kernel computes diagonal phases and scales requested Q columns and
@@ -243,11 +239,12 @@ R rows consistently. Phase 4 shares that kernel with existing CUDA
 path. The kernel launches over the output domains and does not download scalar
 phases.
 
-Phase 4 extends the cuBLAS vtable and typed wrappers with `S/D/C/Zgemv`,
-`S/Dger`, `C/Zgeru`, and `S/D/C/Zgemm`. Reflector updates fold `-tau` into the
-GER/GERU alpha, so no separate SCAL binding is needed. Dynamic symbol loads and
-wrapper calls return typed load/provider/status errors and use the session-owned
-handle and stream.
+Phase 5 uses `cusolverDnCreateParams`, `cusolverDnXlarft_bufferSize`, and
+`cusolverDnXlarft` together with the existing `S/D/C/Zgemm` wrappers. The
+Forward/Columnwise ABI values and CUDA R/C datatype codes are pinned to the
+CUDA headers; complex compute remains complex. Dynamic symbol loads and wrapper
+calls return typed load/provider/status errors and use the session-owned handle
+and stream. The params object is destroyed before its owning cuSOLVER handle.
 
 CUDA `from_factors(Q, R)` factors Q with `geqrf`, extracts its upper factor T,
 computes `T * R` with typed cuBLAS GEMM, and assembles the provider-neutral

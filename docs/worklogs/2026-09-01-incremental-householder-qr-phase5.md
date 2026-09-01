@@ -107,8 +107,53 @@ this is diagnostic evidence only, not the acceptance run. The post-implementatio
 `reviewer-flash` closure review traced the six-file diff and returned
 **Correct-to-merge** with no Critical or Important findings.
 
+## Second full-suite result and blocked-WY optimization
+
+Clean candidate `aeeaea2` reran all 336 processes. Correctness,
+compact-vs-BCGS2, and normalized scaling passed, but CUDA bond-128
+compact/full-QR was 0.564 and therefore remained a real frozen-gate FAIL.
+Nsight then identified 155 GEMV dot kernels, 155 reduction kernels, and 155 GER
+kernels in one compact sequence. The raw report remains under
+`target/iqr-performance-aeeaea2/`.
+
+A second pre-implementation `reviewer-flash` design gate returned
+**Correct-to-merge** after requiring that system load retain its independent
+pre-run reference. The accepted CUDA 12.4 blocked-WY path forms T with
+`cusolverDnXlarft` and applies `Q`/`Q^H` with three GEMMs. It keeps V, T, W, W2,
+and workspaces device-local, never materializes Q during append, and removes the
+per-reflector launch sequence. All six focused A100 tests passed across
+F32/F64/C32/C64 and both application directions. A bounded bond-128 diagnostic
+measured about 7.35 ms; it is not acceptance evidence.
+
+The same reviewed amendment corrects acceptance-impossible validity bugs while
+leaving all thresholds, cases, cycles, and 3/5 repetition counts unchanged:
+
+- each timing sample batches four independently reset sequences, so the
+  predeclared sub-millisecond cases can satisfy the frozen >=1 ms resolution
+  rule; ratios and scaling use identical batching in every arm;
+- a fixed untimed 50 ms CPU0 spin precedes every aggregate sample; CPU0
+  frequency and process affinity come from the benchmark process and use the
+  independent hardware `cpuinfo_max_freq` reference;
+- GPU clocks use the median active process clock rather than the necessarily
+  idle pre-run 210 MHz observation; throttle reasons remain strict;
+- system load still uses 1.5x the independent pre-run reference;
+- the checker source joins the benchmark and ledger in exact-candidate hashes.
+
+The batched sequences no longer become `INCONCLUSIVE` merely because one
+unbatched sequence is intrinsically below 1 ms; a batched median below 1 ms
+still does.
+
+Two post-implementation `reviewer-flash` closure lanes returned
+**Correct-to-merge** with no Critical or Important findings. The CUDA lane
+checked the installed Xlarft ABI, params lifecycle, all four datatype codes,
+blocked-WY GEMM dimensions, aliasing, stream ordering, and pointer restoration.
+The harness lane checked the 336-process inventory, batching, clock/load gates,
+source hashes, and historical disclosure. Its two optional Minor findings were
+fixed by pinning every record's shape/repetition fields to the frozen case and
+clarifying CUDA synchronization occurs around each aggregate sample.
+
 ## Measurement status
 
-Thresholds, cases, repetitions, and source correspondence remain frozen. A new
-clean exact candidate must rerun the entire paired suite; Phase-5 acceptance
-remains pending until its deterministic report is PASS.
+Thresholds, cases, cycles, repetitions, and source correspondence remain
+frozen. A new clean exact candidate must rerun the entire paired suite;
+Phase-5 acceptance remains pending until its deterministic report is PASS.

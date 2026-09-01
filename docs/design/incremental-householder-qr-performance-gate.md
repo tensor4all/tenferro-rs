@@ -2,9 +2,11 @@
 
 ### Scope and immutable identities
 
-Phase 5 adds only a benchmark/gate harness and user documentation; it does not
-change the factorization kernels. The benchmark candidate is the exact Phase-4
-merge commit plus the Phase-5 harness commit. The baseline algorithm is the explicit-Q two-pass BCGS2 implementation from
+Phase 5 adds the benchmark/gate harness and user documentation. A failed
+frozen CUDA primary gate may admit only a separately reviewed provider
+optimization followed by a complete rerun; the accepted candidate uses the
+blocked-WY reflector application documented in
+[`incremental-householder-qr.md`](incremental-householder-qr.md). The baseline algorithm is the explicit-Q two-pass BCGS2 implementation from
 tensor4all-rs#694 commit `da0775a208006352f6e5eab18bc6bb09ca39a1f6`,
 source `crates/tensor4all-tensorbackend/src/incremental_qr.rs`, reproduced in the
 benchmark with tenferro backend primitives. Before timing, the Phase-5 design
@@ -14,7 +16,7 @@ and block Q/R assembly. A missing/unreviewed ledger blocks the gate. Repeated on
 accumulated matrix is a diagnostic baseline, not the primary comparator.
 
 The worklog records before any run: exact commits, dirty-state check, compiler,
-release profile, benchmark source hash, CPU/GPU model, NUMA/affinity, provider
+release profile, benchmark/checker source hashes, CPU/GPU model, NUMA/affinity, provider
 versions, thread variables, CUDA runtime/driver, case list, repetitions, and
 host load/frequency observations.
 
@@ -57,20 +59,29 @@ objects and GPU contexts/handles are constructed once and reused.
   `RAYON_NUM_THREADS=OPENBLAS_NUM_THREADS=OMP_NUM_THREADS=MKL_NUM_THREADS=1`.
   Run CPU-faer and CPU-BLAS separately.
 - CUDA: local NVIDIA A100 80GB, one reused CUDA backend, CUDA 12.6 local tier;
-  synchronize immediately before and after each timed complete append sequence.
+  synchronize immediately before and after each timed aggregate sample (the
+  fixed batch of four complete append sequences).
 - Three untimed warmups, then seven independent process cycles. Cycles 1/3/5/7
   run `compact -> bcgs2 -> full-qr`; cycles 2/4/6 run the exact reverse order.
   Each arm is one fresh process and performs five repetitions for bonds 32/64
-  and three for bond 128. The reported statistic is the median of the seven
-  per-process medians.
-- Record every raw timing and a fixed-seed 10,000-resample 95% bootstrap
-  confidence interval for each reported median and paired ratio. No selective
-  reruns or case omission. A process median below 1 ms is `INCONCLUSIVE`
-  because the frozen repetition count lacks adequate resolution.
+  and three for bond 128. Each timing sample is a fixed batch of four
+  independently reset append sequences; initial-state preparation remains
+  outside timing. The aggregate batch time is recorded and all arms of every
+  case use the same batch. The reported statistic is the median of the seven
+  per-process medians. A fixed untimed 50 ms CPU0 spin immediately before each
+  aggregate sample stabilizes the pinned core's frequency.
+- Record every raw aggregate timing and a fixed-seed 10,000-resample 95%
+  bootstrap confidence interval for each reported median and paired ratio. No
+  selective reruns or case omission. A batched process median below 1 ms is
+  `INCONCLUSIVE` because it still lacks adequate resolution.
 
 A case is `INCONCLUSIVE` if process-median coefficient of variation exceeds
-10%, system load exceeds 1.5× `max(pre-run load, 0.1)` in any cycle, thermal/frequency
-observations differ by more than 10%, CUDA reports throttling/errors, or a
+10%, system load exceeds 1.5× `max(pre-run load, 0.1)` in any cycle, or
+thermal/frequency observations differ by more than 10%. CPU frequency is read
+by the pinned benchmark process for CPU0 and compared with CPU0's independent
+hardware `cpuinfo_max_freq`; process affinity must equal the runner affinity. GPU clock
+variation is compared with the median active process clock because the pre-run
+clock is idle; every nonzero throttle reason remains invalid. CUDA errors, or a
 correctness check fails solely for a demonstrated environmental reason. A
 reproducible numeric or source-contract failure is `FAIL`, never
 `INCONCLUSIVE`. Reconsideration requires a

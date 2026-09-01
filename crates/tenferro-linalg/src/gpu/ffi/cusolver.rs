@@ -46,6 +46,7 @@ pub type CusolverDnHandleRaw = *mut c_void;
 pub type CublasHandleRaw = *mut c_void;
 pub type CudaStream = *mut c_void;
 type GesvdjInfoRaw = *mut c_void;
+type CusolverDnParamsRaw = *mut c_void;
 
 type CusolverStatus = i32;
 type CublasStatus = i32;
@@ -60,6 +61,15 @@ pub enum CudaDataType {
     F64,
     Complex32,
     Complex64,
+}
+
+fn cuda_data_type_abi(dtype: CudaDataType) -> i32 {
+    match dtype {
+        CudaDataType::F32 => 0,       // CUDA_R_32F
+        CudaDataType::F64 => 1,       // CUDA_R_64F
+        CudaDataType::Complex32 => 4, // CUDA_C_32F
+        CudaDataType::Complex64 => 5, // CUDA_C_64F
+    }
 }
 
 #[repr(i32)]
@@ -306,6 +316,49 @@ type GeqrfC64Fn = unsafe extern "C" fn(
     *mut Complex64,
     i32,
     *mut i32,
+) -> CusolverStatus;
+
+type CreateParamsFn = unsafe extern "C" fn(*mut CusolverDnParamsRaw) -> CusolverStatus;
+type DestroyParamsFn = unsafe extern "C" fn(CusolverDnParamsRaw) -> CusolverStatus;
+type XlarftBufferSizeFn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverDnParamsRaw,
+    i32,
+    i32,
+    i64,
+    i64,
+    i32,
+    *const c_void,
+    i64,
+    i32,
+    *const c_void,
+    i32,
+    *mut c_void,
+    i64,
+    i32,
+    *mut usize,
+    *mut usize,
+) -> CusolverStatus;
+type XlarftFn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverDnParamsRaw,
+    i32,
+    i32,
+    i64,
+    i64,
+    i32,
+    *const c_void,
+    i64,
+    i32,
+    *const c_void,
+    i32,
+    *mut c_void,
+    i64,
+    i32,
+    *mut c_void,
+    usize,
+    *mut c_void,
+    usize,
 ) -> CusolverStatus;
 
 type OrgqrBufferSizeF32Fn = unsafe extern "C" fn(
@@ -825,6 +878,8 @@ type TrsmBatchedC64Fn = unsafe extern "C" fn(
 struct CusolverVtable {
     create: CusolverCreateFn,
     destroy: CusolverDestroyFn,
+    create_params: CreateParamsFn,
+    destroy_params: DestroyParamsFn,
     set_stream: CusolverSetStreamFn,
     spotrf_buffer_size: PotrfBufferSizeF32Fn,
     dpotrf_buffer_size: PotrfBufferSizeF64Fn,
@@ -850,6 +905,8 @@ struct CusolverVtable {
     dgeqrf: GeqrfF64Fn,
     cgeqrf: GeqrfC32Fn,
     zgeqrf: GeqrfC64Fn,
+    xlarft_buffer_size: XlarftBufferSizeFn,
+    xlarft: XlarftFn,
     sorgqr_buffer_size: OrgqrBufferSizeF32Fn,
     dorgqr_buffer_size: OrgqrBufferSizeF64Fn,
     cungqr_buffer_size: OrgqrBufferSizeC32Fn,
@@ -891,6 +948,8 @@ impl CusolverVtable {
         Ok(Self {
             create: load_symbol(lib, b"cusolverDnCreate\0", "cuSOLVER")?,
             destroy: load_symbol(lib, b"cusolverDnDestroy\0", "cuSOLVER")?,
+            create_params: load_symbol(lib, b"cusolverDnCreateParams\0", "cuSOLVER")?,
+            destroy_params: load_symbol(lib, b"cusolverDnDestroyParams\0", "cuSOLVER")?,
             set_stream: load_symbol(lib, b"cusolverDnSetStream\0", "cuSOLVER")?,
             spotrf_buffer_size: load_symbol(lib, b"cusolverDnSpotrf_bufferSize\0", "cuSOLVER")?,
             dpotrf_buffer_size: load_symbol(lib, b"cusolverDnDpotrf_bufferSize\0", "cuSOLVER")?,
@@ -916,6 +975,8 @@ impl CusolverVtable {
             dgeqrf: load_symbol(lib, b"cusolverDnDgeqrf\0", "cuSOLVER")?,
             cgeqrf: load_symbol(lib, b"cusolverDnCgeqrf\0", "cuSOLVER")?,
             zgeqrf: load_symbol(lib, b"cusolverDnZgeqrf\0", "cuSOLVER")?,
+            xlarft_buffer_size: load_symbol(lib, b"cusolverDnXlarft_bufferSize\0", "cuSOLVER")?,
+            xlarft: load_symbol(lib, b"cusolverDnXlarft\0", "cuSOLVER")?,
             sorgqr_buffer_size: load_symbol(lib, b"cusolverDnSorgqr_bufferSize\0", "cuSOLVER")?,
             dorgqr_buffer_size: load_symbol(lib, b"cusolverDnDorgqr_bufferSize\0", "cuSOLVER")?,
             cungqr_buffer_size: load_symbol(lib, b"cusolverDnCungqr_bufferSize\0", "cuSOLVER")?,
@@ -954,34 +1015,6 @@ impl CusolverVtable {
     }
 }
 
-type GemvFn = unsafe extern "C" fn(
-    CublasHandleRaw,
-    CublasOperation,
-    i32,
-    i32,
-    *const c_void,
-    *const c_void,
-    i32,
-    *const c_void,
-    i32,
-    *const c_void,
-    *mut c_void,
-    i32,
-) -> CublasStatus;
-
-type GerFn = unsafe extern "C" fn(
-    CublasHandleRaw,
-    i32,
-    i32,
-    *const c_void,
-    *const c_void,
-    i32,
-    *const c_void,
-    i32,
-    *mut c_void,
-    i32,
-) -> CublasStatus;
-
 type GemmFn = unsafe extern "C" fn(
     CublasHandleRaw,
     CublasOperation,
@@ -1012,14 +1045,6 @@ struct CublasVtable {
     dtrsm_batched: TrsmBatchedF64Fn,
     ctrsm_batched: TrsmBatchedC32Fn,
     ztrsm_batched: TrsmBatchedC64Fn,
-    sgemv: GemvFn,
-    dgemv: GemvFn,
-    cgemv: GemvFn,
-    zgemv: GemvFn,
-    sger: GerFn,
-    dger: GerFn,
-    cgeru: GerFn,
-    zgeru: GerFn,
     sgemm: GemmFn,
     dgemm: GemmFn,
     cgemm: GemmFn,
@@ -1041,14 +1066,6 @@ impl CublasVtable {
             dtrsm_batched: load_symbol(lib, b"cublasDtrsmBatched\0", "cuBLAS")?,
             ctrsm_batched: load_symbol(lib, b"cublasCtrsmBatched\0", "cuBLAS")?,
             ztrsm_batched: load_symbol(lib, b"cublasZtrsmBatched\0", "cuBLAS")?,
-            sgemv: load_symbol(lib, b"cublasSgemv_v2\0", "cuBLAS")?,
-            dgemv: load_symbol(lib, b"cublasDgemv_v2\0", "cuBLAS")?,
-            cgemv: load_symbol(lib, b"cublasCgemv_v2\0", "cuBLAS")?,
-            zgemv: load_symbol(lib, b"cublasZgemv_v2\0", "cuBLAS")?,
-            sger: load_symbol(lib, b"cublasSger_v2\0", "cuBLAS")?,
-            dger: load_symbol(lib, b"cublasDger_v2\0", "cuBLAS")?,
-            cgeru: load_symbol(lib, b"cublasCgeru_v2\0", "cuBLAS")?,
-            zgeru: load_symbol(lib, b"cublasZgeru_v2\0", "cuBLAS")?,
             sgemm: load_symbol(lib, b"cublasSgemm_v2\0", "cuBLAS")?,
             dgemm: load_symbol(lib, b"cublasDgemm_v2\0", "cuBLAS")?,
             cgemm: load_symbol(lib, b"cublasCgemm_v2\0", "cuBLAS")?,
@@ -1288,6 +1305,7 @@ fn report_cublas_destroy_status(status: CublasStatus, call: &'static str) {
 pub struct CusolverDnHandle {
     lib: Arc<CusolverLibrary>,
     raw: CusolverDnHandleRaw,
+    params: CusolverDnParamsRaw,
 }
 
 impl fmt::Debug for CusolverDnHandle {
@@ -1342,7 +1360,14 @@ impl CusolverDnHandle {
         let mut raw = std::ptr::null_mut();
         let status = unsafe { (lib.vtable.create)(&mut raw) };
         lib.check_status(status, "cubecl_linalg", "cusolverDnCreate")?;
-        Ok(Self { lib, raw })
+        let mut params = std::ptr::null_mut();
+        let status = unsafe { (lib.vtable.create_params)(&mut params) };
+        if let Err(error) = lib.check_status(status, "cubecl_linalg", "cusolverDnCreateParams") {
+            let destroy_status = unsafe { (lib.vtable.destroy)(raw) };
+            report_cusolver_destroy_status(destroy_status, "cusolverDnDestroy");
+            return Err(error);
+        }
+        Ok(Self { lib, raw, params })
     }
 
     /// Attach the native handle to a CUDA stream.
@@ -1713,6 +1738,110 @@ impl CusolverDnHandle {
             ),
         };
         self.lib.check_status(status, op, "cusolverDn*geqrf")
+    }
+
+    /// Query device and host workspace required to form a blocked Householder
+    /// triangular factor with `cusolverDnXlarft`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
+    /// pointers, dtype, or reports another non-success status.
+    #[allow(clippy::too_many_arguments)]
+    pub fn larft_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        n: i64,
+        k: i64,
+        v: *const c_void,
+        ldv: i64,
+        tau: *const c_void,
+        t: *mut c_void,
+        ldt: i64,
+        op: &'static str,
+    ) -> Result<(usize, usize)> {
+        let dtype = cuda_data_type_abi(dtype);
+        let mut device_bytes = 0usize;
+        let mut host_bytes = 0usize;
+        // Forward=0 and Columnwise=0 are pinned by cusolver_common.h.
+        let status = unsafe {
+            (self.lib.vtable.xlarft_buffer_size)(
+                self.raw,
+                self.params,
+                0,
+                0,
+                n,
+                k,
+                dtype,
+                v,
+                ldv,
+                dtype,
+                tau,
+                dtype,
+                t,
+                ldt,
+                dtype,
+                &mut device_bytes,
+                &mut host_bytes,
+            )
+        };
+        self.lib
+            .check_status(status, op, "cusolverDnXlarft_bufferSize")?;
+        Ok((device_bytes, host_bytes))
+    }
+
+    /// Form the blocked Householder triangular factor with
+    /// `cusolverDnXlarft` in Forward/Columnwise mode.
+    ///
+    /// # Safety
+    ///
+    /// All device and host pointers must refer to live allocations of the
+    /// dimensions and workspace sizes accepted by `larft_buffer_size`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects an argument or
+    /// reports another non-success status.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn larft(
+        &self,
+        dtype: CudaDataType,
+        n: i64,
+        k: i64,
+        v: *const c_void,
+        ldv: i64,
+        tau: *const c_void,
+        t: *mut c_void,
+        ldt: i64,
+        device_workspace: *mut c_void,
+        device_workspace_bytes: usize,
+        host_workspace: *mut c_void,
+        host_workspace_bytes: usize,
+        op: &'static str,
+    ) -> Result<()> {
+        let dtype = cuda_data_type_abi(dtype);
+        let status = (self.lib.vtable.xlarft)(
+            self.raw,
+            self.params,
+            0,
+            0,
+            n,
+            k,
+            dtype,
+            v,
+            ldv,
+            dtype,
+            tau,
+            dtype,
+            t,
+            ldt,
+            dtype,
+            device_workspace,
+            device_workspace_bytes,
+            host_workspace,
+            host_workspace_bytes,
+        );
+        self.lib.check_status(status, op, "cusolverDnXlarft")
     }
 
     /// Query the workspace required to form the explicit Q factor.
@@ -2364,6 +2493,8 @@ impl CusolverDnHandle {
 
 impl Drop for CusolverDnHandle {
     fn drop(&mut self) {
+        let params_status = unsafe { (self.lib.vtable.destroy_params)(self.params) };
+        report_cusolver_destroy_status(params_status, "cusolverDnDestroyParams");
         let status = unsafe { (self.lib.vtable.destroy)(self.raw) };
         report_cusolver_destroy_status(status, "cusolverDnDestroy");
     }
@@ -2421,86 +2552,6 @@ impl CublasHandle {
     pub fn set_pointer_mode(&self, mode: CublasPointerMode, op: &'static str) -> Result<()> {
         let status = unsafe { (self.lib.vtable.set_pointer_mode)(self.raw, mode) };
         self.lib.check_status(status, op, "cublasSetPointerMode_v2")
-    }
-
-    /// Execute a matrix-vector product through cuBLAS.
-    ///
-    /// # Safety
-    ///
-    /// The caller must provide valid device pointers and dimensions for the
-    /// selected scalar dtype. Scalar pointers must match the handle's current
-    /// host/device pointer mode.
-    ///
-    // INVARIANT: arguments mirror the fixed cuBLAS GEMV ABI.
-    /// # Errors
-    ///
-    /// Returns `Error::BackendFailure` when cuBLAS rejects the operation,
-    /// pointers, dimensions, or leading dimensions.
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn gemv(
-        &self,
-        dtype: CudaDataType,
-        trans: CublasOperation,
-        m: i32,
-        n: i32,
-        alpha: *const c_void,
-        a: *const c_void,
-        lda: i32,
-        x: *const c_void,
-        incx: i32,
-        beta: *const c_void,
-        y: *mut c_void,
-        incy: i32,
-        op: &'static str,
-    ) -> Result<()> {
-        let function = match dtype {
-            CudaDataType::F32 => self.lib.vtable.sgemv,
-            CudaDataType::F64 => self.lib.vtable.dgemv,
-            CudaDataType::Complex32 => self.lib.vtable.cgemv,
-            CudaDataType::Complex64 => self.lib.vtable.zgemv,
-        };
-        let status = function(self.raw, trans, m, n, alpha, a, lda, x, incx, beta, y, incy);
-        self.lib.check_status(status, op, "cublas*gemv_v2")
-    }
-
-    /// Execute an unconjugated rank-1 update through cuBLAS.
-    ///
-    /// Complex dtypes dispatch to `geru`; real dtypes dispatch to `ger`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must provide valid device matrix/vector pointers and a valid
-    /// scalar pointer for `alpha` matching the handle's current host/device
-    /// pointer mode.
-    ///
-    // INVARIANT: arguments mirror the fixed cuBLAS GER/GERU ABI.
-    /// # Errors
-    ///
-    /// Returns `Error::BackendFailure` when cuBLAS rejects the operation,
-    /// pointers, dimensions, increments, or leading dimension.
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn geru(
-        &self,
-        dtype: CudaDataType,
-        m: i32,
-        n: i32,
-        alpha: *const c_void,
-        x: *const c_void,
-        incx: i32,
-        y: *const c_void,
-        incy: i32,
-        a: *mut c_void,
-        lda: i32,
-        op: &'static str,
-    ) -> Result<()> {
-        let function = match dtype {
-            CudaDataType::F32 => self.lib.vtable.sger,
-            CudaDataType::F64 => self.lib.vtable.dger,
-            CudaDataType::Complex32 => self.lib.vtable.cgeru,
-            CudaDataType::Complex64 => self.lib.vtable.zgeru,
-        };
-        let status = function(self.raw, m, n, alpha, x, incx, y, incy, a, lda);
-        self.lib.check_status(status, op, "cublas*ger/geru_v2")
     }
 
     /// Execute a matrix-matrix product through cuBLAS.

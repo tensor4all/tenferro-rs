@@ -50,7 +50,11 @@ fn incremental_qr_performance_gate_contract() {
         "paired_ratio_ci(compact_values, bcgs2_values)",
         "invalid or incomplete artifact",
         "benchmark_sha256",
+        "checker_sha256",
         "ledger_sha256",
+        "SAMPLE_BATCH = 4",
+        "cpu_reference_mhz",
+        "runner_affinity",
         "target = inconclusive if environment_issues else findings",
         "not (backend == \"cuda\" and bond == 32)",
         "backend != \"cuda\"",
@@ -59,7 +63,14 @@ fn incremental_qr_performance_gate_contract() {
     ] {
         assert!(script.contains(required), "checker drift: {required}");
     }
-    assert!(protocol.contains("process median below 1 ms is `INCONCLUSIVE`"));
+    assert!(benchmark.contains("sample_batch: SAMPLE_BATCH"));
+    assert!(benchmark.contains("CPU_CLOCK_WARMUP_MS: u64 = 50"));
+    assert!(benchmark.contains("warm_cpu_clock();"));
+    assert!(benchmark.contains("cpu0_frequency_mhz()"));
+    assert!(benchmark.contains("process_affinity()"));
+    assert!(protocol.contains("A batched process median below 1 ms is"));
+    assert!(protocol.contains("`INCONCLUSIVE`"));
+    assert!(protocol.contains("same batch"));
     assert!(protocol.contains("reproducible numeric or source-contract failure is `FAIL`"));
     assert!(protocol.contains("max(pre-run load, 0.1)"));
     assert!(ledger.contains("Omitting those costs favors BCGS2"));

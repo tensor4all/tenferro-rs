@@ -141,13 +141,6 @@ pub fn householder_q_columns_identity<E: CubePrimitive>(out: &mut Tensor<E>, sta
     }
 }
 
-#[cube(launch_unchecked)]
-pub fn conjugate_vector<C: ComplexCore>(out: &mut Array<C>, input: &Array<C>) {
-    if ABSOLUTE_POS < out.len() {
-        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].conj();
-    }
-}
-
 #[cube]
 fn positive_phase_real<E: CubePrimitive + core::ops::Neg<Output = E> + PartialOrd>(
     diagonal: E,

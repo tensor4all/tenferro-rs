@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -13,6 +14,8 @@ use tenferro_linalg::{HouseholderQr, LinalgBackend, QrGauge, QrOptions, TensorLi
 use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead};
 
 const SOURCE_COMMIT: &str = "da0775a208006352f6e5eab18bc6bb09ca39a1f6";
+const SAMPLE_BATCH: usize = 4;
+const CPU_CLOCK_WARMUP_MS: u64 = 50;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -49,6 +52,9 @@ struct Record {
     final_rank: usize,
     warmups: usize,
     repetitions: usize,
+    sample_batch: usize,
+    cpu_frequency_mhz: Option<f64>,
+    cpu_affinity: Option<String>,
     timings_ms: Vec<f64>,
     reconstruction_relative_error: f64,
     orthogonality_relative_error: f64,
@@ -311,22 +317,30 @@ fn run_session_outputs<B: BenchSession>(
     let mut timings_ms = Vec::with_capacity(config.repetitions);
     let mut final_factors = None;
     for iteration in 0..total {
-        let prepared = prepare(config.algorithm, session, initial)?;
+        let mut prepared_batch = Vec::with_capacity(SAMPLE_BATCH);
+        for _ in 0..SAMPLE_BATCH {
+            prepared_batch.push(prepare(config.algorithm, session, initial)?);
+        }
+        warm_cpu_clock();
         session
             .benchmark_synchronize()
             .map_err(|error| error.to_string())?;
         let start = Instant::now();
-        let factors = append_sequence(config.algorithm, session, prepared, blocks)?;
+        for prepared in prepared_batch {
+            let factors = append_sequence(config.algorithm, session, prepared, blocks)?;
+            black_box(&factors);
+            final_factors = Some(factors);
+        }
         session
             .benchmark_synchronize()
             .map_err(|error| error.to_string())?;
         let elapsed = start.elapsed().as_secs_f64() * 1.0e3;
-        black_box(&factors);
         if iteration >= config.warmups {
             timings_ms.push(elapsed);
         }
-        final_factors = Some(factors);
     }
+    let cpu_frequency_mhz = cpu0_frequency_mhz();
+    let cpu_affinity = process_affinity();
     let (q, r) = canonical_factors(session, final_factors.unwrap())?;
     let reference = session
         .qr_with_options(
@@ -353,6 +367,9 @@ fn run_session_outputs<B: BenchSession>(
             final_rank,
             warmups: config.warmups,
             repetitions: config.repetitions,
+            sample_batch: SAMPLE_BATCH,
+            cpu_frequency_mhz,
+            cpu_affinity,
             timings_ms,
             reconstruction_relative_error: f64::NAN,
             orthogonality_relative_error: f64::NAN,
@@ -362,6 +379,37 @@ fn run_session_outputs<B: BenchSession>(
         r,
         reference_r,
     ))
+}
+
+fn warm_cpu_clock() {
+    let start = Instant::now();
+    let duration = std::time::Duration::from_millis(CPU_CLOCK_WARMUP_MS);
+    let mut state = 1u64;
+    while start.elapsed() < duration {
+        state = black_box(
+            state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1),
+        );
+    }
+    black_box(state);
+}
+
+fn cpu0_frequency_mhz() -> Option<f64> {
+    fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|khz| khz / 1_000.0)
+}
+
+fn process_affinity() -> Option<String> {
+    fs::read_to_string("/proc/self/status")
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("Cpus_allowed_list:\t"))
+        .map(str::to_owned)
 }
 
 enum Prepared {
