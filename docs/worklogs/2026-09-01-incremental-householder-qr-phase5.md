@@ -215,9 +215,28 @@ availability/provenance evidence. A focused `taskset -c 17` faer probe of the
 new path recorded warmup 3099.950 MHz, measured 3099.939 MHz, affinity `17`, and
 three aggregate timings 3.993/3.678/3.994 ms.
 
+## Fifth full-suite result and environmental blocker
+
+Exact clean candidate `576e206` completed all 336 processes with no performance,
+correctness, scaling, source, >=1 ms, load, GPU clock/throttle, or CoV finding.
+CUDA bond-128 compact/full-QR was 0.429 and compact/BCGS2 was 0.128. The run was
+still `INCONCLUSIVE` only because some fresh processes changed core17 boost mode
+between their three warmup samples and measured samples (for example 3.700 to
+3.100 GHz, a 16.2% drop beyond the unchanged 10% gate). With hundreds of fresh
+processes, this schedutil transition is stochastic and repeatable even after
+50 ms to 1 s warms.
+
+The current user cannot select a CPU governor (`cpupower frequency-set` requires
+root and passwordless sudo is unavailable). Four complete exact-candidate reruns
+have now produced no performance/correctness finding after blocked-WY, but the
+predeclared frequency validity rule cannot become conclusive on this
+unprivileged schedutil host. The remaining acceptance run requires a dedicated
+host or maintainer action to lock the pinned CPU frequency/performance governor;
+no threshold waiver or further post-hoc checker relaxation is taken.
+
 ## Measurement status
 
 Thresholds, cases, cycles, repetitions, absolute load gate, and source
-correspondence remain frozen. A new clean exact candidate must rerun the entire
-paired suite under `taskset -c 17` on a quiet host; Phase-5 acceptance remains
-pending until its deterministic report is PASS.
+correspondence remain frozen. Phase-5 acceptance and merge are blocked pending
+one complete clean-candidate rerun with a fixed CPU governor that returns a
+deterministic `PASS` report.
