@@ -425,6 +425,32 @@ fn svd_vector_observable_backward_grad_is_finite() {
 }
 
 #[test]
+fn incremental_householder_qr_backward_runs_eagerly() {
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0]).unwrap(),
+        ad_test_ctx(),
+    )
+    .unwrap();
+    let state = a.householder_qr().unwrap();
+    let q = state
+        .q_columns(0..2, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+        .unwrap();
+    let r = state
+        .r(QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+        .unwrap();
+    let loss = q
+        .reduce_sum(Some(&[0, 1]))
+        .unwrap()
+        .add(&r.reduce_sum(Some(&[0, 1])).unwrap())
+        .unwrap();
+
+    loss.backward().unwrap();
+
+    let grad = a.grad().unwrap().unwrap().to_tensor().unwrap();
+    assert_finite_f64_tensor(&grad);
+}
+
+#[test]
 fn qr_returns_correct_shapes() {
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),

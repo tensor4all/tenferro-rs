@@ -22,7 +22,7 @@ use tenferro_ops::ad::PrimitiveRuleBuilder;
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 
-use crate::extension::{EighGauge, LinalgExtensionOp, LinalgOp, SvdGauge};
+use crate::extension::{EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdGauge};
 use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
 pub(crate) use tenferro_ops::ad::support::{
     conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex,
@@ -32,9 +32,17 @@ use tenferro_ops::dim_expr::{DimExpr, DimExprEvalError};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
 
+mod householder_qr;
 mod solve;
 mod support;
 
+pub(crate) use householder_qr::{
+    linearize_append as linearize_householder_qr_append,
+    linearize_factor as linearize_householder_qr_factor,
+    linearize_from_factors as linearize_householder_qr_from_factors,
+    linearize_q_columns as linearize_householder_qr_q_columns,
+    linearize_r as linearize_householder_qr_r,
+};
 pub(crate) use solve::{
     linearize_full_piv_lu_solve, linearize_lu_solve_prepared, linearize_solve,
     linearize_triangular_solve, transpose_full_piv_lu_solve, transpose_lu_solve_prepared,
@@ -92,7 +100,7 @@ fn primal_matrix_input_shape(
     Ok((input_shape.len() >= 2).then_some(input_shape))
 }
 
-fn linalg_std_op(op: LinalgOp) -> StdTensorOp {
+pub(crate) fn linalg_std_op(op: LinalgOp) -> StdTensorOp {
     StdTensorOp::Extension(Arc::new(LinalgExtensionOp::new(op)))
 }
 
@@ -1186,13 +1194,35 @@ pub(crate) fn linearize_qr(
     let Some(da) = tangent_in[0] else {
         return Ok(vec![None, None]);
     };
-
     let q_active = ctx.is_value_active_in_linearize(&primal_out[0]);
     let r_active = ctx.is_value_active_in_linearize(&primal_out[1]);
+    linearize_qr_with_factors(
+        builder,
+        primal_in,
+        da,
+        ValueRef::External(primal_out[0].clone()),
+        ValueRef::External(primal_out[1].clone()),
+        q_active,
+        r_active,
+        ctx,
+    )
+}
+
+// INVARIANT: the operands, activity flags, and shape context are the complete QR rule contract.
+#[allow(clippy::too_many_arguments)]
+fn linearize_qr_with_factors(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    da: LocalValueId,
+    q: ValueRef<StdTensorOp>,
+    r: ValueRef<StdTensorOp>,
+    q_active: bool,
+    r_active: bool,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if !q_active && !r_active {
         return Ok(vec![None, None]);
     }
-
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None]);
     };
@@ -1201,8 +1231,6 @@ pub(crate) fn linearize_qr(
     let concrete_dims = concrete_rectangular_dims(m, n, ctx, "linearize_qr")?;
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
-    let q = ValueRef::External(primal_out[0].clone());
-    let r = ValueRef::External(primal_out[1].clone());
 
     if let Some((m_size, n_size)) = concrete_dims.filter(|(m_size, n_size)| n_size > m_size) {
         let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank, dtype);

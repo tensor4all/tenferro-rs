@@ -23,6 +23,7 @@ pub enum ReplayKind {
     SvdUvhProduct,
     EighValuesVectorsAbs,
     PinvSingularIdentity,
+    IncrementalHouseholderQr,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -387,6 +388,16 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
         | ("eigh", "gauge_ill_defined", "eigh_values_vectors_abs", "error") => {
             RecordSupport::ExpectedError(ExpectedErrorKind::GaugeIllDefined)
         }
+        (
+            "incremental_householder_qr",
+            "factor_qr" | "append_qr" | "from_factors_qr" | "selected_q_columns" | "r",
+            "identity",
+            "success",
+        ) => supported_if(
+            svd_replay_dtype(&record.dtype),
+            ReplayKind::IncrementalHouseholderQr,
+            "incremental Householder QR replay supports float32/float64/complex64/complex128",
+        ),
         ("full_pivot_lu", "identity", "identity", "success") => supported_if(
             svd_replay_dtype(&record.dtype) && square_matrix_input(record),
             ReplayKind::NumericalIdentity,

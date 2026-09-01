@@ -289,13 +289,43 @@ The `from_factors` transpose follows the real-inner-product convention:
 
 ```text
 Q_bar = A_bar R^H
-R_bar = Q^H A_bar
+R_bar = triu(Q^H A_bar)
 ```
 
-Complex JVP/VJP follows the repository's JAX-style complex convention. Before
-these rules become supported, the linalg AD manifest records the operations as
-`PendingOracle` or `Unsupported`, and the corresponding `tensor-ad-oracles`
-family must land.
+The upper-trapezoidal projection selects the zero-lower-triangle cotangent
+representative for the valid `R` input domain. Its JVP likewise uses
+`Q * triu(dR)`. The `Q` factor is a general full-column-rank matrix, so its
+tangent is Euclidean rather than Stiefel-projected.
+
+Full thin-Q recovery in AD uses an internal `HouseholderQrThinQ` extension
+operation rather than encoding `0..k` in the public static-range operation. It
+accepts `(packed, coeff)`, returns shape `[packed.rows, coeff.len]`, and obtains
+`k = coeff.len = min(m, n)` at execution. This keeps symbolic traced widths
+representable. The operation has no public wrapper and remains `Unsupported` in
+the AD manifest because it is fixed residual vocabulary, not a
+user-differentiable operation.
+
+The `r` and `q_columns` linearization fragments emit thin-Q and R recovery as
+`OperationRole::Primary`. Those fixed primal residuals are not transposed. Only
+the matrix-product, triangular-projection, and triangular-solve linear fragment
+is transposed, preserving `SupportedViaLinearize` without recursively
+differentiating recovery operations. Recovered Q/R use exactly the public
+positive-real-diagonal gauge before entering the existing QR derivative.
+
+Graph-build metadata requires `coeff.len == min(packed.rows, packed.cols)` for
+R, selected-Q, and internal thin-Q recovery whenever statically decidable.
+`from_factors` additionally requires `q.cols == r.rows` and
+`q.cols <= min(q.rows, r.cols)` whenever statically decidable; unresolved
+symbolic relationships remain deferred to execution.
+
+Complex JVP/VJP follows the repository's JAX-style complex convention. The
+upstream oracle tuples are
+`(incremental_householder_qr, factor_qr)`, `append_qr`, `from_factors_qr`,
+`selected_q_columns`, and `r`. They cover F32/F64/C32/C64, tall/square/wide and
+tall-to-wide shapes, PyTorch JVP/VJP, centered finite differences, and adjoint
+consistency. Rank-deficient states remain outside the differentiable domain.
+The oracle change must merge before tenferro marks these public operations
+supported.
 
 ## Tests
 

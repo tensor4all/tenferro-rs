@@ -263,13 +263,13 @@ fn traced_compact_qr_preserves_known_shapes() {
 
 #[cfg(feature = "autodiff")]
 #[test]
-fn householder_qr_ad_rejects_before_oracles() {
+fn householder_qr_r_grad_matches_finite_difference() {
     use tenferro_ad::AdContext;
     use tenferro_linalg::TracedTensorLinalgExt;
-    use tenferro_runtime::TracedTensor;
+    use tenferro_runtime::{GraphCompiler, TracedTensor};
 
-    let a = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0])
-        .unwrap();
+    let values = vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0];
+    let a = TracedTensor::from_vec_col_major(vec![3, 2], values.clone()).unwrap();
     let r = a.householder_qr().unwrap().r(QrOptions::default()).unwrap();
     let loss = r.reduce_sum(None).unwrap();
     let ad = AdContext::builder()
@@ -277,10 +277,83 @@ fn householder_qr_ad_rejects_before_oracles() {
         .unwrap()
         .build()
         .unwrap();
-    let error = ad
-        .grad(&loss, &a)
-        .expect_err("incremental QR AD must reject until its oracle-backed rules land");
-    assert!(error.to_string().contains("unsupported"));
+    let grad = ad.grad(&loss, &a).unwrap();
+    let program = GraphCompiler::new().compile(&grad).unwrap();
+    let actual = super::support::run_all(&program, &[]).unwrap().remove(0);
+    let actual = actual.as_slice::<f64>().unwrap();
+
+    let scalar_loss = |data: Vec<f64>| {
+        let input = Tensor::from_vec_col_major(vec![3, 2], data).unwrap();
+        let mut backend = CpuBackend::new();
+        backend.with_backend_session(|session| {
+            let r = input
+                .householder_qr(session)
+                .unwrap()
+                .r(QrOptions::default(), session)
+                .unwrap();
+            r.as_slice::<f64>().unwrap().iter().sum::<f64>()
+        })
+    };
+    let step = 1.0e-6;
+    for (index, &gradient) in actual.iter().enumerate() {
+        let mut plus = values.clone();
+        let mut minus = values.clone();
+        plus[index] += step;
+        minus[index] -= step;
+        let expected = (scalar_loss(plus) - scalar_loss(minus)) / (2.0 * step);
+        assert!(
+            (gradient - expected).abs() < 2.0e-5,
+            "gradient[{index}] expected {expected}, got {gradient}"
+        );
+    }
+}
+
+#[cfg(feature = "autodiff")]
+#[test]
+fn householder_qr_two_appends_produce_all_input_gradients() {
+    use tenferro_ad::AdContext;
+    use tenferro_linalg::{QrGauge, TracedTensorLinalgExt};
+    use tenferro_runtime::{GraphCompiler, TracedTensor};
+
+    let a = TracedTensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 0.0, -1.0]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![4, 1], vec![0.0_f64, 1.0, 2.0, 1.0]).unwrap();
+    let c = TracedTensor::from_vec_col_major(vec![4, 1], vec![2.0_f64, -1.0, 1.0, 0.5]).unwrap();
+    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let state = a
+        .householder_qr()
+        .unwrap()
+        .append_columns(&b)
+        .unwrap()
+        .append_columns(&c)
+        .unwrap();
+    let q = state.q_columns(0..3, options).unwrap();
+    let r = state.r(options).unwrap();
+    let loss = q
+        .reduce_sum(Some(&[0, 1]))
+        .unwrap()
+        .add(&r.reduce_sum(Some(&[0, 1])).unwrap())
+        .unwrap();
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+    let gradients = [
+        ad.grad(&loss, &a).unwrap(),
+        ad.grad(&loss, &b).unwrap(),
+        ad.grad(&loss, &c).unwrap(),
+    ];
+    let refs = gradients.iter().collect::<Vec<_>>();
+    let program = GraphCompiler::new().compile_many(&refs).unwrap();
+    let outputs = super::support::run_all(&program, &[]).unwrap();
+    for output in outputs {
+        assert_eq!(output.shape(), &[4, 1]);
+        assert!(output
+            .as_slice::<f64>()
+            .unwrap()
+            .iter()
+            .all(|value| value.is_finite()));
+    }
 }
 
 #[cfg(feature = "autodiff")]
