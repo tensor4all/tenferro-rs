@@ -118,6 +118,17 @@ fn compact_householder_cuda_uses_incremental_device_native_paths() {
     assert!(!append.contains("\n    qr_typed("));
     assert!(!append.contains("download_tensor"));
 
+    let apply = source_section(
+        &source,
+        "fn apply_householder_reflectors_typed",
+        "fn geqrf_trailing_typed",
+    );
+    assert!(apply.contains("build_explicit_v"));
+    assert!(apply.contains("reflector V column offset"));
+    assert!(apply.contains("batch_const_ptr::<T>(v_ptr, v_offset)"));
+    assert!(!apply.contains("copy_bytes"));
+    assert!(source.contains("householder_explicit_v::launch_unchecked"));
+
     let from_factors = source_section(
         &source,
         "fn compact_qr_from_factors_typed",

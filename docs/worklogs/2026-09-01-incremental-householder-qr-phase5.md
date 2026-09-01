@@ -74,9 +74,41 @@ failed local boundary and cannot affect the verdict.
 - Missing and malformed artifact smoke tests produced deterministic FAIL
   reports.
 
+## First full-suite result and targeted optimization
+
+The complete paired suite ran from clean candidate `6ed32040`. It produced a
+real primary-gate FAIL for CUDA bond 128: compact/full-QR was 0.656, above the
+frozen 0.5 limit. Compact/BCGS2 was 0.191, so the evidence localized the cost to
+per-reflector fixed overhead rather than refactorization or asymptotic work.
+The report and raw JSONL remain under the ignored local artifact directory
+`target/iqr-performance-6ed32040/`.
+
+A new pre-implementation `reviewer-flash` gate approved a narrow optimization
+with verdict **Correct-to-merge**:
+
+- build the packed state's explicit reflector vectors once into device-local
+  function scratch V (`0` above, `1` on, packed tails below the diagonal);
+- point GEMV/GEMM and GER/GERU at checked `V[j,j]` offsets;
+- remove only the old scalar-one and tail device copies from each reflector;
+- retain reflector order, coefficient conjugation, target updates, stream
+  ordering, pointer-mode restoration, and all no-Q/no-full-QR contracts.
+
+The same review approved a checker-fidelity correction. The frozen rule says
+normalized work may *grow* by at most 35% with prior rank; the first checker used
+`max/min` and incorrectly failed decreasing normalized cost. Rank-16/29 proxies
+are now compared to the rank-8 proxy with the unchanged 1.35 threshold. A
+source self-test pins decreasing proxies as acceptable and growth above 35% as
+failure.
+
+Focused CUDA correctness tests passed for F32/F64/C32/C64 reconstruction,
+append, factor import, wide/rank-deficient/zero cases, and placement. A bounded
+bond-128 diagnostic reduced compact time from about 12.73 ms to about 6.37 ms;
+this is diagnostic evidence only, not the acceptance run. The post-implementation
+`reviewer-flash` closure review traced the six-file diff and returned
+**Correct-to-merge** with no Critical or Important findings.
+
 ## Measurement status
 
-The full paired suite must run only from the first clean committed Phase-5
-candidate. Raw artifacts and the checker report will be attached after that run;
-no threshold or case change is permitted. Phase-5 acceptance remains pending
-until the report is PASS.
+Thresholds, cases, repetitions, and source correspondence remain frozen. A new
+clean exact candidate must rerun the entire paired suite; Phase-5 acceptance
+remains pending until its deterministic report is PASS.

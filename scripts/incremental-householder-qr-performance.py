@@ -484,7 +484,7 @@ def check_suite(artifact_dir: Path, backends: list[str]) -> int:
         for rank in (8, 16, 29):
             timing = summaries[(backend, f"scaling-rank{rank}", "compact")]["median_ms"]
             proxies.append(timing / (32768 * rank * 3))
-        if max(proxies) / min(proxies) > 1.35:
+        if normalized_scaling_grows_too_much(proxies):
             findings.append(f"{backend}: normalized append scaling exceeded 35%")
     report = {
         "schema": SCHEMA,
@@ -499,6 +499,11 @@ def check_suite(artifact_dir: Path, backends: list[str]) -> int:
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["verdict"] == "PASS" else 1
+
+
+def normalized_scaling_grows_too_much(proxies: list[float]) -> bool:
+    baseline = proxies[0]
+    return any(proxy / baseline > 1.35 for proxy in proxies[1:])
 
 
 def self_test() -> None:
@@ -521,6 +526,8 @@ def self_test() -> None:
     low, high = bootstrap_ci([1.0] * 7)
     assert (low, high) == (1.0, 1.0)
     assert paired_ratio_ci([2.0] * 7, [4.0] * 7) == (0.5, 0.5)
+    assert not normalized_scaling_grows_too_much([3.0, 2.0, 1.0])
+    assert normalized_scaling_grows_too_much([1.0, 1.36, 0.9])
     print("incremental-householder-qr-performance-self-test-ok")
 
 

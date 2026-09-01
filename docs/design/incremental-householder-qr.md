@@ -227,10 +227,14 @@ Reflectors are enqueued one at a time in the mathematically required order:
 `Q^H C` applies `j = 0, ..., k - 1` with `conj(tau[j])`, while `Q C`
 applies `j = k - 1, ..., 0` with `tau[j]`. Each `gemv`/rank-1 update covers the
 matrix block in parallel and no GPU thread loops over an unbounded tensor
-domain. The same routine applies `Q^H` during append and applies `Q` to
-requested identity columns. A later blocked-WY
-optimization may replace this routine only if the performance gate requires it;
-there is no full-Q, one-shot-QR, host, or CPU fallback.
+domain. Phase 5 builds the implicit-unit reflector columns once into
+function-local device scratch V, then points each vendor call at checked
+`V[j,j]`; this removes per-reflector scalar and tail copies without retaining V
+in public state. V is reflector storage, not Q. The same routine applies `Q^H`
+during append and applies `Q` to requested identity columns. A later blocked-WY
+optimization may replace the elementary-reflector routine only under a newly
+reviewed performance protocol; there is no full-Q, one-shot-QR, host, or CPU
+fallback.
 
 `QrGauge::PositiveDiagonal` is also provider-owned on CUDA: a linalg-owned
 same-device kernel computes diagonal phases and scales requested Q columns and

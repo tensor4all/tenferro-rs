@@ -35,6 +35,38 @@ where
     })
 }
 
+fn build_explicit_v<T>(
+    backend: &mut CudaExecSession<'_>,
+    packed: &TypedTensor<T>,
+    columns: usize,
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar + TensorScalar,
+{
+    backend.with_cubecl(op, |cubecl| {
+        let output = cubecl.alloc_output::<T>(&[packed.shape()[0], columns])?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let output_arg = cubecl.tensor_binding(&output, op)?;
+        let packed_arg = cubecl.tensor_binding(packed, op)?;
+        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
+        // SAFETY: bindings are live device tensors and each thread writes one
+        // explicit reflector-vector entry. The output is function-local scratch.
+        unsafe {
+            cubecl_linalg::householder_explicit_v::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                output_arg.into_tensor_arg(),
+                packed_arg.into_tensor_arg(),
+            );
+        }
+        Ok(output)
+    })
+}
+
 fn linalg_scalar_bytes<T: LinalgScalar>(value: &T) -> &[u8] {
     // SAFETY: LinalgScalar is sealed in this module to f32/f64/Complex32/
     // Complex64, all of which have initialized byte representations without
@@ -75,11 +107,13 @@ where
         .then(|| T::conjugate_coeff(backend, coeff, op))
         .transpose()?;
     let apply_coeff = coeff_adjoint.as_ref().unwrap_or(coeff);
+    // The explicit reflector vectors are device-local function scratch, not Q.
+    // `with_raw` flushes this CubeCL build before the cuBLAS calls below.
+    let v = build_explicit_v(backend, packed, k, op)?;
     let m_i32 = as_i32(m, op, "m")?;
     let columns_i32 = as_i32(columns, op, "columns")?;
-    let one = T::one();
     let zero = T::zero();
-    let minus_one = -one;
+    let minus_one = -T::one();
 
     backend.with_raw(op, |raw| {
         let handles = raw.resource(CudaLinalgHandles::load)?;
@@ -87,31 +121,25 @@ where
         let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
         handles.cublas().set_stream(stream, op)?;
 
-        let one_device = raw.upload_bytes(linalg_scalar_bytes(&one), op)?;
         let zero_device = raw.upload_bytes(linalg_scalar_bytes(&zero), op)?;
         let minus_one_device = raw.upload_bytes(linalg_scalar_bytes(&minus_one), op)?;
-        let mut one_ptr = std::ptr::null_mut::<c_void>();
         let mut zero_ptr = std::ptr::null_mut::<c_void>();
         let mut minus_one_ptr = std::ptr::null_mut::<c_void>();
-        one_device.with_ptr(|ptr| one_ptr = ptr);
         zero_device.with_ptr(|ptr| zero_ptr = ptr);
         minus_one_device.with_ptr(|ptr| minus_one_ptr = ptr);
 
-        let mut v = raw.alloc_output::<T>(&[m])?;
         let mut w = raw.alloc_output::<T>(&[columns])?;
-        let packed_ref = raw.tensor(packed)?;
         let coeff_ref = raw.tensor(apply_coeff)?;
         let target_ref = raw.tensor_mut(target)?;
-        let v_ref = raw.tensor_mut(&mut v)?;
+        let v_ref = raw.tensor(&v)?;
         let w_ref = raw.tensor_mut(&mut w)?;
         // SAFETY: every handle is a validated live device span in this raw
         // session; pointers are retained only for stream-ordered calls below.
-        let (packed_ptr, coeff_ptr, target_ptr, v_ptr, w_ptr) = unsafe {
+        let (coeff_ptr, target_ptr, v_ptr, w_ptr) = unsafe {
             (
-                packed_ref.raw_ptr().cast_const(),
                 coeff_ref.raw_ptr().cast_const(),
                 target_ref.raw_ptr(),
-                v_ref.raw_ptr(),
+                v_ref.raw_ptr().cast_const(),
                 w_ref.raw_ptr(),
             )
         };
@@ -127,34 +155,22 @@ where
             for reflector in indices {
                 let len = m - reflector;
                 let len_i32 = as_i32(len, op, "reflector length")?;
-                let packed_column =
-                    checked_mul_usize(op, "reflector packed column offset", reflector, m)?;
-                let packed_tail_offset =
-                    packed_column.checked_add(reflector + 1).ok_or_else(|| {
-                        Error::invalid_argument(op, "reflector offset", "offset overflowed")
-                    })?;
-                let tail_bytes = checked_mul_usize(
-                    op,
-                    "reflector tail bytes",
-                    len - 1,
-                    std::mem::size_of::<T>(),
-                )?;
-                // SAFETY: checked reflector offsets remain within the packed,
-                // coefficient, target, and scratch allocations.
-                let (packed_tail, tau, target_sub) = unsafe {
+                let v_column = checked_mul_usize(op, "reflector V column offset", reflector, m)?;
+                let v_offset = v_column.checked_add(reflector).ok_or_else(|| {
+                    Error::invalid_argument(op, "reflector V offset", "offset overflowed")
+                })?;
+                // SAFETY: checked offsets select V[j,j], tau[j], and target
+                // row j inside live device allocations.
+                let (v_sub, tau, target_sub) = unsafe {
                     (
-                        batch_const_ptr::<T>(packed_ptr, packed_tail_offset),
+                        batch_const_ptr::<T>(v_ptr, v_offset),
                         batch_const_ptr::<T>(coeff_ptr, reflector),
                         batch_ptr::<T>(target_ptr, reflector),
                     )
                 };
-                // SAFETY: scalar and tail copies target disjoint live scratch
-                // spans and are ordered on the session stream.
+                // SAFETY: all pointers and dimensions are validated above and
+                // vendor calls are ordered on the session stream.
                 unsafe {
-                    raw.copy_bytes(v_ptr, one_ptr.cast_const(), std::mem::size_of::<T>(), op)?;
-                    if len > 1 {
-                        raw.copy_bytes(batch_ptr::<T>(v_ptr, 1), packed_tail, tail_bytes, op)?;
-                    }
                     match T::DATA_TYPE {
                         CudaDataType::F32 | CudaDataType::F64 => {
                             handles.cublas().gemv(
@@ -165,7 +181,7 @@ where
                                 tau,
                                 target_sub.cast_const(),
                                 m_i32,
-                                v_ptr.cast_const(),
+                                v_sub,
                                 1,
                                 zero_ptr.cast_const(),
                                 w_ptr,
@@ -182,7 +198,7 @@ where
                                 columns_i32,
                                 len_i32,
                                 tau,
-                                v_ptr.cast_const(),
+                                v_sub,
                                 len_i32,
                                 target_sub.cast_const(),
                                 m_i32,
@@ -198,7 +214,7 @@ where
                         len_i32,
                         columns_i32,
                         minus_one_ptr.cast_const(),
-                        v_ptr.cast_const(),
+                        v_sub,
                         1,
                         w_ptr.cast_const(),
                         1,
