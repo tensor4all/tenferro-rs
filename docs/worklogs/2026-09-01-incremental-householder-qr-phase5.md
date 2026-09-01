@@ -193,9 +193,31 @@ stores five complete 50 ms calibration samples in
 `INCONCLUSIVE`; there is no peak or partial-sample fallback. The unchanged 10%
 gate compares measured process medians with that pre-run active reference.
 
+## Fourth full-suite result and within-process frequency gate
+
+Exact candidate `ebc488f` again completed 336 processes with no performance,
+correctness, scaling, source, >=1 ms, GPU clock/throttle, or CoV finding. CUDA
+bond-128 compact/full-QR was 0.457. The run remained `INCONCLUSIVE` because
+fresh processes entered either 3.1 or 3.7 GHz boost modes relative to one
+suite-start mode, and the frozen absolute load gate also observed late load up
+to 13.34 from a 5.38 pre-run baseline.
+
+A proposed per-process load reference was rejected by `reviewer-flash` because
+a pre/post comparison of one-minute load average would be vacuous. The revised
+frequency-only amendment retains the frozen absolute suite-start load gate and
+received **Correct-to-merge**. Every fresh process now compares its three
+untimed-warmup frequency-boundary samples with its 3/5 measured-boundary
+samples using the unchanged 10% threshold. Missing samples remain
+`INCONCLUSIVE`. This check does not detect a transient mid-batch throttle or a
+uniform whole-run shift; seven alternating cycles, paired ratios, and the CoV
+timing proxy remain the cross-process safeguards. The suite calibration remains
+availability/provenance evidence. A focused `taskset -c 17` faer probe of the
+new path recorded warmup 3099.950 MHz, measured 3099.939 MHz, affinity `17`, and
+three aggregate timings 3.993/3.678/3.994 ms.
+
 ## Measurement status
 
-Thresholds, cases, cycles, repetitions, and source correspondence remain
-frozen. A new clean exact candidate must rerun the entire paired suite under
-`taskset -c 17`; Phase-5 acceptance remains pending until its deterministic
-report is PASS.
+Thresholds, cases, cycles, repetitions, absolute load gate, and source
+correspondence remain frozen. A new clean exact candidate must rerun the entire
+paired suite under `taskset -c 17` on a quiet host; Phase-5 acceptance remains
+pending until its deterministic report is PASS.

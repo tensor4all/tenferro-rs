@@ -77,11 +77,15 @@ objects and GPU contexts/handles are constructed once and reused.
 
 A case is `INCONCLUSIVE` if process-median coefficient of variation exceeds
 10%, system load exceeds 1.5× `max(pre-run load, 0.1)` in any cycle, or
-thermal/frequency observations differ by more than 10%. Before measured
-subprocesses start, five 50 ms active samples on the single pinned CPU define an
-independent median reference. Each benchmark process reads the same CPU after
-each warm and before timing; its median must remain within 10% of the active
-reference, and process affinity must exactly equal runner affinity. GPU clock
+thermal/frequency observations differ by more than 10%. Five suite-start active
+samples on the single pinned CPU remain availability/provenance evidence. Each
+fresh benchmark process compares the median of its three untimed-warmup boundary
+reads with the median of its 3/5 measured boundary reads using the unchanged 10%
+limit; process affinity must exactly equal runner affinity. This boundary check
+does not detect a transient mid-batch throttle or a uniform whole-run frequency
+shift. Cross-process mode effects are instead exposed conservatively by seven
+alternating cycles, paired ratios, and the process-median CoV gate; CoV remains
+a timing proxy rather than a direct frequency guarantee. GPU clock
 variation is compared with the median active process clock because the pre-run
 clock is idle; every nonzero throttle reason remains invalid. CUDA errors, or a
 correctness check fails solely for a demonstrated environmental reason. A

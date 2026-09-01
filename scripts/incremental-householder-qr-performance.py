@@ -352,6 +352,7 @@ def validate_record(record: dict) -> None:
         "timings_ms",
         "repetitions",
         "sample_batch",
+        "cpu_warmup_reference_mhz",
         "cpu_frequency_mhz",
         "cpu_affinity",
         "reconstruction_relative_error",
@@ -397,11 +398,11 @@ def validate_record(record: dict) -> None:
         raise ValueError("record algorithm does not match the frozen cycle order")
     if record["sample_batch"] != SAMPLE_BATCH:
         raise ValueError(f"unexpected sample_batch: {record['sample_batch']!r}")
-    if record["cpu_frequency_mhz"] is not None and (
-        not math.isfinite(float(record["cpu_frequency_mhz"]))
-        or float(record["cpu_frequency_mhz"]) <= 0.0
-    ):
-        raise ValueError("invalid cpu_frequency_mhz")
+    for field in ("cpu_warmup_reference_mhz", "cpu_frequency_mhz"):
+        if record[field] is not None and (
+            not math.isfinite(float(record[field])) or float(record[field]) <= 0.0
+        ):
+            raise ValueError(f"invalid {field}")
     if record["cpu_affinity"] is not None and not isinstance(record["cpu_affinity"], str):
         raise ValueError("invalid cpu_affinity")
     timings = record["timings_ms"]
@@ -445,7 +446,7 @@ def observation_issues(
     record: dict,
     pre: dict,
     backend: str,
-    cpu_active_reference_mhz: float | None,
+    cpu_calibration_available: bool,
     runner_affinity: str | None,
     gpu_reference_mhz: float | None,
 ) -> list[str]:
@@ -453,10 +454,11 @@ def observation_issues(
     issues = []
     if observation["load1"] > 1.5 * max(float(pre["load1"]), 0.1):
         issues.append("system load validity gate failed")
+    cpu_warmup_mhz = record.get("cpu_warmup_reference_mhz")
     cpu_mhz = record.get("cpu_frequency_mhz")
-    if cpu_active_reference_mhz is None or cpu_mhz is None:
+    if not cpu_calibration_available or cpu_warmup_mhz is None or cpu_mhz is None:
         issues.append("CPU frequency observation unavailable")
-    elif abs(float(cpu_mhz) / cpu_active_reference_mhz - 1.0) > 0.10:
+    elif abs(float(cpu_mhz) / float(cpu_warmup_mhz) - 1.0) > 0.10:
         issues.append("CPU frequency validity gate failed")
     if runner_affinity is None or record.get("cpu_affinity") != runner_affinity:
         issues.append("CPU affinity validity gate failed")
@@ -554,7 +556,7 @@ def check_suite(artifact_dir: Path, backends: list[str]) -> int:
                         record,
                         pre,
                         backend,
-                        cpu_active_reference_mhz,
+                        cpu_active_reference_mhz is not None,
                         runner_affinity,
                         gpu_reference_mhz,
                     )
@@ -674,6 +676,7 @@ def self_test() -> None:
     assert complete_calibration_median([3_100.0, 3_100.0, None, 3_100.0, 3_100.0]) is None
     assert complete_calibration_median([3_100.0] * 4) is None
     record = {
+        "cpu_warmup_reference_mhz": 2_000.0,
         "cpu_frequency_mhz": 2_000.0,
         "cpu_affinity": "0",
         "environment": {
@@ -682,10 +685,19 @@ def self_test() -> None:
             "gpu_throttle": "0x0000000000000000",
         },
     }
-    assert observation_issues(record, {"load1": 1.0}, "cuda", 2_000.0, "0", 1_410.0) == []
+    assert observation_issues(record, {"load1": 1.0}, "cuda", True, "0", 1_410.0) == []
     record["environment"]["load1"] = 1.51
     assert "system load validity gate failed" in observation_issues(
-        record, {"load1": 1.0}, "cuda", 2_000.0, "0", 1_410.0
+        record, {"load1": 1.0}, "cuda", True, "0", 1_410.0
+    )
+    record["environment"]["load1"] = 1.0
+    record["cpu_frequency_mhz"] = 2_201.0
+    assert "CPU frequency validity gate failed" in observation_issues(
+        record, {"load1": 1.0}, "cuda", True, "0", 1_410.0
+    )
+    record["cpu_frequency_mhz"] = None
+    assert "CPU frequency observation unavailable" in observation_issues(
+        record, {"load1": 1.0}, "cuda", True, "0", 1_410.0
     )
     print("incremental-householder-qr-performance-self-test-ok")
 

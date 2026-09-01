@@ -53,6 +53,7 @@ struct Record {
     warmups: usize,
     repetitions: usize,
     sample_batch: usize,
+    cpu_warmup_reference_mhz: Option<f64>,
     cpu_frequency_mhz: Option<f64>,
     cpu_affinity: Option<String>,
     timings_ms: Vec<f64>,
@@ -315,6 +316,7 @@ fn run_session_outputs<B: BenchSession>(
         .checked_add(config.repetitions)
         .ok_or_else(|| "warmup/repetition count overflowed".to_string())?;
     let mut timings_ms = Vec::with_capacity(config.repetitions);
+    let mut cpu_warmup_frequency_samples = Vec::with_capacity(config.warmups);
     let mut cpu_frequency_samples = Vec::with_capacity(config.repetitions);
     let mut final_factors = None;
     for iteration in 0..total {
@@ -340,8 +342,11 @@ fn run_session_outputs<B: BenchSession>(
         if iteration >= config.warmups {
             timings_ms.push(elapsed);
             cpu_frequency_samples.push(cpu_frequency_sample);
+        } else {
+            cpu_warmup_frequency_samples.push(cpu_frequency_sample);
         }
     }
+    let cpu_warmup_reference_mhz = median_complete_samples(&cpu_warmup_frequency_samples);
     let cpu_frequency_mhz = median_complete_samples(&cpu_frequency_samples);
     let cpu_affinity = process_affinity();
     let (q, r) = canonical_factors(session, final_factors.unwrap())?;
@@ -371,6 +376,7 @@ fn run_session_outputs<B: BenchSession>(
             warmups: config.warmups,
             repetitions: config.repetitions,
             sample_batch: SAMPLE_BATCH,
+            cpu_warmup_reference_mhz,
             cpu_frequency_mhz,
             cpu_affinity,
             timings_ms,

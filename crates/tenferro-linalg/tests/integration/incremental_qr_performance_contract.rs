@@ -55,6 +55,7 @@ fn incremental_qr_performance_gate_contract() {
         "SAMPLE_BATCH = 4",
         "cpu_active_reference_mhz",
         "cpu_calibration_samples_mhz",
+        "cpu_warmup_reference_mhz",
         "runner_affinity",
         "target = inconclusive if environment_issues else findings",
         "not (backend == \"cuda\" and bond == 32)",
@@ -68,6 +69,8 @@ fn incremental_qr_performance_gate_contract() {
     assert!(benchmark.contains("CPU_CLOCK_WARMUP_MS: u64 = 50"));
     assert!(benchmark.contains("warm_cpu_clock();"));
     assert!(benchmark.contains("pinned_cpu_frequency_mhz()"));
+    assert!(benchmark.contains("cpu_warmup_frequency_samples"));
+    assert!(benchmark.contains("cpu_warmup_reference_mhz"));
     let timing_loop = benchmark
         .split_once("for iteration in 0..total")
         .expect("benchmark should contain timing loop")
