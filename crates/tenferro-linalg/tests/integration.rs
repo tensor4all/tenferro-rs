@@ -34,6 +34,8 @@ mod linalg_internal_path_contract;
 #[cfg(feature = "autodiff")]
 #[path = "integration/oracle_replay.rs"]
 mod oracle_replay;
+#[path = "integration/small_append_performance_contract.rs"]
+mod small_append_performance_contract;
 #[path = "integration/support.rs"]
 mod support;
 #[path = "integration/traced_ad_explicit.rs"]

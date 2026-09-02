@@ -120,6 +120,11 @@ required-features = ["autodiff"]
 name = "incremental_householder_qr"
 harness = false
 
+[[bench]]
+name = "householder_qr_small_appends"
+harness = false
+required-features = ["autodiff"]
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
