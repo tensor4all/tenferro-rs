@@ -646,6 +646,12 @@ impl CudaExtensionCache {
         if let Some(entry) = inner.entries.get_mut(&type_id) {
             entry.retained_bytes = retained_bytes;
             inner.refresh_retained_bytes();
+            if inner.retained_bytes > inner.max_retained_bytes.get() {
+                inner.entries.remove(&type_id);
+                inner.order.retain(|candidate| *candidate != type_id);
+                inner.stats.evictions = inner.stats.evictions.saturating_add(1);
+                inner.refresh_retained_bytes();
+            }
             inner.evict_to_limit();
         }
         Ok(())
