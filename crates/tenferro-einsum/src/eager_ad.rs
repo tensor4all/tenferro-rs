@@ -4,19 +4,27 @@ use std::collections::hash_map::DefaultHasher;
 use std::error::Error as StdError;
 use std::hash::{Hash, Hasher};
 use std::mem::size_of;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use computegraph::compile::{compile, CompiledProgram, Instruction};
 use computegraph::graph::GraphBuilder;
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{ValueKey, ValueRef};
-use tenferro_ad::extension::{adopt_untracked_eager_value, apply_eager_with_extension_session};
+use tenferro_ad::extension::{
+    adopt_untracked_eager_value, apply_eager_with_targeted_extension_session,
+    EagerExtensionBackendKind, EagerExtensionTarget,
+};
 use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_cpu::CpuBackend;
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cuda::CudaBackend;
+#[cfg(feature = "webgpu")]
+use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::{ErrorPhase, ExtensionCacheKey};
+use tenferro_runtime::{ErrorPhase, ExtensionCacheKey, ExtensionModule};
 use tenferro_tensor::{ErrorKind, ShapeMismatch, Tensor, ValidationError, ValidationKind};
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
@@ -74,30 +82,39 @@ pub trait EagerEinsumExt {
     fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor>;
 }
 
-fn eager_cpu_extension_module(
-) -> tenferro_runtime::Result<Arc<dyn tenferro_runtime::ExtensionModule>> {
-    static MODULE: OnceLock<Arc<dyn tenferro_runtime::ExtensionModule>> = OnceLock::new();
-    if let Some(module) = MODULE.get() {
-        return Ok(Arc::clone(module));
+fn eager_extension_module(
+    target: EagerExtensionTarget,
+) -> tenferro_runtime::Result<Arc<dyn ExtensionModule>> {
+    let EagerExtensionTarget {
+        engine_id,
+        backend_kind,
+    } = target;
+    match backend_kind {
+        EagerExtensionBackendKind::Cpu => {
+            crate::extension::extension_module::<CpuBackend>(engine_id)
+                .map_err(eager_runtime_config_error)
+        }
+        #[cfg(feature = "cuda")]
+        EagerExtensionBackendKind::Cuda => {
+            crate::extension::extension_module::<CudaBackend>(engine_id)
+                .map_err(eager_runtime_config_error)
+        }
+        #[cfg(feature = "webgpu")]
+        EagerExtensionBackendKind::WebGpu => {
+            crate::extension::extension_module::<WebGpuBackend>(engine_id)
+                .map_err(eager_runtime_config_error)
+        }
     }
+}
 
-    let engine_id = tenferro_cpu::runtime_engine_id().map_err(|source| {
-        tenferro_runtime::Error::runtime_state_source(
-            "tenferro_einsum::eager_extension_module",
-            ErrorPhase::Execution,
-            source,
-        )
-    })?;
-    let module = crate::extension::extension_module::<tenferro_cpu::CpuBackend>(engine_id)
-        .map_err(|source| {
-            tenferro_runtime::Error::runtime_state_source(
-                "tenferro_einsum::eager_extension_module",
-                ErrorPhase::Execution,
-                source,
-            )
-        })?;
-    let _ = MODULE.set(Arc::clone(&module));
-    Ok(MODULE.get().cloned().unwrap_or(module))
+fn eager_runtime_config_error(
+    source: tenferro_runtime::RuntimeConfigError,
+) -> tenferro_runtime::Error {
+    tenferro_runtime::Error::runtime_state_source(
+        "tenferro_einsum::eager_extension_module",
+        ErrorPhase::Execution,
+        source,
+    )
 }
 
 impl EagerEinsumExt for [&EagerTensor] {
@@ -271,7 +288,7 @@ fn einsum_subscripts_with_broadcast(
         EinsumExtensionOp::with_output_shape_hint(subscripts.clone(), output_shape_hint, plan_spec)
     });
     let mut outputs =
-        apply_eager_with_extension_session(op, inputs, eager_cpu_extension_module()?)?;
+        apply_eager_with_targeted_extension_session(op, inputs, eager_extension_module)?;
     outputs.pop().ok_or_else(|| {
         Error::Runtime(tenferro_runtime::Error::MissingInput(
             "einsum extension produced no eager output".into(),
