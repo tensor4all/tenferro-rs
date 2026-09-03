@@ -1156,15 +1156,131 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
         CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
     let a_gpu = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_gpu = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend.clone()).unwrap();
     let a = EagerTensor::from_tensor_in(a_gpu, ctx.clone()).unwrap();
     let b = EagerTensor::from_tensor_in(b_gpu, ctx).unwrap();
 
     let x = a.solve(&b).unwrap();
 
-    let download_backend =
-        CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
-    let x_host = download_tensor(download_backend.runtime(), &x.to_tensor().unwrap()).unwrap();
+    let x_host = download_tensor(upload_backend.runtime(), &x.to_tensor().unwrap()).unwrap();
     assert_eq!(x_host.shape(), &[2, 1]);
     assert_close_slice(f64_data(&x_host), &[1.8, -0.4], 1.0e-9);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore]
+fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
+    if !gpu_available() {
+        eprintln!("skipping CUDA eager f64 decomposition test: no CUDA device");
+        return;
+    }
+
+    let expected = [1.0_f64, 3.0, 2.0, 4.0];
+    let host = Tensor::from_vec_col_major(vec![2, 2], expected.to_vec()).unwrap();
+    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let device = upload_tensor(backend.runtime(), &host).unwrap();
+    let runtime = EagerRuntime::with_cuda_backend(backend.clone()).unwrap();
+    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+
+    let (q, r) = input.qr().unwrap();
+    let (u, s, vt) = input.svd().unwrap();
+    for output in [&q, &r, &u, &s, &vt] {
+        assert_eq!(output.runtime().id(), runtime.id());
+        assert!(output.to_tensor().unwrap().as_slice::<f64>().is_err());
+    }
+
+    let download = |output: &EagerTensor| {
+        download_tensor(backend.runtime(), &output.to_tensor().unwrap()).unwrap()
+    };
+    let q = download(&q);
+    let r = download(&r);
+    let u = download(&u);
+    let s = download(&s);
+    let vt = download(&vt);
+    let qr = matmul_2x2_f64(f64_data(&q), f64_data(&r));
+    let mut us = f64_data(&u).to_vec();
+    for col in 0..2 {
+        for row in 0..2 {
+            us[row + 2 * col] *= f64_data(&s)[col];
+        }
+    }
+    let usvt = matmul_2x2_f64(&us, f64_data(&vt));
+    assert_close_slice(&qr, &expected, 1.0e-9);
+    assert_close_slice(&usvt, &expected, 1.0e-9);
+}
+
+#[cfg(feature = "cuda")]
+fn matmul_2x2_f64(lhs: &[f64], rhs: &[f64]) -> Vec<f64> {
+    (0..4)
+        .map(|linear| {
+            let row = linear % 2;
+            let col = linear / 2;
+            (0..2).map(|k| lhs[row + 2 * k] * rhs[k + 2 * col]).sum()
+        })
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore]
+fn cuda_eager_qr_and_svd_c64_stay_resident_and_reconstruct() {
+    if !gpu_available() {
+        eprintln!("skipping CUDA eager c64 decomposition test: no CUDA device");
+        return;
+    }
+
+    let expected = [
+        Complex64::new(1.0, 0.5),
+        Complex64::new(3.0, -0.5),
+        Complex64::new(2.0, -1.0),
+        Complex64::new(4.0, 0.25),
+    ];
+    let host = Tensor::from_vec_col_major(vec![2, 2], expected.to_vec()).unwrap();
+    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let device = upload_tensor(backend.runtime(), &host).unwrap();
+    let runtime = EagerRuntime::with_cuda_backend(backend.clone()).unwrap();
+    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+
+    let (q, r) = input.qr().unwrap();
+    let (u, s, vt) = input.svd().unwrap();
+    for output in [&q, &r, &u, &s, &vt] {
+        assert_eq!(output.runtime().id(), runtime.id());
+        let resident = output.to_tensor().unwrap();
+        assert!(match output.dtype() {
+            tenferro_tensor::DType::C64 => resident.as_slice::<Complex64>().is_err(),
+            tenferro_tensor::DType::F64 => resident.as_slice::<f64>().is_err(),
+            dtype => panic!("unexpected decomposition dtype {dtype:?}"),
+        });
+    }
+
+    let download = |output: &EagerTensor| {
+        download_tensor(backend.runtime(), &output.to_tensor().unwrap()).unwrap()
+    };
+    let q = download(&q);
+    let r = download(&r);
+    let u = download(&u);
+    let s = download(&s);
+    let vt = download(&vt);
+    let qr = matmul_2x2_c64(c64_data(&q), c64_data(&r));
+    let mut us = c64_data(&u).to_vec();
+    for col in 0..2 {
+        for row in 0..2 {
+            us[row + 2 * col] *= f64_data(&s)[col];
+        }
+    }
+    let usvt = matmul_2x2_c64(&us, c64_data(&vt));
+    assert_close_c64_slice(&qr, &expected, 1.0e-8);
+    assert_close_c64_slice(&usvt, &expected, 1.0e-8);
+}
+
+#[cfg(feature = "cuda")]
+fn matmul_2x2_c64(lhs: &[Complex64], rhs: &[Complex64]) -> Vec<Complex64> {
+    (0..4)
+        .map(|linear| {
+            let row = linear % 2;
+            let col = linear / 2;
+            (0..2).map(|k| lhs[row + 2 * k] * rhs[k + 2 * col]).sum()
+        })
+        .collect()
 }

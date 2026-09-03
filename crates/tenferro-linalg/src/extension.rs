@@ -271,6 +271,7 @@ pub(crate) fn validate_derivative_eps(
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[doc(hidden)]
+#[allow(dead_code)]
 pub(crate) enum LinalgOp {
     Cholesky,
     Lu,
