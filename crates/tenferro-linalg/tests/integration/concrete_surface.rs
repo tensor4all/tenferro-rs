@@ -128,6 +128,41 @@ fn rank_revealing_qr_supports_all_float_and_complex_dtypes() {
 }
 
 #[test]
+fn rank_revealing_qr_handles_empty_dimensions_and_empty_batches() {
+    let inputs: [(Vec<usize>, Vec<f64>); 3] = [
+        (vec![0, 3], vec![]),
+        (vec![3, 0], vec![]),
+        (vec![2, 2, 0], vec![]),
+    ];
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        for (shape, data) in inputs {
+            let input = Tensor::from_vec_col_major(shape, data).unwrap();
+            let result = input
+                .rank_revealing_qr(RankRevealingQrOptions::default(), session)
+                .unwrap();
+            let ranks = result.rank.as_slice::<i64>().unwrap();
+            if result.rank.shape().is_empty() {
+                assert_eq!(ranks, &[0]);
+            } else {
+                assert!(ranks.is_empty());
+            }
+        }
+    });
+}
+
+#[test]
+fn rank_revealing_qr_rejects_non_finite_input() {
+    let input = Tensor::from_vec_col_major(vec![2, 1], vec![f64::NAN, 1.0]).unwrap();
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        assert!(input
+            .rank_revealing_qr(RankRevealingQrOptions::default(), session)
+            .is_err());
+    });
+}
+
+#[test]
 fn rank_revealing_qr_rejects_invalid_tolerances() {
     let input = Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).unwrap();
     let mut host = CpuBackend::new();
