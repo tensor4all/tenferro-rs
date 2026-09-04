@@ -1,4 +1,6 @@
 use crate::backend::{unsupported_dtype, CompactQrResult, LinalgBackend};
+use crate::extension::apply_qr_gauge;
+use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
 
 use super::linalg;
 
@@ -417,6 +419,41 @@ impl LinalgBackend for CpuExecSession<'_> {
             context.with_materialized_tensor_read(buffers, "qr", input, |input, buffers| {
                 qr_entered(provider, context, buffers, input)
             })
+        })
+    }
+
+    fn rank_revealing_qr(
+        &mut self,
+        input: &Tensor,
+        options: crate::RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
+        ensure_host_tensor("rank_revealing_qr", input)?;
+        ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
+        let provider = linalg_provider_kind(self.kind(), "rank_revealing_qr")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            rank_revealing_qr_entered(provider, context, buffers, input, options)
+        })
+    }
+
+    fn rank_revealing_qr_read(
+        &mut self,
+        input: TensorRead<'_>,
+        options: crate::RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
+        ensure_host_tensor_read("rank_revealing_qr", &input)?;
+        ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
+        let provider = linalg_provider_kind(self.kind(), "rank_revealing_qr")?;
+        self.with_linalg_pool_fresh(move |context, buffers| {
+            context.with_materialized_tensor_read(
+                buffers,
+                "rank_revealing_qr",
+                input,
+                |input, buffers| {
+                    rank_revealing_qr_entered(provider, context, buffers, input, options)
+                },
+            )
         })
     }
 
@@ -1790,6 +1827,92 @@ fn qr_entered(
             }
         }
     }
+}
+
+fn rank_revealing_qr_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+    options: crate::RankRevealingQrOptions,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    macro_rules! map_result {
+        ($result:expr, $variant:ident) => {{
+            $result.map(|result| {
+                vec![
+                    Tensor::$variant(result.q),
+                    Tensor::$variant(result.r),
+                    Tensor::I64(result.column_permutation),
+                    Tensor::I64(result.rank),
+                ]
+            })
+        }};
+    }
+    let mut outputs = match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                match input {
+                    Tensor::F32(t) => map_result!(
+                        linalg::faer::rank_revealing_qr(context, buffers, t, options),
+                        F32
+                    ),
+                    Tensor::F64(t) => map_result!(
+                        linalg::faer::rank_revealing_qr(context, buffers, t, options),
+                        F64
+                    ),
+                    Tensor::C32(t) => map_result!(
+                        linalg::faer::rank_revealing_qr(context, buffers, t, options),
+                        C32
+                    ),
+                    Tensor::C64(t) => map_result!(
+                        linalg::faer::rank_revealing_qr(context, buffers, t, options),
+                        C64
+                    ),
+                    _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, input, options);
+                Err(unsupported_provider(
+                    "rank_revealing_qr",
+                    CpuBackendKind::Faer,
+                ))
+            }
+        }
+        CpuLinalgProvider::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                match input {
+                    Tensor::F32(t) => {
+                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), F32)
+                    }
+                    Tensor::F64(t) => {
+                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), F64)
+                    }
+                    Tensor::C32(t) => {
+                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), C32)
+                    }
+                    Tensor::C64(t) => {
+                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), C64)
+                    }
+                    _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, input, options);
+                Err(unsupported_provider(
+                    "rank_revealing_qr",
+                    CpuBackendKind::Blas,
+                ))
+            }
+        }
+    }?;
+    apply_qr_gauge(options.gauge, &mut outputs[..2])?;
+    Ok(outputs)
 }
 
 fn householder_qr_entered(

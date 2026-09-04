@@ -19,7 +19,7 @@ pub(crate) use lu::{lu, lu_factor};
 pub(crate) use qr::{
     append_2d as householder_qr_append, compact_factor_2d as householder_qr,
     from_factors_2d as householder_qr_from_factors, q_columns_2d as householder_qr_q_columns, qr,
-    raw_r_2d as householder_qr_r,
+    rank_revealing_qr, raw_r_2d as householder_qr_r,
 };
 pub(crate) use solve::{solve, solve_from_views, solve_into};
 pub(crate) use svd::{svd, svd_values};

@@ -20,7 +20,7 @@ use tenferro_tensor::{
 use crate::extension::{
     apply_eigh_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions, QrOptions, SvdOptions,
 };
-use crate::LinalgBackend;
+use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
 
 /// Scalar types supported by statically typed linear algebra methods.
 ///
@@ -70,6 +70,24 @@ pub type TypedSvd<T> = (
     TypedTensor<<T as TensorScalar>::Real>,
     TypedTensor<T>,
 );
+/// Fixed typed output for rank-revealing QR.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{RankRevealingQrResult, TypedRankRevealingQrResult};
+/// use tenferro_tensor::TypedTensor;
+///
+/// let result: TypedRankRevealingQrResult<f64> = RankRevealingQrResult {
+///     q: TypedTensor::from_vec_col_major(vec![1, 1], vec![1.0])?,
+///     r: TypedTensor::from_vec_col_major(vec![1, 1], vec![2.0])?,
+///     column_permutation: TypedTensor::from_vec_col_major(vec![1], vec![0_i64])?,
+///     rank: TypedTensor::from_vec_col_major(vec![], vec![1_i64])?,
+/// };
+/// assert_eq!(result.rank.as_slice()?, &[1]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub type TypedRankRevealingQrResult<T> = RankRevealingQrResult<TypedTensor<T>, TypedTensor<i64>>;
 /// Fixed typed output tuple for LU decomposition.
 ///
 /// # Examples
@@ -247,6 +265,33 @@ pub trait TensorLinalgExt {
         options: QrOptions,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// Compute column-pivoted rank-revealing QR with fixed-shape tensor metadata.
+    ///
+    /// # Errors
+    /// Returns validation errors for rank, dtype, or invalid tolerances;
+    /// numerical failure for non-finite input or diagonal values; and explicit
+    /// unsupported/backend errors when the selected provider cannot execute RRQR.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{RankRevealingQrOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+    /// # let mut host = CpuBackend::new();
+    /// let result = host.with_backend_session(|session| {
+    ///     a.rank_revealing_qr(RankRevealingQrOptions::default().rtol(1e-12), session)
+    /// })?;
+    /// assert_eq!(result.column_permutation.shape(), &[2]);
+    /// assert_eq!(result.rank.shape(), &[]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn rank_revealing_qr(
+        &self,
+        options: RankRevealingQrOptions,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<RankRevealingQrResult<Tensor>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, unsupported-backend, numerical, or output-contract errors.
@@ -697,6 +742,32 @@ pub trait TensorReadLinalgExt {
         options: QrOptions,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// Compute rank-revealing QR from a borrowed tensor read.
+    ///
+    /// # Errors
+    /// Returns validation, same-placement materialization, numerical, backend,
+    /// or explicit unsupported errors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{RankRevealingQrOptions, TensorReadLinalgExt};
+    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+    /// # let mut host = CpuBackend::new();
+    /// let result = host.with_backend_session(|session| {
+    ///     TensorRead::from_tensor(&a).rank_revealing_qr_read(
+    ///         RankRevealingQrOptions::default(), session)
+    /// })?;
+    /// assert_eq!(result.rank.as_slice::<i64>()?, &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn rank_revealing_qr_read(
+        self,
+        options: RankRevealingQrOptions,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<RankRevealingQrResult<Tensor>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, same-placement materialization, backend, numerical, or contract errors.
@@ -1208,6 +1279,31 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
         options: QrOptions,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)>;
+    /// Compute typed rank-revealing QR with `i64` permutation and rank tensors.
+    ///
+    /// # Errors
+    /// Returns validation, numerical, backend, unsupported, or typed-output
+    /// contract errors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{RankRevealingQrOptions, TypedTensorLinalgExt};
+    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
+    /// # let mut host = CpuBackend::new();
+    /// let result = host.with_backend_session(|session| {
+    ///     a.rank_revealing_qr(RankRevealingQrOptions::default(), session)
+    /// })?;
+    /// assert_eq!(result.rank.as_slice()?, &[2_i64]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn rank_revealing_qr(
+        &self,
+        options: RankRevealingQrOptions,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<TypedRankRevealingQrResult<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
@@ -1580,6 +1676,15 @@ impl TensorLinalgExt for Tensor {
             two(backend.qr_with_options(self, options)?, "qr_with_options")
         })
     }
+    fn rank_revealing_qr(
+        &self,
+        options: RankRevealingQrOptions,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<RankRevealingQrResult<Tensor>> {
+        with_linalg_backend(session, "rank_revealing_qr", |backend| {
+            rank_revealing_qr_result(backend.rank_revealing_qr(self, options)?)
+        })
+    }
     fn lu(
         &self,
         session: &mut dyn BackendSession,
@@ -1736,6 +1841,15 @@ impl TensorReadLinalgExt for TensorRead<'_> {
                 backend.qr_with_options_read(self, options)?,
                 "qr_with_options_read",
             )
+        })
+    }
+    fn rank_revealing_qr_read(
+        self,
+        options: RankRevealingQrOptions,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<RankRevealingQrResult<Tensor>> {
+        with_linalg_backend(session, "rank_revealing_qr_read", |backend| {
+            rank_revealing_qr_result(backend.rank_revealing_qr_read(self, options)?)
         })
     }
     fn lu_read(
@@ -1961,6 +2075,22 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
         })
     }
 
+    fn rank_revealing_qr(
+        &self,
+        options: RankRevealingQrOptions,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<TypedRankRevealingQrResult<T>> {
+        with_linalg_backend(session, "rank_revealing_qr", |backend| {
+            let result = T::tensor_read(self).rank_revealing_qr_read(options, backend)?;
+            Ok(RankRevealingQrResult {
+                q: typed_output::<T>(result.q)?,
+                r: typed_output::<T>(result.r)?,
+                column_permutation: typed_output::<i64>(result.column_permutation)?,
+                rank: typed_output::<i64>(result.rank)?,
+            })
+        })
+    }
+
     fn lu(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedLu<T>> {
         with_linalg_backend(session, "lu", |backend| {
             let (p, l, u, parity) = T::tensor_read(self).lu_read(backend)?;
@@ -2142,6 +2272,18 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
             )
         })
     }
+}
+
+fn rank_revealing_qr_result(
+    outputs: Vec<Tensor>,
+) -> tenferro_tensor::Result<RankRevealingQrResult<Tensor>> {
+    let (q, r, column_permutation, rank) = four(outputs, "rank_revealing_qr")?;
+    Ok(RankRevealingQrResult {
+        q,
+        r,
+        column_permutation,
+        rank,
+    })
 }
 
 fn typed_svd<T: LinalgScalar>(

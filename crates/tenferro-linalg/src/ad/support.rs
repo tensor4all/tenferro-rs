@@ -104,10 +104,11 @@ pub enum LinalgAdOpKind {
     HouseholderQrThinQ,
     HouseholderQrAppendTangent,
     HouseholderQrSplitTangent,
+    RankRevealingQr,
 }
 
 impl LinalgAdOpKind {
-    pub const COUNT: usize = 25;
+    pub const COUNT: usize = 26;
 
     /// Return the manifest index for this operation kind.
     ///
@@ -145,6 +146,7 @@ impl LinalgAdOpKind {
             Self::HouseholderQrThinQ => 22,
             Self::HouseholderQrAppendTangent => 23,
             Self::HouseholderQrSplitTangent => 24,
+            Self::RankRevealingQr => 25,
         }
     }
 
@@ -167,6 +169,7 @@ impl LinalgAdOpKind {
             LinalgOp::SvdFull => Self::SvdFull,
             LinalgOp::SvdVals { .. } => Self::SvdVals,
             LinalgOp::Qr { .. } => Self::Qr,
+            LinalgOp::RankRevealingQr { .. } => Self::RankRevealingQr,
             LinalgOp::HouseholderQrFactor => Self::HouseholderQrFactor,
             LinalgOp::HouseholderQrFromFactors => Self::HouseholderQrFromFactors,
             LinalgOp::HouseholderQrAppend => Self::HouseholderQrAppend,
@@ -354,6 +357,12 @@ static SVD_FULL_OUTPUTS: [LinalgAdOutputSupport; 3] = [
 static QR_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "q", LinalgAdRuleSupport::SupportedViaLinearize),
     output(1, "r", LinalgAdRuleSupport::SupportedViaLinearize),
+];
+static RANK_REVEALING_QR_OUTPUTS: [LinalgAdOutputSupport; 4] = [
+    output(0, "q", LinalgAdRuleSupport::Unsupported),
+    output(1, "r", LinalgAdRuleSupport::Unsupported),
+    output(2, "column_permutation", LinalgAdRuleSupport::Unsupported),
+    output(3, "rank", LinalgAdRuleSupport::Unsupported),
 ];
 static HOUSEHOLDER_QR_STATE_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "packed", LinalgAdRuleSupport::SupportedViaLinearize),
@@ -686,6 +695,15 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
         LinalgAdRuleSupport::Unsupported,
         &HOUSEHOLDER_QR_RESIDUAL_OUTPUTS,
         &["Internal transpose residual; no public differentiable surface."],
+    ),
+    support_entry(
+        LinalgAdOpKind::RankRevealingQr,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &RANK_REVEALING_QR_OUTPUTS,
+        &["Pivot selection and numerical rank are discontinuous; all outputs are initially unsupported for AD."],
     ),
 ];
 

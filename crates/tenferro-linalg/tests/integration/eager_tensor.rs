@@ -9,8 +9,8 @@ use tenferro_gpu::{
     cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend,
 };
 use tenferro_linalg::{
-    EagerTensorLinalgExt, EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, SvdGauge,
-    SvdOptions,
+    EagerTensorLinalgExt, EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions,
+    RankRevealingQrOptions, SvdGauge, SvdOptions,
 };
 
 fn test_ctx() -> Arc<EagerRuntime> {
@@ -26,6 +26,27 @@ fn ad_test_ctx() -> Arc<EagerRuntime> {
         .build()
         .unwrap();
     EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap()
+}
+
+#[test]
+fn eager_rank_revealing_qr_keeps_metadata_in_runtime() {
+    let runtime = test_ctx();
+    let input = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 1.0, 2.0, 3.0]).unwrap(),
+        Arc::clone(&runtime),
+    )
+    .unwrap();
+    let result = input
+        .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12))
+        .unwrap();
+    assert!(Arc::ptr_eq(result.q.runtime(), &runtime));
+    assert!(Arc::ptr_eq(result.r.runtime(), &runtime));
+    assert!(Arc::ptr_eq(result.column_permutation.runtime(), &runtime));
+    assert!(Arc::ptr_eq(result.rank.runtime(), &runtime));
+    assert_eq!(
+        result.rank.to_tensor().unwrap().as_slice::<i64>().unwrap(),
+        &[1]
+    );
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {

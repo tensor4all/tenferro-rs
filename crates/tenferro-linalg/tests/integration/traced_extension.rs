@@ -1,8 +1,8 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{
-    EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, SvdGauge, SvdOptions,
-    TracedTensorLinalgExt,
+    EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions, SvdGauge,
+    SvdOptions, TracedTensorLinalgExt,
 };
 use tenferro_runtime::{DType, Error, GraphCompiler, Runtime, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::Error as TensorError;
@@ -37,6 +37,37 @@ fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
         ),
     };
     TracedTensor::from_tensor_concrete_shape(tensor).unwrap()
+}
+
+#[test]
+fn rank_revealing_qr_traced_fixed_outputs_execute() {
+    let a = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(
+            vec![3, 3],
+            vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let result = a
+        .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12))
+        .unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_many(&[
+            &result.q,
+            &result.r,
+            &result.column_permutation,
+            &result.rank,
+        ])
+        .unwrap();
+    let outputs = support::run_all(&program, &[]).unwrap();
+    assert_eq!(outputs.len(), 4);
+    assert_eq!(outputs[0].shape(), &[3, 3]);
+    assert_eq!(outputs[1].shape(), &[3, 3]);
+    assert_eq!(outputs[2].shape(), &[3]);
+    assert_eq!(outputs[3].shape(), &[] as &[usize]);
+    assert_eq!(outputs[3].as_slice::<i64>().unwrap(), &[2]);
 }
 
 #[test]

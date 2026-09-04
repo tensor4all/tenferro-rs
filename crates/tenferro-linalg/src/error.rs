@@ -60,6 +60,14 @@ pub enum Error {
         /// Linalg operation that failed to converge.
         op: &'static str,
     },
+    /// The input or a required computed quantity was non-finite.
+    #[error("{op} encountered non-finite {role}")]
+    NonFinite {
+        /// Linalg operation that encountered the non-finite value.
+        op: &'static str,
+        /// Input or computed quantity that was non-finite.
+        role: &'static str,
+    },
     /// The input matrix or factorization became singular.
     #[error("{op} is singular")]
     Singular {
@@ -93,7 +101,9 @@ impl Error {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::NonConvergence { .. } | Self::Singular { .. } => ErrorKind::NumericalFailure,
+            Self::NonConvergence { .. } | Self::NonFinite { .. } | Self::Singular { .. } => {
+                ErrorKind::NumericalFailure
+            }
             Self::UnsupportedDType { .. } => ErrorKind::Unsupported,
         }
     }

@@ -9,7 +9,9 @@ use tenferro_runtime::{
 use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
+use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
 use crate::validation::{ensure_float_or_complex, validate_lstsq};
+use crate::{RankRevealingQrOptions, RankRevealingQrResult};
 
 /// Linear algebra extension methods for [`TracedTensor`].
 pub trait TracedTensorLinalgExt {
@@ -114,6 +116,33 @@ pub trait TracedTensorLinalgExt {
     /// Symbolic shape checks and backend QR failures can be deferred to compile
     /// or execution.
     fn qr_with_options(&self, options: QrOptions) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build fixed-arity traced column-pivoted rank-revealing QR.
+    ///
+    /// # Errors
+    /// Returns graph-build validation errors for rank, dtype, or invalid
+    /// tolerances, and extension registration failures.
+    ///
+    /// # Deferred errors
+    /// Symbolic shape checks, non-finite numerical failures, and unsupported
+    /// backend execution are reported during compile or execution.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::{RankRevealingQrOptions, TracedTensorLinalgExt};
+    /// use tenferro_runtime::TracedTensor;
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0])?;
+    /// let result = a.rank_revealing_qr(RankRevealingQrOptions::default())?;
+    /// assert_eq!(result.q.rank, 2);
+    /// assert_eq!(result.column_permutation.rank, 1);
+    /// assert_eq!(result.rank.rank, 0);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn rank_revealing_qr(
+        &self,
+        options: RankRevealingQrOptions,
+    ) -> Result<RankRevealingQrResult<TracedTensor>>;
 
     /// Build a traced Hermitian eigendecomposition operation.
     ///
@@ -394,6 +423,13 @@ impl TracedTensorLinalgExt for TracedTensor {
 
     fn qr_with_options(&self, options: QrOptions) -> Result<(TracedTensor, TracedTensor)> {
         qr_with_options(self, options)
+    }
+
+    fn rank_revealing_qr(
+        &self,
+        options: RankRevealingQrOptions,
+    ) -> Result<RankRevealingQrResult<TracedTensor>> {
+        rank_revealing_qr(self, options)
     }
 
     fn eigh(&self) -> Result<(TracedTensor, TracedTensor)> {
@@ -700,6 +736,52 @@ pub fn qr_with_options(
         )?,
         "qr",
     )
+}
+
+/// Build a traced column-pivoted rank-revealing QR operation.
+///
+/// # Errors
+/// Returns graph-build validation errors for invalid rank, dtype, or
+/// tolerances, plus extension registration failures.
+///
+/// # Deferred errors
+/// Symbolic shape checks, non-finite numerical failures, and unsupported
+/// backend execution are reported during compile or execution.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{RankRevealingQrOptions, TracedTensorLinalgExt};
+/// use tenferro_runtime::TracedTensor;
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+/// let result = a.rank_revealing_qr(RankRevealingQrOptions::default())?;
+/// assert_eq!(result.column_permutation.rank, 1);
+/// assert_eq!(result.rank.rank, 0);
+/// # Ok::<(), tenferro_runtime::Error>(())
+/// ```
+pub fn rank_revealing_qr(
+    a: &TracedTensor,
+    options: RankRevealingQrOptions,
+) -> Result<RankRevealingQrResult<TracedTensor>> {
+    validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
+    ensure_float_or_complex("rank_revealing_qr", a.dtype)?;
+    let (q, r, column_permutation, rank) = four_outputs(
+        apply(
+            Arc::new(LinalgExtensionOp::new(LinalgOp::RankRevealingQr {
+                gauge: options.gauge,
+                rtol: options.rtol,
+                atol: options.atol,
+            })),
+            &[a],
+        )?,
+        "rank_revealing_qr",
+    )?;
+    Ok(RankRevealingQrResult {
+        q,
+        r,
+        column_permutation,
+        rank,
+    })
 }
 
 /// Build a traced Hermitian eigenvalue decomposition op using default options.
