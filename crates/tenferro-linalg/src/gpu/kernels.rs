@@ -1,3 +1,7 @@
+#[path = "kernels/rank_revealing_qr.rs"]
+mod rank_revealing_qr;
+pub(super) use rank_revealing_qr::*;
+
 use cubecl::prelude::*;
 use num_complex::{Complex32, Complex64};
 

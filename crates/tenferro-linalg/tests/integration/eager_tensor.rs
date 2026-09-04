@@ -1205,10 +1205,17 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
     let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
 
     let (q, r) = input.qr().unwrap();
+    let rrqr = input
+        .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12))
+        .unwrap();
     let (u, s, vt) = input.svd().unwrap();
-    for output in [&q, &r, &u, &s, &vt] {
+    for output in [&q, &r, &rrqr.q, &rrqr.r, &u, &s, &vt] {
         assert_eq!(output.runtime().id(), runtime.id());
         assert!(output.to_tensor().unwrap().as_slice::<f64>().is_err());
+    }
+    for output in [&rrqr.column_permutation, &rrqr.rank] {
+        assert_eq!(output.runtime().id(), runtime.id());
+        assert!(output.to_tensor().unwrap().as_slice::<i64>().is_err());
     }
 
     let download = |output: &EagerTensor| {
@@ -1216,6 +1223,7 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
     };
     let q = download(&q);
     let r = download(&r);
+    assert_eq!(download(&rrqr.rank).as_slice::<i64>().unwrap(), &[2]);
     let u = download(&u);
     let s = download(&s);
     let vt = download(&vt);
