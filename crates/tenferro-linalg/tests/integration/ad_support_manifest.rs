@@ -41,6 +41,7 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         LinalgAdOpKind::HouseholderQrThinQ,
         LinalgAdOpKind::HouseholderQrAppendTangent,
         LinalgAdOpKind::HouseholderQrSplitTangent,
+        LinalgAdOpKind::RankRevealingQr,
     ];
 
     let manifest = all_linalg_ad_support();
@@ -54,6 +55,16 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         for (output_index, output) in entry.outputs.iter().enumerate() {
             assert_eq!(output.index, output_index);
         }
+    }
+}
+
+#[test]
+fn rank_revealing_qr_is_explicitly_unsupported_for_ad() {
+    let entry = linalg_ad_support(LinalgAdOpKind::RankRevealingQr);
+    assert_eq!(entry.jvp.status, LinalgAdRuleSupport::Unsupported);
+    assert_eq!(entry.vjp.status, LinalgAdRuleSupport::Unsupported);
+    for output in entry.outputs {
+        assert_eq!(output.status, LinalgAdRuleSupport::Unsupported);
     }
 }
 

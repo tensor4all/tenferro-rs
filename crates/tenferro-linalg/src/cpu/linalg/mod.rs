@@ -5,6 +5,8 @@ pub mod faer_linalg;
 #[cfg_attr(feature = "cpu-faer", allow(dead_code, unused_imports))]
 pub mod lapack_linalg;
 
+mod rank_revealing_qr;
+
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
 use tenferro_tensor::{TypedTensor, TypedTensorView};
 

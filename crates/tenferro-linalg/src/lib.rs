@@ -52,6 +52,7 @@ mod extension;
 mod gpu;
 mod householder;
 pub mod prelude;
+mod rank_revealing_qr;
 mod tensor_ext;
 mod traced;
 mod validation;
@@ -72,8 +73,9 @@ pub use extension::{
     DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
 };
 pub use householder::HouseholderQr;
+pub use rank_revealing_qr::{RankRevealingQrOptions, RankRevealingQrResult};
 pub use tensor_ext::{
     LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu,
-    TypedSvd, TypedTensorLinalgExt,
+    TypedRankRevealingQrResult, TypedSvd, TypedTensorLinalgExt,
 };
 pub use traced::TracedTensorLinalgExt;

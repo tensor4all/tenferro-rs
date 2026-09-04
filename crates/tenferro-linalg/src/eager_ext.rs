@@ -17,6 +17,8 @@ use crate::extension::{
     extension_module, validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions,
     SvdOptions,
 };
+use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
+use crate::{RankRevealingQrOptions, RankRevealingQrResult};
 
 /// Linear algebra extension methods for [`EagerTensor`].
 pub trait EagerTensorLinalgExt {
@@ -190,6 +192,31 @@ pub trait EagerTensorLinalgExt {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     fn qr_with_options(&self, options: QrOptions) -> Result<(EagerTensor, EagerTensor)>;
+    /// Compute column-pivoted rank-revealing QR with four tensor outputs.
+    ///
+    /// # Errors
+    /// Returns validation errors for rank, dtype, or invalid tolerances;
+    /// numerical failure for non-finite values; and explicit unsupported,
+    /// backend, runtime, or output-contract errors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{EagerTensorLinalgExt, RankRevealingQrOptions};
+    /// # let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?, runtime)?;
+    /// let result = a.rank_revealing_qr(RankRevealingQrOptions::default())?;
+    /// assert_eq!(result.column_permutation.shape(), &[2]);
+    /// assert_eq!(result.rank.value()?.as_slice::<i64>()?, &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    fn rank_revealing_qr(
+        &self,
+        options: RankRevealingQrOptions,
+    ) -> Result<RankRevealingQrResult<EagerTensor>>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for an invalid matrix rank or shape,
@@ -665,6 +692,13 @@ impl EagerTensorLinalgExt for EagerTensor {
         qr_with_options(self, options)
     }
 
+    fn rank_revealing_qr(
+        &self,
+        options: RankRevealingQrOptions,
+    ) -> Result<RankRevealingQrResult<EagerTensor>> {
+        rank_revealing_qr(self, options)
+    }
+
     fn lu(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)> {
         lu(self)
     }
@@ -1027,6 +1061,61 @@ pub fn qr_with_options(a: &EagerTensor, options: QrOptions) -> Result<(EagerTens
         )?,
         "qr",
     )
+}
+
+/// Column-pivoted rank-revealing QR for eager tensors.
+///
+/// # Errors
+/// Returns validation errors for invalid rank, dtype, or tolerances; numerical
+/// failure for non-finite values; and explicit unsupported, backend, runtime,
+/// or output-contract errors.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// # use tenferro_linalg::{EagerTensorLinalgExt, RankRevealingQrOptions};
+/// # let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// # let a = EagerTensor::from_tensor_in(
+/// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?, runtime)?;
+/// let result = a.rank_revealing_qr(RankRevealingQrOptions::default())?;
+/// assert_eq!(result.rank.shape(), &[]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+pub fn rank_revealing_qr(
+    a: &EagerTensor,
+    options: RankRevealingQrOptions,
+) -> Result<RankRevealingQrResult<EagerTensor>> {
+    validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
+    let mut outputs = apply_linalg_eager(
+        LinalgOp::RankRevealingQr {
+            gauge: options.gauge,
+            rtol: options.rtol,
+            atol: options.atol,
+        },
+        &[a],
+    )?
+    .into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(q), Some(r), Some(column_permutation), Some(rank), None) => {
+            Ok(RankRevealingQrResult {
+                q,
+                r,
+                column_permutation,
+                rank,
+            })
+        }
+        _ => Err(Error::Internal(
+            "rank_revealing_qr eager op returned an unexpected number of outputs".into(),
+        )),
+    }
 }
 
 /// LU factorization for eager tensors.

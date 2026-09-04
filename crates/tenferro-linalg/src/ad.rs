@@ -126,6 +126,10 @@ impl LinalgAdRule {
             LinalgOp::Qr { .. } => {
                 rules::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx)
             }
+            LinalgOp::RankRevealingQr { .. } => Err(ADRuleError::unsupported(
+                "tenferro-linalg.rank_revealing_qr",
+                ADRuleKind::Jvp,
+            )),
             LinalgOp::Eigh { derivative_eps, .. } => rules::linearize_eigh(
                 builder,
                 primal_in,
@@ -265,6 +269,10 @@ impl LinalgAdRule {
             }
             LinalgOp::HouseholderQrThinQ { .. } => Err(ADRuleError::unsupported(
                 "tenferro-linalg.householder_qr_thin_q",
+                ADRuleKind::Transpose,
+            )),
+            LinalgOp::RankRevealingQr { .. } => Err(ADRuleError::unsupported(
+                "tenferro-linalg.rank_revealing_qr",
                 ADRuleKind::Transpose,
             )),
             LinalgOp::Cholesky

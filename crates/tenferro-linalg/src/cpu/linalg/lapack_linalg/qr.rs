@@ -877,6 +877,302 @@ impl_complex_qr!(
     "zunmqr"
 );
 
+pub(crate) trait LapackRankRevealingQr: LapackQr {
+    fn is_finite(self) -> bool;
+    fn magnitude(self) -> f64;
+    fn geqp3(
+        buffers: &mut BufferPool,
+        data: &mut [Self],
+        rows: usize,
+        cols: usize,
+        permutation: &mut [i32],
+        tau: &mut [Self],
+    ) -> tenferro_tensor::Result<()>;
+    fn generate_q(
+        buffers: &mut BufferPool,
+        q: &mut [Self],
+        rows: usize,
+        cols: usize,
+        tau: &[Self],
+    ) -> tenferro_tensor::Result<()>;
+}
+
+macro_rules! impl_real_rank_revealing_qr {
+    ($scalar:ty, $geqp3:path, $orgqr:path, $geqp3_name:literal, $orgqr_name:literal) => {
+        impl LapackRankRevealingQr for $scalar {
+            fn is_finite(self) -> bool {
+                self.is_finite()
+            }
+
+            fn magnitude(self) -> f64 {
+                self.abs() as f64
+            }
+
+            fn geqp3(
+                buffers: &mut BufferPool,
+                data: &mut [Self],
+                rows: usize,
+                cols: usize,
+                permutation: &mut [i32],
+                tau: &mut [Self],
+            ) -> tenferro_tensor::Result<()> {
+                let m = dim_i32(rows, "rank_revealing_qr")?;
+                let n = dim_i32(cols, "rank_revealing_qr")?;
+                let mut query = [0.0 as $scalar];
+                let mut info = 0;
+                // SAFETY: all matrix, pivot, tau, and query lengths follow the
+                // checked LAPACK dimensions; lwork=-1 writes only query[0].
+                unsafe {
+                    $geqp3(m, n, data, m, permutation, tau, &mut query, -1, &mut info);
+                }
+                check_lapack_info(
+                    "rank_revealing_qr",
+                    concat!($geqp3_name, "(work query)"),
+                    info,
+                )?;
+                let lwork = work_len(query[0] as f64, "rank_revealing_qr", $geqp3_name)?;
+                let mut work = buffers.acquire_zeroed::<$scalar>(lwork as usize);
+                // SAFETY: dimensions and workspace were validated by the
+                // successful query; all mutable buffers are live and disjoint.
+                unsafe {
+                    $geqp3(m, n, data, m, permutation, tau, &mut work, lwork, &mut info);
+                }
+                <$scalar as PoolScalar>::pool_release(buffers, work);
+                check_lapack_info("rank_revealing_qr", $geqp3_name, info)
+            }
+
+            fn generate_q(
+                buffers: &mut BufferPool,
+                q: &mut [Self],
+                rows: usize,
+                cols: usize,
+                tau: &[Self],
+            ) -> tenferro_tensor::Result<()> {
+                let m = dim_i32(rows, "rank_revealing_qr")?;
+                let k = dim_i32(cols, "rank_revealing_qr")?;
+                let mut query = [0.0 as $scalar];
+                let mut info = 0;
+                // SAFETY: q is checked m-by-k column-major storage, tau has k
+                // entries, and lwork=-1 writes only query[0].
+                unsafe { $orgqr(m, k, k, q, m, tau, &mut query, -1, &mut info) };
+                check_lapack_info(
+                    "rank_revealing_qr",
+                    concat!($orgqr_name, "(work query)"),
+                    info,
+                )?;
+                let lwork = work_len(query[0] as f64, "rank_revealing_qr", $orgqr_name)?;
+                let mut work = buffers.acquire_zeroed::<$scalar>(lwork as usize);
+                // SAFETY: the successful query validated the dimensions and
+                // workspace; q, tau, work, and info remain live and disjoint.
+                unsafe { $orgqr(m, k, k, q, m, tau, &mut work, lwork, &mut info) };
+                <$scalar as PoolScalar>::pool_release(buffers, work);
+                check_lapack_info("rank_revealing_qr", $orgqr_name, info)
+            }
+        }
+    };
+}
+
+macro_rules! impl_complex_rank_revealing_qr {
+    ($complex:ty, $real:ty, $geqp3:path, $ungqr:path, $geqp3_name:literal, $ungqr_name:literal) => {
+        impl LapackRankRevealingQr for $complex {
+            fn is_finite(self) -> bool {
+                self.re.is_finite() && self.im.is_finite()
+            }
+
+            fn magnitude(self) -> f64 {
+                self.norm() as f64
+            }
+
+            fn geqp3(
+                buffers: &mut BufferPool,
+                data: &mut [Self],
+                rows: usize,
+                cols: usize,
+                permutation: &mut [i32],
+                tau: &mut [Self],
+            ) -> tenferro_tensor::Result<()> {
+                let m = dim_i32(rows, "rank_revealing_qr")?;
+                let n = dim_i32(cols, "rank_revealing_qr")?;
+                let rwork_len =
+                    checked_product("rank_revealing_qr", "GEQP3 real workspace", &[2, cols])?;
+                let mut rwork = buffers.acquire_zeroed::<$real>(rwork_len);
+                let mut query = [<$complex>::new(0.0, 0.0)];
+                let mut info = 0;
+                // SAFETY: all matrix, pivot, tau, real-work, and query lengths
+                // follow checked LAPACK dimensions; lwork=-1 writes query[0].
+                unsafe {
+                    $geqp3(
+                        m,
+                        n,
+                        data,
+                        m,
+                        permutation,
+                        tau,
+                        &mut query,
+                        -1,
+                        &mut rwork,
+                        &mut info,
+                    );
+                }
+                check_lapack_info(
+                    "rank_revealing_qr",
+                    concat!($geqp3_name, "(work query)"),
+                    info,
+                )?;
+                let lwork = work_len(query[0].re as f64, "rank_revealing_qr", $geqp3_name)?;
+                let mut work = buffers.acquire_zeroed::<$complex>(lwork as usize);
+                // SAFETY: dimensions and workspace were validated by the
+                // successful query; all mutable buffers are live and disjoint.
+                unsafe {
+                    $geqp3(
+                        m,
+                        n,
+                        data,
+                        m,
+                        permutation,
+                        tau,
+                        &mut work,
+                        lwork,
+                        &mut rwork,
+                        &mut info,
+                    );
+                }
+                <$complex as PoolScalar>::pool_release(buffers, work);
+                <$real as PoolScalar>::pool_release(buffers, rwork);
+                check_lapack_info("rank_revealing_qr", $geqp3_name, info)
+            }
+
+            fn generate_q(
+                buffers: &mut BufferPool,
+                q: &mut [Self],
+                rows: usize,
+                cols: usize,
+                tau: &[Self],
+            ) -> tenferro_tensor::Result<()> {
+                let m = dim_i32(rows, "rank_revealing_qr")?;
+                let k = dim_i32(cols, "rank_revealing_qr")?;
+                let mut query = [<$complex>::new(0.0, 0.0)];
+                let mut info = 0;
+                // SAFETY: q is checked m-by-k column-major storage, tau has k
+                // entries, and lwork=-1 writes only query[0].
+                unsafe { $ungqr(m, k, k, q, m, tau, &mut query, -1, &mut info) };
+                check_lapack_info(
+                    "rank_revealing_qr",
+                    concat!($ungqr_name, "(work query)"),
+                    info,
+                )?;
+                let lwork = work_len(query[0].re as f64, "rank_revealing_qr", $ungqr_name)?;
+                let mut work = buffers.acquire_zeroed::<$complex>(lwork as usize);
+                // SAFETY: the successful query validated the dimensions and
+                // workspace; q, tau, work, and info remain live and disjoint.
+                unsafe { $ungqr(m, k, k, q, m, tau, &mut work, lwork, &mut info) };
+                <$complex as PoolScalar>::pool_release(buffers, work);
+                check_lapack_info("rank_revealing_qr", $ungqr_name, info)
+            }
+        }
+    };
+}
+
+impl_real_rank_revealing_qr!(f32, lapack::sgeqp3, lapack::sorgqr, "sgeqp3", "sorgqr");
+impl_real_rank_revealing_qr!(f64, lapack::dgeqp3, lapack::dorgqr, "dgeqp3", "dorgqr");
+impl_complex_rank_revealing_qr!(
+    Complex32,
+    f32,
+    lapack::cgeqp3,
+    lapack::cungqr,
+    "cgeqp3",
+    "cungqr"
+);
+impl_complex_rank_revealing_qr!(
+    Complex64,
+    f64,
+    lapack::zgeqp3,
+    lapack::zungqr,
+    "zgeqp3",
+    "zungqr"
+);
+
+fn normalize_lapack_permutation(permutation: &[i32]) -> tenferro_tensor::Result<Vec<i64>> {
+    let n = permutation.len();
+    let mut seen = vec![false; n];
+    let mut normalized = Vec::with_capacity(n);
+    for &column in permutation {
+        let zero_based = column
+            .checked_sub(1)
+            .and_then(|value| usize::try_from(value).ok());
+        let Some(zero_based) = zero_based.filter(|&value| value < n && !seen[value]) else {
+            return Err(tenferro_tensor::Error::invalid_argument(
+                "rank_revealing_qr",
+                "column_permutation",
+                "LAPACK GEQP3 returned an invalid pivot permutation",
+            ));
+        };
+        seen[zero_based] = true;
+        normalized.push(i64::try_from(zero_based).map_err(|_| {
+            tenferro_tensor::Error::invalid_argument(
+                "rank_revealing_qr",
+                "column_permutation",
+                "column index exceeds i64 range",
+            )
+        })?);
+    }
+    Ok(normalized)
+}
+
+fn rank_revealing_qr_2d<T: LapackRankRevealingQr>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    options: crate::RankRevealingQrOptions,
+) -> tenferro_tensor::Result<crate::cpu::linalg::rank_revealing_qr::TypedRrqr<T>> {
+    let (m, n) = matrix_dims(input, "rank_revealing_qr")?;
+    let k = m.min(n);
+    let input_data = input.host_data()?;
+    if input_data.iter().any(|&value| !value.is_finite()) {
+        return Err(crate::error::into_tensor_error(
+            "rank_revealing_qr",
+            crate::Error::NonFinite {
+                op: "rank_revealing_qr",
+                role: "input",
+            },
+        ));
+    }
+    if input_data.iter().all(|&value| value.magnitude() == 0.0) {
+        return crate::cpu::linalg::rank_revealing_qr::zero_matrix_result(input, T::one());
+    }
+
+    let mut qr = input_data.to_vec();
+    let mut permutation = vec![0_i32; n];
+    let mut tau = vec![T::default(); k];
+    T::geqp3(buffers, &mut qr, m, n, &mut permutation, &mut tau)?;
+    let r = leading_upper_triangle_from_lapack(&qr, m, k, n)?;
+    let rank = crate::cpu::linalg::rank_revealing_qr::prefix_rank(
+        (0..k).map(|index| r[index + index * k].magnitude()),
+        options,
+    )?;
+    let mut q = Vec::with_capacity(checked_product("rank_revealing_qr", "Q matrix", &[m, k])?);
+    for column in 0..k {
+        let start = column.checked_mul(m).ok_or_else(|| {
+            tenferro_tensor::Error::validation(
+                "rank_revealing_qr",
+                tenferro_tensor::ValidationError::IntegerOverflow,
+            )
+        })?;
+        q.extend_from_slice(&qr[start..start + m]);
+    }
+    T::generate_q(buffers, &mut q, m, k, &tau)?;
+
+    Ok(crate::RankRevealingQrResult {
+        q: tensor_from_vec_with_template(vec![m, k], q, input)?,
+        r: tensor_from_vec_with_template(vec![k, n], r, input)?,
+        column_permutation: tensor_from_vec_with_template(
+            vec![n],
+            normalize_lapack_permutation(&permutation)?,
+            input,
+        )?,
+        rank: tensor_from_vec_with_template(vec![], vec![rank], input)?,
+    })
+}
+
 fn qr_2d<T: LapackQr>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -907,6 +1203,17 @@ pub(crate) fn qr<T: LapackQr>(
         ]);
     }
     batched_multi("qr", buffers, input, qr_2d)
+}
+
+pub(crate) fn rank_revealing_qr<T: LapackRankRevealingQr>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    options: crate::RankRevealingQrOptions,
+) -> tenferro_tensor::Result<crate::cpu::linalg::rank_revealing_qr::TypedRrqr<T>> {
+    crate::rank_revealing_qr::validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
+    crate::cpu::linalg::rank_revealing_qr::batched(buffers, input, |buffers, batch| {
+        rank_revealing_qr_2d(buffers, batch, options)
+    })
 }
 
 #[cfg(test)]

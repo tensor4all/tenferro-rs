@@ -15,6 +15,7 @@ use crate::extension::{
     apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions,
     QrOptions, SvdOptions,
 };
+use crate::RankRevealingQrOptions;
 
 /// Backend surface required by the linalg extension runtime.
 ///
@@ -457,6 +458,30 @@ pub trait LinalgBackend: BackendSession {
         let mut outputs = self.qr_read(input)?;
         apply_qr_gauge(options.gauge, &mut outputs)?;
         Ok(outputs)
+    }
+
+    #[doc(hidden)]
+    fn rank_revealing_qr(
+        &mut self,
+        _input: &Tensor,
+        _options: RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::unsupported(
+            "rank_revealing_qr",
+            "backend does not implement rank-revealing QR",
+        ))
+    }
+
+    #[doc(hidden)]
+    fn rank_revealing_qr_read(
+        &mut self,
+        _input: TensorRead<'_>,
+        _options: RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::unsupported(
+            "rank_revealing_qr",
+            "backend does not implement borrowed rank-revealing QR",
+        ))
     }
 
     #[doc(hidden)]

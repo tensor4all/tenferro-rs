@@ -1,8 +1,8 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{
-    EighOptions, LinalgBackend, QrOptions, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
-    TypedTensorLinalgExt,
+    EighOptions, LinalgBackend, QrOptions, RankRevealingQrOptions, SvdOptions, TensorLinalgExt,
+    TensorReadLinalgExt, TypedTensorLinalgExt,
 };
 use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorScalar, TypedTensor};
 
@@ -29,6 +29,132 @@ fn dynamic_and_read_surfaces_return_fixed_tuples() {
         assert_eq!(r.shape(), &[2, 2]);
         assert_eq!(sign.as_slice::<f64>().unwrap(), &[1.0]);
         assert!((logabsdet.as_slice::<f64>().unwrap()[0] - 8.0_f64.ln()).abs() < 1.0e-12);
+    });
+}
+
+#[test]
+fn rank_revealing_qr_handles_interspersed_dependence() {
+    // Columns are a, a, b. A prefix-only non-pivoted rank guard cannot retain
+    // the later independent column, whereas CPQR must report rank two.
+    let input = Tensor::from_vec_col_major(
+        vec![4, 3],
+        vec![
+            1.0_f64, 2.0, 3.0, 4.0, // a
+            1.0, 2.0, 3.0, 4.0, // duplicate a
+            0.0, 1.0, 0.0, 0.0, // independent b
+        ],
+    )
+    .unwrap();
+    let mut host = CpuBackend::new();
+
+    host.with_backend_session(|session| {
+        let result = input
+            .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12), session)
+            .unwrap();
+        assert_eq!(result.q.shape(), &[4, 3]);
+        assert_eq!(result.r.shape(), &[3, 3]);
+        assert_eq!(result.column_permutation.shape(), &[3]);
+        assert_eq!(result.rank.shape(), &[] as &[usize]);
+        assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[2]);
+
+        let permutation = result.column_permutation.as_slice::<i64>().unwrap();
+        let mut sorted = permutation.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![0, 1, 2]);
+
+        let q = result.q.as_slice::<f64>().unwrap();
+        let r = result.r.as_slice::<f64>().unwrap();
+        let source = input.as_slice::<f64>().unwrap();
+        for lhs_col in 0..3 {
+            for rhs_col in 0..3 {
+                let inner = (0..4)
+                    .map(|row| q[row + lhs_col * 4] * q[row + rhs_col * 4])
+                    .sum::<f64>();
+                let expected = if lhs_col == rhs_col { 1.0 } else { 0.0 };
+                assert!((inner - expected).abs() < 1.0e-11);
+            }
+        }
+        for factor_col in 0..3 {
+            let source_col = usize::try_from(permutation[factor_col]).unwrap();
+            for row in 0..4 {
+                let reconstructed = (0..3)
+                    .map(|inner| q[row + inner * 4] * r[inner + factor_col * 3])
+                    .sum::<f64>();
+                assert!((reconstructed - source[row + source_col * 4]).abs() < 1.0e-11);
+            }
+        }
+    });
+}
+
+#[test]
+fn rank_revealing_qr_supports_all_float_and_complex_dtypes() {
+    use num_complex::Complex32;
+
+    let inputs = vec![
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 0.0, 1.0, 0.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 1.0, 0.0]).unwrap(),
+        Tensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex32::new(1.0, 1.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(1.0, 1.0),
+                Complex32::new(0.0, 0.0),
+            ],
+        )
+        .unwrap(),
+        Tensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 1.0),
+                Complex64::new(0.0, 0.0),
+            ],
+        )
+        .unwrap(),
+    ];
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        for input in &inputs {
+            let result = input
+                .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-6), session)
+                .unwrap();
+            assert_eq!(result.q.dtype(), input.dtype());
+            assert_eq!(result.r.dtype(), input.dtype());
+            assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[1]);
+        }
+    });
+}
+
+#[test]
+fn rank_revealing_qr_rejects_invalid_tolerances() {
+    let input = Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).unwrap();
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        for options in [
+            RankRevealingQrOptions::default().rtol(f64::NAN),
+            RankRevealingQrOptions::default().rtol(-1.0),
+            RankRevealingQrOptions::default().atol(f64::INFINITY),
+        ] {
+            assert!(input.rank_revealing_qr(options, session).is_err());
+        }
+    });
+}
+
+#[test]
+fn rank_revealing_qr_zero_and_batched_metadata() {
+    let input = Tensor::from_vec_col_major(vec![2, 2, 2], vec![0.0_f64; 8]).unwrap();
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        let result = input
+            .rank_revealing_qr(RankRevealingQrOptions::default(), session)
+            .unwrap();
+        assert_eq!(result.q.shape(), &[2, 2, 2]);
+        assert_eq!(result.r.shape(), &[2, 2, 2]);
+        assert_eq!(result.column_permutation.shape(), &[2, 2]);
+        assert_eq!(result.rank.shape(), &[2]);
+        assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[0, 0]);
     });
 }
 

@@ -17,6 +17,8 @@ pub(crate) trait FaerLinalg:
     type Real: Copy + Clone + PoolScalar;
 
     fn parity_one() -> Self;
+    fn is_finite(self) -> bool;
+    fn magnitude(self) -> f64;
     fn compact_factor_data(
         ctx: &CpuExecutionContext<'_>,
         data: &mut [Self],
@@ -143,6 +145,12 @@ pub(crate) trait FaerLinalg:
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    fn rank_revealing_qr_2d(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+        options: crate::RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>>;
     fn eigh_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -1513,6 +1521,14 @@ macro_rules! impl_faer_linalg_for_real {
         1.0
     }
 
+    fn is_finite(self) -> bool {
+        self.is_finite()
+    }
+
+    fn magnitude(self) -> f64 {
+        self.abs() as f64
+    }
+
     fn compact_factor_data(
         ctx: &CpuExecutionContext<'_>,
         data: &mut [Self],
@@ -2163,6 +2179,92 @@ macro_rules! impl_faer_linalg_for_real {
         Self::qr_core(ctx, buffers, mat, m, n, input.placement())
     }
 
+    fn rank_revealing_qr_2d(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+        options: crate::RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>> {
+        let (m, n) = matrix_dims(input, "rank_revealing_qr")?;
+        let k = m.min(n);
+        let block_size =
+            faer::linalg::qr::no_pivoting::factor::recommended_block_size::<Self>(m, n);
+        let mut qr = Mat::zeros(m, n);
+        qr.copy_from(Self::faer_mat_ref_compact(input.host_data()?, m, n));
+        let mut coeff = Mat::zeros(block_size, k);
+        let mut permutation = vec![0usize; n];
+        let mut inverse_permutation = vec![0usize; n];
+        // Following faer 0.24's public column-pivoted QR factor API; the
+        // provider's forward permutation is the public gather convention.
+        let mut mem = MemBuffer::new(
+            faer::linalg::qr::col_pivoting::factor::qr_in_place_scratch::<usize, Self>(
+                m,
+                n,
+                block_size,
+                ctx.faer_parallelism(),
+                Default::default(),
+            ),
+        );
+        faer::linalg::qr::col_pivoting::factor::qr_in_place(
+            qr.as_mut(),
+            coeff.as_mut(),
+            &mut permutation,
+            &mut inverse_permutation,
+            ctx.faer_parallelism(),
+            MemStack::new(&mut mem),
+            Default::default(),
+        );
+        let mut q = Mat::identity(m, k);
+        let mut mem = MemBuffer::new(
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<Self>(
+                m,
+                block_size,
+                k,
+            ),
+        );
+        faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
+            qr.as_ref().subcols(0, k),
+            coeff.as_ref(),
+            Conj::No,
+            q.as_mut(),
+            ctx.faer_parallelism(),
+            MemStack::new(&mut mem),
+        );
+        let rank = super::rank_revealing_qr::prefix_rank(
+            (0..k).map(|index| qr[(index, index)].abs() as f64),
+            options,
+        )?;
+        let permutation = permutation
+            .into_iter()
+            .map(|column| {
+                i64::try_from(column).map_err(|_| {
+                    invalid_config(
+                        "rank_revealing_qr",
+                        "column permutation exceeds i64 range",
+                    )
+                })
+            })
+            .collect::<tenferro_tensor::Result<Vec<_>>>()?;
+        Ok(crate::RankRevealingQrResult {
+            q: tensor_from_vec_with_template(
+                vec![m, k],
+                col_major_vec_from_mat(buffers, q.as_ref())?,
+                input.placement(),
+            )?,
+            r: tensor_from_vec_with_template(
+                vec![k, n],
+                upper_triangle_vec_from_mat(qr.as_ref().get(..k, ..))?,
+                input.placement(),
+            )?,
+            column_permutation: tensor_from_vec_with_template(
+                vec![n],
+                permutation,
+                input.placement(),
+            )?,
+            rank: tensor_from_vec_with_template(vec![], vec![rank], input.placement())?,
+        })
+    }
+
     fn eigh_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -2411,6 +2513,14 @@ macro_rules! impl_faer_linalg_for_complex {
 
     fn parity_one() -> Self {
         <$complex>::new(1.0, 0.0)
+    }
+
+    fn is_finite(self) -> bool {
+        self.re.is_finite() && self.im.is_finite()
+    }
+
+    fn magnitude(self) -> f64 {
+        self.norm() as f64
     }
 
     fn compact_factor_data(
@@ -3159,6 +3269,107 @@ macro_rules! impl_faer_linalg_for_complex {
         Self::qr_core(ctx, buffers, mat, m, n, input.placement())
     }
 
+    fn rank_revealing_qr_2d(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+        options: crate::RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>> {
+        let (m, n) = matrix_dims(input, "rank_revealing_qr")?;
+        let k = m.min(n);
+        let mat = Self::faer_mat_ref_compact(input.host_data()?, m, n);
+        // SAFETY: the compile-time layout checks in impl_complex_faer_casts
+        // prove Self and faer's complex scalar have identical representation.
+        let mat: MatRef<'_, $faer_complex> = unsafe {
+            MatRef::from_raw_parts(
+                mat.as_ptr().cast::<$faer_complex>(),
+                m,
+                n,
+                mat.row_stride(),
+                mat.col_stride(),
+            )
+        };
+        let block_size =
+            faer::linalg::qr::no_pivoting::factor::recommended_block_size::<$faer_complex>(m, n);
+        let mut qr = Mat::zeros(m, n);
+        qr.copy_from(mat);
+        let mut coeff = Mat::zeros(block_size, k);
+        let mut permutation = vec![0usize; n];
+        let mut inverse_permutation = vec![0usize; n];
+        // Following faer 0.24's public column-pivoted QR factor API; the
+        // provider's forward permutation is the public gather convention.
+        let mut mem = MemBuffer::new(
+            faer::linalg::qr::col_pivoting::factor::qr_in_place_scratch::<usize, $faer_complex>(
+                m,
+                n,
+                block_size,
+                ctx.faer_parallelism(),
+                Default::default(),
+            ),
+        );
+        faer::linalg::qr::col_pivoting::factor::qr_in_place(
+            qr.as_mut(),
+            coeff.as_mut(),
+            &mut permutation,
+            &mut inverse_permutation,
+            ctx.faer_parallelism(),
+            MemStack::new(&mut mem),
+            Default::default(),
+        );
+        let mut q = Mat::identity(m, k);
+        let mut mem = MemBuffer::new(
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<$faer_complex>(
+                m,
+                block_size,
+                k,
+            ),
+        );
+        faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
+            qr.as_ref().subcols(0, k),
+            coeff.as_ref(),
+            Conj::No,
+            q.as_mut(),
+            ctx.faer_parallelism(),
+            MemStack::new(&mut mem),
+        );
+        let rank = super::rank_revealing_qr::prefix_rank(
+            (0..k).map(|index| {
+                let value = qr[(index, index)];
+                (value.re as f64).hypot(value.im as f64)
+            }),
+            options,
+        )?;
+        let permutation = permutation
+            .into_iter()
+            .map(|column| {
+                i64::try_from(column).map_err(|_| {
+                    invalid_config(
+                        "rank_revealing_qr",
+                        "column permutation exceeds i64 range",
+                    )
+                })
+            })
+            .collect::<tenferro_tensor::Result<Vec<_>>>()?;
+        Ok(crate::RankRevealingQrResult {
+            q: tensor_from_vec_with_template(
+                vec![m, k],
+                $vec_from_mat(buffers, q.as_ref())?,
+                input.placement(),
+            )?,
+            r: tensor_from_vec_with_template(
+                vec![k, n],
+                $matrix_from_predicate(qr.as_ref(), k, n, |row, col| row <= col)?,
+                input.placement(),
+            )?,
+            column_permutation: tensor_from_vec_with_template(
+                vec![n],
+                permutation,
+                input.placement(),
+            )?,
+            rank: tensor_from_vec_with_template(vec![], vec![rank], input.placement())?,
+        })
+    }
+
     fn eigh_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -3892,6 +4103,31 @@ pub(crate) fn qr<T: FaerLinalg>(
     }
     batched_multi_result("qr", buffers, input, 2, |buffers, batch| {
         T::qr_2d(ctx, buffers, batch)
+    })
+}
+
+pub(crate) fn rank_revealing_qr<T: FaerLinalg>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    options: crate::RankRevealingQrOptions,
+) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<T>> {
+    crate::rank_revealing_qr::validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
+    super::rank_revealing_qr::batched(buffers, input, |buffers, batch| {
+        let data = batch.host_data()?;
+        if data.iter().any(|&value| !value.is_finite()) {
+            return Err(crate::error::into_tensor_error(
+                "rank_revealing_qr",
+                crate::Error::NonFinite {
+                    op: "rank_revealing_qr",
+                    role: "input",
+                },
+            ));
+        }
+        if data.iter().all(|&value| value.magnitude() == 0.0) {
+            return super::rank_revealing_qr::zero_matrix_result(batch, T::one());
+        }
+        T::rank_revealing_qr_2d(ctx, buffers, batch, options)
     })
 }
 

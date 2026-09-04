@@ -13,6 +13,7 @@ use tenferro_tensor::{BackendSession, DType, Error, ErrorKind, Tensor, TensorBac
 use tenferro_gpu::cuda::with_cuda_exec_session;
 
 use crate::backend::LinalgBackend;
+use crate::RankRevealingQrOptions;
 
 mod gauge;
 #[cfg(all(test, not(feature = "cuda")))]
@@ -306,6 +307,11 @@ pub(crate) enum LinalgOp {
     Qr {
         gauge: QrGauge,
     },
+    RankRevealingQr {
+        gauge: QrGauge,
+        rtol: f64,
+        atol: f64,
+    },
     HouseholderQrFactor,
     HouseholderQrFromFactors,
     HouseholderQrAppend,
@@ -362,6 +368,7 @@ impl LinalgOp {
             | Self::SvdVals { .. }
             | Self::TriangularSolve { .. } => 1,
             Self::Svd { .. } | Self::SvdFull => 3,
+            Self::RankRevealingQr { .. } | Self::Lu => 4,
             Self::Qr { .. }
             | Self::HouseholderQrFactor
             | Self::HouseholderQrFromFactors
@@ -374,7 +381,6 @@ impl LinalgOp {
             | Self::HouseholderQrAppendTangent
             | Self::HouseholderQrSplitTangent { .. } => 1,
             Self::LuFactor => 3,
-            Self::Lu => 4,
             Self::FullPivLu => 5,
         }
     }
@@ -425,6 +431,7 @@ impl LinalgOp {
             Self::HouseholderQrThinQ { .. } => 24,
             Self::HouseholderQrAppendTangent => 25,
             Self::HouseholderQrSplitTangent { .. } => 26,
+            Self::RankRevealingQr { .. } => 27,
         }
     }
 }
@@ -467,6 +474,11 @@ impl ExtensionOp for LinalgExtensionOp {
             | LinalgOp::HouseholderQrR { gauge }
             | LinalgOp::HouseholderQrThinQ { gauge } => {
                 hash_qr_gauge(hasher, gauge);
+            }
+            LinalgOp::RankRevealingQr { gauge, rtol, atol } => {
+                hash_qr_gauge(hasher, gauge);
+                hasher.write_u64(rtol.to_bits());
+                hasher.write_u64(atol.to_bits());
             }
             LinalgOp::HouseholderQrQColumns { start, end, gauge } => {
                 hasher.write_usize(start);
@@ -628,6 +640,9 @@ impl ExtensionOp for LinalgExtensionOp {
                 vec![svd_values_meta(input_dtypes[0], input_shapes[0])?]
             }
             LinalgOp::Qr { .. } => qr_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::RankRevealingQr { .. } => {
+                rank_revealing_qr_meta(input_dtypes[0], input_shapes[0])?
+            }
             LinalgOp::HouseholderQrFactor => {
                 householder_qr_factor_meta(input_dtypes[0], input_shapes[0])?
             }
@@ -807,7 +822,7 @@ fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp)
                 LinalgOp::Solve => true,
                 // Full-matrices SVD falls back to the default `svd_full`
                 // impl, which reports `Unsupported`.
-                LinalgOp::SvdFull => false,
+                LinalgOp::SvdFull | LinalgOp::RankRevealingQr { .. } => false,
                 // Conjugate-only prepared LU solve is unsupported on CUDA.
                 LinalgOp::LuSolvePrepared {
                     transpose_a: false,
@@ -890,6 +905,9 @@ fn execute_linalg<B: LinalgBackend>(
         LinalgOp::SvdFull => backend.svd_full(inputs[0]),
         LinalgOp::SvdVals { .. } => Ok(vec![backend.svd_values(inputs[0])?]),
         LinalgOp::Qr { gauge } => backend.qr_with_options(inputs[0], QrOptions { gauge }),
+        LinalgOp::RankRevealingQr { gauge, rtol, atol } => {
+            backend.rank_revealing_qr(inputs[0], RankRevealingQrOptions { gauge, rtol, atol })
+        }
         LinalgOp::HouseholderQrFactor => {
             let state = backend.householder_qr(inputs[0])?;
             Ok(vec![state.packed, state.coeff])
@@ -1451,6 +1469,20 @@ fn qr_meta(dtype: DType, shape: &[SymDim]) -> tenferro_tensor::Result<Vec<(DType
     Ok(vec![
         (dtype, matrix_shape(m, k.clone(), batch)),
         (dtype, matrix_shape(k, n, batch)),
+    ])
+}
+
+fn rank_revealing_qr_meta(
+    dtype: DType,
+    shape: &[SymDim],
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    let (m, n, batch) = matrix_meta_parts("tenferro-linalg.rank_revealing_qr", shape)?;
+    let k = m.clone().min(n.clone());
+    Ok(vec![
+        (dtype, matrix_shape(m, k.clone(), batch)),
+        (dtype, matrix_shape(k, n.clone(), batch)),
+        (DType::I64, vector_shape(n, batch)),
+        (DType::I64, batch.to_vec()),
     ])
 }
 
