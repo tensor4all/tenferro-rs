@@ -6,7 +6,7 @@ use tenferro_gpu::cuda::CudaExecSession;
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
-use crate::QrOptions;
+use crate::{QrOptions, RankRevealingQrOptions};
 
 impl LinalgBackend for CudaExecSession<'_> {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
@@ -141,6 +141,39 @@ impl LinalgBackend for CudaExecSession<'_> {
             }
             TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
                 Err(unsupported_dtype("qr", input.dtype()))
+            }
+        }
+    }
+
+    fn rank_revealing_qr(
+        &mut self,
+        input: &Tensor,
+        options: RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        linalg::rank_revealing_qr(self, input, options)
+    }
+
+    fn rank_revealing_qr_read(
+        &mut self,
+        input: TensorRead<'_>,
+        options: RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
+        match input {
+            TensorView::F32(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.rank_revealing_qr(&Tensor::F32(input), options)),
+            TensorView::F64(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.rank_revealing_qr(&Tensor::F64(input), options)),
+            TensorView::C32(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.rank_revealing_qr(&Tensor::C32(input), options)),
+            TensorView::C64(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.rank_revealing_qr(&Tensor::C64(input), options)),
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("rank_revealing_qr", input.dtype()))
             }
         }
     }

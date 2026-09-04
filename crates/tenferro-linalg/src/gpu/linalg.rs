@@ -410,6 +410,14 @@ pub(super) fn qr(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Ve
     }
 }
 
+pub(super) fn rank_revealing_qr(
+    backend: &mut CudaExecSession<'_>,
+    input: &Tensor,
+    options: crate::RankRevealingQrOptions,
+) -> Result<Vec<Tensor>> {
+    rank_revealing_qr::rank_revealing_qr(backend, input, options)
+}
+
 pub(super) fn householder_qr(
     backend: &mut CudaExecSession<'_>,
     input: &Tensor,
@@ -2394,6 +2402,7 @@ where
 }
 
 mod householder_qr;
+mod rank_revealing_qr;
 use householder_qr::*;
 
 fn qr_typed<T>(

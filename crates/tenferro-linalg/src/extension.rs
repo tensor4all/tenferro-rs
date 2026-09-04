@@ -822,7 +822,7 @@ fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp)
                 LinalgOp::Solve => true,
                 // Full-matrices SVD falls back to the default `svd_full`
                 // impl, which reports `Unsupported`.
-                LinalgOp::SvdFull | LinalgOp::RankRevealingQr { .. } => false,
+                LinalgOp::SvdFull => false,
                 // Conjugate-only prepared LU solve is unsupported on CUDA.
                 LinalgOp::LuSolvePrepared {
                     transpose_a: false,

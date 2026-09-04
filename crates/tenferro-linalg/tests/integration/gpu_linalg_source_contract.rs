@@ -379,6 +379,29 @@ fn cuda_linalg_drop_paths_report_destroy_status() {
 }
 
 #[test]
+fn cuda_rrqr_has_no_payload_download_or_cpu_fallback() {
+    let source = read_workspace_source("tenferro-linalg/src/gpu/linalg/rank_revealing_qr.rs");
+    assert_eq!(
+        source.matches("download_tensor(").count(),
+        1,
+        "RRQR may download only its bounded provider-status vector"
+    );
+    assert_eq!(
+        source.matches("host_data()").count(),
+        1,
+        "only the downloaded provider-status tensor may use host_data"
+    );
+    for banned in ["CpuBackend", "CubeCount::new_single"] {
+        assert!(
+            !source.contains(banned),
+            "CUDA RRQR must not use payload host access, CPU fallback, or a single-worker launch: {banned}"
+        );
+    }
+    assert!(source.contains("Tensor::I64(status)"));
+    assert!(source.contains("rank remain device-resident"));
+}
+
+#[test]
 fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let svd_read_source = source_section(&source, "fn svd_read", "fn qr");

@@ -7,7 +7,9 @@ use tenferro_gpu::{
     cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session,
     cuda::CudaBackend, cuda::CudaDeviceId, cuda::CudaExecSession,
 };
-use tenferro_linalg::{HouseholderQr, LinalgBackend, QrGauge, QrOptions, TensorLinalgExt};
+use tenferro_linalg::{
+    HouseholderQr, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions, TensorLinalgExt,
+};
 use tenferro_tensor::{BackendSessionHost, Error, Tensor, TensorRead, TypedTensor};
 
 fn cpu_backend() -> CpuBackend {
@@ -238,6 +240,13 @@ fn conj_transpose_c64(data: &[Complex64], rows: usize, cols: usize) -> Vec<Compl
 }
 
 fn assert_slice_close_f32(actual: &[f32], expected: &[f32], tol: f32) {
+    assert_eq!(actual.len(), expected.len());
+    for (lhs, rhs) in actual.iter().zip(expected.iter()) {
+        assert!((lhs - rhs).abs() <= tol, "lhs={lhs:?} rhs={rhs:?}");
+    }
+}
+
+fn assert_slice_close_f64(actual: &[f64], expected: &[f64], tol: f64) {
     assert_eq!(actual.len(), expected.len());
     for (lhs, rhs) in actual.iter().zip(expected.iter()) {
         assert!((lhs - rhs).abs() <= tol, "lhs={lhs:?} rhs={rhs:?}");
@@ -1262,6 +1271,217 @@ fn test_gpu_eig_returns_unsupported_error() {
 
     let err = with_cuda_linalg_session(&mut backend, |session| session.eig(&gpu)).unwrap_err();
     assert!(matches!(err, Error::Unsupported { op: "eig", .. }));
+}
+
+#[test]
+#[ignore = "requires an A100-class CUDA GPU"]
+fn test_cuda_rank_revealing_qr_f64_reconstructs_interspersed_rank_deficiency() {
+    if !gpu_available() {
+        eprintln!("skipping CUDA RRQR test: no CUDA device found");
+        return;
+    }
+    let input = tensor_f64(
+        vec![4, 5],
+        vec![
+            1.0, 0.0, 0.0, 0.0, // c0
+            0.0, 1.0, 0.0, 0.0, // c1
+            1.0, 0.0, 0.0, 0.0, // c2 duplicates c0
+            0.0, 0.0, 1.0, 0.0, // c3
+            0.0, 0.0, 0.0, 0.0, // c4
+        ],
+    );
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.rank_revealing_qr(&gpu_input, RankRevealingQrOptions::default().rtol(1.0e-12))
+    })
+    .unwrap();
+    assert_eq!(outputs.len(), 4);
+    for output in &outputs {
+        assert!(match output.dtype() {
+            tenferro_tensor::DType::F64 => output.as_slice::<f64>().is_err(),
+            tenferro_tensor::DType::I64 => output.as_slice::<i64>().is_err(),
+            dtype => panic!("unexpected RRQR dtype {dtype:?}"),
+        });
+    }
+    let q = download(&gpu, &outputs[0]);
+    let r = download(&gpu, &outputs[1]);
+    let permutation = download(&gpu, &outputs[2]);
+    let rank = download(&gpu, &outputs[3]);
+    assert_eq!(permutation.as_slice::<i64>().unwrap(), &[0, 1, 3, 2, 4]);
+    assert_eq!(rank.as_slice::<i64>().unwrap(), &[3]);
+    let reconstructed = matmul_f64(
+        q.as_slice::<f64>().unwrap(),
+        r.as_slice::<f64>().unwrap(),
+        4,
+        4,
+        5,
+    );
+    let p = permutation.as_slice::<i64>().unwrap();
+    let expected = p
+        .iter()
+        .flat_map(|&column| {
+            let start = column as usize * 4;
+            input.as_slice::<f64>().unwrap()[start..start + 4]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    assert_slice_close_f64(&reconstructed, &expected, 1.0e-10);
+    let qtq = matmul_f64(
+        &transpose_f64(q.as_slice::<f64>().unwrap(), 4, 4),
+        q.as_slice::<f64>().unwrap(),
+        4,
+        4,
+        4,
+    );
+    let identity = vec![
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    assert_slice_close_f64(&qtq, &identity, 1.0e-10);
+}
+
+#[test]
+#[ignore = "requires an A100-class CUDA GPU"]
+fn test_cuda_rank_revealing_qr_complex_dtypes_reconstruct() {
+    if !gpu_available() {
+        eprintln!("skipping CUDA complex RRQR test: no CUDA device found");
+        return;
+    }
+    let mut gpu = gpu_backend();
+    let input_c32 = tensor_c32(
+        vec![3, 3],
+        vec![
+            Complex32::new(1.0, 1.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(2.0, -1.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(1.0, 1.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+        ],
+    );
+    let gpu_input = upload(&gpu, &input_c32);
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.rank_revealing_qr(
+            &gpu_input,
+            RankRevealingQrOptions::default()
+                .gauge(tenferro_linalg::QrGauge::PositiveDiagonal)
+                .rtol(1.0e-5),
+        )
+    })
+    .unwrap();
+    let q = download(&gpu, &outputs[0]);
+    let r = download(&gpu, &outputs[1]);
+    let permutation = download(&gpu, &outputs[2]);
+    let rank = download(&gpu, &outputs[3]);
+    assert_eq!(rank.as_slice::<i64>().unwrap(), &[2]);
+    let p = permutation.as_slice::<i64>().unwrap();
+    let expected = p
+        .iter()
+        .flat_map(|&column| {
+            let start = column as usize * 3;
+            input_c32.as_slice::<Complex32>().unwrap()[start..start + 3]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    let reconstructed = matmul_c32(
+        q.as_slice::<Complex32>().unwrap(),
+        r.as_slice::<Complex32>().unwrap(),
+        3,
+        3,
+        3,
+    );
+    assert_slice_close_c32(&reconstructed, &expected, 2.0e-5);
+
+    let input_c64 = tensor_c64(
+        vec![3, 3],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+    let gpu_input = upload(&gpu, &input_c64);
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.rank_revealing_qr(
+            &gpu_input,
+            RankRevealingQrOptions::default()
+                .gauge(tenferro_linalg::QrGauge::PositiveDiagonal)
+                .rtol(1.0e-12),
+        )
+    })
+    .unwrap();
+    let q = download(&gpu, &outputs[0]);
+    let r = download(&gpu, &outputs[1]);
+    let permutation = download(&gpu, &outputs[2]);
+    let rank = download(&gpu, &outputs[3]);
+    assert_eq!(rank.as_slice::<i64>().unwrap(), &[2]);
+    let p = permutation.as_slice::<i64>().unwrap();
+    let expected = p
+        .iter()
+        .flat_map(|&column| {
+            let start = column as usize * 3;
+            input_c64.as_slice::<Complex64>().unwrap()[start..start + 3]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    let reconstructed = matmul_c64(
+        q.as_slice::<Complex64>().unwrap(),
+        r.as_slice::<Complex64>().unwrap(),
+        3,
+        3,
+        3,
+    );
+    assert_slice_close_c64(&reconstructed, &expected, 1.0e-11);
+    for diagonal in 0..3 {
+        let value = r.as_slice::<Complex64>().unwrap()[diagonal + diagonal * 3];
+        assert!(value.im.abs() <= 1.0e-12 && value.re >= 0.0);
+    }
+}
+
+#[test]
+#[ignore = "requires an A100-class CUDA GPU"]
+fn test_cuda_rank_revealing_qr_f32_batched_and_scaled_ranks() {
+    if !gpu_available() {
+        eprintln!("skipping CUDA batched RRQR test: no CUDA device found");
+        return;
+    }
+    // First 3x2 batch is full rank at large scale; second has duplicate columns.
+    let input = tensor_f32(
+        vec![3, 2, 2],
+        vec![
+            1.0e8, 0.0, 0.0, 0.0, 2.0e8, 0.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0,
+        ],
+    );
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.rank_revealing_qr(&gpu_input, RankRevealingQrOptions::default().rtol(1.0e-5))
+    })
+    .unwrap();
+    let permutation = download(&gpu, &outputs[2]);
+    let rank = download(&gpu, &outputs[3]);
+    assert_eq!(outputs[0].shape(), &[3, 2, 2]);
+    assert_eq!(outputs[1].shape(), &[2, 2, 2]);
+    assert_eq!(permutation.shape(), &[2, 2]);
+    assert_eq!(rank.shape(), &[2]);
+    assert_eq!(rank.as_slice::<i64>().unwrap(), &[2, 1]);
+    for batch in permutation.as_slice::<i64>().unwrap().chunks_exact(2) {
+        let mut columns = batch.to_vec();
+        columns.sort_unstable();
+        assert_eq!(columns, vec![0, 1]);
+    }
 }
 
 #[test]
