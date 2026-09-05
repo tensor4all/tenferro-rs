@@ -1703,8 +1703,12 @@
               "surface": "concrete",
               "tests": [
                 {
-                  "path": "crates/tenferro-einsum/tests/integration/eager_tensor.rs",
-                  "symbol": "eager_tensor_einsum_matmul_primal_matches_expected_values"
+                  "path": "crates/tenferro-einsum/src/concrete_tests.rs",
+                  "symbol": "public_tensor_einsum_ext_executes_dtype_erased_inputs"
+                },
+                {
+                  "path": "crates/tenferro-einsum/src/concrete_tests.rs",
+                  "symbol": "public_typed_tensor_einsum_ext_preserves_complex_dtype"
                 }
               ],
               "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
@@ -1717,11 +1721,57 @@
               "surface": "traced",
               "tests": [
                 {
-                  "path": "crates/tenferro-einsum/src/eager/tests.rs",
-                  "symbol": "generic_binary_contract_reduces_then_builds_dot_config"
+                  "path": "crates/tenferro-einsum/tests/integration/traced_correctness.rs",
+                  "symbol": "explicit_path_matmul_executes_numerically"
                 }
               ],
               "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            },
+            {
+              "component": "einsum",
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping",
+              "id": "{family}.{operation}.ordinary.eager",
+              "phase": "execution",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "eager",
+              "tests": [
+                {
+                  "path": "crates/tenferro-einsum/tests/integration/eager_tensor.rs",
+                  "symbol": "eager_tensor_einsum_matmul_primal_matches_expected_values"
+                }
+              ]
+            },
+            {
+              "component": "einsum",
+              "workflow": "validate -> parse notation -> capture input specs -> plan contraction tree",
+              "id": "{family}.{operation}.prepare.concrete",
+              "phase": "setup",
+              "setup_boundary": "concrete plan preparation",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-einsum/src/concrete_tests.rs",
+                  "symbol": "concrete_einsum_plan_executes_without_replanning_contract"
+                }
+              ]
+            },
+            {
+              "component": "einsum",
+              "workflow": "validate prepared input specs -> caller-owned backend session -> execute without replanning",
+              "id": "{family}.{operation}.prepared.concrete",
+              "phase": "execution",
+              "setup_boundary": "prepared concrete workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-einsum/src/concrete_tests.rs",
+                  "symbol": "concrete_einsum_plan_executes_without_replanning_contract"
+                },
+                {
+                  "path": "crates/tenferro-einsum/src/concrete_tests.rs",
+                  "symbol": "concrete_einsum_plan_rejects_shape_and_dtype_mismatches"
+                }
+              ]
             }
           ],
           "category": "extension",
@@ -1736,45 +1786,43 @@
               "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
             },
             "concrete": {
-              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contract": "concrete routes distinguish public plan preparation from prepared execution; execution validates specs and uses the caller-supplied backend session",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-einsum/src/extension.rs::execute_einsum_extension",
-                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
-                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-einsum/src/extension.rs::execute_einsum_extension -> concrete Tensor return (no wrapping owner)",
+                "allocation_source": "crates/tenferro-einsum/src/concrete.rs::execute",
+                "metadata": "ConcreteEinsumPlan::prepare captures input specs; execute revalidates rank, shape, and dtype before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through the caller-owned backend session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-einsum/src/concrete.rs::execute -> crate::eager::eager_einsum_exec -> concrete Tensor return (no wrapping owner)",
                 "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
               "owners": {
-                "admission": [
-                  {
-                    "path": "crates/tenferro-runtime/src/runtime/extension_provider.rs",
-                    "symbol": "ExtensionEngine"
-                  }
-                ],
+                "admission": {
+                  "reason": "These concrete entries borrow a caller-owned BackendSession; plan preparation does not admit a session.",
+                  "status": "not-applicable"
+                },
                 "execution": [
                   {
-                    "path": "crates/tenferro-einsum/src/extension.rs",
-                    "symbol": "execute_einsum_extension"
+                    "path": "crates/tenferro-einsum/src/concrete.rs",
+                    "symbol": "execute"
                   }
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-einsum/src/util.rs",
-                    "symbol": "compute_output_shape"
+                    "path": "crates/tenferro-einsum/src/concrete.rs",
+                    "symbol": "input_specs"
                   }
                 ],
                 "planning": [
                   {
-                    "path": "crates/tenferro-einsum/src/builder.rs",
-                    "symbol": "binary_contract"
+                    "path": "crates/tenferro-einsum/src/concrete.rs",
+                    "symbol": "prepare_subscripts_internal"
                   }
                 ],
                 "validation": [
                   {
-                    "path": "crates/tenferro-einsum/src/subscripts.rs",
-                    "symbol": "parse_einsum_subscripts"
+                    "path": "crates/tenferro-einsum/src/concrete.rs",
+                    "symbol": "validate_inputs"
                   }
                 ],
                 "wrapping": {
@@ -1785,13 +1833,13 @@
               "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
             },
             "eager": {
-              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contract": "eager dispatch checks direct binary dot_general, optional whole-program and expanded standard-operation paths, then uses the einsum extension only as fallback",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-einsum/src/extension.rs::execute_einsum_extension",
-                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
-                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-einsum/src/extension.rs::execute_einsum_extension -> crates/tenferro-einsum/src/typed_eager.rs::typed_eager_einsum",
+                "allocation_source": "crates/tenferro-einsum/src/eager_ad.rs::einsum_subscripts_with_broadcast",
+                "metadata": "eager dispatch infers output metadata before selecting standard-operation or extension branches",
+                "owner_lifetime": "eager inputs remain valid through their runtime execution session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-einsum/src/eager_ad.rs::einsum_subscripts_with_broadcast -> EagerTensor result/AD carrier (tracked or untracked)",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -1804,32 +1852,44 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-einsum/src/extension.rs",
-                    "symbol": "execute_einsum_extension"
+                    "path": "crates/tenferro-einsum/src/eager_ad.rs",
+                    "symbol": "einsum_subscripts_with_broadcast"
+                  },
+                  {
+                    "path": "crates/tenferro-einsum/src/eager_ad.rs",
+                    "symbol": "try_direct_binary_dot_general"
+                  },
+                  {
+                    "path": "crates/tenferro-einsum/src/eager_ad.rs",
+                    "symbol": "try_whole_program_untracked"
+                  },
+                  {
+                    "path": "crates/tenferro-einsum/src/eager_ad.rs",
+                    "symbol": "try_expand_eager_einsum"
                   }
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-einsum/src/util.rs",
-                    "symbol": "compute_output_shape"
+                    "path": "crates/tenferro-einsum/src/eager_ad.rs",
+                    "symbol": "infer_eager_output_shape"
                   }
                 ],
                 "planning": [
                   {
-                    "path": "crates/tenferro-einsum/src/builder.rs",
-                    "symbol": "binary_contract"
+                    "path": "crates/tenferro-einsum/src/eager_ad.rs",
+                    "symbol": "try_expand_eager_einsum"
                   }
                 ],
                 "validation": [
                   {
-                    "path": "crates/tenferro-einsum/src/subscripts.rs",
-                    "symbol": "parse_einsum_subscripts"
+                    "path": "crates/tenferro-einsum/src/eager_ad.rs",
+                    "symbol": "einsum_subscripts_with_broadcast"
                   }
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-einsum/src/typed_eager.rs",
-                    "symbol": "typed_eager_einsum"
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "EagerTensor"
                   }
                 ]
               },

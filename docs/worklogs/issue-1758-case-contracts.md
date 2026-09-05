@@ -29,3 +29,30 @@ instead of `integration`; no Rust-test execution is claimed. No Rust code change
 the new reference was traced to its actual EagerTensor.add test body.
 
 Flash full-diff review, committed-head rules check and hosted CI/merge remain pending.
+
+## Einsum route-contract correction
+
+Applied the Flash-approved data-only correction from
+[`einsum-route-contract-correction`](../design/einsum-route-contract-correction.md):
+184 exported cases now retain the prior 181 IDs and add only
+`einsum.einsum.ordinary.eager`, `einsum.einsum.prepare.concrete`, and
+`einsum.einsum.prepared.concrete`. Concrete ownership now records public plan
+preparation, input-spec revalidation, and the caller-owned backend session;
+eager ownership records direct `dot_general`, optional whole-program,
+expanded standard-operation, and extension-fallback branches. Existing einsum
+anchors were replaced with numerical/public-contract tests, including complex
+and mismatch evidence. No Rust, dependency, API, timer, or benchmark-producer
+code changed; benchmark statuses remain pending/follow-up.
+
+The initial mutation run exposed stale fixed-count and eager-operation assertions.
+Flash approved the design amendment before changing the existing Python test:
+it now checks184 rows, the three exact new IDs/surfaces/phases, and add/einsum eager
+operations. Parent independently verified no old ID was removed and all other
+families remained byte-for-byte equivalent as parsed data. The inventory checker,
+mutation script and CI-only fast gate passed. The stale-snapshot diagnostic is
+intentional mutation-test output, not a gate failure. Final Flash full-six-file
+review returned Correct-to-merge after correcting concrete admission to
+not-applicable/caller-borrowed and Eager wrapping to tracked/untracked EagerTensor.
+An earlier mutation-test finding referenced nonexistent code and was explicitly
+retracted against the actual rejection helper and tests; no bypass was added.
+Exact-head rules check and hosted CI/merge remain pending for this correction.
