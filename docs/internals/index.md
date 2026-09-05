@@ -21,6 +21,7 @@ Normative specs — trait signatures, op semantics, backend contracts.
 - [AD contract](../spec/ad-contract.md)
 - [Optimizer passes](../spec/optimizer-passes.md)
 - [Tensor semantics](../spec/tensor-semantics.md)
+- [Public-boundary overhead inventory](public-boundary-overhead-inventory.md)
 
 ## Source Pointers
 
@@ -34,3 +35,4 @@ Normative specs — trait signatures, op semantics, backend contracts.
 | Buffer pool | `tenferro-tensor/src/buffer_pool.rs` |
 | CPU context | `tenferro-tensor/src/cpu/context.rs` |
 | GPU design | `docs/design/gpu-backend-design.md` |
+| Public-boundary inventory | `scripts/check-public-boundary-inventory.py`, `docs/internals/public-boundary-overhead-inventory.json`, and benchmark export |

@@ -1,0 +1,2775 @@
+{
+  "baseline_revision": "0457a2ed0aeea21b14f4297f7f4731e09b3a0507",
+  "benchmarks": [
+    {
+      "id": "95",
+      "status": "pending"
+    },
+    {
+      "id": "96",
+      "status": "follow-up"
+    }
+  ],
+  "families": {
+    "core": {
+      "authority": {
+        "path": "crates/tenferro-core-ops/src/catalog.rs",
+        "symbol": "primitive_ops"
+      },
+      "selectors": [
+        {
+          "cases": [
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
+                  "symbol": "exp"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-ad/src/eager/tests.rs",
+                  "symbol": "eager_materialization_uses_backend"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "analytic",
+          "id": "core.analytic",
+          "operations": [
+            "cos",
+            "exp",
+            "expm1",
+            "log",
+            "log1p",
+            "pow",
+            "rsqrt",
+            "sin",
+            "sqrt",
+            "tanh"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-tensor/src/backend.rs::TensorAnalytic",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-tensor/src/backend.rs::TensorAnalytic -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "default_backend_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "TensorAnalytic"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "symbol": "validate_shape_metadata"
+                  }
+                ],
+                "planning": {
+                  "reason": "concrete backend routes execute directly; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "validate_elementwise_output_disjoint"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "exec_single_output"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "shape"
+                  }
+                ],
+                "planning": {
+                  "reason": "eager operations execute immediately; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "unary_op"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "new_untracked_result"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-runtime/src/traced.rs::apply_unary",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-runtime/src/ad_support.rs",
+                    "symbol": "metadata_scopes"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_same_shape_unary"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_unary"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        },
+        {
+          "cases": [
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-ad/src/eager/tests.rs",
+                  "symbol": "untracked_standard_op_results_do_not_enter_value_record_registry"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
+                  "symbol": "dot_general"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "contraction",
+          "id": "core.contraction",
+          "operations": [
+            "dot_general"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-tensor/src/backend.rs::TensorDot",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-tensor/src/backend.rs::TensorDot -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "default_backend_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "TensorDot"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "symbol": "validate_shape_metadata"
+                  }
+                ],
+                "planning": {
+                  "reason": "concrete backend routes execute directly; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "validate_dot_general_read_into"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "exec_single_output"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "shape"
+                  }
+                ],
+                "planning": {
+                  "reason": "eager operations execute immediately; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "validate_eager_dot_general_config"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "new_untracked_result"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-runtime/src/traced.rs::apply_binary",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-runtime/src/ad_support.rs",
+                    "symbol": "metadata_scopes"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "dot_general"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_binary"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        },
+        {
+          "cases": [
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
+                  "symbol": "dynamic_slice"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-runtime/src/traced.rs",
+                  "symbol": "dynamic_truncate"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "dynamic",
+          "id": "core.dynamic",
+          "operations": [
+            "dynamic_truncate",
+            "pad_to_match"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-tensor/src/backend.rs::TensorBackendOps",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-tensor/src/backend.rs::TensorBackendOps -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "default_backend_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "TensorBackendOps"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "symbol": "validate_shape_metadata"
+                  }
+                ],
+                "planning": {
+                  "reason": "concrete backend routes execute directly; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "validate_shape_product"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "exec_single_output"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "shape"
+                  }
+                ],
+                "planning": {
+                  "reason": "eager operations execute immediately; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "validate_eager_axes"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "new_untracked_result"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-runtime/src/traced.rs::apply_unary",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-runtime/src/ad_support.rs",
+                    "symbol": "metadata_scopes"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "dynamic_truncate"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_unary"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        },
+        {
+          "cases": [
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-ad/src/eager/tests.rs",
+                  "symbol": "eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
+                  "symbol": "add"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "elementwise",
+          "id": "core.elementwise",
+          "operations": [
+            "abs",
+            "add",
+            "clamp",
+            "compare",
+            "conj",
+            "div",
+            "maximum",
+            "minimum",
+            "mul",
+            "neg",
+            "rem",
+            "select",
+            "sign",
+            "sub"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-tensor/src/backend.rs::TensorElementwise",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-tensor/src/backend.rs::TensorElementwise -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "default_backend_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "TensorElementwise"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "symbol": "validate_shape_metadata"
+                  }
+                ],
+                "planning": {
+                  "reason": "concrete backend routes execute directly; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "validate_elementwise_output_disjoint"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "exec_single_output"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "shape"
+                  }
+                ],
+                "planning": {
+                  "reason": "eager operations execute immediately; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "broadcast_binary"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "new_untracked_result"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-runtime/src/traced.rs::apply_binary",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-runtime/src/ad_support.rs",
+                    "symbol": "metadata_scopes"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "broadcast_binary"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_binary"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        },
+        {
+          "cases": [
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-tensor/src/tests/types_tests.rs",
+                  "symbol": "tensor_shape_and_dtype_cover_all_variants"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-runtime/src/traced.rs",
+                  "symbol": "shape_of"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "host",
+          "id": "core.host",
+          "operations": [
+            "constant",
+            "shape_of"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-tensor/src/backend.rs::TensorBackendOps",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-tensor/src/backend.rs::TensorBackendOps -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "default_backend_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "TensorBackendOps"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "symbol": "validate_shape_metadata"
+                  }
+                ],
+                "planning": {
+                  "reason": "concrete backend routes execute directly; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "validate_shape_product"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "exec_single_output"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "shape"
+                  }
+                ],
+                "planning": {
+                  "reason": "eager operations execute immediately; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "unary_op"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "new_untracked_result"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-runtime/src/traced.rs::apply_unary",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-runtime/src/ad_support.rs",
+                    "symbol": "metadata_scopes"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "shape_of"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_unary"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        },
+        {
+          "cases": [
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
+                  "symbol": "default_read_methods_delegate_owned_tensors_and_reject_views"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
+                  "symbol": "default_read_methods_delegate_owned_tensors_and_reject_views"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "indexing",
+          "id": "core.indexing",
+          "operations": [
+            "concatenate",
+            "dynamic_slice",
+            "dynamic_update_slice",
+            "gather",
+            "gather_dynamic_slice_sizes",
+            "pad",
+            "reverse",
+            "scatter",
+            "slice"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-tensor/src/backend.rs::TensorIndexing",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-tensor/src/backend.rs::TensorIndexing -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "default_backend_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "TensorIndexing"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "symbol": "validate_shape_metadata"
+                  }
+                ],
+                "planning": {
+                  "reason": "concrete backend routes execute directly; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "validate_read_into_destination"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "exec_single_output"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "shape"
+                  }
+                ],
+                "planning": {
+                  "reason": "eager operations execute immediately; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "validate_eager_axes"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "new_untracked_result"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-runtime/src/traced.rs::apply_unary",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-runtime/src/ad_support.rs",
+                    "symbol": "metadata_scopes"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-runtime/src/shape_packing.rs",
+                    "symbol": "index_select"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_unary"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        },
+        {
+          "cases": [
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-einsum/src/eager/tests.rs",
+                  "symbol": "reduce_sum"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-runtime/src/traced/tests.rs",
+                  "symbol": "reductions_reject_invalid_axes_instead_of_saturating_rank"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "reduction",
+          "id": "core.reduction",
+          "operations": [
+            "reduce_max",
+            "reduce_min",
+            "reduce_prod",
+            "reduce_sum",
+            "reduce_sum_squares"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-tensor/src/backend.rs::TensorReduction",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-tensor/src/backend.rs::TensorReduction -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "default_backend_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "TensorReduction"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "symbol": "validate_shape_metadata"
+                  }
+                ],
+                "planning": {
+                  "reason": "concrete backend routes execute directly; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-tensor/src/validate/mod.rs",
+                    "symbol": "validate_unique_axes"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "exec_single_output"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "shape"
+                  }
+                ],
+                "planning": {
+                  "reason": "eager operations execute immediately; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "validate_eager_axes"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "new_untracked_result"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-runtime/src/traced.rs::apply_unary",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-runtime/src/ad_support.rs",
+                    "symbol": "metadata_scopes"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "reduction_output_meta"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_unary"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        },
+        {
+          "cases": [
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-tensor/src/tests/public_surface_contract_tests.rs",
+                  "symbol": "structural_runtime_materialization_is_erased_and_context_free_copies_are_removed"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-runtime/src/traced.rs",
+                  "symbol": "broadcast_in_dim"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "structural",
+          "id": "core.structural",
+          "operations": [
+            "broadcast_in_dim",
+            "convert",
+            "embed_diag",
+            "extract_diag",
+            "reshape",
+            "transpose",
+            "tril",
+            "triu"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-tensor/src/backend.rs::TensorStructural",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-tensor/src/backend.rs::TensorStructural -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "default_backend_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "symbol": "TensorStructural"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "symbol": "validate_shape_metadata"
+                  }
+                ],
+                "planning": {
+                  "reason": "concrete backend routes execute directly; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-tensor/src/validate/mod.rs",
+                    "symbol": "validate_permutation_axes"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "exec_single_output"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "shape"
+                  }
+                ],
+                "planning": {
+                  "reason": "eager operations execute immediately; no graph planner owns this route",
+                  "status": "not-applicable"
+                },
+                "validation": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "unary_op"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "symbol": "new_untracked_result"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-runtime/src/traced.rs::apply_unary",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-runtime/src/ad_support.rs",
+                    "symbol": "metadata_scopes"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "broadcast_in_dim"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-runtime/src/traced.rs",
+                    "symbol": "apply_unary"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        }
+      ]
+    },
+    "einsum": {
+      "authority": {
+        "path": "crates/tenferro-einsum/src/cache.rs",
+        "symbol": "EINSUM_EXTENSION_FAMILY_ID"
+      },
+      "selectors": [
+        {
+          "cases": [
+            {
+              "component": "einsum",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-einsum/tests/integration/eager_tensor.rs",
+                  "symbol": "eager_tensor_einsum_matmul_primal_matches_expected_values"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "einsum",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-einsum/src/eager/tests.rs",
+                  "symbol": "generic_binary_contract_reduces_then_builds_dot_config"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "extension",
+          "id": "einsum.extension",
+          "operations": [
+            "einsum"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-einsum/src/extension.rs::execute",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-einsum/src/extension.rs::execute -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/extension_provider.rs",
+                    "symbol": "ExtensionEngine"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-einsum/src/extension.rs",
+                    "symbol": "execute"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-einsum/src/util.rs",
+                    "symbol": "compute_output_shape"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-einsum/src/builder.rs",
+                    "symbol": "binary_contract"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-einsum/src/subscripts.rs",
+                    "symbol": "parse_einsum_subscripts"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-einsum/src/extension.rs::execute",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-einsum/src/extension.rs::execute -> crates/tenferro-einsum/src/typed_eager.rs::typed_eager_einsum",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-einsum/src/extension.rs",
+                    "symbol": "execute"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-einsum/src/util.rs",
+                    "symbol": "compute_output_shape"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-einsum/src/builder.rs",
+                    "symbol": "binary_contract"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-einsum/src/subscripts.rs",
+                    "symbol": "parse_einsum_subscripts"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-einsum/src/typed_eager.rs",
+                    "symbol": "typed_eager_einsum"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-einsum/src/typed_eager.rs::typed_eager_einsum",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-einsum/src/util.rs",
+                    "symbol": "compute_output_shape"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-einsum/src/builder.rs",
+                    "symbol": "binary_contract"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-einsum/src/subscripts.rs",
+                    "symbol": "parse_einsum_subscripts"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-einsum/src/traced.rs",
+                    "symbol": "einsum"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        }
+      ]
+    },
+    "fft": {
+      "authority": {
+        "path": "crates/tenferro-fft/src/spec.rs",
+        "symbol": "FftOperation"
+      },
+      "selectors": [
+        {
+          "cases": [
+            {
+              "component": "fft",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-fft/tests/fft_ops.rs",
+                  "symbol": "fft_cpu_execution_reuses_cached_rustfft_plans"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "fft",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-fft/tests/fft_ops.rs",
+                  "symbol": "eager_fft_matches_traced_fft"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "extension",
+          "id": "fft.extension",
+          "operations": [
+            "c2c_forward",
+            "c2c_inverse",
+            "c2r",
+            "r2c_full",
+            "r2c_onesided"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-fft/src/lib.rs::execute_concrete_fft_op",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-fft/src/lib.rs::execute_concrete_fft_op -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "with_fft_exec_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "execute_concrete_fft_op"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "validated_fft_plan_spec"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "validate_operation_dtype"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-fft/src/lib.rs::execute_concrete_fft_op",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-fft/src/lib.rs::execute_concrete_fft_op -> crates/tenferro-fft/src/eager_ext.rs::apply_eager_fft",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "execute_concrete_fft_op"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "validated_fft_plan_spec"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "validate_operation_dtype"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-fft/src/eager_ext.rs",
+                    "symbol": "apply_eager_fft"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-fft/src/eager_ext.rs::apply_eager_fft",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "validated_fft_plan_spec"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "validate_operation_dtype"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "symbol": "fft"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        }
+      ]
+    },
+    "linalg": {
+      "authority": {
+        "path": "crates/tenferro-linalg/src/extension.rs",
+        "symbol": "LinalgOp"
+      },
+      "selectors": [
+        {
+          "cases": [
+            {
+              "component": "linalg",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "crates/tenferro-linalg/tests/integration/eager_tensor.rs",
+                  "symbol": "eager_solve_f64"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "linalg",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-linalg/tests/integration/eager_tensor.rs",
+                  "symbol": "cholesky_of_identity"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "extension",
+          "id": "linalg.extension",
+          "operations": [
+            "cholesky",
+            "eig",
+            "eig_vals",
+            "eigh",
+            "eigh_vals",
+            "full_piv_lu",
+            "full_piv_lu_solve",
+            "householder_qr_append",
+            "householder_qr_append_tangent",
+            "householder_qr_factor",
+            "householder_qr_from_factors",
+            "householder_qr_q_columns",
+            "householder_qr_r",
+            "householder_qr_split_tangent",
+            "householder_qr_thin_q",
+            "log_abs_det_from_lu_factor",
+            "lu",
+            "lu_factor",
+            "lu_solve_prepared",
+            "qr",
+            "rank_revealing_qr",
+            "sign_det_from_lu_factor",
+            "solve",
+            "svd",
+            "svd_full",
+            "svd_vals",
+            "triangular_solve"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/extension_provider.rs",
+                    "symbol": "ExtensionEngine"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "execute"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "execute_linalg_extension_reads_owner"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-linalg/src/validation.rs",
+                    "symbol": "ensure_float_or_complex"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute -> crates/tenferro-linalg/src/traced.rs::one_output",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "execute"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "execute_linalg_extension_reads_owner"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-linalg/src/validation.rs",
+                    "symbol": "ensure_float_or_complex"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-linalg/src/eager_ext.rs",
+                    "symbol": "one_output"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-linalg/src/traced.rs::one_output",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "execute_linalg_extension_reads_owner"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "crates/tenferro-linalg/src/validation.rs",
+                    "symbol": "ensure_float_or_complex"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "crates/tenferro-linalg/src/traced.rs",
+                    "symbol": "one_output"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "follow-up",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        }
+      ]
+    },
+    "sparse": {
+      "authority": {
+        "path": "ext/sparse/src/extension.rs",
+        "symbol": "FAMILY_ID"
+      },
+      "selectors": [
+        {
+          "cases": [
+            {
+              "component": "sparse",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "ext/sparse/src/extension/tests.rs",
+                  "symbol": "sparse_metadata_validation_preserves_dtype_and_rank_payloads"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "sparse",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "ext/sparse/src/extension/tests.rs",
+                  "symbol": "sparse_semantic_rules_execute_jvp_and_vjp_numerically"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "extension",
+          "id": "sparse.extension",
+          "operations": [
+            "matmul",
+            "matmul_jvp",
+            "matmul_vjp"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "ext/sparse/src/extension.rs::apply_sparse_matmul",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "ext/sparse/src/extension.rs::apply_sparse_matmul -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/extension_provider.rs",
+                    "symbol": "ExtensionEngine"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "apply_sparse_matmul"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "prepare"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "ext/sparse/src/sparse.rs",
+                    "symbol": "validate_coordinates"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "ext/sparse/src/extension.rs::apply_sparse_matmul",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "ext/sparse/src/extension.rs::apply_sparse_matmul -> ext/sparse/src/sparse.rs::sparse_matmul_eager",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "apply_sparse_matmul"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "prepare"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "ext/sparse/src/sparse.rs",
+                    "symbol": "validate_coordinates"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "ext/sparse/src/sparse.rs",
+                    "symbol": "sparse_matmul_eager"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> ext/sparse/src/sparse.rs::sparse_matmul_eager",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "infer_output_meta"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "prepare"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "ext/sparse/src/sparse.rs",
+                    "symbol": "validate_coordinates"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "ext/sparse/src/extension.rs",
+                    "symbol": "sparse_matmul"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        }
+      ]
+    },
+    "tropical": {
+      "authority": {
+        "path": "ext/tropical/src/extension.rs",
+        "symbol": "TROPICAL_EINSUM_FAMILY_ID"
+      },
+      "selectors": [
+        {
+          "cases": [
+            {
+              "component": "tropical",
+              "id": "{family}.{operation}.ordinary.concrete",
+              "phase": "validation",
+              "setup_boundary": "ordinary public workflow",
+              "surface": "concrete",
+              "tests": [
+                {
+                  "path": "ext/tropical/src/extension/tests.rs",
+                  "symbol": "tropical_semantic_rules_execute_jvp_and_vjp_numerically"
+                }
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "tropical",
+              "id": "{family}.{operation}.prepared.traced",
+              "phase": "execution",
+              "setup_boundary": "prepared or nested-session workflow",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "ext/tropical/src/traced.rs",
+                  "symbol": "compositional_dot_general_try_api_rejects_rank_mismatch"
+                }
+              ],
+              "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
+            }
+          ],
+          "category": "extension",
+          "id": "tropical.extension",
+          "operations": [
+            "einsum",
+            "einsum_jvp",
+            "einsum_vjp"
+          ],
+          "surfaces": {
+            "borrowed": {
+              "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "concrete": {
+              "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "ext/tropical/src/einsum.rs::execute_target_order_gemm_typed",
+                "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "ext/tropical/src/einsum.rs::execute_target_order_gemm_typed -> concrete Tensor return (no wrapping owner)",
+                "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/extension_provider.rs",
+                    "symbol": "ExtensionEngine"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "ext/tropical/src/einsum.rs",
+                    "symbol": "execute_target_order_gemm_typed"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "ext/tropical/src/einsum.rs",
+                    "symbol": "output_shape_for_labels"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "ext/tropical/src/einsum.rs",
+                    "symbol": "execute_typed"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "ext/tropical/src/traced.rs",
+                    "symbol": "validate_tropical_einsum_inputs"
+                  }
+                ],
+                "wrapping": {
+                  "reason": "concrete backend returns its owned Tensor directly; no AD/traced wrapper owns this route",
+                  "status": "not-applicable"
+                }
+              },
+              "reason": "concrete route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "eager": {
+              "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "ext/tropical/src/einsum.rs::execute_target_order_gemm_typed",
+                "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "ext/tropical/src/einsum.rs::execute_target_order_gemm_typed -> ext/tropical/src/traced.rs::tropical_einsum",
+                "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "with_execution_session"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "ext/tropical/src/einsum.rs",
+                    "symbol": "execute_target_order_gemm_typed"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "ext/tropical/src/einsum.rs",
+                    "symbol": "output_shape_for_labels"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "ext/tropical/src/einsum.rs",
+                    "symbol": "execute_typed"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "ext/tropical/src/traced.rs",
+                    "symbol": "validate_tropical_einsum_inputs"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "ext/tropical/src/traced.rs",
+                    "symbol": "tropical_einsum"
+                  }
+                ]
+              },
+              "reason": "eager route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "output_reuse": {
+              "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            },
+            "traced": {
+              "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
+              "contracts": {
+                "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
+                "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
+                "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
+                "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> ext/tropical/src/traced.rs::tropical_einsum",
+                "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
+              },
+              "disposition": "follow-up",
+              "owners": {
+                "admission": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "submit"
+                  }
+                ],
+                "execution": [
+                  {
+                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
+                    "symbol": "run_compiled"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "path": "ext/tropical/src/einsum.rs",
+                    "symbol": "output_shape_for_labels"
+                  }
+                ],
+                "planning": [
+                  {
+                    "path": "ext/tropical/src/einsum.rs",
+                    "symbol": "execute_typed"
+                  }
+                ],
+                "validation": [
+                  {
+                    "path": "ext/tropical/src/traced.rs",
+                    "symbol": "validate_tropical_einsum_inputs"
+                  }
+                ],
+                "wrapping": [
+                  {
+                    "path": "ext/tropical/src/traced.rs",
+                    "symbol": "tropical_einsum"
+                  }
+                ]
+              },
+              "reason": "traced route has no published timing evidence; benchmark #95 must measure the existing owner path"
+            },
+            "typed": {
+              "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
+              "disposition": "unsupported",
+              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "generation_provenance": "source-derived from the current checkout; overlay/source digest is the freshness key",
+  "schema": "tenferro.public-boundary-overhead.v1"
+}
