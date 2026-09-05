@@ -65,6 +65,8 @@ _CI_FILES = frozenset(
     {
         ".github/dependabot.yml",
         "scripts/check-pr-fast.sh",
+        "scripts/check-public-boundary-inventory.py",
+        "scripts/test-public-boundary-inventory.py",
     }
 )
 _CI_PREFIXES = (".github/workflows/", "scripts/ci/")

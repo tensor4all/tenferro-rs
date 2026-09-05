@@ -46,6 +46,13 @@ class ChangePolicyTests(unittest.TestCase):
                 self.assertTrue(policy.run_ci_config)
                 self.assertTrue(policy.run_macos)
 
+    def test_inventory_checker_uses_ci_config_lane(self) -> None:
+        policy = classify_paths(["scripts/check-public-boundary-inventory.py"])
+        self.assertIs(policy.change_class, ChangeClass.CI_ONLY)
+        self.assertTrue(policy.run_ci_config)
+        self.assertFalse(policy.run_docs)
+        self.assertFalse(policy.run_rust)
+
     def test_unrelated_ci_change_does_not_require_macos(self) -> None:
         policy = classify_paths([".github/workflows/docs.yml"])
         self.assertFalse(policy.run_macos)

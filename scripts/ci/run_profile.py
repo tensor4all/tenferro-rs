@@ -80,6 +80,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "python3 scripts/test-check-guide-dependency-snippets.py",
         "python3 scripts/check-guide-dependency-snippets.py",
         "python3 scripts/check-operation-categories.py --fail-on-findings",
+        "python3 scripts/check-public-boundary-inventory.py",
         # Downstream external-linalg interop examples (issue #1602): compiled
         # and run as a consumer that uses only public tenferro APIs. The BLAS
         # binary links the system OpenBLAS/LAPACK installed by the docs CI job
@@ -106,6 +107,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "python3 scripts/check-publish-layout.py",
         "python3 scripts/test-storage-ownership-contracts-v2.py",
         _STORAGE_OWNERSHIP_CHECKER,
+        "python3 scripts/test-public-boundary-inventory.py",
         "python3 -m unittest discover -s scripts/ci/tests -v",
         "actionlint",
     ),

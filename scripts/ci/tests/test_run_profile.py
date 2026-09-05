@@ -170,6 +170,10 @@ class RunProfileTests(unittest.TestCase):
             commands.index("bash scripts/build_docs_site.sh"),
         )
 
+    def test_inventory_checker_is_in_docs_and_ci_config_profiles(self) -> None:
+        self.assertIn("python3 scripts/check-public-boundary-inventory.py", commands_for("docs"))
+        self.assertIn("python3 scripts/test-public-boundary-inventory.py", commands_for("ci-config"))
+
     def test_ci_config_runs_release_publication_checks(self) -> None:
         commands = commands_for("ci-config")
         for command in (
