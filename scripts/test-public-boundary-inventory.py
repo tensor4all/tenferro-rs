@@ -151,6 +151,30 @@ def test_malformed_authority_syntax_is_rejected() -> None:
             raise AssertionError("malformed catalog accepted")
 
 
+def test_source_refs_require_declarations() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+        path = root / "source.rs"
+        path.write_text(
+            "use crate::execute;\nmacro_rules! wrapper { ($execute:ident) => {} }\n",
+            encoding="utf-8",
+        )
+        for ref in (
+            {"path": "source.rs", "symbol": "execute"},
+            {"path": "source.rs", "symbol": "ident"},
+        ):
+            try:
+                checker._source_ref(ref, root)
+            except ValueError as error:
+                assert "symbol not found" in str(error)
+            else:
+                raise AssertionError("phantom source declaration accepted")
+
+        path.write_text("pub(crate) fn execute() {}\n", encoding="utf-8")
+        checker._source_ref({"path": "source.rs", "symbol": "execute"}, root)
+        checker._source_ref({"path": "source.rs", "symbol": "execute"}, root, "test")
+
+
 def test_enum_tuple_variants_are_rejected() -> None:
     with tempfile.TemporaryDirectory() as directory:
         path = pathlib.Path(directory) / "ops.rs"
@@ -161,6 +185,16 @@ def test_enum_tuple_variants_are_rejected() -> None:
             assert "unsupported Ops variant syntax" in str(error)
         else:
             raise AssertionError("unsupported tuple enum variant accepted")
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = pathlib.Path(directory) / "ops.rs"
+        path.write_text("enum Ops {\n    Good { value: String },\n}\n", encoding="utf-8")
+        try:
+            checker._enum(path, "Ops", pathlib.Path(directory))
+        except ValueError as error:
+            assert "unsupported Ops variant syntax" in str(error)
+        else:
+            raise AssertionError("single-line struct enum variant accepted")
 
 
 def test_each_category_has_distinct_regression_refs() -> None:

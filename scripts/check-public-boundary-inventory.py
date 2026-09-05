@@ -182,8 +182,13 @@ def _source_ref(ref: dict[str, Any], root: pathlib.Path, kind: str = "owner") ->
     if not path.is_file():
         raise ValueError(f"{kind} source does not exist: {ref['path']}")
     text = path.read_text(encoding="utf-8")
-    pattern = rf"\bfn\s+{re.escape(ref['symbol'])}\b" if kind == "test" else rf"\b{re.escape(ref['symbol'])}\b"
-    if not re.search(pattern, text):
+    symbol = re.escape(ref["symbol"])
+    visibility = r"(?:(?:pub)(?:\s*\([^)]*\))?\s+)?"
+    declaration = rf"^\s*{visibility}(?:(?:async)\s+)?(?:fn|struct|trait|enum|type|const)\s+{symbol}\b"
+    fn_declaration = rf"^\s*{visibility}(?:(?:async)\s+)?fn\s+{symbol}\b"
+    macro = rf"^\s*macro_rules!\s+{symbol}\b"
+    pattern = fn_declaration if kind == "test" else rf"(?:{declaration}|{macro})"
+    if not re.search(pattern, text, re.MULTILINE):
         raise ValueError(f"{kind} symbol not found: {ref['path']}::{ref['symbol']}")
 
 

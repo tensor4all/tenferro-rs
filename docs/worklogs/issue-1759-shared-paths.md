@@ -64,3 +64,26 @@ verification (exact commands):
 
 Remaining required gate: parent-owned final Flash re-review. Benchmark execution and
 hardware-specific routes remain follow-up work for #95/#96 and the parent issue.
+
+## Continuation: final Flash findings at `b86ed970`
+
+This continuation is limited to the final review corrections; it adds no Rust
+runtime or public API code. The extension macro's `execute` parameter label was
+replaced by the actual einsum and linalg route declarations. Linalg concrete and
+eager routes now record no separate planning owner, while traced planning points
+to the production compiler lowering function and traced execution points to the
+session executor. Eager allocation, payload, and wrapping references now point
+to their definitions in `eager.rs`. `_source_ref` now accepts only anchored
+function/struct/trait/enum/type/const/macro declarations (and test refs only
+functions), preventing imported names and macro parameter labels from passing.
+The mutation tests cover phantom/imported refs and single-line struct enum
+variants.
+
+Commands run in this continuation:
+
+- `timeout 30 python3 scripts/test-public-boundary-inventory.py` — RED before
+  the checker fix (phantom `execute` accepted), then pass after the fix.
+- `timeout 30 python3 scripts/check-public-boundary-inventory.py --generate --export-benchmarks docs/internals/public-boundary-benchmarks.json` — pass.
+- `timeout 30 python3 scripts/test-public-boundary-inventory.py` — pass.
+- `timeout 30 python3 scripts/check-public-boundary-inventory.py` — pass (`180`
+  case contracts across `6` families).

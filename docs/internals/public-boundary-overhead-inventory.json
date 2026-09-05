@@ -119,10 +119,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "allocation_source": "crates/tenferro-ad/src/eager.rs::exec_single_output",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "payload_boundary": "crates/tenferro-ad/src/eager.rs::exec_single_output -> crates/tenferro-ad/src/eager.rs::new_untracked_result",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -135,7 +135,7 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "exec_single_output"
                   }
                 ],
@@ -157,7 +157,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "new_untracked_result"
                   }
                 ]
@@ -320,10 +320,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "allocation_source": "crates/tenferro-ad/src/eager.rs::exec_single_output",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "payload_boundary": "crates/tenferro-ad/src/eager.rs::exec_single_output -> crates/tenferro-ad/src/eager.rs::new_untracked_result",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -336,7 +336,7 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "exec_single_output"
                   }
                 ],
@@ -358,7 +358,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "new_untracked_result"
                   }
                 ]
@@ -522,10 +522,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "allocation_source": "crates/tenferro-ad/src/eager.rs::exec_single_output",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "payload_boundary": "crates/tenferro-ad/src/eager.rs::exec_single_output -> crates/tenferro-ad/src/eager.rs::new_untracked_result",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -538,7 +538,7 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "exec_single_output"
                   }
                 ],
@@ -560,7 +560,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "new_untracked_result"
                   }
                 ]
@@ -736,10 +736,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "allocation_source": "crates/tenferro-ad/src/eager.rs::exec_single_output",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "payload_boundary": "crates/tenferro-ad/src/eager.rs::exec_single_output -> crates/tenferro-ad/src/eager.rs::new_untracked_result",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -752,7 +752,7 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "exec_single_output"
                   }
                 ],
@@ -774,7 +774,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "new_untracked_result"
                   }
                 ]
@@ -938,10 +938,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "allocation_source": "crates/tenferro-ad/src/eager.rs::exec_single_output",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "payload_boundary": "crates/tenferro-ad/src/eager.rs::exec_single_output -> crates/tenferro-ad/src/eager.rs::new_untracked_result",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -954,7 +954,7 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "exec_single_output"
                   }
                 ],
@@ -976,7 +976,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "new_untracked_result"
                   }
                 ]
@@ -1147,10 +1147,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "allocation_source": "crates/tenferro-ad/src/eager.rs::exec_single_output",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "payload_boundary": "crates/tenferro-ad/src/eager.rs::exec_single_output -> crates/tenferro-ad/src/eager.rs::new_untracked_result",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -1163,7 +1163,7 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "exec_single_output"
                   }
                 ],
@@ -1185,7 +1185,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "new_untracked_result"
                   }
                 ]
@@ -1352,10 +1352,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "allocation_source": "crates/tenferro-ad/src/eager.rs::exec_single_output",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "payload_boundary": "crates/tenferro-ad/src/eager.rs::exec_single_output -> crates/tenferro-ad/src/eager.rs::new_untracked_result",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -1368,7 +1368,7 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "exec_single_output"
                   }
                 ],
@@ -1390,7 +1390,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "new_untracked_result"
                   }
                 ]
@@ -1560,10 +1560,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output",
+                "allocation_source": "crates/tenferro-ad/src/eager.rs::exec_single_output",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-ad/src/eager_ops.rs::exec_single_output -> crates/tenferro-ad/src/eager_ops.rs::new_untracked_result",
+                "payload_boundary": "crates/tenferro-ad/src/eager.rs::exec_single_output -> crates/tenferro-ad/src/eager.rs::new_untracked_result",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -1576,7 +1576,7 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "exec_single_output"
                   }
                 ],
@@ -1598,7 +1598,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
+                    "path": "crates/tenferro-ad/src/eager.rs",
                     "symbol": "new_untracked_result"
                   }
                 ]
@@ -1722,10 +1722,10 @@
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-einsum/src/extension.rs::execute",
+                "allocation_source": "crates/tenferro-einsum/src/extension.rs::execute_einsum_extension",
                 "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-einsum/src/extension.rs::execute -> concrete Tensor return (no wrapping owner)",
+                "payload_boundary": "crates/tenferro-einsum/src/extension.rs::execute_einsum_extension -> concrete Tensor return (no wrapping owner)",
                 "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -1739,7 +1739,7 @@
                 "execution": [
                   {
                     "path": "crates/tenferro-einsum/src/extension.rs",
-                    "symbol": "execute"
+                    "symbol": "execute_einsum_extension"
                   }
                 ],
                 "metadata": [
@@ -1771,10 +1771,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-einsum/src/extension.rs::execute",
+                "allocation_source": "crates/tenferro-einsum/src/extension.rs::execute_einsum_extension",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-einsum/src/extension.rs::execute -> crates/tenferro-einsum/src/typed_eager.rs::typed_eager_einsum",
+                "payload_boundary": "crates/tenferro-einsum/src/extension.rs::execute_einsum_extension -> crates/tenferro-einsum/src/typed_eager.rs::typed_eager_einsum",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -1788,7 +1788,7 @@
                 "execution": [
                   {
                     "path": "crates/tenferro-einsum/src/extension.rs",
-                    "symbol": "execute"
+                    "symbol": "execute_einsum_extension"
                   }
                 ],
                 "metadata": [
@@ -2178,10 +2178,10 @@
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute",
+                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_owner",
                 "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute -> concrete Tensor return (no wrapping owner)",
+                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_owner -> concrete Tensor return (no wrapping owner)",
                 "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -2195,7 +2195,7 @@
                 "execution": [
                   {
                     "path": "crates/tenferro-linalg/src/extension.rs",
-                    "symbol": "execute"
+                    "symbol": "execute_linalg_extension_reads_owner"
                   }
                 ],
                 "metadata": [
@@ -2204,12 +2204,10 @@
                     "symbol": "infer_output_meta"
                   }
                 ],
-                "planning": [
-                  {
-                    "path": "crates/tenferro-linalg/src/extension.rs",
-                    "symbol": "execute_linalg_extension_reads_owner"
-                  }
-                ],
+                "planning": {
+                  "status": "not-applicable",
+                  "reason": "the concrete/eager extension owner performs no separate planning step"
+                },
                 "validation": [
                   {
                     "path": "crates/tenferro-linalg/src/validation.rs",
@@ -2227,10 +2225,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute",
+                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_owner",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute -> crates/tenferro-linalg/src/traced.rs::one_output",
+                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_owner -> crates/tenferro-linalg/src/traced.rs::one_output",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -2244,7 +2242,7 @@
                 "execution": [
                   {
                     "path": "crates/tenferro-linalg/src/extension.rs",
-                    "symbol": "execute"
+                    "symbol": "execute_linalg_extension_reads_owner"
                   }
                 ],
                 "metadata": [
@@ -2253,12 +2251,10 @@
                     "symbol": "infer_output_meta"
                   }
                 ],
-                "planning": [
-                  {
-                    "path": "crates/tenferro-linalg/src/extension.rs",
-                    "symbol": "execute_linalg_extension_reads_owner"
-                  }
-                ],
+                "planning": {
+                  "status": "not-applicable",
+                  "reason": "the concrete/eager extension owner performs no separate planning step"
+                },
                 "validation": [
                   {
                     "path": "crates/tenferro-linalg/src/validation.rs",
@@ -2299,8 +2295,8 @@
                 ],
                 "execution": [
                   {
-                    "path": "crates/tenferro-runtime/src/runtime/snapshot.rs",
-                    "symbol": "run_compiled"
+                    "path": "crates/tenferro-linalg/src/extension.rs",
+                    "symbol": "execute_linalg_extension_in_session"
                   }
                 ],
                 "metadata": [
@@ -2311,8 +2307,8 @@
                 ],
                 "planning": [
                   {
-                    "path": "crates/tenferro-linalg/src/extension.rs",
-                    "symbol": "execute_linalg_extension_reads_owner"
+                    "path": "crates/tenferro-runtime/src/compiler/mod.rs",
+                    "symbol": "compile_std_to_exec_with_options_and_constraints"
                   }
                 ],
                 "validation": [
