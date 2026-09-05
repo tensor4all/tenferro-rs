@@ -404,7 +404,13 @@ fn execute_stage(
         &fixture.specs
     };
     match stage {
-        Stage::Parse => Ok(Subscripts::parse(fixture.case.notation())?.inputs.len()),
+        Stage::Parse => {
+            let parsed = Subscripts::parse(fixture.case.notation())?;
+            let count = parsed.inputs.len();
+            // Consume the complete parser output, not only its operand count.
+            black_box(parsed);
+            Ok(count)
+        }
         Stage::InputMetadata => {
             let metadata = input_specs(inputs);
             let count = metadata.len();
