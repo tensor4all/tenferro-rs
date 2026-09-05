@@ -107,6 +107,9 @@
         "core.triu.ordinary.concrete",
         "core.triu.prepared.traced",
         "einsum.einsum.ordinary.concrete",
+        "einsum.einsum.ordinary.eager",
+        "einsum.einsum.prepare.concrete",
+        "einsum.einsum.prepared.concrete",
         "einsum.einsum.prepared.traced",
         "fft.c2c_forward.ordinary.concrete",
         "fft.c2c_forward.prepared.traced",
@@ -295,6 +298,9 @@
         "core.triu.ordinary.concrete",
         "core.triu.prepared.traced",
         "einsum.einsum.ordinary.concrete",
+        "einsum.einsum.ordinary.eager",
+        "einsum.einsum.prepare.concrete",
+        "einsum.einsum.prepared.concrete",
         "einsum.einsum.prepared.traced",
         "fft.c2c_forward.ordinary.concrete",
         "fft.c2c_forward.prepared.traced",
@@ -1418,6 +1424,36 @@
       "status": "pending",
       "surface": "concrete",
       "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+    },
+    {
+      "family": "einsum",
+      "id": "einsum.einsum.ordinary.eager",
+      "operation": "einsum",
+      "phase": "execution",
+      "setup_boundary": "ordinary public workflow",
+      "status": "pending",
+      "surface": "eager",
+      "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+    },
+    {
+      "family": "einsum",
+      "id": "einsum.einsum.prepare.concrete",
+      "operation": "einsum",
+      "phase": "setup",
+      "setup_boundary": "concrete plan preparation",
+      "status": "pending",
+      "surface": "concrete",
+      "workflow": "validate -> parse notation -> capture input specs -> plan contraction tree"
+    },
+    {
+      "family": "einsum",
+      "id": "einsum.einsum.prepared.concrete",
+      "operation": "einsum",
+      "phase": "execution",
+      "setup_boundary": "prepared concrete workflow",
+      "status": "pending",
+      "surface": "concrete",
+      "workflow": "validate prepared input specs -> caller-owned backend session -> execute without replanning"
     },
     {
       "family": "einsum",

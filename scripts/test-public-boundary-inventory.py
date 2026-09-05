@@ -38,8 +38,22 @@ def rejects(mutator, phrase: str) -> None:
 
 def test_current_inventory_is_exhaustive() -> None:
     _, auth, rows = inventory()
-    assert len(rows) == sum(len(item.operations) * 2 for item in auth.values()) + 1
-    assert [row["operation"] for row in rows if row["id"].endswith("ordinary.eager")] == ["add"]
+    assert len(rows) == 184
+    assert [row["operation"] for row in rows if row["id"].endswith("ordinary.eager")] == ["add", "einsum"]
+    new_routes = {
+        row["id"]: (row["surface"], row["phase"])
+        for row in rows
+        if row["id"] in {
+            "einsum.einsum.ordinary.eager",
+            "einsum.einsum.prepare.concrete",
+            "einsum.einsum.prepared.concrete",
+        }
+    }
+    assert new_routes == {
+        "einsum.einsum.ordinary.eager": ("eager", "execution"),
+        "einsum.einsum.prepare.concrete": ("concrete", "setup"),
+        "einsum.einsum.prepared.concrete": ("concrete", "execution"),
+    }
 
 
 def test_case_filters_reject_malformed_uncovered_and_duplicate_contracts() -> None:
