@@ -38,7 +38,41 @@ def rejects(mutator, phrase: str) -> None:
 
 def test_current_inventory_is_exhaustive() -> None:
     _, auth, rows = inventory()
-    assert len(rows) == sum(len(item.operations) * 2 for item in auth.values())
+    assert len(rows) == sum(len(item.operations) * 2 for item in auth.values()) + 1
+    assert [row["operation"] for row in rows if row["id"].endswith("ordinary.eager")] == ["add"]
+
+
+def test_case_filters_reject_malformed_uncovered_and_duplicate_contracts() -> None:
+    rejects(
+        lambda value: value["families"]["core"]["selectors"][0]["cases"][0].update(operations=[]),
+        "nonempty list",
+    )
+    rejects(
+        lambda value: value["families"]["core"]["selectors"][0]["cases"][0].update(operations="add"),
+        "nonempty list",
+    )
+    rejects(
+        lambda value: value["families"]["core"]["selectors"][0]["cases"][0].update(operations=[1]),
+        "contain strings",
+    )
+    rejects(
+        lambda value: value["families"]["core"]["selectors"][0]["cases"][0].update(operations=["abs", "abs"]),
+        "must be unique",
+    )
+    rejects(
+        lambda value: value["families"]["core"]["selectors"][0]["cases"][0].update(operations=["external"]),
+        "outside selector",
+    )
+    def remove_coverage(value: dict) -> None:
+        elementwise = next(item for item in value["families"]["core"]["selectors"] if item["id"] == "core.elementwise")
+        for case in elementwise["cases"]:
+            case["operations"] = ["add"]
+    rejects(remove_coverage, "uncovered operations")
+    def duplicate_id(value: dict) -> None:
+        elementwise = next(item for item in value["families"]["core"]["selectors"] if item["id"] == "core.elementwise")
+        eager = next(case for case in elementwise["cases"] if case["id"].endswith("ordinary.eager"))
+        eager["id"] = "{family}.{operation}.ordinary.concrete"
+    rejects(duplicate_id, "duplicate expanded case id")
 
 
 def test_operation_addition_removal_and_rename_fail() -> None:
