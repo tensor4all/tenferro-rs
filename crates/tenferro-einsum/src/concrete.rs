@@ -1798,6 +1798,9 @@ fn resolve_read_notation<'a>(
     resolve_shapes(notation, inputs.iter().map(|input| input.shape()).collect())
 }
 
+#[cfg(test)]
+mod probes;
+
 fn input_specs(inputs: &[&Tensor]) -> Vec<ConcreteEinsumInputSpec> {
     inputs
         .iter()
