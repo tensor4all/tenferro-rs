@@ -24,6 +24,15 @@ class ChangePolicyTests(unittest.TestCase):
         self.assertFalse(policy.run_gpu)
         self.assertFalse(policy.run_macos)
 
+    def test_repository_rules_are_docs_but_do_not_hide_code(self) -> None:
+        paths = ["AGENTS.md", "REPOSITORY_RULES.md"]
+        self.assertIs(classify_paths(paths).change_class, ChangeClass.DOCS_ONLY)
+        for extra in ("src/lib.rs", "unknown.md"):
+            with self.subTest(extra=extra):
+                self.assertIs(
+                    classify_paths(paths + [extra]).change_class, ChangeClass.CODE
+                )
+
     def test_ci_and_docs_runs_both_lightweight_suites(self) -> None:
         policy = classify_paths(
             [".github/workflows/ci.yml", "docs/worklogs/ci.md"]
@@ -317,6 +326,14 @@ class LocalGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("classification: docs-only", result.stdout)
         self.assertFalse(self.marker.exists(), "docs-only must not invoke Cargo")
+
+    def test_repository_rules_skip_cargo_and_coverage_acknowledgement(self) -> None:
+        self.write_change("AGENTS.md")
+        self.write_change("REPOSITORY_RULES.md")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("classification: docs-only", result.stdout)
+        self.assertFalse(self.marker.exists(), "rule docs must not invoke Cargo")
 
     def test_untracked_docs_with_trailing_whitespace_fail(self) -> None:
         target = self.repo / "docs" / "guide.md"
