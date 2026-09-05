@@ -53,6 +53,8 @@ class ChangePolicy:
 
 _DOC_FILES = frozenset(
     {
+        "AGENTS.md",
+        "REPOSITORY_RULES.md",
         "CHANGELOG.md",
         "CONTRIBUTING.md",
         "LICENSE-APACHE",
