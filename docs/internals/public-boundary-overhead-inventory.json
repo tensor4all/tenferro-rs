@@ -22,7 +22,7 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -232,7 +232,7 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -433,7 +433,7 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -635,7 +635,7 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -645,6 +645,23 @@
                 }
               ],
               "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
+            },
+            {
+              "component": "core",
+              "id": "{family}.{operation}.ordinary.eager",
+              "phase": "execution",
+              "setup_boundary": "ordinary EagerTensor forward-call workflow",
+              "surface": "eager",
+              "operations": [
+                "add"
+              ],
+              "tests": [
+                {
+                  "path": "crates/tenferro-ad/tests/integration/numpy_api.rs",
+                  "symbol": "eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons"
+                }
+              ],
+              "workflow": "EagerTensor add admission -> eager execution -> result/optional AD recording; input/leaf construction and backward are outside this case"
             },
             {
               "component": "core",
@@ -849,7 +866,7 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -1051,7 +1068,7 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -1260,7 +1277,7 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -1465,7 +1482,7 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -1681,7 +1698,7 @@
             {
               "component": "einsum",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -1894,7 +1911,7 @@
             {
               "component": "fft",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -2111,7 +2128,7 @@
             {
               "component": "linalg",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -2346,7 +2363,7 @@
             {
               "component": "sparse",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [
@@ -2561,7 +2578,7 @@
             {
               "component": "tropical",
               "id": "{family}.{operation}.ordinary.concrete",
-              "phase": "validation",
+              "phase": "execution",
               "setup_boundary": "ordinary public workflow",
               "surface": "concrete",
               "tests": [

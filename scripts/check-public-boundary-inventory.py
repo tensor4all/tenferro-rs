@@ -264,14 +264,28 @@ def validate_overlay(data: dict[str, Any], auth: dict[str, Authority], root: pat
             cases = selector.get("cases")
             if not isinstance(cases, list) or not cases:
                 raise ValueError(f"{family}/{selector['id']} has no case contracts")
-            for op in selected:
-                for case in cases:
-                    if not isinstance(case, dict) or not case.get("id") or case.get("surface") not in SURFACES or not case.get("phase") or not case.get("setup_boundary"):
-                        raise ValueError(f"malformed case contract for {family}/{op}")
-                    if not isinstance(case.get("tests"), list) or not case["tests"]:
-                        raise ValueError(f"case {case.get('id')} has no regression tests")
-                    for test in case["tests"]:
-                        _source_ref(test, root, "test")
+            covered: set[str] = set()
+            for case in cases:
+                if not isinstance(case, dict):
+                    raise ValueError(f"malformed case contract for {family}/{selector['id']}")
+                case_operations = case.get("operations", selected)
+                if not isinstance(case_operations, list) or not case_operations:
+                    raise ValueError(f"case {case.get('id')} operations must be a nonempty list")
+                if any(not isinstance(op, str) for op in case_operations):
+                    raise ValueError(f"case {case.get('id')} operations must contain strings")
+                if len(case_operations) != len(set(case_operations)):
+                    raise ValueError(f"case {case.get('id')} operations must be unique")
+                external = sorted(set(case_operations) - set(selected))
+                if external:
+                    raise ValueError(f"case {case.get('id')} operations outside selector: {', '.join(external)}")
+                if not case.get("id") or case.get("surface") not in SURFACES or not case.get("phase") or not case.get("setup_boundary"):
+                    raise ValueError(f"malformed case contract for {family}/{selector['id']}")
+                if not isinstance(case.get("tests"), list) or not case["tests"]:
+                    raise ValueError(f"case {case.get('id')} has no regression tests")
+                for test in case["tests"]:
+                    _source_ref(test, root, "test")
+                covered.update(case_operations)
+                for op in case_operations:
                     case_id = str(case["id"]).replace("{family}", family).replace("{operation}", op)
                     row = dict(case, id=case_id)
                     row.update(
@@ -284,6 +298,9 @@ def validate_overlay(data: dict[str, Any], auth: dict[str, Authority], root: pat
                         category=authority.categories[op],
                     )
                     rows.append(row)
+            missing_cases = sorted(set(selected) - covered)
+            if missing_cases:
+                raise ValueError(f"uncovered operations in {family}/{selector['id']}: {', '.join(missing_cases)}")
         if len({row["id"] for row in rows}) != len(rows):
             raise ValueError("duplicate expanded case id")
         uncovered = sorted(set(authority.operations) - set(seen))

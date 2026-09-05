@@ -3,13 +3,14 @@
 
 - Baseline revision: `0457a2ed0aeea21b14f4297f7f4731e09b3a0507`
 - Generation provenance: `source-derived from the current checkout; overlay/source digest is the freshness key`
-- Overlay/source digest: `9167d374058599aa7a50f2ce4005164ba6a8bcc6e252118758787a46ef7d03de`
+- Overlay/source digest: `1cdcca0ebfc25fa2031edb38f115f694fc20cf93bd5317dd89c617d5aa778b8b`
 
 | Family | Operation | Category | Surfaces (disposition) | Case contracts |
 |---|---|---|---|---|
 | core | `abs` | elementwise | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.abs.ordinary.concrete |
 | core | `abs` | elementwise | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.abs.prepared.traced |
 | core | `add` | elementwise | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.add.ordinary.concrete |
+| core | `add` | elementwise | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.add.ordinary.eager |
 | core | `add` | elementwise | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.add.prepared.traced |
 | core | `broadcast_in_dim` | structural | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.broadcast_in_dim.ordinary.concrete |
 | core | `broadcast_in_dim` | structural | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.broadcast_in_dim.prepared.traced |
