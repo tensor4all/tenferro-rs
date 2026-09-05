@@ -4,6 +4,29 @@ Parent #1758; measurement infrastructure for #1760 and benchmark #95.
 Baseline `0457a2ed0aeea21b14f4297f7f4731e09b3a0507`.
 Design: [einsum-component-probes](../design/einsum-component-probes.md).
 
+## Direct-work diagnostic and shared-owner candidate
+
+Historical review/delegation notes below are not current workflow gates.
+The integrated probe at `e120bbf` and benchmark harness `acf631f` completed all
+30 stages in the CPU devcontainer with verified release provenance. The frozen
+precision protocol used 5 independent processes, 7 measured samples per process,
+3 warmups, a 10ms minimum aggregate, and CoV ≤ 0.10. Earlier incomplete pilots
+remain archived and are not accepted comparisons. This is a component diagnostic,
+not end-to-end baseline/candidate acceptance.
+
+Combined binary preparation dominates parse/input-metadata costs, and explicit
+pair construction avoids much of its cost. The selected candidate therefore
+bypasses ordering search for two operands in the shared
+`ContractionTree::optimize_with_options` owner. It keeps `options.validate()` and
+uses existing `from_pairs` shape validation and step-plan construction. It does
+not specialize rank, dtype, operation spelling or execution surface, add a cache,
+or weaken prepared execution checks. Three-or-more-operand optimization is unchanged.
+
+New label/shape-equivalence and rejection tests passed on the original path before
+the shortcut. With the candidate, all 183 einsum unit tests passed, one probe was
+ignored, and strict crate/test Clippy and rustfmt passed. Release/paired performance
+validation, full public matrix coverage and final PR gates remain outstanding.
+
 ## Pre-implementation review
 
 DeepSeek V4 Flash, design round1: **Correct-to-merge**, before implementation.

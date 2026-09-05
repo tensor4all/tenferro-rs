@@ -342,6 +342,41 @@ fn from_pairs_rejects_wrong_step_count() {
 }
 
 #[test]
+fn optimize_binary_matches_explicit_pair_for_general_labels_and_shapes() {
+    let cases: &[(&str, &[&[usize]])] = &[
+        ("ij,jk->ki", &[&[2, 3], &[3, 4]]),
+        ("bij,bjk->bik", &[&[2, 3, 4], &[2, 4, 5]]),
+        ("ii,jj->", &[&[2, 2], &[3, 3]]),
+        ("i,j->ji", &[&[2], &[3]]),
+        ("αβ,βγ->γα", &[&[2, 3], &[3, 4]]),
+    ];
+    for &(notation, shapes) in cases {
+        let subs = Subscripts::parse(notation).unwrap();
+        let automatic = ContractionTree::optimize(&subs, shapes).unwrap();
+        let explicit = ContractionTree::from_pairs(&subs, shapes, &[(0, 1)]).unwrap();
+        assert_eq!(automatic.step_pair(0), explicit.step_pair(0), "{notation}");
+        assert_eq!(automatic.size_dict, explicit.size_dict, "{notation}");
+        assert_eq!(automatic.operand_subs, explicit.operand_subs, "{notation}");
+        assert_eq!(
+            automatic.step_subscripts(0),
+            explicit.step_subscripts(0),
+            "{notation}"
+        );
+    }
+}
+
+#[test]
+fn optimize_binary_preserves_shape_validation() {
+    let subs = Subscripts::parse("ij,jk->ik").unwrap();
+    let invalid_shapes: &[&[&[usize]]] = &[&[], &[&[2, 3]], &[&[2], &[3, 4]], &[&[2, 3], &[5, 4]]];
+    for shapes in invalid_shapes {
+        let automatic = ContractionTree::optimize(&subs, shapes).unwrap_err();
+        let explicit = ContractionTree::from_pairs(&subs, shapes, &[(0, 1)]).unwrap_err();
+        assert_eq!(automatic.to_string(), explicit.to_string());
+    }
+}
+
+#[test]
 fn optimize_single_operand_returns_tree_with_no_steps() {
     let subs = Subscripts::new(&[&[0, 1]], &[0, 1]);
     let tree = ContractionTree::optimize(&subs, &[&[3, 4][..]]).unwrap();
@@ -350,7 +385,7 @@ fn optimize_single_operand_returns_tree_with_no_steps() {
 }
 
 #[test]
-fn optimize_with_options_falls_back_to_self_greedy_when_omeco_returns_none() {
+fn optimize_two_operands_returns_single_pair() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
     let shapes = [&[2, 3][..], &[3, 4][..]];
     let tree = ContractionTree::optimize_with_options(

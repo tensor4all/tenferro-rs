@@ -141,9 +141,10 @@ impl ContractionTree {
     /// Automatically compute an optimized contraction order with explicit
     /// planner options.
     ///
-    /// This routes automatic planning through TreeSA using the provided
-    /// configuration. The default options correspond to a greedy-initialized
-    /// TreeSA with zero annealing iterations.
+    /// For three or more operands, this routes planning through TreeSA using
+    /// the provided configuration. The default is greedy-initialized TreeSA
+    /// with zero annealing iterations. One or two operands need no ordering
+    /// search; their trees are built directly after validating the options.
     ///
     /// # Errors
     ///
@@ -159,6 +160,9 @@ impl ContractionTree {
         let input_count = subscripts.inputs.len();
         if input_count <= 1 {
             return Self::from_pairs(subscripts, shapes, &[]);
+        }
+        if input_count == 2 {
+            return Self::from_pairs(subscripts, shapes, &[(0, 1)]);
         }
 
         let size_dict = build_size_dict(subscripts, shapes, None)?;
