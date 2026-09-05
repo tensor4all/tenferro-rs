@@ -301,6 +301,15 @@ may be enabled for one command with `CARGO_PROFILE_DEV_DEBUG=1` or
 
 ### PR Creation Rules
 
+- Minimize PR count for one agreed deliverable. Keep implementation steps and
+  focused tests small, but collect related changes and validate them before
+  opening a PR. Do not create a PR per task or correction; update the existing PR.
+- Split only for real repository/dependency, reviewability, or independent
+  release/rollback boundaries, or an explicit user request. Do not bundle
+  unrelated changes merely to reduce PR count.
+- Batch ready corrections before pushing to avoid redundant CI runs; preserve
+  required CI and approvals for the final submitted state.
+
 - PRs to `main` must be created using `gh pr create`
 - Do not include AI-generated analysis reports as standalone files in PRs
 - Batched repository-rule remediation PRs must follow
