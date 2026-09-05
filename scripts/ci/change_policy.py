@@ -69,6 +69,7 @@ _CI_FILES = frozenset(
         "scripts/check-pr-fast.sh",
         "scripts/check-public-boundary-inventory.py",
         "scripts/test-public-boundary-inventory.py",
+        "scripts/test-repository-rules-review.py",
     }
 )
 _CI_PREFIXES = (".github/workflows/", "scripts/ci/")
