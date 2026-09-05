@@ -1,5 +1,15 @@
 # Issue 1759: shared public-boundary inventory
 
+## Final review and parent verification
+
+DeepSeek V4 Flash final review at `e3c08c232ea6dd5189e8a03e33e21cfae6d5e32a`:
+**Correct-to-merge**. Prior phantom/misattributed owner findings are fixed. The
+non-blocking request for separate GPU/XLA/multi-device evidence limitations is
+addressed in the internals index; no device performance is inferred from CPU work.
+Parent independently passed the inventory checker, mutation tests, 19 change-policy
+and 36 run-profile tests, the focused fast PR gate and committed-head deterministic
+rules review. Hosted CI and merge remain required; #1758 is not complete.
+
 ## Context and decisions
 
 Parent #1758 requires measurement before optimization. This independently

@@ -23,6 +23,13 @@ Normative specs — trait signatures, op semantics, backend contracts.
 - [Tensor semantics](../spec/tensor-semantics.md)
 - [Public-boundary overhead inventory](public-boundary-overhead-inventory.md)
 
+The overhead inventory records source-path responsibilities, not measured CPU
+performance. CUDA/GPU, XLA, and multi-device execution each remain separately
+unmeasured follow-ups under [#1758](https://github.com/tensor4all/tenferro-rs/issues/1758).
+CPU source inspection or future CPU timings do not establish their support,
+synchronization, transfer costs, or performance. Applicable device-specific evidence
+is required before the parent program's final acceptance.
+
 ## Source Pointers
 
 | Topic | Location |
