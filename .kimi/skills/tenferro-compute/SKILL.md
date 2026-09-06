@@ -37,9 +37,15 @@ not when changing tenferro itself.
   rejected.
 - **No facade crate.** `cargo add tenferro` fails by design; depend on the
   crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
-- **Explicit backend.** Direct operations take an explicit backend argument;
-  construct the backend/runtime once and reuse it — per-call construction
-  discards the buffer pool.
+- **Explicit execution owner.** Concrete operations take a borrowed session
+  inside `backend.with_backend_session(...)` (`BackendSessionHost` import).
+  Construct the backend/runtime once and reuse it — per-call construction
+  discards the buffer pool. Eager tensors retain their runtime instead.
+- **Representation is not reuse.** Integer einsum labels still plan. For a
+  repeated compatible equation/input count/dtype/shape, prepare a
+  `ConcreteEinsumPlan` once, even from a string; see
+  [performance idioms](references/performance-idioms.md). Do not flatten
+  parenthesized contraction order into label arrays.
 - **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`).
   Flat notation supports one right-aligned, broadcastable `...` ellipsis per
   term; `EinsumNotation` provides the programmatic form.

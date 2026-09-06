@@ -28,6 +28,8 @@
 
 ## Guides
 
+- [Ordinary calls and prepared execution](https://tensor4all.org/tenferro-rs/guides/ordinary-and-prepared-execution.html): Choosing ordinary einsum, compatible ConcreteEinsumPlan reuse and programmatic labels, with scoped historical Linux measurements.
+
 - [Einsum](https://tensor4all.org/tenferro-rs/guides/einsum.html): WARNING — missing arrows and parenthesized ellipses are parse-time `Error::InvalidSubscripts` failures; use flat `...` ellipsis or `EinsumNotation`.
 - [Linear Algebra](https://tensor4all.org/tenferro-rs/guides/linear-algebra.html): Covers the `tenferro-linalg` operation crate and its direct, eager, and traced execution surfaces.
 - [External Linear Algebra Interop](https://tensor4all.org/tenferro-rs/guides/external-linalg-interop.html): Calling faer or BLAS/LAPACK directly on tenferro-owned storage: the direct-dependency contract, column-major leading dimensions, non-contiguous/non-host rejection, and provider thread control.

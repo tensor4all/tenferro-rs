@@ -59,6 +59,7 @@ website:
           - guides/views-and-slicing.md
           - storage-ownership.md
           - guides/einsum.md
+          - guides/ordinary-and-prepared-execution.md
           - guides/linear-algebra.md
           - guides/external-linalg-interop.md
           - guides/custom-operations.md

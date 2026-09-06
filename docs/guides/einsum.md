@@ -1,5 +1,8 @@
 # Einsum
 
+For choosing between ordinary calls, compatible plan reuse and programmatic
+labels, start with [Ordinary calls and prepared execution](ordinary-and-prepared-execution.md).
+
 `einsum` is a standard extension, not part of `tenferro` core. Add the
 `tenferro-einsum` crate and import its extension traits. Concrete tensor
 execution uses `TensorEinsumExt` and `TypedTensorEinsumExt` for owned inputs,
