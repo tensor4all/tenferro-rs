@@ -1,4 +1,12 @@
+use std::cell::Cell;
 use std::collections::HashSet;
+
+// Scalar test instrumentation, not cached planning state. Thread isolation keeps
+// parallel tests independent; these counters do not exist in non-test builds.
+thread_local! {
+    pub(super) static OMECO_CALLS: Cell<usize> = const { Cell::new(0) };
+    pub(super) static SELF_GREEDY_CALLS: Cell<usize> = const { Cell::new(0) };
+}
 
 use std::collections::HashMap;
 
@@ -11,6 +19,51 @@ use super::{
     build_needed_label_counts, collect_candidate_intermediate_subs, nested_to_pairs,
     optimize_self_greedy_pairs, ContractionOptimizerOptions, ContractionTree,
 };
+
+#[test]
+fn binary_public_planning_bypasses_both_general_optimizers() {
+    OMECO_CALLS.with(|count| count.set(0));
+    SELF_GREEDY_CALLS.with(|count| count.set(0));
+    let counts = || {
+        (
+            OMECO_CALLS.with(Cell::get),
+            SELF_GREEDY_CALLS.with(Cell::get),
+        )
+    };
+    let binary = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let tree = ContractionTree::optimize(&binary, &shapes).unwrap();
+    assert_eq!(counts(), (0, 0));
+    assert_eq!(tree.step_pair(0), Some((0, 1)));
+    let options = ContractionOptimizerOptions {
+        ntrials: 2,
+        niters: 3,
+        betas: vec![0.1, 1.0],
+        ..ContractionOptimizerOptions::default()
+    };
+    let tree = ContractionTree::optimize_with_options(&binary, &shapes, &options).unwrap();
+    assert_eq!(tree.step_count(), 1);
+    assert_eq!(counts(), (0, 0));
+
+    let a = tenferro_tensor::Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let b = tenferro_tensor::Tensor::from_vec_col_major(vec![3, 4], vec![2.0_f64; 12]).unwrap();
+    let _plan = crate::ConcreteEinsumPlan::prepare([&a, &b], "ij,jk->ik").unwrap();
+    assert_eq!(counts(), (0, 0));
+
+    // A positive control proves that the real general entry is instrumented.
+    let nary = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[2, 3][..], &[3, 4][..], &[4, 2][..]];
+    let tree = ContractionTree::optimize(&nary, &shapes).unwrap();
+    assert_eq!(tree.step_count(), 2);
+    assert_eq!(OMECO_CALLS.with(Cell::get), 1);
+
+    // Also prove the fallback counter is connected, independently of omeco's
+    // choice to return a plan for the positive-control problem above.
+    let before = SELF_GREEDY_CALLS.with(Cell::get);
+    let sizes = super::build_size_dict(&nary, &shapes, None).unwrap();
+    assert_eq!(optimize_self_greedy_pairs(&nary, &sizes).unwrap().len(), 2);
+    assert_eq!(SELF_GREEDY_CALLS.with(Cell::get), before + 1);
+}
 
 #[test]
 fn default_options_build_zero_iter_greedy_initialized_treesa() {
@@ -342,6 +395,41 @@ fn from_pairs_rejects_wrong_step_count() {
 }
 
 #[test]
+fn optimize_binary_matches_explicit_pair_for_general_labels_and_shapes() {
+    let cases: &[(&str, &[&[usize]])] = &[
+        ("ij,jk->ki", &[&[2, 3], &[3, 4]]),
+        ("bij,bjk->bik", &[&[2, 3, 4], &[2, 4, 5]]),
+        ("ii,jj->", &[&[2, 2], &[3, 3]]),
+        ("i,j->ji", &[&[2], &[3]]),
+        ("αβ,βγ->γα", &[&[2, 3], &[3, 4]]),
+    ];
+    for &(notation, shapes) in cases {
+        let subs = Subscripts::parse(notation).unwrap();
+        let automatic = ContractionTree::optimize(&subs, shapes).unwrap();
+        let explicit = ContractionTree::from_pairs(&subs, shapes, &[(0, 1)]).unwrap();
+        assert_eq!(automatic.step_pair(0), explicit.step_pair(0), "{notation}");
+        assert_eq!(automatic.size_dict, explicit.size_dict, "{notation}");
+        assert_eq!(automatic.operand_subs, explicit.operand_subs, "{notation}");
+        assert_eq!(
+            automatic.step_subscripts(0),
+            explicit.step_subscripts(0),
+            "{notation}"
+        );
+    }
+}
+
+#[test]
+fn optimize_binary_preserves_shape_validation() {
+    let subs = Subscripts::parse("ij,jk->ik").unwrap();
+    let invalid_shapes: &[&[&[usize]]] = &[&[], &[&[2, 3]], &[&[2], &[3, 4]], &[&[2, 3], &[5, 4]]];
+    for shapes in invalid_shapes {
+        let automatic = ContractionTree::optimize(&subs, shapes).unwrap_err();
+        let explicit = ContractionTree::from_pairs(&subs, shapes, &[(0, 1)]).unwrap_err();
+        assert_eq!(automatic.to_string(), explicit.to_string());
+    }
+}
+
+#[test]
 fn optimize_single_operand_returns_tree_with_no_steps() {
     let subs = Subscripts::new(&[&[0, 1]], &[0, 1]);
     let tree = ContractionTree::optimize(&subs, &[&[3, 4][..]]).unwrap();
@@ -350,7 +438,7 @@ fn optimize_single_operand_returns_tree_with_no_steps() {
 }
 
 #[test]
-fn optimize_with_options_falls_back_to_self_greedy_when_omeco_returns_none() {
+fn optimize_two_operands_returns_single_pair() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
     let shapes = [&[2, 3][..], &[3, 4][..]];
     let tree = ContractionTree::optimize_with_options(

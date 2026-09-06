@@ -141,9 +141,10 @@ impl ContractionTree {
     /// Automatically compute an optimized contraction order with explicit
     /// planner options.
     ///
-    /// This routes automatic planning through TreeSA using the provided
-    /// configuration. The default options correspond to a greedy-initialized
-    /// TreeSA with zero annealing iterations.
+    /// For three or more operands, this routes planning through TreeSA using
+    /// the provided configuration. The default is greedy-initialized TreeSA
+    /// with zero annealing iterations. One or two operands need no ordering
+    /// search; their trees are built directly after validating the options.
     ///
     /// # Errors
     ///
@@ -159,6 +160,9 @@ impl ContractionTree {
         let input_count = subscripts.inputs.len();
         if input_count <= 1 {
             return Self::from_pairs(subscripts, shapes, &[]);
+        }
+        if input_count == 2 {
+            return Self::from_pairs(subscripts, shapes, &[(0, 1)]);
         }
 
         let size_dict = build_size_dict(subscripts, shapes, None)?;
@@ -479,6 +483,8 @@ fn optimize_omeco_pairs(
     size_dict: &HashMap<u32, usize>,
     options: &ContractionOptimizerOptions,
 ) -> Result<Option<Vec<(usize, usize)>>> {
+    #[cfg(test)]
+    tests::OMECO_CALLS.with(|count| count.set(count.get() + 1));
     let code = OmecoEinCode::new(subscripts.inputs.clone(), subscripts.output.clone());
     let optimizer = options.to_treesa();
     let Some(nested) = optimizer.optimize(&code, size_dict) else {
@@ -633,6 +639,8 @@ fn optimize_self_greedy_pairs(
     subscripts: &Subscripts,
     size_dict: &HashMap<u32, usize>,
 ) -> Result<Vec<(usize, usize)>> {
+    #[cfg(test)]
+    tests::SELF_GREEDY_CALLS.with(|count| count.set(count.get() + 1));
     let input_count = subscripts.inputs.len();
     let mut available: Vec<usize> = (0..input_count).collect();
     let mut operand_subs: Vec<Vec<u32>> = subscripts.inputs.clone();
