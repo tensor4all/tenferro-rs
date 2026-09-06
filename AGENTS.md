@@ -24,9 +24,16 @@ Then read the tenferro-specific rules:
 
 The sections below are tenferro-specific additions and overrides.
 
-Before implementation work, review `REPOSITORY_RULES.md`.
-Before creating a PR, review `REPOSITORY_RULES.md` again.
-Before touching AD rules, oracle replay, or linearized boundary code, review `REPOSITORY_RULES.md` first.
+Read the applicable sections of `REPOSITORY_RULES.md` when starting work and
+revisit them when scope changes, particularly for AD, unsafe or FFI boundaries.
+Do not reload unchanged rules before every edit or PR step.
+
+### Proportionate workflow
+
+Work directly by default. Subagents and independent AI/cross-model reviews are
+optional and require an explicit user request. Review the coherent final diff
+once; corrections within its agreed design need affected checks, not a fresh
+design approval or full review cycle. Required CI and human approvals are unchanged.
 
 ## Current Implementation Status
 
@@ -141,12 +148,10 @@ See [`docs/design/`](docs/design/) for architecture and design documents.
 
 ### Work Logs And Review Intent
 
-For nontrivial refactors, cleanup streams, AI-assisted implementation, or
-changes that make explicit design tradeoffs, check [`docs/worklogs/`](docs/worklogs/)
-before reviewing the code. Work logs record the session summary, context read,
-reference code, chosen design, rejected alternatives, and residual risks. A
-review that challenges scope, abstraction, or design intent should engage with
-the linked work log instead of treating the diff as context-free.
+Use [`docs/worklogs/`](docs/worklogs/) for multi-phase work or non-obvious design
+tradeoffs. Small fixes can keep their rationale and checks in the PR body; AI
+assistance alone does not require a separate log. Consult a linked decision
+record when reviewing the choices it explains, rather than duplicating it.
 
 When a PR establishes or changes durable design intent, update the appropriate
 document under [`docs/design/`](docs/design/) in the same PR. Work logs explain
@@ -270,11 +275,11 @@ without `--worktree` before PR creation.
 
 Additionally, verify the following before pushing:
 
-- **Side review**: Re-read `REPOSITORY_RULES.md` and review the local diff against repository rules before creating a PR. Fix any findings, or explicitly document residual risks.
+- **Self-review**: Apply relevant repository rules to the coherent final diff once. Fix findings or document residual risks; do not repeat unchanged reviews.
 - **Sample code verification**: All code examples in `README.md` and `docs/getting-started/` must compile and run correctly. Extract and test any changed examples.
 - **Design document updates**: When code changes affect architecture or specifications, update the corresponding documents in `docs/architecture/`, `docs/spec/`, or `docs/design/`, and update any affected diagrams under `docs/assets/` or embedded in Markdown. Stale documentation is worse than no documentation.
 - **Agent skill freshness**: When a PR changes public API surface, feature flags, crate boundaries, or documented idioms, review `.agents/skills/tenferro-compute/` and the other shipped skill mirrors, and update them in the same PR when they no longer match.
-- **Work log updates**: For nontrivial refactors, cleanup streams, AI-assisted implementation, or explicit tradeoff decisions, add or update a work log under `docs/worklogs/` and link it from the PR body.
+- **Work log updates**: Link a concise record for multi-phase work or non-obvious tradeoffs. For small fixes, rationale and checks in the PR body are sufficient.
 
 ### Local Rust Build Acceleration
 
@@ -295,6 +300,15 @@ may be enabled for one command with `CARGO_PROFILE_DEV_DEBUG=1` or
   used a cold or warm cache.
 
 ### PR Creation Rules
+
+- Minimize PR count for one agreed deliverable. Keep implementation steps and
+  focused tests small, but collect related changes and validate them before
+  opening a PR. Do not create a PR per task or correction; update the existing PR.
+- Split only for real repository/dependency, reviewability, or independent
+  release/rollback boundaries, or an explicit user request. Do not bundle
+  unrelated changes merely to reduce PR count.
+- Batch ready corrections before pushing to avoid redundant CI runs; preserve
+  required CI and approvals for the final submitted state.
 
 - PRs to `main` must be created using `gh pr create`
 - Do not include AI-generated analysis reports as standalone files in PRs
