@@ -338,7 +338,8 @@ Every documentation example compiles and runs in CI.
 **AI-assisted development.** tenferro-rs assumes AI-assisted and agentic
 coding for development, migration, and review. AI output is never accepted as
 authority by itself: changes are validated against repository rules
-([REPOSITORY_RULES.md](REPOSITORY_RULES.md)), oracle checks, CI, reproducible
+([REPOSITORY_RULES.md](REPOSITORY_RULES.md), [PERFORMANCE_TIPS.md](PERFORMANCE_TIPS.md)),
+oracle checks, CI, reproducible
 benchmarks, and maintainer review, with design records under
 [docs/design/](docs/design/) and [docs/worklogs/](docs/worklogs/) keeping the
 process coherent. Why we work this way is part of the

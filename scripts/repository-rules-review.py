@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Review PR diffs against REPOSITORY_RULES.md using a delta-scoped LLM check.
+"""Review PR diffs against REPOSITORY_RULES.md and PERFORMANCE_TIPS.md using a
+delta-scoped LLM check.
 
 Local API key loading uses the ``python-dotenv`` library. Install dev helpers with:
 
@@ -27,6 +28,10 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "REPOSITORY_RULES.md"
+PERFORMANCE_RULES_PATH = ROOT / "PERFORMANCE_TIPS.md"
+# Every `##` section in these files is a routing unit; titles must be unique
+# across the files.
+RULES_PATHS: tuple[Path, ...] = (RULES_PATH, PERFORMANCE_RULES_PATH)
 PROMPT_PATH = ROOT / "ai" / "prompts" / "repository-rules-review.md"
 PROMPT_VERSION = "2"
 DEFAULT_MODEL = "deepseek-v4-pro"
@@ -204,6 +209,7 @@ HUMAN_ONLY_SECTIONS = frozenset(
         "CI Cost Discipline",
         "Publication Order And Publish-Safety",
         "Performance-Gated Experiment Protocol",
+        "Audit Procedure",
     }
 )
 
@@ -511,9 +517,21 @@ def configure_dotenv(*, explicit: Path | None, skip: bool) -> None:
     load_dotenv(path, override=False)
 
 
-def parse_repository_rules_sections(path: Path = RULES_PATH) -> dict[str, str]:
+def parse_repository_rules_sections(path: Path | None = None) -> dict[str, str]:
+    """Parse `##` sections from one rules file, or from all of RULES_PATHS."""
+    if path is None:
+        sections: dict[str, str] = {}
+        for rules_path in RULES_PATHS:
+            for title, body in parse_repository_rules_sections(rules_path).items():
+                if title in sections:
+                    raise ValueError(
+                        f"duplicate rule section {title!r} in {rules_path.name}"
+                    )
+                sections[title] = body
+        return sections
+
     text = path.read_text(encoding="utf-8")
-    sections: dict[str, str] = {}
+    sections = {}
     current_title: str | None = None
     current_lines: list[str] = []
 
@@ -1309,7 +1327,7 @@ def review_chunk(
             f"Prompt version: {PROMPT_VERSION}",
             "Changed files:",
             "\n".join(f"- {path}" for path in changed),
-            "Applicable REPOSITORY_RULES sections:",
+            "Applicable rule sections (REPOSITORY_RULES.md and PERFORMANCE_TIPS.md):",
             rules_text,
             "Output limits:",
             f"- Return at most {MAX_FINDINGS_PER_CHUNK} findings for this diff chunk.",
@@ -2685,9 +2703,10 @@ def main(argv: list[str] | None = None) -> int:
 
     configure_dotenv(explicit=args.dotenv, skip=args.no_dotenv)
 
-    if not RULES_PATH.is_file():
-        print(f"Missing rules file: {RULES_PATH}", file=sys.stderr)
-        return 1
+    for rules_path in RULES_PATHS:
+        if not rules_path.is_file():
+            print(f"Missing rules file: {rules_path}", file=sys.stderr)
+            return 1
     if not PROMPT_PATH.is_file():
         print(f"Missing prompt file: {PROMPT_PATH}", file=sys.stderr)
         return 1

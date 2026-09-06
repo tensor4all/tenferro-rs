@@ -214,7 +214,9 @@ def test_select_rule_sections_includes_public_boundary_audits() -> None:
 def test_final_cross_phase_multi_agent_audit_contract_is_present() -> None:
     mod = load_module()
     section_title = "Final Cross-Phase Multi-Agent Audit"
-    text = mod.RULES_PATH.read_text(encoding="utf-8")
+    text = "\n".join(
+        path.read_text(encoding="utf-8") for path in mod.RULES_PATHS
+    )
     section_marker = f"\n## {section_title}\n"
     expected_lanes = [
         ("1", "Specification and architecture"),
@@ -229,15 +231,15 @@ def test_final_cross_phase_multi_agent_audit_contract_is_present() -> None:
         ("Unsafe Code Boundary", "#unsafe-code-boundary"),
         (
             "Performance-Sensitive Safety Contracts",
-            "#performance-sensitive-safety-contracts",
+            "PERFORMANCE_TIPS.md#performance-sensitive-safety-contracts",
         ),
-        ("Materialization And Copies", "#materialization-and-copies"),
+        ("Materialization And Copies", "PERFORMANCE_TIPS.md#materialization-and-copies"),
         (
             "Performance-Gated Experiment Protocol",
-            "#performance-gated-experiment-protocol",
+            "PERFORMANCE_TIPS.md#performance-gated-experiment-protocol",
         ),
-        ("Cache Ownership", "#cache-ownership"),
-        ("CPU Threading Contract", "#cpu-threading-contract"),
+        ("Cache Ownership", "PERFORMANCE_TIPS.md#cache-ownership"),
+        ("CPU Threading Contract", "PERFORMANCE_TIPS.md#cpu-threading-contract"),
         ("GPU Backend Contract", "#gpu-backend-contract"),
         ("Documentation Policy", "#documentation-policy"),
         ("Work Logs And Design Records", "#work-logs-and-design-records"),

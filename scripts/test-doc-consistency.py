@@ -541,7 +541,7 @@ def test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero()
 
 def test_repository_rules_sections_are_routed_or_human_only() -> None:
     reviewer = load_repository_rules_review()
-    sections = reviewer.parse_repository_rules_sections(ROOT / "REPOSITORY_RULES.md")
+    sections = reviewer.parse_repository_rules_sections()
 
     routed = set(reviewer.ALWAYS_SECTIONS)
     for _, section_names in reviewer.SECTION_TRIGGERS:
@@ -564,9 +564,13 @@ def test_repository_rules_sections_are_routed_or_human_only() -> None:
     assert not oversized, oversized
 
     rules = read("REPOSITORY_RULES.md")
+    performance = read("PERFORMANCE_TIPS.md")
     assert "register_runtime" not in rules
-    assert rules.count("local uniqueness proof") == 1
-    assert rules.count("need-before-implementation gate") == 1
+    assert "register_runtime" not in performance
+    assert performance.count("local uniqueness proof") == 1
+    assert performance.count("need-before-implementation gate") == 1
+    assert "local uniqueness proof" not in rules
+    assert "need-before-implementation gate" not in rules
 
 
 def test_active_ad_docs_use_current_semantic_ad_owner() -> None:

@@ -23,5 +23,6 @@ optional sibling checkout fallback documented in `AGENTS.md`.
 
 - Do not add vendored shared-rule bundles under `ai/`.
 - Do not add agent asset lockfiles or sync manifests for external templates.
-- Keep durable tenferro-specific policy in `REPOSITORY_RULES.md`.
+- Keep durable tenferro-specific policy in `REPOSITORY_RULES.md` and
+  performance contracts in `PERFORMANCE_TIPS.md`.
 - Keep contribution policy in `CONTRIBUTING.md`; keep workflow mechanics here.

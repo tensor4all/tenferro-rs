@@ -1,6 +1,6 @@
 name: review bot
 
-# Delta-scoped REPOSITORY_RULES review. This workflow runs from the trusted base
+# Delta-scoped REPOSITORY_RULES and PERFORMANCE_TIPS review. This workflow runs from the trusted base
 # revision and treats PR contents as data only: it fetches the PR head for git
 # diffs, but never checks out or executes files from the PR branch.
 
