@@ -1,5 +1,64 @@
 # Binary einsum optimizer bypass (#1761, Phase 1 of #1771)
 
+## Adoption decision: explicit one worker
+
+The maintainer authorized renewed investigation, then explicitly restricted
+this overhead measurement to **one worker**, accepted the results below and
+requested merge. This supersedes the earlier draft/stop decision recorded below;
+the historical measurements are retained, not discarded or rewritten.
+
+The independent fresh-target release builds reproduce the original executable
+SHA-256 hashes exactly, excluding stale build artifacts. A renewed unpinned 1T
+comparison does not reproduce the large reversed-input regression. Small
+prepared controls remain noisy with an unpinned initiating thread.
+
+The final complete comparison explicitly uses `CpuBackend::with_threads(1)` and
+`taskset -c 32` for both executables. CPU affinity is separate from the worker
+count: CPU 32 is the worker selected by the previous 1T configuration; pinning
+also prevents the initiating thread from migrating. This is a pinned **1T**
+result, not a default/all-core performance claim. Seven paired processes per
+revision, alternating AB/BA, all 36 existing cases and five >=50 ms samples per
+case; no case exclusions. The protocol was recorded before timing.
+
+- Ordinary string 2/8/32 aggregate candidate/base ratio: **0.6851**, 95% CI
+  **[0.6661, 0.7046]** (about 31.5% faster).
+- All 36 cases pass the predeclared non-regression bound (upper CI < 1.10),
+  including prepared, N-ary, layout/orientation and larger execution.
+- Reversed 256 inputs: compact 0.9626 [0.9160, 1.0115], transposed 0.9936
+  [0.9702, 1.0175], reverse view 0.9520 [0.9361, 0.9682].
+- Prepared 2/8/32/256 upper confidence bounds: 1.0180 / 1.0668 / 1.0320 /
+  1.0420. No dedicated binary optimizer or additional production changes needed.
+
+The earlier all-core configuration used 64 workers. Using that as an overhead
+acceptance condition was inappropriate. Its binary-to-binary timing difference
+is not explained: both revisions selected (0,1), so an operand-order change
+was **not** the cause. Same-process search/bypass and A/A diagnostics show
+substantial variability; they do not establish a root cause for the 64-worker
+difference. No claim that all-core performance is unchanged is made. The
+maintainer chose not to pursue that separate question.
+
+[New evidence archive](issue-1761-one-worker-data.tar.gz) contains the frozen
+protocols, independent build logs and hashes, all recheck/A/A/pinned raw data,
+analysis source and exploratory diagnostic logs/patch. Diagnostics are not
+production changes or another supported API. The final diagnostic patch is
+against d65a422c; earlier logs used the same probe before adding fresh-plan and
+aggregate section counters. Their timings are diagnostic, not acceptance data.
+
+Final measurement command per process (base/candidate are the independently
+built copies of the unchanged example; see archive protocols for AB/BA order):
+
+```bash
+/usr/bin/time -v -o one-worker-pinned/1-$pair-$revision.time \
+  taskset -c 32 ./$revision 1 \
+  > one-worker-pinned/1-$pair-$revision.csv \
+  2> one-worker-pinned/1-$pair-$revision.stderr
+python3 analyze-one-worker.py one-worker-pinned
+```
+
+No Rust source changed after the previously passing correctness/local gate and
+hosted CI at 3b0e4831. This update adds only the adoption record and evidence.
+The full final 1T timing table follows at the end of this work log.
+
 ## Scope and decisions
 
 Read the latest #1771 and #1761, AGENTS.md, REPOSITORY_RULES.md, shared common,
@@ -342,3 +401,47 @@ Primary ratio, 95% CI: (0.6343310780474402, 0.5283242871223386, 0.76160783515835
 | batch_ordinary/8 | 29.424 | 20.603 | 0.6602 [0.5709, 0.7636] | 16.4% | PASS |
 | nary_prepare/8 | 24.773 | 24.403 | 1.0073 [0.9569, 1.0603] | 4.6% | PASS |
 | nary_ordinary/8 | 56.115 | 55.628 | 0.9942 [0.9122, 1.0835] | 6.6% | PASS |
+
+## Final accepted pinned one-worker comparison
+
+## Threads: 1
+Primary ratio, 95% CI: (0.6850946414319503, 0.6660961456100876, 0.7046350152482621)
+
+| Case | Base us | Candidate us | Ratio [95% CI] | Max process CoV | Non-regression |
+|---|---:|---:|---|---:|---|
+| prepare_string/2 | 11.952 | 5.036 | 0.4218 [0.4057, 0.4386] | 3.4% | PASS |
+| prepare_labels/2 | 11.127 | 4.240 | 0.3798 [0.3621, 0.3985] | 4.7% | PASS |
+| ordinary_string/2 | 33.163 | 22.026 | 0.6728 [0.6450, 0.7018] | 4.7% | PASS |
+| ordinary_labels/2 | 29.968 | 20.370 | 0.6808 [0.6503, 0.7127] | 3.6% | PASS |
+| prepared/2 | 13.071 | 12.913 | 0.9862 [0.9553, 1.0180] | 3.8% | PASS |
+| prepare_string/8 | 11.821 | 5.103 | 0.4296 [0.4074, 0.4531] | 5.5% | PASS |
+| prepare_labels/8 | 11.030 | 4.117 | 0.3715 [0.3547, 0.3892] | 6.1% | PASS |
+| ordinary_string/8 | 32.258 | 21.805 | 0.6724 [0.6455, 0.7004] | 3.4% | PASS |
+| ordinary_labels/8 | 30.996 | 21.365 | 0.6832 [0.6461, 0.7224] | 4.6% | PASS |
+| prepared/8 | 12.673 | 13.130 | 1.0149 [0.9655, 1.0668] | 5.5% | PASS |
+| prepare_string/32 | 12.043 | 5.816 | 0.4883 [0.4592, 0.5193] | 4.8% | PASS |
+| prepare_labels/32 | 10.768 | 4.740 | 0.4410 [0.4093, 0.4752] | 5.1% | PASS |
+| ordinary_string/32 | 36.440 | 26.157 | 0.7108 [0.6722, 0.7516] | 4.7% | PASS |
+| ordinary_labels/32 | 33.321 | 23.646 | 0.7130 [0.6893, 0.7375] | 4.5% | PASS |
+| prepared/32 | 15.093 | 15.164 | 1.0076 [0.9839, 1.0320] | 4.3% | PASS |
+| prepare_string/256 | 11.526 | 4.977 | 0.4424 [0.4088, 0.4789] | 7.9% | PASS |
+| prepare_labels/256 | 10.161 | 4.079 | 0.3975 [0.3694, 0.4277] | 7.1% | PASS |
+| ordinary_string/256 | 700.470 | 705.822 | 0.9910 [0.9518, 1.0318] | 2.6% | PASS |
+| ordinary_labels/256 | 713.614 | 694.943 | 0.9775 [0.9418, 1.0147] | 2.9% | PASS |
+| prepared/256 | 697.187 | 699.013 | 1.0055 [0.9703, 1.0420] | 2.8% | PASS |
+| read_compact_ab/8 | 33.062 | 22.505 | 0.6650 [0.6270, 0.7054] | 5.1% | PASS |
+| read_compact_ba/8 | 45.110 | 31.530 | 0.7191 [0.6824, 0.7578] | 5.0% | PASS |
+| read_transpose_ab/8 | 33.352 | 22.308 | 0.6634 [0.6225, 0.7069] | 4.4% | PASS |
+| read_transpose_ba/8 | 45.994 | 32.242 | 0.7001 [0.6552, 0.7480] | 4.5% | PASS |
+| read_reverse_ab/8 | 33.325 | 22.809 | 0.6824 [0.6399, 0.7278] | 4.9% | PASS |
+| read_reverse_ba/8 | 46.241 | 31.920 | 0.6963 [0.6564, 0.7387] | 4.1% | PASS |
+| read_compact_ab/256 | 704.061 | 707.030 | 1.0136 [0.9841, 1.0441] | 3.1% | PASS |
+| read_compact_ba/256 | 1064.515 | 1017.987 | 0.9626 [0.9160, 1.0115] | 3.2% | PASS |
+| read_transpose_ab/256 | 722.098 | 717.099 | 0.9939 [0.9573, 1.0319] | 3.5% | PASS |
+| read_transpose_ba/256 | 874.131 | 871.033 | 0.9936 [0.9702, 1.0175] | 3.2% | PASS |
+| read_reverse_ab/256 | 728.110 | 736.102 | 1.0041 [0.9665, 1.0433] | 2.8% | PASS |
+| read_reverse_ba/256 | 1054.971 | 1003.008 | 0.9520 [0.9361, 0.9682] | 1.9% | PASS |
+| batch_prepare/8 | 12.588 | 5.441 | 0.4284 [0.4093, 0.4485] | 5.2% | PASS |
+| batch_ordinary/8 | 34.292 | 23.520 | 0.6643 [0.6319, 0.6984] | 5.4% | PASS |
+| nary_prepare/8 | 24.239 | 24.182 | 1.0112 [0.9445, 1.0826] | 5.9% | PASS |
+| nary_ordinary/8 | 61.657 | 60.819 | 0.9981 [0.9482, 1.0507] | 3.5% | PASS |
