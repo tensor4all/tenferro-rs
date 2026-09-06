@@ -2,8 +2,8 @@ Create a pull request using the repository-local PR workflow.
 
 Workflow:
 
-1. Re-read `README.md`, `AGENTS.md`, `REPOSITORY_RULES.md`, and the relevant repository-local workflow docs under `ai/`.
-2. Self-review the diff against `REPOSITORY_RULES.md` and the relevant shared tensor4all rules referenced by `AGENTS.md`. Fix any violations before proceeding.
+1. Re-read `README.md`, `AGENTS.md`, `REPOSITORY_RULES.md`, `PERFORMANCE_TIPS.md` when the diff touches performance-sensitive code, and the relevant repository-local workflow docs under `ai/`.
+2. Self-review the diff against `REPOSITORY_RULES.md`, `PERFORMANCE_TIPS.md`, and the relevant shared tensor4all rules referenced by `AGENTS.md`. Fix any violations before proceeding.
 3. Review docs consistency across `README.md`, `docs/design/**`, and public rustdoc for the current diff.
 4. Confirm the repository still has auto-merge enabled and the required branch protection checks configured.
 5. Draft a concise PR title and body.

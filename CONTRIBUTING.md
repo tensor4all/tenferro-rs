@@ -2,7 +2,7 @@
 
 Thanks for helping improve tenferro-rs. This file describes the external
 contribution path. Repository-specific implementation rules live in
-`REPOSITORY_RULES.md`.
+`REPOSITORY_RULES.md` and, for performance contracts, `PERFORMANCE_TIPS.md`.
 
 Governance, maintainer roles, merge authority, and project-direction decisions
 are defined in [GOVERNANCE.md](GOVERNANCE.md). The maintainer list is

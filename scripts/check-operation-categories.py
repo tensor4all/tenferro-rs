@@ -109,6 +109,7 @@ LIVE_DOC_ROOTS = [
     pathlib.Path("README.md"),
     pathlib.Path("AGENTS.md"),
     pathlib.Path("REPOSITORY_RULES.md"),
+    pathlib.Path("PERFORMANCE_TIPS.md"),
     pathlib.Path("docs/index.md"),
     pathlib.Path("docs/getting-started"),
     pathlib.Path("docs/tutorials"),

@@ -12,7 +12,8 @@ to create or refine a feature request or design discussion issue.
 
 - Read `CONTRIBUTING.md`, `AGENTS.md`, `REPOSITORY_RULES.md`, and
   `ai/contribution-workflows/repository-remediation.md` before implementation
-  work. Always read the remediation workflow so the agent can recognize when a
+  work, plus `PERFORMANCE_TIPS.md` when the fix touches performance-sensitive
+  code. Always read the remediation workflow so the agent can recognize when a
   one-bug PR should become a related-finding batch.
 - If the request covers multiple related bug reports, a repository-rule audit,
   or a bug batch that should stay in one PR, follow the remediation workflow.

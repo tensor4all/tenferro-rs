@@ -12,7 +12,8 @@ AD semantics.
 ## Operating Rules
 
 - Read `CONTRIBUTING.md`, `AGENTS.md`, `REPOSITORY_RULES.md`, and this file
-  before implementation work.
+  before implementation work, plus `PERFORMANCE_TIPS.md` when the findings
+  touch performance-sensitive code.
 - Start from the latest `origin/main` in an isolated worktree unless the user
   explicitly requests a different base.
 - Preserve unrelated user changes. Do not reset, stash, overwrite, or rebase
@@ -363,7 +364,7 @@ regression coverage where practical and state the exact gap in the PR body.
 
 Before creating the PR:
 
-1. Re-read `REPOSITORY_RULES.md`.
+1. Re-read `REPOSITORY_RULES.md` and, for performance findings, `PERFORMANCE_TIPS.md`.
 2. Review the local diff against public surface, AD, performance/layout/cache,
    GPU placement, docs, tests, and work-log requirements.
 3. Fix any findings discovered by the side review.
