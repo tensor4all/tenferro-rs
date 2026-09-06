@@ -483,6 +483,8 @@ fn optimize_omeco_pairs(
     size_dict: &HashMap<u32, usize>,
     options: &ContractionOptimizerOptions,
 ) -> Result<Option<Vec<(usize, usize)>>> {
+    #[cfg(test)]
+    tests::OMECO_CALLS.with(|count| count.set(count.get() + 1));
     let code = OmecoEinCode::new(subscripts.inputs.clone(), subscripts.output.clone());
     let optimizer = options.to_treesa();
     let Some(nested) = optimizer.optimize(&code, size_dict) else {
@@ -637,6 +639,8 @@ fn optimize_self_greedy_pairs(
     subscripts: &Subscripts,
     size_dict: &HashMap<u32, usize>,
 ) -> Result<Vec<(usize, usize)>> {
+    #[cfg(test)]
+    tests::SELF_GREEDY_CALLS.with(|count| count.set(count.get() + 1));
     let input_count = subscripts.inputs.len();
     let mut available: Vec<usize> = (0..input_count).collect();
     let mut operand_subs: Vec<Vec<u32>> = subscripts.inputs.clone();

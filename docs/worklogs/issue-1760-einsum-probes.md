@@ -4,6 +4,36 @@ Parent #1758; measurement infrastructure for #1760 and benchmark #95.
 Baseline `0457a2ed0aeea21b14f4297f7f4731e09b3a0507`.
 Design: [einsum-component-probes](../design/einsum-component-probes.md).
 
+## Behavioral optimizer bypass evidence
+
+#1761 requires an actual counter/seam, not source matching. Test-only counters
+now sit at both general optimizer entries (omeco and self-greedy). The public
+optimize and optimize_with_options calls, plus ConcreteEinsumPlan::prepare for a
+binary contraction, leave both at zero. N-ary planning and an explicit fallback call are positive controls that
+the counters are connected. Thread-local scalar counters isolate parallel tests;
+no plan, tensor, validation fact or other reusable execution state is cached.
+The instrumentation is absent from non-test builds.
+
+A mutation check temporarily removed only the binary shortcut. The new test
+failed with actual counts (1,0), expected (0,0). After restoring the shortcut,
+all184 library tests passed with one ignored probe in debug, release and
+coverage-instrumented profiles. Strict crate Clippy and rustfmt passed;
+planning/tree.rs coverage is414/439 lines (94.31%). After adding the explicit
+ConcreteEinsumPlan assertion, focused debug/release tests and strict Clippy passed
+again; the unchanged source paths retain the full-suite and coverage evidence.
+No timed probe was run.
+
+The first release attempt timed out during a cold-dependency build. Its surviving
+owned rustc (launched by the existing shared wrapper) was inspected and allowed
+to finish; the shared service was not stopped. The successful retry used a longer
+observed-build budget, eight jobs and a task-local empty RUSTC_WRAPPER override
+so the attempt did not depend on that wrapper. No global setting was changed.
+
+The counters do affect lib-test artifacts. Future component comparisons must
+apply identical instrumentation to both revisions and obtain fresh receipts;
+old frozen baseline/candidate artifacts and measurements are unchanged. Existing
+performance data is not silently reattributed to this new test binary.
+
 ## Direct-work diagnostic and shared-owner candidate
 
 Historical review/delegation notes below are not current workflow gates.
