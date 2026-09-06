@@ -293,6 +293,9 @@ Selected deep dives:
 - [Storage ownership](https://tensor4all.org/tenferro-rs/storage-ownership.html)
   — one physical owner, borrowed views, explicit copies/transfers, and prepared
   access boundaries.
+- [Ordinary calls and prepared execution](https://tensor4all.org/tenferro-rs/guides/ordinary-and-prepared-execution.html)
+  — choose ordinary einsum, compatible plan reuse, or programmatic equations;
+  interpret measured overhead with its actual timing scope.
 - [Views and slicing](https://tensor4all.org/tenferro-rs/guides/views-and-slicing.html)
   — static-rank views, mutable disjointness, and explicit `duplicate()`.
 - [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html)

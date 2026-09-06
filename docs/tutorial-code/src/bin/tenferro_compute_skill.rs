@@ -146,7 +146,47 @@ assert_eq!(buffer[0], 7.0);
     Ok(())
 }
 
+#[rustfmt::skip]
+fn ordinary_and_prepared_einsum() -> Result<(), Box<dyn std::error::Error>> {
+    // snippet-start:ordinary-and-prepared-einsum
+use tenferro_cpu::CpuBackend;
+use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, TensorEinsumExt};
+use tenferro_tensor::{BackendSessionHost, Tensor};
+
+let lhs = Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+let rhs = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 1.0, 2.0])?;
+let mut backend = CpuBackend::new();
+// Ordinary execution: no explicit preparation needed.
+let ordinary = backend.with_backend_session(|session| {
+    [&lhs, &rhs].einsum("ij,jk->ik", session)
+})?;
+assert_eq!(ordinary.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
+
+// Strings are fine for one-time preparation. The plan does not retain inputs.
+let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
+for (data, expected) in [
+    (vec![1.0_f64, 2.0, 3.0, 4.0], [2.0, 4.0, 7.0, 10.0]),
+    (vec![2.0_f64, 4.0, 6.0, 8.0], [4.0, 8.0, 14.0, 20.0]),
+] {
+    let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
+    let result = backend.with_backend_session(|session| {
+        plan.execute([&next_lhs, &rhs], session)
+    })?;
+    assert_eq!(result.as_slice::<f64>()?, &expected);
+}
+
+// Integer labels describe the equation; this ordinary call still plans.
+let equation = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+let structured = backend.with_backend_session(|session| {
+    [&lhs, &rhs].einsum_subscripts(&equation, session)
+})?;
+assert_eq!(structured.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
+    // snippet-end:ordinary-and-prepared-einsum
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ordinary_and_prepared_einsum()?;
     concrete_operation_and_column_major()?;
     eager_operation()?;
     traced_operation_with_extension_registration()?;
