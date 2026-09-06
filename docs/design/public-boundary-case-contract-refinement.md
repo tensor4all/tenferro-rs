@@ -1,6 +1,8 @@
 # Public-boundary case contract refinement
 
-Status: DeepSeek V4 Flash design **Correct-to-merge**, before implementation.
+Historical refinement status: DeepSeek V4 Flash design **Correct-to-merge**.
+The original review assignments below describe that earlier refinement, not a
+standing review gate for subsequent amendments.
 Parent #1758; integration prerequisite for benchmark #95.
 Base: `6858475b7bd8156e8e78abe55c2a8958d6deca21`.
 No Rust/runtime/public API/dependency change or performance claim.
@@ -62,7 +64,25 @@ Private components and compiled/prepared scenarios need their own accurate links
 the existing pending prepared/traced definitions are not blanket aliases for them.
 This bounded amendment does not claim their integration or complete family coverage.
 
-## Acceptance
+## Traced einsum setup amendment
+
+Add `einsum.einsum.prepare.traced` to the existing einsum selector, with phase
+`setup` and surface `traced`. Its boundary is construction of parameter specs and
+TraceContext inputs, einsum tracing, `TraceContext::finish`, and
+`GraphCompiler::compile_traced_graph`. Tensor payload construction, runtime/engine
+construction, input binding and numerical execution are excluded. It is combined
+trace-and-compile setup, not compiler-only time. The benchmark must separate the
+current helper's runtime construction before claiming this case.
+
+Use the existing traced input/metadata and compiled numerical tests as source
+links; those links are not a new test run or performance evidence. Preserve all
+184 existing IDs and their metadata, add one pending contract, and regenerate
+through the existing checker. No wire fields or Rust APIs change. Keep generic
+compiler paths on the existing conservative all-family selection fallback; adding
+a compiler owner only to einsum would incorrectly omit other dependent families.
+Test the exact setup boundary and that conservative selection remains intact.
+
+## Acceptance (original refinement)
 
 - Existing180 case IDs retained; exactly one eager-add route added at this base.
 - Ordinary concrete phases reflect full execution, not pure validation.

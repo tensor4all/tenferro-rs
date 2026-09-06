@@ -1772,6 +1772,24 @@
                   "symbol": "concrete_einsum_plan_rejects_shape_and_dtype_mismatches"
                 }
               ]
+            },
+            {
+              "component": "einsum",
+              "id": "{family}.{operation}.prepare.traced",
+              "phase": "setup",
+              "setup_boundary": "parameter specs, tracing and graph compilation; excludes tensor payloads, runtime construction, input binding and execution",
+              "surface": "traced",
+              "tests": [
+                {
+                  "path": "crates/tenferro-einsum/tests/integration/traced_correctness.rs",
+                  "symbol": "trace_context_einsum_ext_exposes_einsum"
+                },
+                {
+                  "path": "crates/tenferro-einsum/tests/integration/traced_correctness.rs",
+                  "symbol": "explicit_path_matmul_executes_numerically"
+                }
+              ],
+              "workflow": "TraceContext inputs -> einsum trace -> finish -> GraphCompiler::compile_traced_graph"
             }
           ],
           "category": "extension",

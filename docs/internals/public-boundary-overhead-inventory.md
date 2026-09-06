@@ -3,7 +3,7 @@
 
 - Baseline revision: `0457a2ed0aeea21b14f4297f7f4731e09b3a0507`
 - Generation provenance: `source-derived from the current checkout; overlay/source digest is the freshness key`
-- Overlay/source digest: `7a304fccad0187826eb6bec105d107ae31702b6b48cb99990743709dfed0110f`
+- Overlay/source digest: `a2e5fe1aac81703605f214db869ca54b975494f8098f8b7e24598a17a2309036`
 
 | Family | Operation | Category | Surfaces (disposition) | Case contracts |
 |---|---|---|---|---|
@@ -113,6 +113,7 @@
 | einsum | `einsum` | extension | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | einsum.einsum.ordinary.concrete |
 | einsum | `einsum` | extension | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | einsum.einsum.ordinary.eager |
 | einsum | `einsum` | extension | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | einsum.einsum.prepare.concrete |
+| einsum | `einsum` | extension | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | einsum.einsum.prepare.traced |
 | einsum | `einsum` | extension | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | einsum.einsum.prepared.concrete |
 | einsum | `einsum` | extension | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | einsum.einsum.prepared.traced |
 | fft | `c2c_forward` | extension | concrete: follow-up, typed: unsupported, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | fft.c2c_forward.ordinary.concrete |

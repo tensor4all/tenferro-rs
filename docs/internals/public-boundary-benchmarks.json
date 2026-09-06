@@ -109,6 +109,7 @@
         "einsum.einsum.ordinary.concrete",
         "einsum.einsum.ordinary.eager",
         "einsum.einsum.prepare.concrete",
+        "einsum.einsum.prepare.traced",
         "einsum.einsum.prepared.concrete",
         "einsum.einsum.prepared.traced",
         "fft.c2c_forward.ordinary.concrete",
@@ -300,6 +301,7 @@
         "einsum.einsum.ordinary.concrete",
         "einsum.einsum.ordinary.eager",
         "einsum.einsum.prepare.concrete",
+        "einsum.einsum.prepare.traced",
         "einsum.einsum.prepared.concrete",
         "einsum.einsum.prepared.traced",
         "fft.c2c_forward.ordinary.concrete",
@@ -1444,6 +1446,16 @@
       "status": "pending",
       "surface": "concrete",
       "workflow": "validate -> parse notation -> capture input specs -> plan contraction tree"
+    },
+    {
+      "family": "einsum",
+      "id": "einsum.einsum.prepare.traced",
+      "operation": "einsum",
+      "phase": "setup",
+      "setup_boundary": "parameter specs, tracing and graph compilation; excludes tensor payloads, runtime construction, input binding and execution",
+      "status": "pending",
+      "surface": "traced",
+      "workflow": "TraceContext inputs -> einsum trace -> finish -> GraphCompiler::compile_traced_graph"
     },
     {
       "family": "einsum",

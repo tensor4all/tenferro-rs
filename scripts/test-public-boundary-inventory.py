@@ -38,7 +38,7 @@ def rejects(mutator, phrase: str) -> None:
 
 def test_current_inventory_is_exhaustive() -> None:
     _, auth, rows = inventory()
-    assert len(rows) == 184
+    assert len(rows) == 185
     assert [row["operation"] for row in rows if row["id"].endswith("ordinary.eager")] == ["add", "einsum"]
     new_routes = {
         row["id"]: (row["surface"], row["phase"])
@@ -276,9 +276,23 @@ def test_case_selection_is_conservative_and_aliases_stay_distinct() -> None:
     core_ids = {row["id"] for row in rows if row["family"] == "core"}
     assert checker.select_case_ids(rows, ["crates/tenferro-tensor/src/backend.rs"]) == sorted(core_ids)
     assert checker.select_case_ids(rows, ["crates/tenferro-core-ops/src/new-owner.rs"]) == sorted(all_ids)
+    assert checker.select_case_ids(rows, ["crates/tenferro-runtime/src/graph/compiler.rs"]) == sorted(all_ids)
     assert checker.select_case_ids(rows, ["docs/README.md"]) == []
     alias_ids = {row["id"] for row in rows if row["family"] == "sparse"}
     assert len(alias_ids) == 6
+
+
+def test_traced_setup_is_distinct_from_execution() -> None:
+    _, _, rows = inventory()
+    setup = next(row for row in rows if row["id"] == "einsum.einsum.prepare.traced")
+    execution = next(row for row in rows if row["id"] == "einsum.einsum.prepared.traced")
+    assert setup["phase"] == "setup" and setup["surface"] == "traced"
+    assert execution["phase"] == "execution"
+    assert setup["setup_boundary"] == (
+        "parameter specs, tracing and graph compilation; excludes tensor payloads, "
+        "runtime construction, input binding and execution"
+    )
+    assert "GraphCompiler::compile_traced_graph" in setup["workflow"]
 
 
 if __name__ == "__main__":
