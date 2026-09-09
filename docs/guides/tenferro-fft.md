@@ -322,9 +322,10 @@ contracts need a separate design.
 ### Eager Tensors
 
 Use `EagerTensorFftExt` for immediate execution in an `EagerRuntime`. The
-methods have the same names and arguments as `TracedTensorFftExt`, register the
-FFT execution runtime on demand, and record the existing extension operation
-when gradients are enabled.
+borrowed `fft`, `ifft`, `rfft`, and `irfft` methods have the same names and
+arguments as `TracedTensorFftExt`, register the FFT execution runtime on demand,
+and record the existing extension operation when gradients are enabled.
+These methods do not modify their input.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_23 -->
 ```rust
@@ -343,6 +344,31 @@ assert_eq!(spectrum.shape(), &[3]);
 assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
 ```
 <!-- end-snippet-source -->
+
+### CPU output reuse and consuming FFT
+
+Ordinary CPU host FFT results use the backend's existing buffer pool. Dropping
+the final storage owner returns the allocation to its original pool, subject to
+that pool's retention limit. A live result, alias, or retained AD value prevents
+premature reuse. If the pool has already been destroyed, the allocation is freed
+normally. This avoids repeated payload allocation; small metadata allocations
+can still occur.
+
+With `autodiff`, `fft_in_place(axis, norm)` and `ifft_in_place(axis, norm)` consume
+an eager, compact column-major CPU host `C32` or `C64` tensor and transform its
+existing allocation. Noncontiguous views are rejected unchanged; use the
+borrowed FFT methods for those layouts.
+They preserve shape and do not accept a requested transform length. Real
+transforms, device/managed storage, active capture, and gradient-tracked inputs
+are not supported by this consuming contract. `no_grad` does not make a tracked
+input eligible. Exclusive ownership must be obtainable without an implicit
+copy; release other owners or explicitly create an independent copy if needed.
+
+`EagerFftInPlaceError::Rejected` returns the unchanged input in a `Box`, along
+with its error source. `Execution` reports failure after ownership acquisition;
+the input is consumed and no rollback is promised. Keep using the borrowed
+methods when the original value must remain available or gradients are needed.
+The `EagerTensorFftExt` rustdoc includes executable consuming-FFT examples.
 
 ### Apple shared CPU and Metal execution
 
@@ -380,7 +406,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 <!-- end-snippet-source -->
 
-RustFFT supports managed `F32`, `F64`, `C32`, and `C64` tensors. The initial
+RustFFT supports managed `F32`, `F64`, `C32`, and `C64` tensors. Its CPU lane
+kernel uses reusable host staging followed by a copy into the provider-owned
+shared allocation: the current managed write API exposes a copy callback, not
+a writable span. Preserving shared residency does not imply zero CPU copies.
+The consuming host in-place API does not extend this managed-storage contract.
+
+The initial
 CubeK Metal implementation supports C32 CFFT/IFFT, F32 one-sided RFFT, and C32
 IRFFT for power-of-two transform lengths of at least 2. RFFT/IRFFT may pad or
 truncate to a supported requested length; CFFT cannot change the input-axis
