@@ -2,6 +2,15 @@
 
 //! Fused CPU elementwise execution.
 
+/// Internal result alias for the fused CPU adapter.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu_fused::Result;
+/// let result: Result<()> = Ok(());
+/// assert!(result.is_ok());
+/// ```
 pub type Result<T> = tenferro_tensor::Result<T>;
 pub use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 

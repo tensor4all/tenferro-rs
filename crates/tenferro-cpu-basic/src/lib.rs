@@ -2,6 +2,15 @@
 
 //! Shared host CPU resources and low-level adapters.
 
+/// Internal result alias for shared CPU adapters.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu_basic::Result;
+/// let result: Result<()> = Ok(());
+/// assert!(result.is_ok());
+/// ```
 pub type Result<T> = tenferro_tensor::Result<T>;
 use tenferro_tensor::CompareDir;
 pub use tenferro_tensor::{
@@ -49,6 +58,14 @@ pub fn cpu_division_by_zero(op: &'static str, dtype: DType) -> Error {
 
 #[doc(hidden)]
 pub trait ConjElem {
+    /// Apply complex conjugation, or leave a real scalar unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu_basic::ConjElem;
+    /// assert_eq!(ConjElem::conj_elem(2.0_f64), 2.0);
+    /// ```
     fn conj_elem(self) -> Self;
 }
 
