@@ -4,11 +4,11 @@
 //! provides backend-parametric session-explicit operation methods through
 //! [`TensorSessionOpsExt`].
 
-use tenferro_ops::broadcast::{
-    broadcast_error_to_validation, broadcast_input_plan, broadcast_shape, broadcast_shapes,
-};
+use tenferro_ops::broadcast::{broadcast_error_to_validation, broadcast_shape, broadcast_shapes};
 use tenferro_tensor::validate::matmul_config_for_shapes;
-use tenferro_tensor::{BackendSession, CompareDir, DType, Error, Result};
+use tenferro_tensor::{BackendSession, CompareDir, DType, Error, Result, TensorRead};
+
+use crate::typed_tensor::{broadcast_to_in_read, ReadInput};
 
 use crate::TensorSessionOpsExt;
 use tenferro_tensor::Tensor;
@@ -16,12 +16,12 @@ use tenferro_tensor::Tensor;
 impl TensorSessionOpsExt for Tensor {
     fn add(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.add(&lhs, &rhs)
+        session.add_read(lhs.tensor_read(), rhs.tensor_read())
     }
 
     fn mul(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.mul(&lhs, &rhs)
+        session.mul_read(lhs.tensor_read(), rhs.tensor_read())
     }
 
     fn exp(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
@@ -42,32 +42,32 @@ impl TensorSessionOpsExt for Tensor {
 
     fn sub(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.sub(&lhs, &rhs)
+        session.sub_read(lhs.tensor_read(), rhs.tensor_read())
     }
 
     fn div(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.div(&lhs, &rhs)
+        session.div_read(lhs.tensor_read(), rhs.tensor_read())
     }
 
     fn rem(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.rem(&lhs, &rhs)
+        session.rem_read(lhs.tensor_read(), rhs.tensor_read())
     }
 
     fn pow(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.pow(&lhs, &rhs)
+        session.pow_read(lhs.tensor_read(), rhs.tensor_read())
     }
 
     fn maximum(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.maximum(&lhs, &rhs)
+        session.maximum_read(lhs.tensor_read(), rhs.tensor_read())
     }
 
     fn minimum(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.minimum(&lhs, &rhs)
+        session.minimum_read(lhs.tensor_read(), rhs.tensor_read())
     }
 
     fn neg(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
@@ -125,7 +125,7 @@ impl TensorSessionOpsExt for Tensor {
         session: &mut dyn BackendSession,
     ) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
-        session.compare(&lhs, &rhs, &dir)
+        session.compare_read(lhs.tensor_read(), rhs.tensor_read(), &dir)
     }
 
     fn where_select(
@@ -136,7 +136,11 @@ impl TensorSessionOpsExt for Tensor {
     ) -> Result<Tensor> {
         let (condition, on_true, on_false) =
             broadcast_ternary_in(self, on_true, on_false, session)?;
-        session.select(&condition, &on_true, &on_false)
+        session.select_read(
+            condition.tensor_read(),
+            on_true.tensor_read(),
+            on_false.tensor_read(),
+        )
     }
 
     fn clamp(
@@ -146,7 +150,11 @@ impl TensorSessionOpsExt for Tensor {
         session: &mut dyn BackendSession,
     ) -> Result<Tensor> {
         let (input, lower, upper) = broadcast_ternary_in(self, lower, upper, session)?;
-        session.clamp(&input, &lower, &upper)
+        session.clamp_read(
+            input.tensor_read(),
+            lower.tensor_read(),
+            upper.tensor_read(),
+        )
     }
 
     fn matmul(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
@@ -163,49 +171,30 @@ impl TensorSessionOpsExt for Tensor {
     }
 }
 
-fn broadcast_to_in(
-    input: &Tensor,
-    target_shape: &[usize],
+fn broadcast_binary_in<'a>(
+    lhs: &'a Tensor,
+    rhs: &'a Tensor,
     session: &mut dyn BackendSession,
-) -> Result<Tensor> {
-    let input_shape = input.shape();
-    if input_shape == target_shape {
-        return input.duplicate();
-    }
-
-    let plan = broadcast_input_plan(input_shape, target_shape).map_err(broadcast_error)?;
-    let source = if plan.source_shape == input_shape {
-        input.duplicate()?
-    } else {
-        session.reshape(input, &plan.source_shape)?
-    };
-    session.broadcast_in_dim(&source, target_shape, &plan.dims)
-}
-
-fn broadcast_binary_in(
-    lhs: &Tensor,
-    rhs: &Tensor,
-    session: &mut dyn BackendSession,
-) -> Result<(Tensor, Tensor)> {
+) -> Result<(ReadInput<'a>, ReadInput<'a>)> {
     let shape = broadcast_shape(lhs.shape(), rhs.shape()).map_err(broadcast_error)?;
     Ok((
-        broadcast_to_in(lhs, &shape, session)?,
-        broadcast_to_in(rhs, &shape, session)?,
+        broadcast_to_in_read(TensorRead::from_tensor(lhs), &shape, session)?,
+        broadcast_to_in_read(TensorRead::from_tensor(rhs), &shape, session)?,
     ))
 }
 
-fn broadcast_ternary_in(
-    first: &Tensor,
-    second: &Tensor,
-    third: &Tensor,
+fn broadcast_ternary_in<'a>(
+    first: &'a Tensor,
+    second: &'a Tensor,
+    third: &'a Tensor,
     session: &mut dyn BackendSession,
-) -> Result<(Tensor, Tensor, Tensor)> {
+) -> Result<(ReadInput<'a>, ReadInput<'a>, ReadInput<'a>)> {
     let shape = broadcast_shapes([first.shape(), second.shape(), third.shape()])
         .map_err(broadcast_error)?;
     Ok((
-        broadcast_to_in(first, &shape, session)?,
-        broadcast_to_in(second, &shape, session)?,
-        broadcast_to_in(third, &shape, session)?,
+        broadcast_to_in_read(TensorRead::from_tensor(first), &shape, session)?,
+        broadcast_to_in_read(TensorRead::from_tensor(second), &shape, session)?,
+        broadcast_to_in_read(TensorRead::from_tensor(third), &shape, session)?,
     ))
 }
 
