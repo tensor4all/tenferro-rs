@@ -383,6 +383,28 @@ impl<'a> CpuExecutionContext<'a> {
         }
     }
 
+    /// Effective native-kernel degree inside this already-entered CPU context.
+    /// Non-Rayon executors and sequential/nested policy use one thread.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let threads = backend.with_linalg_pool(|context, _| Ok(context.native_thread_count()))?;
+    /// assert_eq!(threads, 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn native_thread_count(&self) -> usize {
+        match (
+            self.parallel_mode,
+            self.domain.executor_capabilities().inner_parallelism,
+        ) {
+            (ParallelMode::Inner, CpuInnerParallelism::Rayon) => self.thread_budget().get(),
+            _ => 1,
+        }
+    }
+
     pub(crate) fn strided_exec_context(&self) -> strided_kernel::ExecContext {
         match (
             self.parallel_mode,

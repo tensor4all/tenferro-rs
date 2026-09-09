@@ -252,13 +252,13 @@ impl TypedTensorMaskSessionOpsExt for TypedTensor<bool> {
 // INVARIANT: this private adapter keeps borrowed reads borrowed and owns only
 // the explicit fallback tensor; it is never exposed or cloned.
 #[allow(clippy::large_enum_variant)]
-enum ReadInput<'a> {
+pub(crate) enum ReadInput<'a> {
     Borrowed(TensorRead<'a>),
     Owned(Tensor),
 }
 
 impl ReadInput<'_> {
-    fn tensor_read(&self) -> TensorRead<'_> {
+    pub(crate) fn tensor_read(&self) -> TensorRead<'_> {
         match self {
             Self::Borrowed(read) => read.clone(),
             Self::Owned(tensor) => TensorRead::from_tensor(tensor),
@@ -266,20 +266,20 @@ impl ReadInput<'_> {
     }
 }
 
-fn broadcast_to_in_read<'a, T: TensorScalar>(
-    input: &'a TypedTensor<T>,
+pub(crate) fn broadcast_to_in_read<'a>(
+    input: TensorRead<'a>,
     target_shape: &[usize],
     session: &mut dyn BackendSession,
 ) -> Result<ReadInput<'a>> {
     if input.shape() == target_shape {
-        return Ok(ReadInput::Borrowed(T::tensor_read(input)));
+        return Ok(ReadInput::Borrowed(input));
     }
 
     let plan = broadcast_input_plan(input.shape(), target_shape).map_err(broadcast_error)?;
     let source = if plan.source_shape == input.shape() {
-        ReadInput::Borrowed(T::tensor_read(input))
+        ReadInput::Borrowed(input)
     } else {
-        let reshaped = session.reshape_read(T::tensor_read(input), &plan.source_shape)?;
+        let reshaped = session.reshape_read(input, &plan.source_shape)?;
         ReadInput::Owned(reshaped)
     };
     let out = session.broadcast_in_dim_read(source.tensor_read(), target_shape, &plan.dims)?;
@@ -293,8 +293,8 @@ fn broadcast_binary_in_read<'a, T: TensorScalar>(
 ) -> Result<(ReadInput<'a>, ReadInput<'a>)> {
     let shape = broadcast_shape(lhs.shape(), rhs.shape()).map_err(broadcast_error)?;
     Ok((
-        broadcast_to_in_read(lhs, &shape, session)?,
-        broadcast_to_in_read(rhs, &shape, session)?,
+        broadcast_to_in_read(T::tensor_read(lhs), &shape, session)?,
+        broadcast_to_in_read(T::tensor_read(rhs), &shape, session)?,
     ))
 }
 
@@ -307,9 +307,9 @@ fn broadcast_ternary_in_read<'a, C: TensorScalar, T: TensorScalar>(
     let shape = broadcast_shapes([first.shape(), second.shape(), third.shape()])
         .map_err(broadcast_error)?;
     Ok((
-        broadcast_to_in_read(first, &shape, session)?,
-        broadcast_to_in_read(second, &shape, session)?,
-        broadcast_to_in_read(third, &shape, session)?,
+        broadcast_to_in_read(C::tensor_read(first), &shape, session)?,
+        broadcast_to_in_read(T::tensor_read(second), &shape, session)?,
+        broadcast_to_in_read(T::tensor_read(third), &shape, session)?,
     ))
 }
 

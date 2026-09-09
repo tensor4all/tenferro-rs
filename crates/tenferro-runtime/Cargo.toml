@@ -65,3 +65,7 @@ path = "tests/integration.rs"
 [[test]]
 name = "prelude"
 path = "tests/prelude.rs"
+
+[[test]]
+name = "binary_allocations"
+path = "tests/binary_allocations.rs"

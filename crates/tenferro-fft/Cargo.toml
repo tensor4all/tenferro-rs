@@ -54,6 +54,7 @@ tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.5.0", 
 libloading = { workspace = true, optional = true }
 computegraph.workspace = true
 num-complex.workspace = true
+rayon.workspace = true
 num-traits.workspace = true
 rustfft = "6"
 thiserror.workspace = true

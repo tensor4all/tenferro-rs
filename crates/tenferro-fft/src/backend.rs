@@ -135,6 +135,48 @@ pub trait FftBackend: BackendSession {
         Ok(())
     }
 
+    /// Execute a validated FFT from borrowed storage.
+    ///
+    /// The default explicitly canonicalizes view inputs. Backends supporting
+    /// compact borrowed storage override this method to avoid input copies.
+    ///
+    /// # Examples
+    /// The borrowed public surface dispatches through this backend hook:
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_fft::{FftNorm, TensorReadFftExt};
+    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// let input = Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2])?;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let output = backend.with_backend_session(|session| {
+    ///     TensorRead::Tensor(&input).fft_read(None, 0, FftNorm::Backward, session)
+    /// })?;
+    /// assert_eq!(output.as_slice::<Complex64>()?, &[Complex64::new(2., 0.), Complex64::new(0., 0.)]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for unsupported dtype,
+    /// layout, or placement, and [`tenferro_tensor::Error::Validation`] when
+    /// input metadata disagrees with the validated spec. Same-placement
+    /// canonicalization, plan creation, and execution failures preserve the
+    /// selected backend's typed error source; no implicit transfer is performed.
+    fn execute_fft_read(
+        &mut self,
+        input: TensorRead<'_>,
+        spec: &FftPlanSpec,
+        cache: FftExecutionCache<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        match input {
+            TensorRead::Tensor(input) => self.execute_fft(input, spec, cache),
+            input => {
+                let owned = self.to_contiguous_read(input)?;
+                self.execute_fft(&owned, spec, cache)
+            }
+        }
+    }
+
     /// Execute one validated FFT request on `input`'s existing placement.
     ///
     /// # Errors
@@ -153,31 +195,4 @@ pub trait FftBackend: BackendSession {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn execution_cache_debug_identifies_both_owners_and_exposes_the_store() {
-        let mut caller = FftPlanCache::default();
-        let mut caller_cache = FftExecutionCache::caller_owned(&mut caller);
-        assert!(format!("{caller_cache:?}").contains("CallerOwned"));
-        assert_eq!(
-            caller_cache
-                .store_mut()
-                .stats(tenferro_runtime::ExtensionCacheSelector::All)
-                .entries,
-            0
-        );
-
-        let mut runtime = ExtensionCacheStore::default();
-        let mut runtime_cache = FftExecutionCache::runtime_owned(&mut runtime);
-        assert!(format!("{runtime_cache:?}").contains("RuntimeOwned"));
-        assert_eq!(
-            runtime_cache
-                .store_mut()
-                .stats(tenferro_runtime::ExtensionCacheSelector::All)
-                .entries,
-            0
-        );
-    }
-}
+mod tests;

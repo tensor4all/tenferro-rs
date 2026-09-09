@@ -212,10 +212,47 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// let tensor = unsafe { output.assume_init_as::<Rank<1>>() }.unwrap();
     /// assert_eq!(tensor.as_slice().unwrap(), &[7]);
     /// ```
-    pub unsafe fn assume_init_as<R: TensorRank>(mut self) -> Result<TypedTensor<T, R>>
+    pub unsafe fn assume_init_as<R: TensorRank>(self) -> Result<TypedTensor<T, R>>
     where
         T: TensorScalar,
     {
+        // SAFETY: the caller guarantees complete initialization.
+        unsafe { self.finish(false) }
+    }
+
+    /// Transfer a fully initialized output with automatic original-pool return.
+    /// The pool is retained weakly; dropping the pool first frees later outputs
+    /// normally. Dropping an output never acquires a CPU session lock.
+    ///
+    /// # Safety
+    /// Every logical element must be initialized and no kernel may retain a
+    /// destination view. This is the same full-overwrite contract as assume_init.
+    ///
+    /// # Errors
+    /// Returns [`Error::Validation`] if the output shape and initialized buffer
+    /// length disagree, or [`Error::RuntimeState`] if recycler attachment cannot
+    /// obtain the host allocation. Shape conversion failures retain their typed
+    /// source as [`Error::BackendSource`].
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// let mut pool = BufferPool::new();
+    /// let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![1])?;
+    /// output.as_uninit_slice_mut()[0].write(2.0);
+    /// // SAFETY: the only element has been initialized.
+    /// let tensor = unsafe { output.assume_init_recycled() }?;
+    /// assert_eq!(tensor.as_slice()?, &[2.0]);
+    /// drop(tensor);
+    /// assert_eq!(pool.len(), 1);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub unsafe fn assume_init_recycled(self) -> Result<TypedTensor<T>> {
+        // SAFETY: the caller guarantees complete initialization.
+        unsafe { self.finish(true) }
+    }
+
+    unsafe fn finish<R: TensorRank>(mut self, recycle: bool) -> Result<TypedTensor<T, R>> {
         let shape = R::shape_from_vec(std::mem::take(&mut self.shape).into())
             .map_err(|err| Error::backend_source("pooled_uninit_output", err))?;
         let data = std::mem::take(&mut self.data);
@@ -224,9 +261,21 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
         let data = unsafe {
             Vec::from_raw_parts(data.as_mut_ptr().cast::<T>(), data.len(), data.capacity())
         };
-        let tensor = TypedTensor::from_vec_col_major(shape, data)?;
-        self.checkout = None;
-        Ok(tensor)
+        if recycle {
+            // INVARIANT: only successful completion takes the checkout, and this
+            // method consumes self, so a live output always owns its token here.
+            let Some(checkout) = self.checkout.take() else {
+                unreachable!("a live pooled output owns its checkout");
+            };
+            let recycler = <T as crate::buffer_pool::private::Sealed>::pool_finish_recycled(
+                self.pool, checkout,
+            );
+            TypedTensor::from_vec_col_major_with_recycler(shape, data, recycler)
+        } else {
+            let tensor = TypedTensor::from_vec_col_major(shape, data)?;
+            self.checkout = None;
+            Ok(tensor)
+        }
     }
 }
 

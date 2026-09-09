@@ -79,6 +79,52 @@ pub struct EagerExtensionTarget {
 #[cfg(test)]
 mod tests;
 
+/// Validate recording eligibility before a consuming extension mutation.
+/// This does not grant write authority: callers must still consume the input
+/// through `EagerTensor::into_value` and obtain an exclusive tensor borrow.
+///
+/// # Errors
+/// Returns `Error::RuntimeState` for gradient-tracked values, legacy AD traces,
+/// or active capture, including capture nested inside no_grad. Saved-value
+/// ownership must additionally pass the structural into_value check.
+/// Input-signature validation, module-factory and installation errors are
+/// propagated unchanged.
+///
+/// # Examples
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_ad::extension::prepare_eager_in_place_input;
+/// let input = EagerTensor::requires_grad_in(
+///     Tensor::from_vec_col_major([1], vec![1.0_f64])?, EagerRuntime::new()?)?;
+/// let result = prepare_eager_in_place_input(&input, "example", |_| {
+///     panic!("tracked inputs must be rejected before module construction")
+/// });
+/// assert!(result.is_err());
+/// assert_eq!(input.shape(), &[1]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[doc(hidden)]
+pub fn prepare_eager_in_place_input(
+    input: &EagerTensor,
+    family_id: &'static str,
+    module_factory: impl FnOnce(EagerExtensionTarget) -> Result<Arc<dyn ExtensionModule>>,
+) -> Result<()> {
+    if input.requires_grad || input.trace.is_some() || eager_capture_active() {
+        return Err(Error::runtime_state(
+            "eager in-place",
+            ErrorPhase::Execution,
+            "in-place execution requires an untracked value outside trace capture",
+        ));
+    }
+    let target = input.ctx.eager_extension_target()?;
+    validate_eager_extension_input_signature(&input.ctx, &target, &[input.tensor_read()])?;
+    let module = module_factory(target.clone())?;
+    input
+        .ctx
+        .ensure_extension_module_for_engine(module, family_id, &target.engine_id)?;
+    Ok(())
+}
+
 /// Adopt an untracked eager tensor value produced by this runtime's backend.
 ///
 /// This is a low-level extension contract for eager composite operations that

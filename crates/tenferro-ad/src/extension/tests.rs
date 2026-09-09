@@ -387,6 +387,45 @@ fn eager_extension_cpu_input_signature_is_accepted_before_factory() {
 }
 
 #[test]
+fn consuming_preparation_checks_recording_and_installs_without_taking_ownership() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let value = input(&ctx);
+    let family = BridgeProbe::one().family_id();
+    let before = ctx.runtime().epoch().unwrap();
+    let error = super::prepare_eager_in_place_input(&value, family, |_| {
+        Err(Error::runtime_state(
+            "test factory",
+            ErrorPhase::Execution,
+            "factory failure",
+        ))
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("factory failure"));
+    assert_eq!(ctx.runtime().epoch().unwrap(), before);
+    for _ in 0..2 {
+        super::prepare_eager_in_place_input(&value, family, |target| {
+            Ok(BridgeModule::for_engine(target.engine_id))
+        })
+        .unwrap();
+    }
+    assert!(ctx.runtime().epoch().unwrap() > before);
+    // Preparation only checks eligibility; the caller still owns a usable value.
+    assert!(value.to_tensor().is_ok());
+    let tracked = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let epoch = ctx.runtime().epoch().unwrap();
+    assert!(super::prepare_eager_in_place_input(&tracked, family, |_| {
+        panic!("tracked input must be rejected before the factory")
+    })
+    .is_err());
+    assert_eq!(ctx.runtime().epoch().unwrap(), epoch);
+    assert!(tracked.to_tensor().is_ok());
+}
+
+#[test]
 fn eager_extension_targeted_install_is_idempotent_for_fresh_modules() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let input = input(&ctx);

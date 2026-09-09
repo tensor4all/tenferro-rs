@@ -7,6 +7,60 @@ use tenferro_tensor::{ErrorKind, Tensor, TensorRead, TensorView, TypedTensorView
 
 use crate::{FftExecutor, FftNorm, FftPlanCache, TensorFftExt, TensorReadFftExt};
 
+#[test]
+fn cpu_fft_spec_rejects_changed_dtype_and_shape_before_execution() {
+    let spec = crate::concrete_fft_spec(
+        "fft",
+        crate::FftOperation::C2cForward,
+        tenferro_tensor::DType::C64,
+        &[2],
+        None,
+        0,
+        FftNorm::Backward,
+    )
+    .unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut plans = FftPlanCache::default();
+    for input in [
+        Tensor::from_vec_col_major([2], vec![1.0_f64; 2]).unwrap(),
+        Tensor::from_vec_col_major([3], vec![Complex64::new(1., 0.); 3]).unwrap(),
+    ] {
+        let error = backend
+            .with_backend_session(|session| {
+                tenferro_cpu::with_cpu_exec_session(session, |cpu| {
+                    crate::FftBackend::execute_fft(
+                        cpu,
+                        &input,
+                        &spec,
+                        crate::FftExecutionCache::caller_owned(&mut plans),
+                    )
+                })
+                .unwrap()
+            })
+            .unwrap_err();
+        assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
+    }
+    let data = [1.0_f64, 2.0];
+    let view = TensorRead::from_view(TensorView::F64(
+        TypedTensorView::from_slice([2], [1], 0, &data).unwrap(),
+    ));
+    let error = backend
+        .with_backend_session(|session| {
+            tenferro_cpu::with_cpu_exec_session(session, |cpu| {
+                crate::FftBackend::execute_fft_read(
+                    cpu,
+                    view,
+                    &spec,
+                    crate::FftExecutionCache::caller_owned(&mut plans),
+                )
+            })
+            .unwrap()
+        })
+        .unwrap_err();
+    assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
+    assert_eq!(backend.buffer_pool_stats().unwrap().buffers, 0);
+}
+
 fn assert_complex_close(actual: &[Complex64], expected: &[Complex64]) {
     assert_eq!(actual.len(), expected.len());
     for (actual, expected) in actual.iter().zip(expected) {

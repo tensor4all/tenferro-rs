@@ -7195,6 +7195,28 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
     }
 
+    /// Construct a backend-pooled host tensor with weak final-owner reclamation.
+    /// Explicit Vec extraction disarms reclamation; aliases and retained groups
+    /// keep the original root alive. The recycler must not acquire session locks.
+    ///
+    /// # Errors
+    /// Returns validation errors for invalid shape/length and runtime-state errors
+    /// if the freshly created host root cannot attach its recycler.
+    #[doc(hidden)]
+    pub fn from_vec_col_major_with_recycler(
+        shape: impl tenferro_tensor_core::IntoRankShape<R>,
+        data: Vec<T>,
+        recycler: std::sync::Weak<dyn crate::HostBufferRecycler<T>>,
+    ) -> crate::Result<Self> {
+        let mut tensor = Self::from_vec_col_major(shape, data)?;
+        tensor
+            .group
+            .group
+            .set_host_recycler(tensor.group.allocation_index, recycler)
+            .map_err(|error| crate::Error::runtime_state_source("pooled host tensor", error))?;
+        Ok(tensor)
+    }
+
     /// Make an explicit owning copy of this tensor.
     ///
     /// Host storage is copied into a fresh allocation. Backend-owned storage
