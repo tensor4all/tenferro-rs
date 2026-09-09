@@ -92,9 +92,9 @@ mod storage;
 
 #[doc(hidden)]
 pub use storage::{
-    AccessError, AllocationKey, BackendAllocation, ProviderCapabilities, ProviderKind,
-    ProviderReadMapping, ProviderWriteMapping, RootBoundSpan, RootResourceExtent, RootResourceId,
-    SpanValidationError,
+    AccessError, AllocationKey, BackendAllocation, HostBufferRecycler, ProviderCapabilities,
+    ProviderKind, ProviderReadMapping, ProviderWriteMapping, RootBoundSpan, RootResourceExtent,
+    RootResourceId, SpanValidationError,
 };
 pub use storage::{AllocationGroup, DescriptorSlot, GroupError};
 

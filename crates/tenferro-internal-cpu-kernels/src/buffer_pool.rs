@@ -17,7 +17,8 @@ use std::env;
 use std::ffi::OsString;
 use std::fmt;
 use std::mem::{size_of, ManuallyDrop, MaybeUninit};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+use tenferro_tensor::HostBufferRecycler;
 
 use num_complex::{Complex32, Complex64};
 
@@ -79,6 +80,14 @@ pub struct BufferPoolStats {
 /// assert_eq!(pool.len(), 1);
 /// ```
 pub struct BufferPool {
+    state: Arc<SharedPool>,
+}
+
+#[derive(Debug)]
+struct SharedPool(Mutex<PoolState>);
+
+#[derive(Debug)]
+struct PoolState {
     f64_pool: BTreeMap<usize, Vec<Vec<f64>>>,
     f32_pool: BTreeMap<usize, Vec<Vec<f32>>>,
     i32_pool: BTreeMap<usize, Vec<Vec<i32>>>,
@@ -103,7 +112,7 @@ impl fmt::Debug for BufferPool {
             .field("stats", &self.stats())
             .field(
                 "max_retained_capacity_bytes",
-                &self.max_retained_capacity_bytes,
+                &self.max_retained_capacity_bytes(),
             )
             .finish_non_exhaustive()
     }
@@ -183,6 +192,13 @@ pub(crate) mod private {
         ) -> crate::Result<(Vec<MaybeUninit<Self>>, super::UninitCheckoutToken)>
         where
             Self: Sized;
+        fn pool_finish_recycled(
+            pool: &mut super::BufferPool,
+            checkout: super::UninitCheckoutToken,
+        ) -> std::sync::Weak<dyn tenferro_tensor::HostBufferRecycler<Self>>
+        where
+            Self: Sized;
+
         fn pool_discard_uninit(
             pool: &mut super::BufferPool,
             data: Vec<MaybeUninit<Self>>,
@@ -287,6 +303,8 @@ macro_rules! impl_pool_scalar {
                 pool: &mut BufferPool,
                 len: usize,
             ) -> crate::Result<(Vec<MaybeUninit<Self>>, UninitCheckoutToken)> {
+                let mut state = lock_pool(&pool.state);
+                let pool = &mut *state;
                 match take_best_fit(&mut pool.$field, len) {
                     Some(buf) => {
                         let cap = buf.capacity();
@@ -322,12 +340,25 @@ macro_rules! impl_pool_scalar {
                 }
             }
 
+            fn pool_finish_recycled(
+                pool: &mut BufferPool,
+                checkout: UninitCheckoutToken,
+            ) -> Weak<dyn HostBufferRecycler<Self>> {
+                if let UninitCheckoutToken::Reused { actual_capacity } = checkout {
+                    decrement_in_flight(&mut lock_pool(&pool.state).$in_flight, actual_capacity);
+                }
+                let owner: Arc<dyn HostBufferRecycler<Self>> = pool.state.clone();
+                Arc::downgrade(&owner)
+            }
+
             fn pool_discard_uninit(
                 pool: &mut BufferPool,
                 data: Vec<MaybeUninit<Self>>,
                 checkout: UninitCheckoutToken,
             ) {
                 drop(data);
+                let mut state = lock_pool(&pool.state);
+                let pool = &mut *state;
                 if let UninitCheckoutToken::Reused { actual_capacity } = checkout {
                     decrement_in_flight(&mut pool.$in_flight, actual_capacity);
                 }
@@ -340,6 +371,8 @@ macro_rules! impl_pool_scalar {
             }
 
             fn pool_acquire_zeroed(pool: &mut BufferPool, len: usize) -> Vec<Self> {
+                let mut state = lock_pool(&pool.state);
+                let pool = &mut *state;
                 match take_best_fit(&mut pool.$field, len) {
                     Some(mut buf) => {
                         pool.retained_capacity_bytes = pool
@@ -355,12 +388,20 @@ macro_rules! impl_pool_scalar {
             }
 
             fn pool_release(pool: &mut BufferPool, buf: Vec<Self>) {
+                decrement_in_flight(&mut lock_pool(&pool.state).$in_flight, buf.capacity());
+                pool.state.recycle(buf);
+            }
+        }
+
+        impl HostBufferRecycler<$ty> for SharedPool {
+            fn recycle(&self, buf: Vec<$ty>) {
+                let mut state = lock_pool(self);
+                let pool = &mut *state;
                 let cap = buf.capacity();
                 if cap > 0 {
-                    decrement_in_flight(&mut pool.$in_flight, cap);
                     pool.retained_capacity_bytes = pool
                         .retained_capacity_bytes
-                        .saturating_add(cap.saturating_mul(size_of::<Self>()));
+                        .saturating_add(cap.saturating_mul(size_of::<$ty>()));
                     pool.$field.entry(cap).or_default().push(buf);
                     pool.enforce_retention_limit();
                 }
@@ -380,13 +421,14 @@ impl_pool_scalar!(Complex32, c32_pool, c32_in_flight, Complex32::new(0.0, 0.0));
 impl BufferPool {
     #[cfg(test)]
     pub(crate) fn in_flight_is_empty(&self) -> bool {
-        self.f64_in_flight.is_empty()
-            && self.f32_in_flight.is_empty()
-            && self.i32_in_flight.is_empty()
-            && self.i64_in_flight.is_empty()
-            && self.bool_in_flight.is_empty()
-            && self.c64_in_flight.is_empty()
-            && self.c32_in_flight.is_empty()
+        let state = lock_pool(&self.state);
+        state.f64_in_flight.is_empty()
+            && state.f32_in_flight.is_empty()
+            && state.i32_in_flight.is_empty()
+            && state.i64_in_flight.is_empty()
+            && state.bool_in_flight.is_empty()
+            && state.c64_in_flight.is_empty()
+            && state.c32_in_flight.is_empty()
     }
     /// Create an empty typed buffer pool.
     ///
@@ -417,22 +459,24 @@ impl BufferPool {
     /// ```
     pub fn with_max_retained_capacity_bytes(max_retained_capacity_bytes: usize) -> Self {
         Self {
-            f64_pool: BTreeMap::new(),
-            f32_pool: BTreeMap::new(),
-            i32_pool: BTreeMap::new(),
-            i64_pool: BTreeMap::new(),
-            bool_pool: BTreeMap::new(),
-            c64_pool: BTreeMap::new(),
-            c32_pool: BTreeMap::new(),
-            f64_in_flight: BTreeMap::new(),
-            f32_in_flight: BTreeMap::new(),
-            i32_in_flight: BTreeMap::new(),
-            i64_in_flight: BTreeMap::new(),
-            bool_in_flight: BTreeMap::new(),
-            c64_in_flight: BTreeMap::new(),
-            c32_in_flight: BTreeMap::new(),
-            retained_capacity_bytes: 0,
-            max_retained_capacity_bytes,
+            state: Arc::new(SharedPool(Mutex::new(PoolState {
+                f64_pool: BTreeMap::new(),
+                f32_pool: BTreeMap::new(),
+                i32_pool: BTreeMap::new(),
+                i64_pool: BTreeMap::new(),
+                bool_pool: BTreeMap::new(),
+                c64_pool: BTreeMap::new(),
+                c32_pool: BTreeMap::new(),
+                f64_in_flight: BTreeMap::new(),
+                f32_in_flight: BTreeMap::new(),
+                i32_in_flight: BTreeMap::new(),
+                i64_in_flight: BTreeMap::new(),
+                bool_in_flight: BTreeMap::new(),
+                c64_in_flight: BTreeMap::new(),
+                c32_in_flight: BTreeMap::new(),
+                retained_capacity_bytes: 0,
+                max_retained_capacity_bytes,
+            }))),
         }
     }
 
@@ -464,7 +508,7 @@ impl BufferPool {
     /// assert_eq!(pool.max_retained_capacity_bytes(), 4096);
     /// ```
     pub fn max_retained_capacity_bytes(&self) -> usize {
-        self.max_retained_capacity_bytes
+        lock_pool(&self.state).max_retained_capacity_bytes
     }
 
     /// Update the maximum retained typed host-buffer capacity in bytes.
@@ -485,8 +529,9 @@ impl BufferPool {
     /// assert!(pool.is_empty());
     /// ```
     pub fn set_max_retained_capacity_bytes(&mut self, max_retained_capacity_bytes: usize) {
-        self.max_retained_capacity_bytes = max_retained_capacity_bytes;
-        self.enforce_retention_limit();
+        let mut state = lock_pool(&self.state);
+        state.max_retained_capacity_bytes = max_retained_capacity_bytes;
+        state.enforce_retention_limit();
     }
 
     /// Number of retained buffers across all typed pools.
@@ -537,15 +582,16 @@ impl BufferPool {
     /// assert_eq!(stats.capacity_bytes, 16);
     /// ```
     pub fn stats(&self) -> BufferPoolStats {
+        let state = lock_pool(&self.state);
         BufferPoolStats {
-            buffers: pool_len(&self.f64_pool)
-                + pool_len(&self.f32_pool)
-                + pool_len(&self.i32_pool)
-                + pool_len(&self.i64_pool)
-                + pool_len(&self.bool_pool)
-                + pool_len(&self.c64_pool)
-                + pool_len(&self.c32_pool),
-            capacity_bytes: self.retained_capacity_bytes,
+            buffers: pool_len(&state.f64_pool)
+                + pool_len(&state.f32_pool)
+                + pool_len(&state.i32_pool)
+                + pool_len(&state.i64_pool)
+                + pool_len(&state.bool_pool)
+                + pool_len(&state.c64_pool)
+                + pool_len(&state.c32_pool),
+            capacity_bytes: state.retained_capacity_bytes,
         }
     }
 
@@ -638,13 +684,7 @@ impl BufferPool {
     /// assert!(pool.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.f64_pool.is_empty()
-            && self.f32_pool.is_empty()
-            && self.i32_pool.is_empty()
-            && self.i64_pool.is_empty()
-            && self.bool_pool.is_empty()
-            && self.c64_pool.is_empty()
-            && self.c32_pool.is_empty()
+        self.len() == 0
     }
 
     /// Drop all retained buffers from the pool.
@@ -664,6 +704,32 @@ impl BufferPool {
     /// assert!(pool.is_empty());
     /// ```
     pub fn clear(&mut self) {
+        let mut state = lock_pool(&self.state);
+        state.clear();
+    }
+
+    #[doc(hidden)]
+    pub fn clear_in_flight_retained(&mut self) {
+        lock_pool(&self.state).clear_in_flight_retained();
+    }
+
+    #[doc(hidden)]
+    pub fn replenish_in_flight_retained(&mut self) {
+        lock_pool(&self.state).replenish_in_flight_retained();
+    }
+}
+
+// INVARIANT: no user callback or tensor destructor runs under this lock; it
+// protects only scalar Vec bins and their accounting, never execution admission.
+fn lock_pool(state: &SharedPool) -> MutexGuard<'_, PoolState> {
+    state
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl PoolState {
+    fn clear(&mut self) {
         self.f64_pool.clear();
         self.f32_pool.clear();
         self.i32_pool.clear();
@@ -733,7 +799,7 @@ impl BufferPool {
                 return;
             };
             if evicted_bytes == 0 {
-                if self.is_empty() {
+                if self.retained_capacity_bytes == 0 {
                     self.retained_capacity_bytes = 0;
                     return;
                 }

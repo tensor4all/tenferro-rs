@@ -1125,6 +1125,21 @@ impl AllocationGroup {
         Ok(self.resolve_descriptor(slot)?.1.allocation.index())
     }
 
+    pub(crate) fn set_host_recycler<T: TensorScalar>(
+        &mut self,
+        allocation_index: usize,
+        recycler: std::sync::Weak<dyn super::root::HostBufferRecycler<T>>,
+    ) -> Result<(), AccessError> {
+        let owner = self
+            .allocations
+            .get_mut(allocation_index)
+            .and_then(Option::as_mut)
+            .ok_or(AccessError::Unsupported {
+                backend: "missing host allocation",
+            })?;
+        owner.set_host_recycler(recycler)
+    }
+
     pub(crate) fn host_buffer_at<T: 'static>(
         &self,
         allocation_index: usize,

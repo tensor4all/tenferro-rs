@@ -176,6 +176,46 @@ pub(crate) struct StorageMut<'a> {
 pub(crate) struct HostAllocation<T> {
     extent: RootResourceExtent,
     data: UnsafeCell<crate::StorageBuffer<T>>,
+    recycler: Option<std::sync::Weak<dyn HostBufferRecycler<T>>>,
+}
+
+/// Backend-owned reclamation of a fully initialized host allocation.
+///
+/// This extension contract transfers a vector only after its final storage owner
+/// is destroyed. Implementations must not panic or acquire execution-admission
+/// locks; destruction can occur inside an active backend session.
+#[doc(hidden)]
+pub trait HostBufferRecycler<T>: std::fmt::Debug + Send + Sync {
+    /// Accept exclusive ownership of an initialized vector for reuse or release.
+    ///
+    /// # Examples
+    /// ```
+    /// use std::sync::atomic::{AtomicUsize, Ordering};
+    /// use tenferro_tensor::HostBufferRecycler;
+    /// #[derive(Debug, Default)]
+    /// struct ReleaseCounter(AtomicUsize);
+    /// impl HostBufferRecycler<f64> for ReleaseCounter {
+    ///     fn recycle(&self, data: Vec<f64>) {
+    ///         self.0.fetch_add(data.len(), Ordering::Relaxed);
+    ///         drop(data);
+    ///     }
+    /// }
+    /// let recycler = ReleaseCounter::default();
+    /// recycler.recycle(vec![1.0, 2.0]);
+    /// assert_eq!(recycler.0.load(Ordering::Relaxed), 2);
+    /// ```
+    fn recycle(&self, data: Vec<T>);
+}
+
+impl<T> Drop for HostAllocation<T> {
+    fn drop(&mut self) {
+        let Some(recycler) = self.recycler.take().and_then(|owner| owner.upgrade()) else {
+            return;
+        };
+        if let crate::StorageBuffer::Host(data) = self.data.get_mut() {
+            recycler.recycle(std::mem::take(data));
+        }
+    }
 }
 
 /// Root-bound owner for a provider buffer supplied through the backend storage
@@ -570,30 +610,37 @@ impl<T: TensorScalar> HostRoot for T {
     fn into_pin(extent: RootResourceExtent, data: Vec<Self>) -> RootResourcePin {
         match T::dtype() {
             DType::F32 => RootResourcePin::HostF32(HostAllocation {
+                recycler: None,
                 extent,
                 data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::F64 => RootResourcePin::HostF64(HostAllocation {
+                recycler: None,
                 extent,
                 data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::I32 => RootResourcePin::HostI32(HostAllocation {
+                recycler: None,
                 extent,
                 data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::I64 => RootResourcePin::HostI64(HostAllocation {
+                recycler: None,
                 extent,
                 data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::Bool => RootResourcePin::HostBool(HostAllocation {
+                recycler: None,
                 extent,
                 data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::C32 => RootResourcePin::HostC32(HostAllocation {
+                recycler: None,
                 extent,
                 data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::C64 => RootResourcePin::HostC64(HostAllocation {
+                recycler: None,
                 extent,
                 data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
@@ -1017,6 +1064,21 @@ impl OwnedStorage {
         self.pin.backend_buffer_mut::<T>()
     }
 
+    pub(crate) fn set_host_recycler<T: TensorScalar>(
+        &mut self,
+        recycler: std::sync::Weak<dyn HostBufferRecycler<T>>,
+    ) -> Result<(), AccessError> {
+        let allocation = self
+            .pin
+            .as_any_mut()
+            .downcast_mut::<HostAllocation<T>>()
+            .ok_or(AccessError::Unsupported {
+                backend: "non-host",
+            })?;
+        allocation.recycler = Some(recycler);
+        Ok(())
+    }
+
     pub(crate) fn into_host_vec<T: TensorScalar>(mut self) -> Result<Vec<T>, AccessError> {
         let allocation = self
             .pin
@@ -1032,7 +1094,9 @@ impl OwnedStorage {
                 backend: "non-host",
             });
         };
-        Ok(std::mem::take(data))
+        let data = std::mem::take(data);
+        allocation.recycler = None;
+        Ok(data)
     }
 }
 

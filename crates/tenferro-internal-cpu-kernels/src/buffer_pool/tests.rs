@@ -286,13 +286,13 @@ fn pooled_uninit_guard_keeps_unrelated_dtype_markers_untouched() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
     let unrelated = pool.acquire_with_capacity::<f64>(8);
-    let marker_before = pool.f64_in_flight.clone();
+    let marker_before = super::lock_pool(&pool.state).f64_in_flight.clone();
     assert_eq!(marker_before.get(&8), Some(&1));
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 16]);
     {
         let _output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
     }
-    assert_eq!(pool.f64_in_flight, marker_before);
+    assert_eq!(super::lock_pool(&pool.state).f64_in_flight, marker_before);
     drop(unrelated);
     pool.clear_in_flight_retained();
 }
@@ -307,9 +307,9 @@ fn pooled_uninit_guard_bool_invalid_byte_error_drops_without_typed_read() {
         panic!("invalid bool partial panic");
     }));
     assert!(result.is_err());
-    assert!(pool.bool_in_flight.is_empty());
+    assert!(super::lock_pool(&pool.state).bool_in_flight.is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert!(!pool.bool_pool.contains_key(&8));
+    assert!(!super::lock_pool(&pool.state).bool_pool.contains_key(&8));
 }
 
 #[test]
@@ -328,11 +328,17 @@ fn pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity() {
     let tensor = unsafe { output.assume_init() }.unwrap();
     assert_eq!(tensor.as_slice().unwrap(), &[1.0, 2.0, 3.0]);
     assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert_eq!(pool.f64_in_flight.get(&8), Some(&1));
+    assert_eq!(
+        super::lock_pool(&pool.state).f64_in_flight.get(&8),
+        Some(&1)
+    );
     pool.replenish_in_flight_retained();
-    assert!(pool.f64_in_flight.is_empty());
+    assert!(super::lock_pool(&pool.state).f64_in_flight.is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
-    assert_eq!(pool.f64_pool.get(&8).map(Vec::len), Some(1));
+    assert_eq!(
+        super::lock_pool(&pool.state).f64_pool.get(&8).map(Vec::len),
+        Some(1)
+    );
 }
 
 #[test]
@@ -342,7 +348,7 @@ fn pooled_uninit_guard_reused_error_discards_exact_capacity() {
     let output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
     let error = unsafe { output.assume_init_as::<tenferro_tensor::Rank<2>>() }.unwrap_err();
     assert!(error.to_string().contains("pooled_uninit_output"));
-    assert!(pool.f64_in_flight.is_empty());
+    assert!(super::lock_pool(&pool.state).f64_in_flight.is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 0);
 }
 
@@ -357,9 +363,9 @@ fn pooled_uninit_guard_reused_partial_panic_discards_exact_capacity() {
         panic!("partial reused C>len panic");
     }));
     assert!(result.is_err());
-    assert!(pool.f64_in_flight.is_empty());
+    assert!(super::lock_pool(&pool.state).f64_in_flight.is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert!(!pool.f64_pool.contains_key(&8));
+    assert!(!super::lock_pool(&pool.state).f64_pool.contains_key(&8));
 }
 
 #[test]

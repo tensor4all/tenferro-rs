@@ -17,7 +17,7 @@ pub use identity::{AllocationKey, RootResourceId};
 #[doc(hidden)]
 pub use prepared::{AccessError, ProviderReadMapping, ProviderWriteMapping};
 #[doc(hidden)]
-pub use root::{BackendAllocation, ProviderCapabilities, ProviderKind};
+pub use root::{BackendAllocation, HostBufferRecycler, ProviderCapabilities, ProviderKind};
 #[doc(hidden)]
 pub use span::{RootBoundSpan, RootResourceExtent, SpanValidationError};
 
