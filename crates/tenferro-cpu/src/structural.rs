@@ -283,7 +283,7 @@ where
         dst_offset,
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
-    map_into(&mut dst_view, &src_view, |value| value.conj_elem())
+    map_into(&mut dst_view, &src_view, ConjElem::conj_elem)
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 

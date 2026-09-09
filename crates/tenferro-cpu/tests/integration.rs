@@ -8,3 +8,5 @@ mod inject_tests;
 mod provider_feature_contract;
 #[path = "integration/runtime_error_tests.rs"]
 mod runtime_error_tests;
+#[path = "integration/static_replay.rs"]
+mod static_replay;

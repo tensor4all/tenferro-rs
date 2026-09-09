@@ -478,16 +478,12 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
         .and_then(|(_, suffix)| suffix.split_once("pub fn typed_sub_with_pool"))
         .map(|(body, _)| body)
         .expect("add view helper must remain present");
-    assert!(add.contains(
-        "// SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view."
-    ));
-    assert!(add.contains(
-        "// SAFETY: the successful add scalar-map replay writes every logical destination element and retains no destination view."
-    ));
-    assert!(
-        !add.contains("successful multiplication kernel"),
-        "add overwrite proofs must not claim multiplication"
-    );
+    // Add delegates to the validated generic helper whose overwrite proofs
+    // are checked above; it must not acquire or finalize an output separately.
+    assert!(add.contains("typed_binary_view_with_pool("));
+    assert!(add.contains("Add::add"));
+    assert!(!add.contains("assume_init"));
+    assert!(!add.contains("PooledUninitOutput"));
 
     let multiplication = elementwise
         .split_once("pub fn typed_mul_view_with_pool")

@@ -1,5 +1,7 @@
 use super::*;
 
+mod static_replay;
+
 #[test]
 fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
     use tenferro_tensor::backend::ElementwiseFusionInst;
