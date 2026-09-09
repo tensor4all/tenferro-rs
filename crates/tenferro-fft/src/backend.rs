@@ -135,6 +135,48 @@ pub trait FftBackend: BackendSession {
         Ok(())
     }
 
+    /// Execute a validated FFT from borrowed storage.
+    ///
+    /// The default explicitly canonicalizes view inputs. Backends supporting
+    /// compact borrowed storage override this method to avoid input copies.
+    ///
+    /// # Examples
+    /// The borrowed public surface dispatches through this backend hook:
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_fft::{FftNorm, TensorReadFftExt};
+    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// let input = Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2])?;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let output = backend.with_backend_session(|session| {
+    ///     TensorRead::Tensor(&input).fft_read(None, 0, FftNorm::Backward, session)
+    /// })?;
+    /// assert_eq!(output.as_slice::<Complex64>()?, &[Complex64::new(2., 0.), Complex64::new(0., 0.)]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for unsupported dtype,
+    /// layout, or placement, and [`tenferro_tensor::Error::Validation`] when
+    /// input metadata disagrees with the validated spec. Same-placement
+    /// canonicalization, plan creation, and execution failures preserve the
+    /// selected backend's typed error source; no implicit transfer is performed.
+    fn execute_fft_read(
+        &mut self,
+        input: TensorRead<'_>,
+        spec: &FftPlanSpec,
+        cache: FftExecutionCache<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        match input {
+            TensorRead::Tensor(input) => self.execute_fft(input, spec, cache),
+            input => {
+                let owned = self.to_contiguous_read(input)?;
+                self.execute_fft(&owned, spec, cache)
+            }
+        }
+    }
+
     /// Execute one validated FFT request on `input`'s existing placement.
     ///
     /// # Errors

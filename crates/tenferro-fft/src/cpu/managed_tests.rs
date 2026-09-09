@@ -160,6 +160,82 @@ impl SharedTensorAllocationDomain for FakeDomain {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum OutputFault {
+    AllocationError,
+    WrongDtype,
+    ForeignDomain,
+    WrongLength,
+}
+
+#[derive(Debug)]
+struct FaultyOutputDomain {
+    input_domain: Arc<FakeDomain>,
+    fault: OutputFault,
+}
+
+impl SharedTensorAllocationDomain for FaultyOutputDomain {
+    fn id(&self) -> AllocationDomainId {
+        self.input_domain.id
+    }
+
+    fn allocate(&self, dtype: DType, shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
+        match self.fault {
+            OutputFault::AllocationError => Err(tenferro_tensor::Error::runtime_state(
+                "FaultyOutputDomain::allocate",
+                "allocation unavailable",
+            )),
+            OutputFault::WrongDtype => self.input_domain.allocate(DType::F32, shape),
+            OutputFault::ForeignDomain => FakeDomain::new().allocate(dtype, shape),
+            OutputFault::WrongLength => self.input_domain.allocate(dtype, &[1]),
+        }
+    }
+}
+
+#[test]
+fn managed_output_failures_return_errors_and_leave_input_usable() {
+    for fault in [
+        OutputFault::AllocationError,
+        OutputFault::WrongDtype,
+        OutputFault::ForeignDomain,
+        OutputFault::WrongLength,
+    ] {
+        let domain = FakeDomain::new();
+        let input = Tensor::F64(domain.tensor(&[4], vec![1., 2., 3., 4.]));
+        let mut failing = CpuBackend::with_threads(1)
+            .unwrap()
+            .with_allocation_domain(Arc::new(FaultyOutputDomain {
+                input_domain: domain.clone(),
+                fault,
+            }));
+        let error = failing
+            .with_backend_session(|s| input.rfft(None, 0, FftNorm::Backward, s))
+            .unwrap_err();
+        match fault {
+            OutputFault::WrongLength => {
+                assert!(matches!(error, tenferro_tensor::Error::HostAccess { .. }))
+            }
+            _ => assert!(matches!(error, tenferro_tensor::Error::RuntimeState { .. })),
+        }
+        let mut valid = backend(&domain);
+        let result = valid
+            .with_backend_session(|s| input.rfft(None, 0, FftNorm::Backward, s))
+            .unwrap();
+        let Tensor::C64(result) = result else {
+            panic!("expected complex result")
+        };
+        let guard = result.backend_buffer().unwrap().map_read().unwrap();
+        assert_eq!(
+            &*guard,
+            &[
+                Complex64::new(10., 0.),
+                Complex64::new(-2., 2.),
+                Complex64::new(-2., 0.)
+            ]
+        );
+    }
+}
+
 fn backend(domain: &Arc<FakeDomain>) -> CpuBackend {
     let erased: Arc<dyn SharedTensorAllocationDomain> = domain.clone();
     CpuBackend::new().with_allocation_domain(erased)

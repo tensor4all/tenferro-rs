@@ -141,6 +141,8 @@ mod cpu;
 mod cuda;
 #[cfg(feature = "autodiff")]
 mod eager_ext;
+#[cfg(feature = "autodiff")]
+mod eager_in_place;
 pub mod prelude;
 mod spec;
 #[cfg(feature = "webgpu")]
@@ -152,6 +154,8 @@ pub use cache::{
 };
 #[cfg(feature = "autodiff")]
 pub use eager_ext::EagerTensorFftExt;
+#[cfg(feature = "autodiff")]
+pub use eager_in_place::EagerFftInPlaceError;
 pub use spec::{FftNorm, FftOperation, FftPlanSpec};
 
 /// Extension family id used by the tenferro FFT extension.
@@ -1036,10 +1040,9 @@ fn execute_concrete_fft_read_op(
         axis,
         norm,
     )?;
-    let materialized = backend.to_contiguous_read(input.clone())?;
     let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
-    backend.execute_fft(
-        &materialized,
+    backend.execute_fft_read(
+        input.clone(),
         &spec,
         FftExecutionCache::caller_owned(&mut plans),
     )
@@ -1476,9 +1479,9 @@ pub(crate) fn execute_fft_extension_reads_session(
     execute_fft_extension_reads_on_session(op, inputs, session, caches)
 }
 
-fn execute_fft_extension_for_capability<B: FftBackend + ?Sized>(
+fn execute_fft_extension_reads_for_capability<B: FftBackend + ?Sized>(
     op: &FftOp,
-    inputs: &[&Tensor],
+    inputs: &[TensorRead<'_>],
     session: &mut B,
     caches: &mut ExtensionCacheStore,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -1489,7 +1492,8 @@ fn execute_fft_extension_for_capability<B: FftBackend + ?Sized>(
             format!("expected 1 input, got {}", inputs.len()),
         ));
     }
-    let input = inputs[0];
+    let input = &inputs[0];
+    session.validate_fft_read_input(fft_op_name(op.operation), input)?;
     let spec = validated_fft_plan_spec(
         fft_op_name(op.operation),
         op.operation,
@@ -1499,7 +1503,11 @@ fn execute_fft_extension_for_capability<B: FftBackend + ?Sized>(
         op.axis,
         op.norm,
     )?;
-    let output = session.execute_fft(input, &spec, FftExecutionCache::runtime_owned(caches))?;
+    let output = session.execute_fft_read(
+        input.clone(),
+        &spec,
+        FftExecutionCache::runtime_owned(caches),
+    )?;
     Ok(vec![output])
 }
 
@@ -1530,25 +1538,6 @@ fn execute_fft_extension_reads_on_session(
         fft_op_name(op.operation),
         "selected backend session does not expose an FFT execution capability",
     ))
-}
-
-fn execute_fft_extension_reads_for_capability<B: FftBackend + ?Sized>(
-    op: &FftOp,
-    inputs: &[TensorRead<'_>],
-    session: &mut B,
-    caches: &mut ExtensionCacheStore,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let op_name = fft_op_name(op.operation);
-    for input in inputs {
-        session.validate_fft_read_input(op_name, input)?;
-    }
-    let materialized_inputs = inputs
-        .iter()
-        .cloned()
-        .map(|input| session.to_contiguous_read(input))
-        .collect::<tenferro_tensor::Result<Vec<_>>>()?;
-    let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-    execute_fft_extension_for_capability(op, &input_refs, session, caches)
 }
 
 define_extension_runtime! {
@@ -2129,7 +2118,7 @@ mod tests {
 
     #[test]
     fn axis_lane_layout_rejects_stride_overflow() {
-        let err = cpu::for_axis_lane(&[usize::MAX, 2], 1, 2, |_| Ok(()))
+        let err = cpu::LaneLayout::new(&[usize::MAX, 2], 1, 2)
             .expect_err("lane layout should reject stride overflow");
 
         assert!(err.to_string().contains("overflows usize"), "{err}");

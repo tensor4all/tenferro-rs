@@ -72,16 +72,6 @@ fn assert_f32_close(actual: &[f32], expected: &[f32]) {
     }
 }
 
-fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-    let (_, after_start) = source
-        .split_once(start)
-        .unwrap_or_else(|| panic!("missing source section start {start}"));
-    let (section, _) = after_start
-        .split_once(end)
-        .unwrap_or_else(|| panic!("missing source section end {end}"));
-    section
-}
-
 #[cfg(feature = "autodiff")]
 fn fft_ad_context() -> tenferro_ad::AdContext {
     tenferro_ad::AdContext::builder()
@@ -208,67 +198,39 @@ fn fft_cpu_output_buffers_avoid_zero_fill_but_keep_lane_padding() {
         !source.contains("let mut output = vec![T::zero(); out_shape.iter().product()]"),
         "FFT CPU real output buffers are fully overwritten and should not be zero-filled"
     );
+    let lanes = include_str!("../src/cpu/lanes.rs");
+    assert!(source.contains("PooledUninitOutput::<O>::new"));
     assert!(
-        source.contains("let mut lane = vec![Complex::zero(); fft_len]")
-            && source.contains("// INVARIANT: zero-fill is transform padding semantics")
-            && source.contains("lane.fill(Complex::zero())"),
-        "FFT CPU scratch lanes must stay zero-filled for transform padding and carry an invariant marker"
+        lanes.contains("lane[copy_len..].fill(Complex::zero())")
+            && lanes.contains("// INVARIANT: only missing input positions are padding"),
+        "FFT padding must explicitly initialize only missing input positions"
     );
 }
 
 #[test]
 fn fft_cpu_execution_reuses_cached_rustfft_plans() {
-    let source = include_str!("../src/cpu.rs");
     let cache_source = include_str!("../src/cache.rs");
-    let c2c = source_section(source, "fn execute_c2c<T>(", "fn execute_r2c<T>(");
-    let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
-    let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
-
-    assert!(
-        cache_source.contains("trait FftPlanProvider"),
-        "FFT CPU execution should obtain plans from an explicit owner"
-    );
-    for (name, section) in [
-        ("execute_c2c", c2c),
-        ("execute_r2c", r2c),
-        ("execute_c2r", c2r),
+    assert!(cache_source.contains("trait FftPlanProvider"));
+    for source in [
+        include_str!("../src/cpu.rs"),
+        include_str!("../src/cpu/lanes.rs"),
     ] {
         assert!(
-            !section.contains("FftPlanner::<T>::new()"),
-            "{name} must not rebuild a RustFFT planner per call"
+            !source.contains("FftPlanner::<T>::new()"),
+            "CPU kernels must reuse owned plans"
         );
     }
 }
 
 #[test]
 fn fft_cpu_execution_uses_explicit_plan_provider() {
-    let source = include_str!("../src/cpu.rs");
-    let c2c = source_section(source, "fn execute_c2c<T>(", "fn execute_r2c<T>(");
-    let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
-    let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
-
-    for (name, section) in [
-        ("execute_c2c", c2c),
-        ("execute_r2c", r2c),
-        ("execute_c2r", c2r),
-    ] {
-        let call_start = section
-            .find("cached_fft_plan::<T, _>(plans")
-            .unwrap_or_else(|| panic!("{name} must use its explicit plan provider"));
-        let call_end = section[call_start..]
-            .find(';')
-            .map(|offset| call_start + offset + 1)
-            .unwrap_or_else(|| panic!("{name} cached_fft_plan call must end in a statement"));
-        let normalized_call = section[call_start..call_end]
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        assert!(
-            normalized_call.ends_with(");"),
-            "unexpected plan call: {normalized_call}"
-        );
-    }
+    let source = include_str!("../src/cpu/lanes.rs");
+    assert!(source.contains("cached_fft_plan::<T, _>(plans"));
+    assert!(source.contains("plan.process_with_scratch(&mut lane, &mut scratch)"));
+    assert!(
+        source.find("let mut scratch =").unwrap() < source.find("for _ in start..end").unwrap(),
+        "scratch must be reused across each job's lanes"
+    );
 }
 
 #[test]
@@ -277,6 +239,7 @@ fn fft_source_has_no_process_global_plan_cache() {
         include_str!("../src/lib.rs"),
         include_str!("../src/cache.rs"),
         include_str!("../src/cpu.rs"),
+        include_str!("../src/cpu/lanes.rs"),
     ];
 
     for source in sources {
@@ -498,7 +461,7 @@ fn eager_fft_matches_traced_fft() {
         ],
     )
     .unwrap();
-    let traced = TracedTensor::from_tensor_concrete_shape(input.clone())
+    let traced = TracedTensor::from_tensor_concrete_shape(input.duplicate().unwrap())
         .unwrap()
         .fft(Some(3), -1, FftNorm::Ortho)
         .unwrap();
@@ -523,7 +486,7 @@ fn eager_ifft_matches_traced_ifft() {
         ],
     )
     .unwrap();
-    let traced = TracedTensor::from_tensor_concrete_shape(input.clone())
+    let traced = TracedTensor::from_tensor_concrete_shape(input.duplicate().unwrap())
         .unwrap()
         .ifft(None, 0, FftNorm::Forward)
         .unwrap();
@@ -539,7 +502,7 @@ fn eager_ifft_matches_traced_ifft() {
 #[cfg(feature = "autodiff")]
 fn eager_rfft_matches_traced_rfft() {
     let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let traced = TracedTensor::from_tensor_concrete_shape(input.clone())
+    let traced = TracedTensor::from_tensor_concrete_shape(input.duplicate().unwrap())
         .unwrap()
         .rfft(None, -1, FftNorm::Backward)
         .unwrap();
@@ -563,7 +526,7 @@ fn eager_irfft_matches_traced_irfft() {
         ],
     )
     .unwrap();
-    let traced = TracedTensor::from_tensor_concrete_shape(input.clone())
+    let traced = TracedTensor::from_tensor_concrete_shape(input.duplicate().unwrap())
         .unwrap()
         .irfft(Some(4), -1, FftNorm::Backward)
         .unwrap();

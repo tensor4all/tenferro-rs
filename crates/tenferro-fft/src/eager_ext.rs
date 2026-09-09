@@ -20,6 +20,63 @@ use crate::{
 
 /// FFT extension methods for [`EagerTensor`].
 pub trait EagerTensorFftExt {
+    /// Consume a uniquely owned, untracked, compact column-major CPU complex
+    /// tensor and overwrite it with its FFT. Shape and allocation are preserved; no implicit copy occurs.
+    /// Gradient-tracked inputs and active trace capture are rejected even under no_grad.
+    ///
+    /// # Errors
+    /// Returns `EagerFftInPlaceError::Rejected` with the unchanged input for an
+    /// invalid axis, non-complex/device input, noncompact layout, recording
+    /// state, or shared owner.
+    /// `EagerFftInPlaceError::Execution` consumes the input if execution fails
+    /// after ownership acquisition; the operation does not promise rollback.
+    ///
+    /// # Examples
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
+    /// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
+    /// let input = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.), Complex64::new(2., 0.)])?, runtime)?;
+    /// let output = input.fft_in_place(0, FftNorm::Backward)?;
+    /// assert_eq!(output.value()?.as_slice::<Complex64>()?, &[Complex64::new(3., 0.), Complex64::new(-1., 0.)]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn fft_in_place(
+        self,
+        axis: isize,
+        norm: FftNorm,
+    ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError>;
+
+    /// Consume an untracked, compact column-major CPU C32/C64 tensor and perform a shape-preserving
+    /// inverse FFT in its original allocation. Ownership rules match fft_in_place.
+    ///
+    /// # Errors
+    /// Returns `EagerFftInPlaceError::Rejected` with the original input when
+    /// validation or exclusive ownership fails, or `Execution` after ownership
+    /// acquisition. Active capture and tracked inputs are not supported.
+    ///
+    /// # Examples
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
+    /// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
+    /// let input = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major([2], vec![Complex64::new(3., 0.), Complex64::new(-1., 0.)])?, runtime)?;
+    /// let output = input.ifft_in_place(0, FftNorm::Backward)?;
+    /// assert_eq!(output.value()?.as_slice::<Complex64>()?, &[Complex64::new(1., 0.), Complex64::new(2., 0.)]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn ifft_in_place(
+        self,
+        axis: isize,
+        norm: FftNorm,
+    ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError>;
+
     /// Execute a complex FFT, or a full-spectrum FFT for real input.
     ///
     /// # Examples
@@ -122,6 +179,22 @@ pub trait EagerTensorFftExt {
 }
 
 impl EagerTensorFftExt for EagerTensor {
+    fn fft_in_place(
+        self,
+        axis: isize,
+        norm: FftNorm,
+    ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError> {
+        crate::eager_in_place::apply(self, FftOperation::C2cForward, axis, norm)
+    }
+
+    fn ifft_in_place(
+        self,
+        axis: isize,
+        norm: FftNorm,
+    ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError> {
+        crate::eager_in_place::apply(self, FftOperation::C2cInverse, axis, norm)
+    }
+
     fn fft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
         let operation = runtime_forward_fft_operation(self.dtype())?;
         apply_eager_fft("fft", self, operation, n, axis, norm)
@@ -188,7 +261,9 @@ fn apply_eager_fft(
     }
 }
 
-fn eager_extension_module(target: EagerExtensionTarget) -> Result<Arc<dyn ExtensionModule>> {
+pub(crate) fn eager_extension_module(
+    target: EagerExtensionTarget,
+) -> Result<Arc<dyn ExtensionModule>> {
     let EagerExtensionTarget {
         engine_id,
         backend_kind,
