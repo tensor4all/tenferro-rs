@@ -44,6 +44,8 @@ _MEMBER_CLASSES = {
     "crates/tenferro-internal-extension-macros": "foundation",
     "crates/tenferro-tensor": "tensor_backend",
     "crates/tenferro-internal-cpu-kernels": "tensor_backend",
+    "crates/tenferro-cpu-basic": "tensor_backend",
+    "crates/tenferro-cpu-fused": "tensor_backend",
     "crates/tenferro-cpu": "tensor_backend",
     "crates/tenferro-gpu": "tensor_backend",
     "crates/tenferro-internal-ops": "tensor_backend",
