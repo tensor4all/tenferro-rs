@@ -236,7 +236,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     ///
     /// # Examples
     /// ```
-    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
     /// let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![1])?;
     /// output.as_uninit_slice_mut()[0].write(2.0);
