@@ -59,6 +59,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("name: CI gate (PR workspace tests)", heavy)
         self.assertIn("name: macOS workspace tests", heavy)
 
+    def test_gpu_gates_wait_for_docs_and_coverage(self) -> None:
+        for path in (".github/workflows/CI_gpu.yml", ".github/workflows/runpod-gpu-test.yml"):
+            with self.subTest(path=path):
+                text = read(path)
+                self.assertIn('              "coverage",\n              "docs-site",', text)
+
     def test_fast_required_jobs_fail_if_policy_fails(self) -> None:
         text = read(".github/workflows/ci.yml")
         self.assertGreaterEqual(text.count("needs.policy.result"), 6)
