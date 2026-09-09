@@ -13,7 +13,8 @@ fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
                 TypedTensorView::from_slice(shape, [1, 64, 2048], 0, &data).unwrap()));
             for threads in [1, 8] {
                 let mut backend = CpuBackend::with_threads(threads).unwrap();
-                assert_eq!(backend.num_threads(), threads);
+                // Managed backends clamp the request to the process CPU set.
+                assert!((1..=threads).contains(&backend.num_threads()));
                 for (axis, &length) in shape.iter().enumerate() {
                     for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
                         backend.with_backend_session(|session| {
@@ -160,7 +161,8 @@ fn parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation() {
     let mut serial = CpuBackend::with_threads(1).unwrap();
     let mut parallel = CpuBackend::with_threads(8).unwrap();
     assert_eq!(serial.num_threads(), 1);
-    assert_eq!(parallel.num_threads(), 8);
+    // CI may expose fewer than eight CPUs; keep testing its effective budget.
+    assert!((1..=8).contains(&parallel.num_threads()));
     for (axis, &length) in shape.iter().enumerate() {
         for n in [None, Some(length + 3), Some(length - 1)] {
             for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
