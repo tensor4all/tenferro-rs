@@ -137,29 +137,29 @@ tenferro-internal-cpu-kernels
                               strided-kernel
 tenferro-cpu-fused        -> tenferro-tensor, tenferro-cpu-basic,
                               strided-basic, strided-fused
+tenferro-cpu              -> tenferro-runtime
 tenferro-cpu              -> tenferro-tensor, tenferro-core-ops,
                               tenferro-cpu-basic, tenferro-cpu-fused,
-                              tenferro-internal-cpu-kernels,
-                              tenferro-runtime
+                              tenferro-internal-cpu-kernels
 tenferro-gpu              -> tenferro-tensor, tenferro-core-ops,
                               tenferro-cpu, tenferro-runtime
-tenferro-internal-ops    -> tenferro-tensor, tenferro-core-ops,
+tenferro-internal-ops     -> tenferro-tensor, tenferro-core-ops,
                               tenferro-internal-extension-macros
-tenferro-runtime         -> tenferro-tensor, tenferro-core-ops,
+tenferro-runtime          -> tenferro-tensor, tenferro-core-ops,
                               tenferro-internal-ops,
                               tenferro-internal-extension-macros
-tenferro-xla             -> tenferro-runtime, tenferro-internal-ops,
+tenferro-xla              -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor
-tenferro-ad              -> tenferro-runtime, tenferro-internal-ops,
+tenferro-ad               -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu
 
-tenferro-einsum          -> tenferro-runtime, tenferro-internal-ops,
+tenferro-einsum           -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu,
                               tenferro-internal-extension-macros
-tenferro-linalg         -> tenferro-runtime, tenferro-internal-ops,
+tenferro-linalg           -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu,
                               tenferro-internal-extension-macros
-tenferro-fft            -> tenferro-runtime, tenferro-internal-ops,
+tenferro-fft              -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu,
                               tenferro-internal-extension-macros
 ```

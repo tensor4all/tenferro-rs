@@ -81,8 +81,8 @@
   <text x="322" y="375" class="sub">backend traits</text>
   <rect x="395" y="320" width="125" height="68" rx="6" class="box"/>
   <text x="457" y="342" class="name" style="font-size:12px">tenferro-cpu</text>
-  <text x="457" y="359" class="sub">CPU assembly · sessions</text>
-  <text x="457" y="375" class="sub" style="font-size:9px">basic pool · fused adapter</text>
+  <text x="457" y="359" class="sub">CPU backend · sessions</text>
+  <text x="457" y="375" class="sub" style="font-size:9px">faer | BLAS/LAPACK</text>
   <rect x="530" y="320" width="120" height="68" rx="6" class="box"/>
   <text x="590" y="342" class="name" style="font-size:12px">tenferro-gpu</text>
   <text x="590" y="359" class="sub">CubeCL · CUDA</text>
