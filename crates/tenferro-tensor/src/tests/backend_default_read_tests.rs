@@ -5,11 +5,11 @@ use crate::{
     },
     AllocationDomainId, AllocationId, BackendCachedDot, BackendRuntimeCache, BackendSession,
     BackendSessionHost, BackendStorage, CompareDir, ContractionScalar, DType,
-    DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig, Placement, ScatterConfig,
-    SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
-    TensorReduction, TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite,
-    TypedTensor, TypedTensorView, TypedTensorViewMut,
+    DotGeneralAccumulation, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig,
+    Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorRead, TensorReduction, TensorScalar, TensorStructural, TensorView, TensorViewMut,
+    TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use num_complex::{Complex32, Complex64};
 
@@ -107,6 +107,81 @@ fn copy_host_view<T: TensorScalar>(
 }
 
 impl TensorElementwise for DefaultReadBackend {
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        crate::backend::validate_read_into_destination(op.label(), inputs, &out)?;
+        let expected = op.arity();
+        if inputs.len() != expected {
+            return Err(crate::Error::invalid_argument(
+                op.label(),
+                "inputs",
+                format!("expected {expected} inputs, got {}", inputs.len()),
+            ));
+        }
+        let direct = out.dtype() == DType::F64
+            && out.as_read().backend_family().is_none()
+            && inputs.iter().all(|input| {
+                matches!(input, TensorRead::Tensor(Tensor::F64(tensor)) if tensor.backend_buffer().is_none())
+            });
+        if !direct {
+            return crate::backend::elementwise_read_into_via_allocating_ops(self, op, inputs, out);
+        }
+        if inputs.iter().any(|input| input.shape() != out.shape()) {
+            return Err(crate::Error::shape_mismatch(
+                op.label(),
+                inputs[0].shape().to_vec(),
+                out.shape().to_vec(),
+            ));
+        }
+        let values = inputs
+            .iter()
+            .map(|input| input.as_slice::<f64>())
+            .collect::<crate::Result<Vec<_>>>()?;
+        let value_at = |index: usize| match op {
+            ElementwiseReadOp::Add => values[0][index] + values[1][index],
+            ElementwiseReadOp::Subtract => values[0][index] - values[1][index],
+            ElementwiseReadOp::Multiply => values[0][index] * values[1][index],
+            ElementwiseReadOp::Negate => -values[0][index],
+            ElementwiseReadOp::Conj => values[0][index],
+            ElementwiseReadOp::Divide => values[0][index] / values[1][index],
+        };
+        match out {
+            TensorWrite::Tensor(output) => {
+                for (index, value) in <f64 as TensorScalar>::as_slice_mut(output)?
+                    .iter_mut()
+                    .enumerate()
+                {
+                    *value = value_at(index);
+                }
+            }
+            TensorWrite::View(TensorViewMut::F64(mut output)) => {
+                let shape = output.shape().to_vec();
+                let mut linear = 0;
+                let mut error = None;
+                for_each_index_col_major(&shape, |index| {
+                    if let Some(slot) = output.get_mut(index) {
+                        *slot = value_at(linear);
+                    } else {
+                        error = Some(crate::Error::backend_failure(
+                            op.label(),
+                            "test backend could not write a host view element",
+                        ));
+                    }
+                    linear += 1;
+                });
+                if let Some(error) = error {
+                    return Err(error);
+                }
+            }
+            _ => unreachable!("dtype and placement were validated before direct replay"),
+        }
+        Ok(())
+    }
+
     fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("add");
         Ok(marker())

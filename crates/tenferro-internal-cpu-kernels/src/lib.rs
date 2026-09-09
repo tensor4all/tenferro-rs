@@ -1,123 +1,29 @@
 #![doc(hidden)]
 
-//! Internal CPU kernel and scratch-pool implementation crate.
+//! Internal ordinary CPU kernel implementations.
+//!
+//! Shared resource ownership is implemented by `tenferro-cpu-basic`; this crate
+//! owns the ordinary dtype-dispatch kernel family.
+
+pub type Result<T> = tenferro_tensor::Result<T>;
+pub use tenferro_cpu_basic::{
+    cpu_backend_buffer_error, cpu_division_by_zero, typed_host_data, typed_view,
+    typed_view_from_view, ConjElem, CpuNumericalError,
+};
+pub use tenferro_tensor::{CacheStats, DType, Error, ErrorKind};
+
+pub mod elementwise;
+pub mod read_into;
+pub use read_into::elementwise_read_into_with_context;
 
 #[cfg(test)]
 use std::mem::MaybeUninit;
-
-pub type Result<T> = tenferro_tensor::Result<T>;
-pub use tenferro_tensor::{CacheStats, Error, ErrorKind};
-
-pub mod buffer_pool;
-mod pooled_uninit_output;
-/// Canonical pooled full-overwrite owner shared with the sibling `tenferro-cpu`
-/// crate. This is the minimum cross-crate surface required for one ownership
-/// contract; `pub(crate)` cannot cross that crate boundary. Construction only
-/// exposes `MaybeUninit` storage, with initialization completed by an explicit
-/// unsafe handoff.
-pub use pooled_uninit_output::PooledUninitOutput;
-pub mod elementwise;
-
-use num_complex::{Complex32, Complex64};
-use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedView};
 #[cfg(test)]
-use strided_kernel::{map_into, Identity};
-use tenferro_tensor::{DType, TensorRank, TensorScalar, TypedTensor, TypedTensorView};
+use strided_kernel::{map_into, Identity, StridedView};
 #[cfg(test)]
-use tenferro_tensor::{Tensor, TensorRead, TensorView};
-
+use tenferro_cpu_basic::{BufferPool, PoolScalar, PooledUninitOutput};
 #[cfg(test)]
-use crate::buffer_pool::{BufferPool, PoolScalar};
-
-pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> Error {
-    Error::runtime_state(
-        op,
-        "CPU backend received backend buffer; download to host before CPU execution",
-    )
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum CpuNumericalError {
-    #[error("{op} detected division by zero for dtype {dtype:?}")]
-    DivisionByZero { op: &'static str, dtype: DType },
-}
-
-pub(crate) fn cpu_division_by_zero(op: &'static str, dtype: DType) -> Error {
-    Error::extension(
-        op,
-        "cpu",
-        ErrorKind::NumericalFailure,
-        CpuNumericalError::DivisionByZero { op, dtype },
-    )
-}
-
-#[doc(hidden)]
-pub trait ConjElem {
-    fn conj_elem(self) -> Self;
-}
-
-impl ConjElem for f32 {
-    fn conj_elem(self) -> Self {
-        self
-    }
-}
-
-impl ConjElem for f64 {
-    fn conj_elem(self) -> Self {
-        self
-    }
-}
-
-impl ConjElem for Complex32 {
-    fn conj_elem(self) -> Self {
-        self.conj()
-    }
-}
-
-impl ConjElem for Complex64 {
-    fn conj_elem(self) -> Self {
-        self.conj()
-    }
-}
-
-pub(crate) fn typed_host_data<'a, T: TensorScalar>(
-    op: &'static str,
-    tensor: &'a TypedTensor<T>,
-) -> Result<&'a [T]> {
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    tensor.host_data()
-}
-
-pub(crate) fn typed_view<'a, T: Copy + TensorScalar>(
-    op: &'static str,
-    tensor: &'a TypedTensor<T>,
-) -> Result<StridedView<'a, T>> {
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    let data = tensor.host_data()?;
-    let strides = kernel_col_major_strides(tensor.shape());
-    StridedView::new(data, tensor.shape(), &strides, 0)
-        .map_err(|err| Error::backend_source(op, err))
-}
-
-pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
-    op: &'static str,
-    view: &TypedTensorView<'a, T, R>,
-) -> Result<StridedView<'a, T>> {
-    if view.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    StridedView::new(
-        view.host_storage()?,
-        view.shape(),
-        view.strides(),
-        view.offset(),
-    )
-    .map_err(|err| Error::backend_source(op, err))
-}
+use tenferro_tensor::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 #[cfg(test)]
 pub(crate) fn materialize_tensor_read(
@@ -139,7 +45,6 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> Result<Tensor> {
             Ok(Tensor::$variant($tensor.duplicate()?))
         }};
     }
-
     match tensor {
         Tensor::F32(tensor) => clone_host!(F32, tensor),
         Tensor::F64(tensor) => clone_host!(F64, tensor),
@@ -164,7 +69,6 @@ fn materialize_tensor_view(
             )?))
         }};
     }
-
     match view {
         TensorView::F32(view) => materialize!(F32, view),
         TensorView::F64(view) => materialize!(F64, view),
@@ -201,7 +105,7 @@ where
         MaybeUninit::new(x)
     })
     .map_err(|err| Error::backend_source(op, err))?;
-    // SAFETY: the successful materialize map replay writes every logical destination element and retains no destination view.
+    // SAFETY: the successful map replay writes every logical destination element.
     let out = unsafe { out.assume_init_as::<R>()? };
     let shape = R::shape_from_vec(view.shape().to_vec().into())
         .map_err(|err| Error::backend_source(op, err))?;

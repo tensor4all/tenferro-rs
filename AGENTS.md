@@ -116,7 +116,9 @@ or `no_run`. Crate-level docs (`//!`) include typical end-to-end examples.
 **strided-rs** (separate workspace) is an external foundation dependency:
 - `strided-traits`: `ScalarBase`, `ElementOp` traits
 - `strided-view`: dynamic-rank strided views (`StridedView`/`StridedViewMut`)
-- `strided-kernel`: cache-optimized map/reduce/broadcast kernels
+- `strided-basic`: shared typed traversal, light copy/reduction and execution policy
+- `strided-kernel`: ordinary dtype-erased map/reduce/broadcast dispatch
+- `strided-fused`: runtime-DAG fused execution
 
 tenferro-rs depends on strided-rs but does not absorb it; strided-rs has no BLAS
 dependency and works standalone.

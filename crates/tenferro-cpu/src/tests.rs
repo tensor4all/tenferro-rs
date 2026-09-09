@@ -694,8 +694,16 @@ fn cpu_elementwise_kernels_live_in_internal_crate() {
         "internal CPU kernel crate must own elementwise kernels"
     );
     assert!(
-        internal_dir.join("src/buffer_pool.rs").exists(),
-        "internal CPU kernel crate must own the shared buffer pool"
+        internal_dir
+            .join("../tenferro-cpu-basic/src/buffer_pool.rs")
+            .exists(),
+        "basic CPU crate must own the shared buffer pool"
+    );
+    assert!(
+        internal_dir
+            .join("../tenferro-cpu-fused/src/lib.rs")
+            .exists(),
+        "fused CPU crate must own fused elementwise kernels"
     );
 }
 

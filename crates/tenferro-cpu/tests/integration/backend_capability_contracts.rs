@@ -665,8 +665,7 @@ fn rust_public_function_scan_is_format_and_literal_independent() {
 #[test]
 fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
     let backend_source = include_str!("../../src/backend.rs");
-    let buffer_pool_source =
-        include_str!("../../../tenferro-internal-cpu-kernels/src/buffer_pool.rs");
+    let buffer_pool_source = include_str!("../../../tenferro-cpu-basic/src/buffer_pool.rs");
     let gemm_source = include_str!("../../src/gemm/mod.rs");
     let exec_session_source = include_str!("../../src/exec_session.rs");
 

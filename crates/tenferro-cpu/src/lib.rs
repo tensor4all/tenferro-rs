@@ -55,7 +55,7 @@ mod arbiter;
 pub mod backend;
 mod blas1;
 pub(crate) mod buffer_pool {
-    pub use tenferro_internal_cpu_kernels::buffer_pool::*;
+    pub use tenferro_cpu_basic::buffer_pool::*;
 }
 mod capability;
 pub mod context;
@@ -65,11 +65,9 @@ pub mod context;
 mod domain_executor;
 #[allow(dead_code)]
 mod dot_runtime;
+pub(crate) use tenferro_cpu_basic::PooledUninitOutput;
+pub(crate) use tenferro_cpu_basic::{erased_raw_strided_ref, erased_raw_strided_uninit_mut};
 pub(crate) use tenferro_internal_cpu_kernels::elementwise;
-pub(crate) use tenferro_internal_cpu_kernels::elementwise::{
-    erased_raw_strided_ref, erased_raw_strided_uninit_mut,
-};
-pub(crate) use tenferro_internal_cpu_kernels::PooledUninitOutput;
 mod engine;
 mod exec_session;
 mod gemm;
@@ -88,8 +86,9 @@ mod topology;
 
 use std::ptr::NonNull;
 #[cfg(test)]
+use strided_kernel::col_major_strides as kernel_col_major_strides;
+#[cfg(test)]
 use strided_kernel::StridedArray;
-use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedView};
 
 use crate::buffer_pool::BufferPool;
 pub(crate) use tenferro_tensor::*;
@@ -342,14 +341,7 @@ pub(crate) use structural::{
 #[doc(hidden)]
 pub mod linalg_interop {
     pub use crate::buffer_pool::{BufferPool, PoolScalar};
-    pub use tenferro_internal_cpu_kernels::PooledUninitOutput;
-}
-
-pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> crate::Error {
-    crate::Error::runtime_state(
-        op,
-        "CPU backend received backend buffer; download to host before CPU execution",
-    )
+    pub use tenferro_cpu_basic::PooledUninitOutput;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -367,73 +359,9 @@ pub(crate) fn cpu_negative_integer_exponent(op: &'static str, dtype: DType) -> c
     )
 }
 
-pub(crate) trait ConjElem {
-    fn conj_elem(self) -> Self;
-}
-
-impl ConjElem for f32 {
-    fn conj_elem(self) -> Self {
-        self
-    }
-}
-
-impl ConjElem for f64 {
-    fn conj_elem(self) -> Self {
-        self
-    }
-}
-
-impl ConjElem for num_complex::Complex32 {
-    fn conj_elem(self) -> Self {
-        self.conj()
-    }
-}
-
-impl ConjElem for num_complex::Complex64 {
-    fn conj_elem(self) -> Self {
-        self.conj()
-    }
-}
-
-pub(crate) fn typed_host_data<'a, T: TensorScalar>(
-    op: &'static str,
-    tensor: &'a TypedTensor<T>,
-) -> crate::Result<&'a [T]> {
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    tensor.host_data()
-}
-
-pub(crate) fn typed_view<'a, T: Copy + TensorScalar>(
-    op: &'static str,
-    tensor: &'a TypedTensor<T>,
-) -> crate::Result<StridedView<'a, T>> {
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    let data = tensor.host_data()?;
-    let strides = kernel_col_major_strides(tensor.shape());
-    StridedView::new(data, tensor.shape(), &strides, 0)
-        .map_err(|err| crate::Error::backend_source(op, err))
-}
-
-pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
-    op: &'static str,
-    view: &TypedTensorView<'a, T, R>,
-) -> crate::Result<StridedView<'a, T>> {
-    if view.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    StridedView::new(
-        view.host_storage()?,
-        view.shape(),
-        view.strides(),
-        view.offset(),
-    )
-    .map_err(|err| crate::Error::backend_source(op, err))
-}
-
+pub(crate) use tenferro_cpu_basic::{
+    cpu_backend_buffer_error, typed_host_data, typed_view, typed_view_from_view, ConjElem,
+};
 pub(crate) fn materialize_tensor_read(
     buffers: &mut BufferPool,
     op: &'static str,

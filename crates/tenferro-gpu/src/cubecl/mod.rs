@@ -79,7 +79,9 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::CacheStats;
-use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, TensorRead, TensorWrite};
+use tenferro_tensor::{
+    ContractionScalar, DotGeneralAccumulation, ElementwiseReadOp, TensorRead, TensorWrite,
+};
 
 use crate::backend::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, TensorAnalytic, TensorBackend,
@@ -3728,6 +3730,15 @@ where
 }
 
 impl TensorElementwise for CudaBackend {
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        tenferro_tensor::backend::elementwise_read_into_via_allocating_ops(self, op, inputs, out)
+    }
+
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         if let Some(result) =
             promoted_real_complex_scalar_binary(self, lhs, rhs, "add", elementwise::MIXED_ADD)

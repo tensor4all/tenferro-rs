@@ -4,6 +4,8 @@ members = [
     "crates/tenferro-tensor-core",
     "crates/tenferro-tensor",
     "crates/tenferro-internal-cpu-kernels",
+    "crates/tenferro-cpu-basic",
+    "crates/tenferro-cpu-fused",
     "crates/tenferro-cpu",
     "crates/tenferro-gpu",
     "crates/tenferro-runtime",
@@ -53,10 +55,14 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "b40cd2f6d83c35ca23b24a8fb371ca061495729c", version = "0.4.0" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "b40cd2f6d83c35ca23b24a8fb371ca061495729c", version = "0.4.0" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "b40cd2f6d83c35ca23b24a8fb371ca061495729c", version = "0.4.0", features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "b40cd2f6d83c35ca23b24a8fb371ca061495729c", version = "0.4.0", features = ["parallel"] }
+# Temporary integration pin to strided-rs PR #254; replace with its merged
+# commit before merging or publishing the tenferro change.
+strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0" }
+strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0", features = ["parallel"] }
+strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0", default-features = false }
+strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0", default-features = false, features = ["parallel"] }
+strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0", features = ["parallel"] }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"

@@ -3,7 +3,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+//! use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
 //!
 //! let mut pool = BufferPool::new();
 //! let mut buf = pool.acquire_zeroed::<f64>(4);
@@ -72,7 +72,7 @@ pub struct BufferPoolStats {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+/// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
 ///
 /// let mut pool = BufferPool::new();
 /// let buf = pool.acquire_zeroed::<f32>(8);
@@ -126,7 +126,7 @@ impl fmt::Debug for BufferPool {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+/// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
 ///
 /// let mut pool = BufferPool::new();
 /// let mut buf = pool.acquire_zeroed::<f64>(2);
@@ -149,7 +149,7 @@ pub trait PoolScalar:
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    /// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// let buf = <f64 as PoolScalar>::pool_acquire_zeroed(&mut pool, 2);
@@ -164,7 +164,7 @@ pub trait PoolScalar:
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    /// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// let buf = vec![1.0_f32; 4];
@@ -435,7 +435,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
+    /// use tenferro_cpu_basic::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::new();
     /// assert!(pool.is_empty());
@@ -452,7 +452,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
+    /// use tenferro_cpu_basic::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::with_max_retained_capacity_bytes(1024);
     /// assert_eq!(pool.max_retained_capacity_bytes(), 1024);
@@ -488,7 +488,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
+    /// use tenferro_cpu_basic::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::unbounded();
     /// assert_eq!(pool.max_retained_capacity_bytes(), usize::MAX);
@@ -502,7 +502,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
+    /// use tenferro_cpu_basic::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::with_max_retained_capacity_bytes(4096);
     /// assert_eq!(pool.max_retained_capacity_bytes(), 4096);
@@ -520,7 +520,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    /// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::with_max_retained_capacity_bytes(1024);
     /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(128));
@@ -539,7 +539,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    /// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 2]);
@@ -558,7 +558,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    /// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(2));
@@ -573,7 +573,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    /// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f32 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
@@ -603,7 +603,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    /// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f32 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
@@ -631,7 +631,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
+    /// use tenferro_cpu_basic::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
     /// let mut buf = pool.acquire_with_capacity::<f64>(4);
@@ -663,7 +663,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
+    /// use tenferro_cpu_basic::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
     /// let buf = pool.acquire_zeroed::<f32>(3);
@@ -678,7 +678,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
+    /// use tenferro_cpu_basic::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::new();
     /// assert!(pool.is_empty());
@@ -696,7 +696,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    /// use tenferro_cpu_basic::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));

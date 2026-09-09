@@ -6,9 +6,9 @@ use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{LinalgBackend, QrOptions, TensorLinalgExt};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    BackendStorageHandle, CompareDir, DType, DotGeneralConfig, Error, ErrorKind, GatherConfig,
-    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
-    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    BackendStorageHandle, CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Error, ErrorKind,
+    GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
+    Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
     TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
     TensorView, TensorWrite, TypedTensor, TypedTensorView, ValidationError,
 };
@@ -122,6 +122,16 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     }
 
     impl TensorElementwise for DefaultOnlyLinalgBackend {
+        fn elementwise_read_into(
+            &mut self,
+            op: ElementwiseReadOp,
+            inputs: &[TensorRead<'_>],
+            out: TensorWrite<'_>,
+        ) -> tenferro_tensor::Result<()> {
+            let _ = (op, inputs, out);
+            panic!("elementwise_read_into should not be called by this test")
+        }
+
         panic_backend_methods! {
             add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
             sub(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;

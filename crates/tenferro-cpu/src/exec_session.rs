@@ -297,7 +297,7 @@ impl TensorElementwise for CpuExecSession<'_> {
     ) -> crate::Result<()> {
         self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
-            tenferro_tensor::backend::elementwise_read_into_with_context(
+            tenferro_internal_cpu_kernels::elementwise_read_into_with_context(
                 op,
                 inputs,
                 out,
@@ -854,7 +854,7 @@ impl TensorFusion for CpuExecSession<'_> {
     ) -> crate::Result<Option<Vec<Tensor>>> {
         self.run_native_fresh_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
-            elementwise::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)
+            tenferro_cpu_fused::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)
         })
     }
 

@@ -8,13 +8,14 @@ use std::sync::Arc;
 use crate::{
     AccessError, AllocationDomainId, AllocationId, AllocationKey, BackendAllocation,
     BackendCachedDot, BackendId, BackendRuntimeCache, BackendSession, CompareDir, DType,
-    DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig, Error,
-    GatherConfig, GpuBackendKind, HostAccessError, MemoryKind, PadConfig, Placement,
-    PreparedDeviceAccess, ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping,
-    RootBoundSpan, RootResourceExtent, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorRank, TensorRead, TensorReduction, TensorScalar, TensorStructural,
-    TensorViewCanonicalization, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig,
+    ElementwiseReadOp, Error, GatherConfig, GpuBackendKind, HostAccessError, MemoryKind, PadConfig,
+    Placement, PreparedDeviceAccess, ProviderCapabilities, ProviderReadMapping,
+    ProviderWriteMapping, RootBoundSpan, RootResourceExtent, ScatterConfig, SliceConfig, Tensor,
+    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRank, TensorRead, TensorReduction,
+    TensorScalar, TensorStructural, TensorViewCanonicalization, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -746,6 +747,15 @@ macro_rules! unsupported {
 }
 
 impl TensorElementwise for WebGpuBackend {
+    fn elementwise_read_into(
+        &mut self,
+        _op: ElementwiseReadOp,
+        _inputs: &[TensorRead<'_>],
+        _out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        unsupported!("webgpu_elementwise_read_into")
+    }
+
     fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
         unsupported!("webgpu_add")
     }

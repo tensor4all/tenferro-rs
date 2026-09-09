@@ -32,7 +32,9 @@ EXTENSION_CRATE_ORDER = [
 IMPLEMENTATION_CRATE_ORDER = [
     "tenferro-tensor-core",
     "tenferro-core-ops",
+    "tenferro-cpu-basic",
     "tenferro-internal-cpu-kernels",
+    "tenferro-cpu-fused",
     "tenferro-internal-ops",
     "tenferro-internal-extension-macros",
 ]

@@ -263,9 +263,11 @@ solves your problem.
 ### Implementation Crates
 
 The crates `tenferro-tensor-core`, `tenferro-core-ops`,
-`tenferro-internal-cpu-kernels`, `tenferro-internal-ops`, and
-`tenferro-internal-extension-macros` are published building blocks for the
-crates above; most users never depend on them directly.
+`tenferro-cpu-basic`, `tenferro-internal-cpu-kernels`, `tenferro-cpu-fused`,
+`tenferro-internal-ops`, and `tenferro-internal-extension-macros` are published
+building blocks for the crates above; most users never depend on them directly.
+The CPU ownership split is documented in
+[`docs/design/cpu-kernel-boundaries.md`](docs/design/cpu-kernel-boundaries.md).
 For current backend operation coverage, start with the hand-written
 [Devices and GPU coverage table](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html#coverage).
 

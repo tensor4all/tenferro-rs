@@ -17,7 +17,8 @@ use tenferro_tensor::backend::{
 };
 use tenferro_tensor::{
     BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
-    GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorBackend, TensorRead, TensorWrite,
+    ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorBackend,
+    TensorRead, TensorWrite,
 };
 
 type TensorResult = tenferro_tensor::Result<Tensor>;
@@ -145,6 +146,16 @@ macro_rules! test_backend_impls {
 macro_rules! panic_elementwise {
     ($ty:ident) => {
         impl TensorElementwise for $ty {
+            fn elementwise_read_into(
+                &mut self,
+                op: ElementwiseReadOp,
+                inputs: &[TensorRead<'_>],
+                out: TensorWrite<'_>,
+            ) -> tenferro_tensor::Result<()> {
+                let _ = (op, inputs, out);
+                panic!("elementwise_read_into should not be called in this test")
+            }
+
             panic_backend_methods! {
                 add(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 sub(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
@@ -213,6 +224,15 @@ impl TensorDot for SessionCountingBackend {
 }
 
 impl TensorElementwise for SessionCountingBackend {
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        self.inner.elementwise_read_into(op, inputs, out)
+    }
+
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> TensorResult {
         self.inner.add(lhs, rhs)
     }

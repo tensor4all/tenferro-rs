@@ -1,9 +1,9 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, CompareDir, DotGeneralConfig, Error, GatherConfig,
-    PadConfig, Result, ScatterConfig, SessionCachedDot, SliceConfig, Tensor, TensorAnalytic,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorView,
+    BackendSession, BackendSessionHost, CompareDir, DotGeneralConfig, ElementwiseReadOp, Error,
+    GatherConfig, PadConfig, Result, ScatterConfig, SessionCachedDot, SliceConfig, Tensor,
+    TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite,
 };
 
 use super::{
@@ -184,6 +184,16 @@ fn unexpected(op: &'static str) -> Error {
 }
 
 impl TensorElementwise for NoBroadcastMaterializationBackend {
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> Result<()> {
+        let _ = (op, inputs, out);
+        Err(unexpected("elementwise_read_into"))
+    }
+
     fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
         Err(unexpected("add"))
     }
