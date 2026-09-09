@@ -195,31 +195,4 @@ pub trait FftBackend: BackendSession {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn execution_cache_debug_identifies_both_owners_and_exposes_the_store() {
-        let mut caller = FftPlanCache::default();
-        let mut caller_cache = FftExecutionCache::caller_owned(&mut caller);
-        assert!(format!("{caller_cache:?}").contains("CallerOwned"));
-        assert_eq!(
-            caller_cache
-                .store_mut()
-                .stats(tenferro_runtime::ExtensionCacheSelector::All)
-                .entries,
-            0
-        );
-
-        let mut runtime = ExtensionCacheStore::default();
-        let mut runtime_cache = FftExecutionCache::runtime_owned(&mut runtime);
-        assert!(format!("{runtime_cache:?}").contains("RuntimeOwned"));
-        assert_eq!(
-            runtime_cache
-                .store_mut()
-                .stats(tenferro_runtime::ExtensionCacheSelector::All)
-                .entries,
-            0
-        );
-    }
-}
+mod tests;

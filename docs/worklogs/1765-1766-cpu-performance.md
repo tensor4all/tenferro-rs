@@ -122,3 +122,18 @@ Detailed local evidence is retained outside the PR under
 `committed-gate-rebuilt.log`, and the archived `investigation-history.md`.
 The checked-in regression tests are the reproducible correctness/allocation
 artifacts; temporary diagnostic probes are not part of the shipped API or PR.
+
+## PR CI corrections
+
+CI exposed an invalid test assumption: on a four-CPU Linux runner, an eight-thread
+request correctly resolves to four. Reproduced with a four-CPU affinity mask;
+changed only thread-budget assertions, preserving all numerical checks. All six
+cpu_reuse tests then passed. Subsequent hosted coverage completed tests but
+reported two enforced file thresholds: AD extension 53.2% < 56%, FFT backend
+68.9% < 80%. Added direct tests for consuming preparation and default FFT
+owned/view dispatch using existing backend operations; moved the growing FFT
+unit tests into their module-local file. FFT backend reaches 100% in focused
+unit coverage. No production behavior or coverage thresholds changed.
+A broad local AD run encountered an existing trybuild underline-format mismatch
+for the private EagerBackend import diagnostic; its expected snapshot was not
+modified. Focused new tests pass; hosted CI remains the final coverage gate.
