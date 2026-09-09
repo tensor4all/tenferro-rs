@@ -8,7 +8,7 @@ share typed replay without dynamic callbacks. Crate-path compatibility is not a
 requirement. No package publication is authorized.
 
 The tenferro implementation is rebased onto current main
-`167a8d28d4fbc91ac9bfa24f1f7b450d2e6e7f8f`.
+`167a8d28dde14cf2d601ab1f7c397ae4de25ca7b`.
 Its strided dependency is now the current split candidate
 `1db88be3bba8882f1c1a1de00315fc341648e75e` (strided-rs PR #254), which includes
 the consumer's prerequisite indexed-kernel work. The initial experiments used
