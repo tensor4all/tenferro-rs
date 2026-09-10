@@ -104,7 +104,7 @@
                 },
                 "validation": [
                   {
-                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "path": "crates/tenferro-internal-cpu-kernels/src/read_into.rs",
                     "symbol": "validate_elementwise_output_disjoint"
                   }
                 ],
@@ -738,7 +738,7 @@
                 },
                 "validation": [
                   {
-                    "path": "crates/tenferro-tensor/src/backend.rs",
+                    "path": "crates/tenferro-internal-cpu-kernels/src/read_into.rs",
                     "symbol": "validate_elementwise_output_disjoint"
                   }
                 ],

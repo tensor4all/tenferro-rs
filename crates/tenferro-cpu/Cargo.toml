@@ -47,6 +47,8 @@ blas-mkl = [
 [dependencies]
 tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.5.0" }
 tenferro-internal-cpu-kernels = { path = "../tenferro-internal-cpu-kernels", version = "0.5.0" }
+tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.5.0" }
+tenferro-cpu-fused = { path = "../tenferro-cpu-fused", version = "0.5.0" }
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.5.0", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.5.0" }
 num-complex.workspace = true

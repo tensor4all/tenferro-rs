@@ -1,10 +1,10 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
-    DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite,
-    TypedTensor,
+    DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
+    TensorView, TensorWrite, TypedTensor,
 };
 
 use crate::eager::{
@@ -45,6 +45,16 @@ impl BackendRuntimeCache for WrongDTypeBackend {
 }
 
 impl TensorElementwise for WrongDTypeBackend {
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        let _ = (op, inputs, out);
+        panic!("elementwise_read_into should not be called in this test")
+    }
+
     panic_backend_methods! {
         add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         sub(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;

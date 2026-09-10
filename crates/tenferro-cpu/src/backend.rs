@@ -2935,7 +2935,7 @@ impl TensorElementwise for CpuBackend {
     ) -> crate::Result<()> {
         self.install_with_pool_context_unmarked(|context, buffers| {
             let exec_context = context.strided_exec_context();
-            tenferro_tensor::backend::elementwise_read_into_with_context(
+            tenferro_internal_cpu_kernels::elementwise_read_into_with_context(
                 op,
                 inputs,
                 out,
@@ -3742,7 +3742,7 @@ impl TensorFusion for CpuBackend {
     ) -> crate::Result<Option<Vec<Tensor>>> {
         self.install_with_pool_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
-            elementwise::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)
+            tenferro_cpu_fused::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)
         })
     }
 

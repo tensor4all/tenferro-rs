@@ -1,8 +1,8 @@
 use std::any::TypeId;
 use tenferro_tensor::backend::{
-    BackendSession, BackendSessionHost, ElementwiseFusionPlan, GroupedGemmConfig, SessionCachedDot,
-    TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural,
+    BackendSession, BackendSessionHost, ElementwiseFusionPlan, ElementwiseReadOp,
+    GroupedGemmConfig, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -74,6 +74,7 @@ macro_rules! delegate {
 }
 
 delegate!(TensorElementwise {
+    fn elementwise_read_into(op: ElementwiseReadOp, inputs: &[TensorRead<'_>], out: TensorWrite<'_>) -> crate::Result<()>;
     fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;

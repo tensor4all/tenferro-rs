@@ -160,6 +160,10 @@ fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
             "elementwise",
             include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs"),
         ),
+        (
+            "fused",
+            include_str!("../../../tenferro-cpu-fused/src/lib.rs"),
+        ),
         ("indexing", include_str!("../indexing.rs")),
         ("reduction", include_str!("../reduction.rs")),
         ("structural", include_str!("../structural.rs")),
@@ -190,17 +194,18 @@ fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
 #[test]
 fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
     let elementwise = include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs");
+    let fused = include_str!("../../../tenferro-cpu-fused/src/lib.rs");
     let indexing = include_str!("../indexing.rs");
     let reduction = include_str!("../reduction.rs");
     let structural = include_str!("../structural.rs");
 
     assert!(
-        elementwise.contains("ErasedFusedPlan::compile"),
-        "CPU elementwise fusion should delegate replay to strided-kernel's erased fused plan"
+        fused.contains("ErasedFusedPlan::compile"),
+        "CPU fused adapter should delegate replay to strided-fused's erased plan"
     );
     assert!(
-        !elementwise.contains("fused_elementwise_into"),
-        "tenferro-cpu should not instantiate strided generic fused replay directly"
+        !elementwise.contains("ErasedFusedPlan::compile"),
+        "ordinary kernels must not instantiate fused replay"
     );
     assert!(
         indexing.contains("ErasedDynamicSlicePlan::compile")

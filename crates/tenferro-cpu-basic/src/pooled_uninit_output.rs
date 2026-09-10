@@ -1,7 +1,7 @@
 use std::alloc::Layout;
 use std::mem::{ManuallyDrop, MaybeUninit};
 
-use strided_kernel::StridedViewMut;
+use strided_basic::StridedViewMut;
 use tenferro_tensor::{validate::checked_shape_product, TensorRank, TensorScalar, TypedTensor};
 
 use crate::buffer_pool::{BufferPool, PoolScalar, UninitCheckoutToken};
@@ -44,7 +44,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
     /// let output = PooledUninitOutput::<f32>::new(&mut pool, vec![2, 3]).unwrap();
     /// drop(output);
@@ -87,7 +87,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
     /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
     /// output.as_uninit_slice_mut()[0].write(7);
@@ -102,7 +102,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
     /// let mut output = PooledUninitOutput::<f32>::new(&mut pool, vec![2]).unwrap();
     /// let view = output.as_uninit_view_mut().unwrap();
@@ -138,7 +138,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
     /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
     /// assert_eq!(output.as_uninit_bytes_mut().len(), 4);
@@ -167,7 +167,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
     /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
     /// output.as_uninit_slice_mut()[0].write(7);
@@ -203,7 +203,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// use tenferro_tensor::Rank;
     /// let mut pool = BufferPool::new();
     /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
@@ -236,7 +236,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     ///
     /// # Examples
     /// ```
-    /// use tenferro_internal_cpu_kernels::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
     /// let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![1])?;
     /// output.as_uninit_slice_mut()[0].write(2.0);

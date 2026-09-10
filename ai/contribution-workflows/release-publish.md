@@ -145,7 +145,9 @@ Agents must stop after validation and must never execute a publication.
    tenferro-internal-extension-macros
    tenferro-tensor-core
    tenferro-tensor
+   tenferro-cpu-basic
    tenferro-internal-cpu-kernels
+   tenferro-cpu-fused
    tenferro-internal-ops
    tenferro-runtime
    tenferro-cpu

@@ -376,7 +376,10 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
             "pooled_uninit_output.rs",
             include_str!("../pooled_uninit_output.rs"),
         ),
-        ("elementwise.rs", include_str!("../elementwise.rs")),
+        (
+            "elementwise.rs",
+            include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs"),
+        ),
     ];
     for (name, source) in production_sources {
         assert!(
@@ -414,7 +417,7 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
     assert!(pooled_output.matches("pub unsafe fn assume_init").count() >= 1);
 
     let cpu_root = include_str!("../../../tenferro-cpu/src/lib.rs");
-    assert!(cpu_root.contains("pub(crate) use tenferro_internal_cpu_kernels::PooledUninitOutput;"));
+    assert!(cpu_root.contains("pub(crate) use tenferro_cpu_basic::PooledUninitOutput;"));
     let cpu_indexing = include_str!("../../../tenferro-cpu/src/indexing.rs");
     assert!(cpu_indexing.contains("use super::PooledUninitOutput;"));
 
@@ -432,7 +435,7 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
     assert!(!pool_scalar.contains("pool_discard_uninit"));
     assert!(!pool.contains("pub enum UninitCheckoutToken"));
     assert!(pool.contains("impl private::Sealed for"));
-    let elementwise = include_str!("../elementwise.rs");
+    let elementwise = include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs");
     for helper in [
         "pub fn typed_mul_with_pool",
         "pub fn typed_mul_view_with_pool",
@@ -478,16 +481,12 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
         .and_then(|(_, suffix)| suffix.split_once("pub fn typed_sub_with_pool"))
         .map(|(body, _)| body)
         .expect("add view helper must remain present");
-    assert!(add.contains(
-        "// SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view."
-    ));
-    assert!(add.contains(
-        "// SAFETY: the successful add scalar-map replay writes every logical destination element and retains no destination view."
-    ));
-    assert!(
-        !add.contains("successful multiplication kernel"),
-        "add overwrite proofs must not claim multiplication"
-    );
+    // Add delegates to the validated generic helper whose overwrite proofs
+    // are checked above; it must not acquire or finalize an output separately.
+    assert!(add.contains("typed_binary_view_with_pool("));
+    assert!(add.contains("Add::add"));
+    assert!(!add.contains("assume_init"));
+    assert!(!add.contains("PooledUninitOutput"));
 
     let multiplication = elementwise
         .split_once("pub fn typed_mul_view_with_pool")

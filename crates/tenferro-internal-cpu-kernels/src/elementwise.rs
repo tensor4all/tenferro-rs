@@ -1,98 +1,23 @@
-use std::mem::{size_of_val, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::ops::{Add, Div, Mul, Neg, Rem as StdRem, Sub};
-use std::ptr::NonNull;
 
 use num_complex::Complex;
 use num_traits::{One, Zero};
 use strided_kernel::{
     batched_outer_product_into_uninit, broadcast_mul_into_uninit, compare_into_uninit, map_into,
-    mul_into_uninit, reduce, zip_map2_into, zip_map3_into, CompareOp, ErasedFusedPlan,
-    ErasedRawStridedPtr, ErasedRawStridedRef, ErasedRawStridedUninitMut, ExecContext, FusedInst,
-    FusedOp, FusedPlan, KernelDType, StridedView,
+    mul_into_uninit, reduce, zip_map2_into, zip_map3_into, CompareOp, StridedView,
 };
 
-use crate::buffer_pool::{BufferPool, PoolScalar};
-use crate::ConjElem;
-use crate::PooledUninitOutput;
-use tenferro_tensor::backend::{
-    ElementwiseFusionInputView, ElementwiseFusionOp, ElementwiseFusionPlan,
-};
+use tenferro_cpu_basic::{BufferPool, ConjElem, PoolScalar, PooledUninitOutput};
 use tenferro_tensor::{
     col_major_strides, CompareDir, DType, Tensor, TensorRank, TensorRead, TensorScalar,
     TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 
 use super::{typed_host_data, typed_view, typed_view_from_view};
-
-// This hidden public boundary is required by the separate tenferro-cpu crate;
-// that crate re-exports it only at crate visibility and no user-facing safe
-// wrapper exposes the raw constructor.
-/// Construct an erased read-only strided view over initialized typed storage.
-///
-/// # Safety
-///
-/// The caller must ensure that `data` retains the alignment and byte layout
-/// required by `dtype`, and that `dtype` agrees with the elements in the
-/// backing storage. Every element reachable through `dims`, `strides`, and
-/// `offset` must be within `data`; the metadata must remain alive for `'a`, and
-/// the borrow must not be invalidated or mutated incompatibly while the view
-/// exists. All reachable elements must be initialized and readable for the
-/// lifetime of the returned view.
-#[doc(hidden)]
-pub unsafe fn erased_raw_strided_ref<'a>(
-    dtype: KernelDType,
-    data: &'a [u8],
-    dims: &'a [usize],
-    strides: &'a [isize],
-    offset: isize,
-) -> strided_kernel::Result<ErasedRawStridedRef<'a>> {
-    let data_ptr = NonNull::new(data.as_ptr().cast_mut()).unwrap_or_else(NonNull::dangling);
-    // SAFETY: all documented preconditions are met: `dtype` matches the
-    // aligned, initialized storage; the metadata keeps every reachable element
-    // in bounds; and the storage and metadata remain valid for the returned view.
-    unsafe {
-        ErasedRawStridedRef::from_raw_parts(dtype, data_ptr, data.len(), dims, strides, offset)
-    }
-}
-
-// The same narrow cross-crate boundary is used for the uninitialized output
-// constructor; it is not a user-facing API and has no safe compatibility shim.
-/// Construct an erased writable strided view over exclusively owned storage.
-///
-/// # Safety
-///
-/// The caller must ensure that `data` retains the alignment and byte layout
-/// required by `dtype`, and that `dtype` agrees with the eventual typed output.
-/// Every element reachable through `dims`, `strides`, and `offset` must be
-/// within the allocation, with all metadata and the exclusive borrow valid for
-/// `'a`. No other reference may access the allocation while the view exists.
-/// The caller must keep the storage uninitialized only as `MaybeUninit` until
-/// every reachable element has been fully written, and must not expose it as
-/// typed storage before that full initialization is proven.
-#[doc(hidden)]
-pub unsafe fn erased_raw_strided_uninit_mut<'a>(
-    dtype: KernelDType,
-    data: &'a mut [MaybeUninit<u8>],
-    dims: &'a [usize],
-    strides: &'a [isize],
-    offset: isize,
-) -> strided_kernel::Result<ErasedRawStridedUninitMut<'a>> {
-    let data_ptr = NonNull::new(data.as_mut_ptr().cast::<u8>()).unwrap_or_else(NonNull::dangling);
-    // SAFETY: all documented preconditions are met: `dtype` matches the
-    // aligned storage; the metadata keeps every reachable element in bounds;
-    // and the exclusive borrow remains valid while the storage is kept as
-    // `MaybeUninit` until every reachable element is written before exposure.
-    unsafe {
-        ErasedRawStridedUninitMut::from_raw_parts(
-            dtype,
-            data_ptr,
-            data.len(),
-            dims,
-            strides,
-            offset,
-        )
-    }
-}
+use tenferro_cpu_basic::{
+    reject_complex_ordered_dtypes, reject_complex_unsupported_compare_dtypes,
+};
 
 macro_rules! dispatch_ternary_result_with_pool {
     ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {
@@ -157,252 +82,6 @@ fn tensor_pair_error(op: &'static str, lhs: &Tensor, rhs: &Tensor) -> crate::Err
 
 fn read_pair_error(op: &'static str, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Error {
     dtype_pair_error(op, lhs.dtype(), rhs.dtype())
-}
-
-fn is_complex_dtype(dtype: DType) -> bool {
-    matches!(dtype, DType::C32 | DType::C64)
-}
-
-fn ordered_complex_error(op: &'static str) -> crate::Error {
-    crate::Error::unsupported(
-        op,
-        "complex tensors do not have a total order; compute abs/norm explicitly before ordered operations",
-    )
-}
-
-fn reject_complex_ordered_dtypes(op: &'static str, dtypes: &[DType]) -> crate::Result<()> {
-    if dtypes.iter().copied().any(is_complex_dtype) {
-        return Err(ordered_complex_error(op));
-    }
-    Ok(())
-}
-
-fn reject_complex_unsupported_compare_dtypes(
-    dir: &CompareDir,
-    dtypes: &[DType],
-) -> crate::Result<()> {
-    if *dir != CompareDir::Eq {
-        reject_complex_ordered_dtypes("compare", dtypes)?;
-    }
-    Ok(())
-}
-
-const ELEMENTWISE_FUSION_OP: &str = "execute_elementwise_fusion";
-const ELEMENTWISE_FUSION_MIN_ELEMENTS: usize = 16 * 1024;
-
-fn validate_elementwise_fusion_inputs(
-    inputs: &[&Tensor],
-    plan: &ElementwiseFusionPlan,
-) -> crate::Result<bool> {
-    if inputs.len() != plan.input_count() {
-        return Err(crate::Error::invalid_argument(
-            ELEMENTWISE_FUSION_OP,
-            "inputs",
-            format!(
-                "plan expects {} inputs but backend received {}",
-                plan.input_count(),
-                inputs.len()
-            ),
-        ));
-    }
-    if plan.input_views().len() != plan.input_count() {
-        return Err(crate::Error::invalid_argument(
-            ELEMENTWISE_FUSION_OP,
-            "input_views",
-            format!(
-                "plan has {} input views for {} inputs",
-                plan.input_views().len(),
-                plan.input_count()
-            ),
-        ));
-    }
-    if plan.outputs().is_empty() {
-        return Ok(false);
-    }
-    for input in inputs {
-        if input.dtype() != plan.dtype() {
-            return Err(crate::Error::dtype_mismatch(
-                ELEMENTWISE_FUSION_OP,
-                input.dtype(),
-                plan.dtype(),
-            ));
-        }
-    }
-    Ok(true)
-}
-
-fn strided_fused_op(op: ElementwiseFusionOp) -> FusedOp {
-    match op {
-        ElementwiseFusionOp::Add => FusedOp::Add,
-        ElementwiseFusionOp::Multiply => FusedOp::Multiply,
-        ElementwiseFusionOp::Negate => FusedOp::Negate,
-        ElementwiseFusionOp::Conj => FusedOp::Conj,
-        ElementwiseFusionOp::Divide => FusedOp::Divide,
-        ElementwiseFusionOp::Abs => FusedOp::Abs,
-        ElementwiseFusionOp::Maximum => FusedOp::Maximum,
-        ElementwiseFusionOp::Minimum => FusedOp::Minimum,
-        ElementwiseFusionOp::Clamp => FusedOp::Clamp,
-        ElementwiseFusionOp::Exp => FusedOp::Exp,
-        ElementwiseFusionOp::Log => FusedOp::Log,
-        ElementwiseFusionOp::Sin => FusedOp::Sin,
-        ElementwiseFusionOp::Cos => FusedOp::Cos,
-        ElementwiseFusionOp::Tanh => FusedOp::Tanh,
-        ElementwiseFusionOp::Sqrt => FusedOp::Sqrt,
-        ElementwiseFusionOp::Rsqrt => FusedOp::Rsqrt,
-        ElementwiseFusionOp::Pow => FusedOp::Pow,
-        ElementwiseFusionOp::Expm1 => FusedOp::Expm1,
-        ElementwiseFusionOp::Log1p => FusedOp::Log1p,
-        ElementwiseFusionOp::Remainder => {
-            unreachable!("remainder must be filtered before CPU elementwise fusion")
-        }
-    }
-}
-
-fn plan_uses_unfused_op(plan: &ElementwiseFusionPlan) -> bool {
-    plan.ops()
-        .iter()
-        .any(|inst| inst.op() == ElementwiseFusionOp::Remainder)
-}
-
-fn plan_uses_ordered_op(plan: &ElementwiseFusionPlan) -> bool {
-    plan.ops().iter().any(|inst| {
-        matches!(
-            inst.op(),
-            ElementwiseFusionOp::Maximum
-                | ElementwiseFusionOp::Minimum
-                | ElementwiseFusionOp::Clamp
-        )
-    })
-}
-
-fn should_defer_to_broadcast_multiply_special_case(plan: &ElementwiseFusionPlan) -> bool {
-    !plan.input_views().iter().all(|view| view.is_identity())
-        && plan.ops().len() == 1
-        && plan.outputs() == [plan.input_count()]
-        && plan.ops()[0].op() == ElementwiseFusionOp::Multiply
-}
-
-fn single_output_strided_fused_plan(plan: &ElementwiseFusionPlan, output: usize) -> FusedPlan {
-    FusedPlan {
-        input_count: plan.input_count(),
-        outputs: vec![output],
-        ops: plan
-            .ops()
-            .iter()
-            .map(|inst| FusedInst {
-                op: strided_fused_op(inst.op()),
-                inputs: inst.inputs().to_vec(),
-            })
-            .collect(),
-    }
-}
-
-fn kernel_dtype(dtype: DType) -> KernelDType {
-    match dtype {
-        DType::F32 => KernelDType::F32,
-        DType::F64 => KernelDType::F64,
-        DType::I32 => KernelDType::I32,
-        DType::I64 => KernelDType::I64,
-        DType::Bool => KernelDType::Bool,
-        DType::C32 => KernelDType::C32,
-        DType::C64 => KernelDType::C64,
-    }
-}
-
-fn typed_bytes<T>(data: &[T]) -> &[u8] {
-    // SAFETY: `data` is an aligned typed slice. The returned byte slice has
-    // the same lifetime and exact byte length, and is read-only.
-    unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), size_of_val(data)) }
-}
-
-struct ErasedFusionInput<'a> {
-    data: &'a [u8],
-    dims: Vec<usize>,
-    strides: Vec<isize>,
-}
-
-fn tensor_host_bytes<'a>(op: &'static str, input: &'a Tensor) -> crate::Result<&'a [u8]> {
-    macro_rules! bytes {
-        ($tensor:expr) => {
-            typed_host_data(op, $tensor).map(typed_bytes)
-        };
-    }
-
-    match input {
-        Tensor::F32(tensor) => bytes!(tensor),
-        Tensor::F64(tensor) => bytes!(tensor),
-        Tensor::I32(tensor) => bytes!(tensor),
-        Tensor::I64(tensor) => bytes!(tensor),
-        Tensor::Bool(tensor) => bytes!(tensor),
-        Tensor::C32(tensor) => bytes!(tensor),
-        Tensor::C64(tensor) => bytes!(tensor),
-    }
-}
-
-fn erased_fusion_input<'a>(
-    input: &'a Tensor,
-    view: &ElementwiseFusionInputView,
-) -> crate::Result<ErasedFusionInput<'a>> {
-    let data = tensor_host_bytes(ELEMENTWISE_FUSION_OP, input)?;
-    let base_shape = input.shape();
-    let base_strides = col_major_strides(base_shape)?;
-    let ElementwiseFusionInputView::BroadcastInDim { shape, dims } = view else {
-        return Ok(ErasedFusionInput {
-            data,
-            dims: base_shape.to_vec(),
-            strides: base_strides,
-        });
-    };
-
-    if dims.len() != base_shape.len() {
-        return Err(crate::Error::invalid_argument(
-            ELEMENTWISE_FUSION_OP,
-            "configuration",
-            format!(
-                "broadcast dims length {} does not match input rank {}",
-                dims.len(),
-                base_shape.len()
-            ),
-        ));
-    }
-
-    let mut strides = vec![0; shape.len()];
-    let mut seen = vec![false; shape.len()];
-    for (source_axis, &target_axis) in dims.iter().enumerate() {
-        if target_axis >= shape.len() {
-            return Err(crate::Error::axis_out_of_bounds(
-                ELEMENTWISE_FUSION_OP,
-                target_axis,
-                shape.len(),
-            ));
-        }
-        if seen[target_axis] {
-            return Err(crate::Error::duplicate_axis(
-                ELEMENTWISE_FUSION_OP,
-                target_axis,
-                "broadcast dims",
-            ));
-        }
-        seen[target_axis] = true;
-        let source_dim = base_shape[source_axis];
-        let target_dim = shape[target_axis];
-        if source_dim != target_dim && source_dim != 1 {
-            return Err(crate::Error::shape_mismatch(
-                ELEMENTWISE_FUSION_OP,
-                shape.to_vec(),
-                base_shape.to_vec(),
-            ));
-        }
-        if source_dim == target_dim {
-            strides[target_axis] = base_strides[source_axis];
-        }
-    }
-
-    Ok(ErasedFusionInput {
-        data,
-        dims: shape.to_vec(),
-        strides,
-    })
 }
 
 #[doc(hidden)]
@@ -1242,253 +921,72 @@ fn read_as_cpu_view(input: TensorRead<'_>) -> CpuReadView<'_> {
     }
 }
 
-#[doc(hidden)]
-pub fn elementwise_fusion_with_pool(
-    buffers: &mut BufferPool,
-    exec_context: &ExecContext,
-    inputs: &[&Tensor],
-    plan: &ElementwiseFusionPlan,
-) -> crate::Result<Option<Vec<Tensor>>> {
-    if !validate_elementwise_fusion_inputs(inputs, plan)? {
-        return Ok(None);
-    }
-    if inputs.is_empty() {
-        return Ok(None);
-    }
-    if plan_uses_unfused_op(plan) {
-        return Ok(None);
-    }
-    if should_defer_to_broadcast_multiply_special_case(plan) {
-        return Ok(None);
-    }
-    if !dtype_supports_erased_fusion(plan.dtype(), plan) {
-        return Ok(None);
-    }
-
-    let input_layouts = inputs
-        .iter()
-        .zip(plan.input_views())
-        .map(|(input, view)| erased_fusion_input(input, view))
-        .collect::<crate::Result<Vec<_>>>()?;
-    let shape = input_layouts[0].dims.clone();
-    if input_layouts
-        .iter()
-        .skip(1)
-        .any(|input| input.dims != shape)
-    {
-        return Ok(None);
-    }
-    let element_count =
-        tenferro_tensor::validate::checked_shape_product(ELEMENTWISE_FUSION_OP, "shape", &shape)?;
-    if element_count < ELEMENTWISE_FUSION_MIN_ELEMENTS {
-        return Ok(None);
-    }
-
-    let dtype = kernel_dtype(plan.dtype());
-    let input_refs = input_layouts
-        .iter()
-        .map(|input| {
-            // SAFETY: fusion inputs are initialized typed storage with matching
-            // dtype and alignment; validated layouts bound every reachable read
-            // for the retained input borrow.
-            unsafe { erased_raw_strided_ref(dtype, input.data, &input.dims, &input.strides, 0) }
-                .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
-        })
-        .collect::<crate::Result<Vec<_>>>()?;
-
-    execute_erased_fused_outputs(buffers, exec_context, dtype, &input_refs, &shape, plan).map(Some)
+// Owned/read entrypoints share these static replay bodies, not function pointers.
+fn replay_unary<T: Copy + Send + Sync, O: Copy + PoolScalar>(
+    op: &'static str,
+    out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<O>>,
+    input: &StridedView<'_, T>,
+    f: impl Fn(T) -> O + Copy + Sync,
+) -> crate::Result<()> {
+    map_into(out, input, |x| MaybeUninit::new(f(x)))
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
-fn dtype_supports_erased_fusion(dtype: DType, plan: &ElementwiseFusionPlan) -> bool {
-    match dtype {
-        DType::F32 | DType::F64 => true,
-        DType::C32 | DType::C64 => !plan_uses_ordered_op(plan),
-        DType::I32 | DType::I64 => plan.ops().iter().all(|inst| {
-            matches!(
-                inst.op(),
-                ElementwiseFusionOp::Add
-                    | ElementwiseFusionOp::Multiply
-                    | ElementwiseFusionOp::Negate
-                    | ElementwiseFusionOp::Conj
-                    | ElementwiseFusionOp::Abs
-                    | ElementwiseFusionOp::Maximum
-                    | ElementwiseFusionOp::Minimum
-                    | ElementwiseFusionOp::Clamp
-            )
-        }),
-        DType::Bool => plan
-            .ops()
-            .iter()
-            .all(|inst| inst.op() == ElementwiseFusionOp::Conj),
-    }
+fn replay_select<T: Copy + PoolScalar>(
+    out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
+    pred: &StridedView<'_, bool>,
+    yes: &StridedView<'_, T>,
+    no: &StridedView<'_, T>,
+) -> crate::Result<()> {
+    zip_map3_into(out, pred, yes, no, |p, t, f| {
+        MaybeUninit::new(if p { t } else { f })
+    })
+    .map_err(|err| crate::Error::backend_source("select", err))
 }
 
-fn execute_erased_fused_outputs(
-    buffers: &mut BufferPool,
-    exec_context: &ExecContext,
-    dtype: KernelDType,
-    input_refs: &[ErasedRawStridedRef<'_>],
-    shape: &[usize],
-    plan: &ElementwiseFusionPlan,
-) -> crate::Result<Vec<Tensor>> {
-    let input_ptrs: Vec<_> = input_refs
-        .iter()
-        .map(ErasedRawStridedPtr::from_ref)
-        .collect();
-    match dtype {
-        KernelDType::F32 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<f32>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::F32,
-                )
-            })
-            .collect(),
-        KernelDType::F64 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<f64>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::F64,
-                )
-            })
-            .collect(),
-        KernelDType::I32 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<i32>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::I32,
-                )
-            })
-            .collect(),
-        KernelDType::I64 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<i64>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::I64,
-                )
-            })
-            .collect(),
-        KernelDType::Bool => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<bool>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::Bool,
-                )
-            })
-            .collect(),
-        KernelDType::C32 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<num_complex::Complex32>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::C32,
-                )
-            })
-            .collect(),
-        KernelDType::C64 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<num_complex::Complex64>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::C64,
-                )
-            })
-            .collect(),
-        _ => Err(crate::Error::unsupported(
-            ELEMENTWISE_FUSION_OP,
-            format!(
-                "unsupported dtype {}; supported dtypes: F32/F64/I32/I64/Bool/C32/C64",
-                dtype.label()
-            ),
-        )),
-    }
+fn replay_clamp<T: OrderedElem + PoolScalar>(
+    out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
+    input: &StridedView<'_, T>,
+    lower: &StridedView<'_, T>,
+    upper: &StridedView<'_, T>,
+) -> crate::Result<()> {
+    zip_map3_into(out, input, lower, upper, |x, lo, hi| {
+        MaybeUninit::new(hi.min_elem(lo.max_elem(x)))
+    })
+    .map_err(|err| crate::Error::backend_source("clamp", err))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn execute_erased_fused_output<T>(
-    buffers: &mut BufferPool,
-    exec_context: &ExecContext,
-    dtype: KernelDType,
-    input_ptrs: &[ErasedRawStridedPtr<'_>],
-    shape: &[usize],
-    plan: &ElementwiseFusionPlan,
-    output: usize,
-    wrap: fn(TypedTensor<T>) -> Tensor,
-) -> crate::Result<Tensor>
-where
-    T: Clone + PoolScalar,
-{
-    let fused_plan = single_output_strided_fused_plan(plan, output);
-    let erased_plan = ErasedFusedPlan::compile(dtype, fused_plan)
-        .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
-    let output_strides = col_major_strides(shape)?;
-    // SAFETY: `out` exclusively owns the output allocation with matching
-    // dtype/alignment and the fused plan overwrites every reachable element
-    // before `assume_init` exposes typed storage.
-    let mut dest = unsafe {
-        erased_raw_strided_uninit_mut(dtype, out.as_uninit_bytes_mut(), shape, &output_strides, 0)
-    }
-    .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    erased_plan
-        .execute_uninit(exec_context, &mut dest, input_ptrs)
-        .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    // SAFETY: the fused replay writes every logical destination element and retains no destination view.
-    Ok(wrap(unsafe { out.assume_init()? }))
+fn replay_binary<T: Copy + Send + Sync, O: Copy + PoolScalar>(
+    op: &'static str,
+    out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<O>>,
+    lhs: &StridedView<'_, T>,
+    rhs: &StridedView<'_, T>,
+    f: impl Fn(T, T) -> O + Copy + Sync,
+) -> crate::Result<()> {
+    zip_map2_into(out, lhs, rhs, |a, b| MaybeUninit::new(f(a, b)))
+        .map_err(|err| crate::Error::backend_source(op, err))
+}
+
+fn replay_scalar_left<T: Copy + PoolScalar>(
+    op: &'static str,
+    out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
+    input: &StridedView<'_, T>,
+    scalar: T,
+    f: impl Fn(T, T) -> T + Copy + Sync,
+) -> crate::Result<()> {
+    map_into(out, input, |x| MaybeUninit::new(f(scalar, x)))
+        .map_err(|err| crate::Error::backend_source(op, err))
+}
+
+fn replay_scalar_right<T: Copy + PoolScalar>(
+    op: &'static str,
+    out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
+    input: &StridedView<'_, T>,
+    scalar: T,
+    f: impl Fn(T, T) -> T + Copy + Sync,
+) -> crate::Result<()> {
+    map_into(out, input, |x| MaybeUninit::new(f(x, scalar)))
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 fn typed_binary_view_with_pool<T, L, R>(
@@ -1505,35 +1003,37 @@ where
 {
     if lhs.shape() == rhs.shape() {
         let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-        zip_map2_into(
+        replay_binary(
+            op,
             &mut out.as_uninit_view_mut()?,
             &typed_view_from_view(op, lhs)?,
             &typed_view_from_view(op, rhs)?,
-            |a, b| MaybeUninit::new(f(a, b)),
-        )
-        .map_err(|err| crate::Error::backend_source(op, err))?;
+            f,
+        )?;
         // SAFETY: the successful runtime-selected zip/map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
         let mut out = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
-        map_into(
+        replay_scalar_left(
+            op,
             &mut out.as_uninit_view_mut()?,
             &typed_view_from_view(op, rhs)?,
-            |x| MaybeUninit::new(f(scalar, x)),
-        )
-        .map_err(|err| crate::Error::backend_source(op, err))?;
+            scalar,
+            f,
+        )?;
         // SAFETY: the successful runtime-selected scalar-map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
         let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-        map_into(
+        replay_scalar_right(
+            op,
             &mut out.as_uninit_view_mut()?,
             &typed_view_from_view(op, lhs)?,
-            |x| MaybeUninit::new(f(x, scalar)),
-        )
-        .map_err(|err| crate::Error::backend_source(op, err))?;
+            scalar,
+            f,
+        )?;
         // SAFETY: the successful scalar map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else {
@@ -1556,12 +1056,12 @@ where
     R: TensorRank,
 {
     let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
-    map_into(
+    replay_unary(
+        op,
         &mut out.as_uninit_view_mut()?,
         &typed_view_from_view(op, input)?,
-        |x| MaybeUninit::new(f(x)),
-    )
-    .map_err(|err| crate::Error::backend_source(op, err))?;
+        f,
+    )?;
     // SAFETY: the successful map replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -1587,13 +1087,13 @@ where
         ));
     }
     let mut out = PooledUninitOutput::<O>::new(buffers, lhs.shape().to_vec())?;
-    zip_map2_into(
+    replay_binary(
+        op,
         &mut out.as_uninit_view_mut()?,
         &typed_view_from_view(op, lhs)?,
         &typed_view_from_view(op, rhs)?,
-        |a, b| MaybeUninit::new(f(a, b)),
-    )
-    .map_err(|err| crate::Error::backend_source(op, err))?;
+        f,
+    )?;
     // SAFETY: the successful zip replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -1662,14 +1162,12 @@ where
         ));
     }
     let mut out = PooledUninitOutput::<T>::new(buffers, pred.shape().to_vec())?;
-    zip_map3_into(
+    replay_select(
         &mut out.as_uninit_view_mut()?,
         &typed_view_from_view("select", pred)?,
         &typed_view_from_view("select", on_true)?,
         &typed_view_from_view("select", on_false)?,
-        |p, t, f| MaybeUninit::new(if p { t } else { f }),
-    )
-    .map_err(|err| crate::Error::backend_source("select", err))?;
+    )?;
     // SAFETY: the successful select replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -1701,14 +1199,12 @@ where
         ));
     }
     let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
-    zip_map3_into(
+    replay_clamp(
         &mut out.as_uninit_view_mut()?,
         &typed_view_from_view("clamp", input)?,
         &typed_view_from_view("clamp", lower)?,
         &typed_view_from_view("clamp", upper)?,
-        |x, lo, hi| MaybeUninit::new(hi.min_elem(lo.max_elem(x))),
-    )
-    .map_err(|err| crate::Error::backend_source("clamp", err))?;
+    )?;
     // SAFETY: the successful clamp replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -2537,14 +2033,14 @@ pub fn div_read_with_pool(
             buffers,
             &a,
             &b,
-            |x, y| x / y,
+            Div::div,
         )?)),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(typed_binary_view_with_pool(
             "div",
             buffers,
             &a,
             &b,
-            |x, y| x / y,
+            Div::div,
         )?)),
         (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
             typed_integer_div_view_with_pool(buffers, &a, &b)?,
@@ -2557,14 +2053,14 @@ pub fn div_read_with_pool(
             buffers,
             &a,
             &b,
-            |x, y| x / y,
+            Div::div,
         )?)),
         (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::C64(typed_binary_view_with_pool(
             "div",
             buffers,
             &a,
             &b,
-            |x, y| x / y,
+            Div::div,
         )?)),
         (CpuReadView::F32(real), CpuReadView::C32(complex)) if real.shape().is_empty() => {
             let scalar = complex_scalar_tensor_from_view(&real)?;
@@ -2574,7 +2070,7 @@ pub fn div_read_with_pool(
                 buffers,
                 &scalar,
                 &complex,
-                |x, y| x / y,
+                Div::div,
             )?))
         }
         (CpuReadView::C32(complex), CpuReadView::F32(real)) if real.shape().is_empty() => {
@@ -2585,7 +2081,7 @@ pub fn div_read_with_pool(
                 buffers,
                 &complex,
                 &scalar,
-                |x, y| x / y,
+                Div::div,
             )?))
         }
         (CpuReadView::F64(real), CpuReadView::C64(complex)) if real.shape().is_empty() => {
@@ -2596,7 +2092,7 @@ pub fn div_read_with_pool(
                 buffers,
                 &scalar,
                 &complex,
-                |x, y| x / y,
+                Div::div,
             )?))
         }
         (CpuReadView::C64(complex), CpuReadView::F64(real)) if real.shape().is_empty() => {
@@ -2607,7 +2103,7 @@ pub fn div_read_with_pool(
                 buffers,
                 &complex,
                 &scalar,
-                |x, y| x / y,
+                Div::div,
             )?))
         }
         _ => Err(crate::Error::dtype_mismatch("div", lhs_dtype, rhs_dtype)),
@@ -2670,14 +2166,14 @@ pub fn rem_read_with_pool(
             buffers,
             &a,
             &b,
-            |x, y| x % y,
+            StdRem::rem,
         )?)),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(typed_binary_view_with_pool(
             "rem",
             buffers,
             &a,
             &b,
-            |x, y| x % y,
+            StdRem::rem,
         )?)),
         (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
             typed_integer_rem_view_with_pool(buffers, &a, &b)?,
@@ -2737,37 +2233,37 @@ pub fn neg_read_with_pool(
             "neg",
             buffers,
             &t,
-            |x| -x,
+            Neg::neg,
         )?)),
         CpuReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
             "neg",
             buffers,
             &t,
-            |x| -x,
+            Neg::neg,
         )?)),
         CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
             "neg",
             buffers,
             &t,
-            |x| x.wrapping_neg_elem(),
+            WrappingIntegerElem::wrapping_neg_elem,
         )?)),
         CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
             "neg",
             buffers,
             &t,
-            |x| x.wrapping_neg_elem(),
+            WrappingIntegerElem::wrapping_neg_elem,
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
             "neg",
             buffers,
             &t,
-            |x| -x,
+            Neg::neg,
         )?)),
         CpuReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
             "neg",
             buffers,
             &t,
-            |x| -x,
+            Neg::neg,
         )?)),
         _ => Err(unary_dtype_error(
             "neg",
@@ -2825,25 +2321,25 @@ pub fn conj_read_with_pool(
             "conj",
             buffers,
             &t,
-            |x| x.conj_elem(),
+            ConjElem::conj_elem,
         )?)),
         CpuReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
             "conj",
             buffers,
             &t,
-            |x| x.conj_elem(),
+            ConjElem::conj_elem,
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
             "conj",
             buffers,
             &t,
-            |x| x.conj_elem(),
+            ConjElem::conj_elem,
         )?)),
         CpuReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
             "conj",
             buffers,
             &t,
-            |x| x.conj_elem(),
+            ConjElem::conj_elem,
         )?)),
         _ => Err(unary_dtype_error("conj", dtype, "F32/F64/C32/C64", true)),
     }
@@ -2899,25 +2395,25 @@ pub fn abs_read_with_pool(
             "abs",
             buffers,
             &t,
-            |x| x.abs_elem(),
+            Tier2Elem::abs_elem,
         )?)),
         CpuReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
             "abs",
             buffers,
             &t,
-            |x| x.abs_elem(),
+            Tier2Elem::abs_elem,
         )?)),
         CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
             "abs",
             buffers,
             &t,
-            |x| x.wrapping_abs_elem(),
+            WrappingIntegerElem::wrapping_abs_elem,
         )?)),
         CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
             "abs",
             buffers,
             &t,
-            |x| x.wrapping_abs_elem(),
+            WrappingIntegerElem::wrapping_abs_elem,
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::F32(typed_complex_abs_view_with_pool(buffers, &t)?)),
         CpuReadView::C64(t) => Ok(Tensor::F64(typed_complex_abs_view_with_pool(buffers, &t)?)),
@@ -2978,37 +2474,37 @@ pub fn sign_read_with_pool(
             "sign",
             buffers,
             &t,
-            |x| x.sign_elem(),
+            Tier2Elem::sign_elem,
         )?)),
         CpuReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
             "sign",
             buffers,
             &t,
-            |x| x.sign_elem(),
+            Tier2Elem::sign_elem,
         )?)),
         CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
             "sign",
             buffers,
             &t,
-            |x| x.signum_elem(),
+            WrappingIntegerElem::signum_elem,
         )?)),
         CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
             "sign",
             buffers,
             &t,
-            |x| x.signum_elem(),
+            WrappingIntegerElem::signum_elem,
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
             "sign",
             buffers,
             &t,
-            |x| x.sign_elem(),
+            Tier2Elem::sign_elem,
         )?)),
         CpuReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
             "sign",
             buffers,
             &t,
-            |x| x.sign_elem(),
+            Tier2Elem::sign_elem,
         )?)),
         _ => Err(unary_dtype_error(
             "sign",
@@ -3075,26 +2571,42 @@ pub fn maximum_read_with_pool(
     reject_complex_ordered_dtypes("maximum", &[lhs_dtype, rhs_dtype])?;
 
     match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
-        (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(
-            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
-                x.max_elem(y)
-            })?,
-        )),
-        (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
-            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
-                x.max_elem(y)
-            })?,
-        )),
-        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
-            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
-                x.max_elem(y)
-            })?,
-        )),
-        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
-            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
-                x.max_elem(y)
-            })?,
-        )),
+        (CpuReadView::F32(a), CpuReadView::F32(b)) => {
+            Ok(Tensor::F32(typed_same_shape_binary_view_with_pool(
+                "maximum",
+                buffers,
+                &a,
+                &b,
+                OrderedElem::max_elem,
+            )?))
+        }
+        (CpuReadView::F64(a), CpuReadView::F64(b)) => {
+            Ok(Tensor::F64(typed_same_shape_binary_view_with_pool(
+                "maximum",
+                buffers,
+                &a,
+                &b,
+                OrderedElem::max_elem,
+            )?))
+        }
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => {
+            Ok(Tensor::I32(typed_same_shape_binary_view_with_pool(
+                "maximum",
+                buffers,
+                &a,
+                &b,
+                OrderedElem::max_elem,
+            )?))
+        }
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => {
+            Ok(Tensor::I64(typed_same_shape_binary_view_with_pool(
+                "maximum",
+                buffers,
+                &a,
+                &b,
+                OrderedElem::max_elem,
+            )?))
+        }
         _ => Err(dtype_pair_error("maximum", lhs_dtype, rhs_dtype)),
     }
 }
@@ -3155,26 +2667,42 @@ pub fn minimum_read_with_pool(
     reject_complex_ordered_dtypes("minimum", &[lhs_dtype, rhs_dtype])?;
 
     match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
-        (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(
-            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
-                x.min_elem(y)
-            })?,
-        )),
-        (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
-            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
-                x.min_elem(y)
-            })?,
-        )),
-        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
-            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
-                x.min_elem(y)
-            })?,
-        )),
-        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
-            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
-                x.min_elem(y)
-            })?,
-        )),
+        (CpuReadView::F32(a), CpuReadView::F32(b)) => {
+            Ok(Tensor::F32(typed_same_shape_binary_view_with_pool(
+                "minimum",
+                buffers,
+                &a,
+                &b,
+                OrderedElem::min_elem,
+            )?))
+        }
+        (CpuReadView::F64(a), CpuReadView::F64(b)) => {
+            Ok(Tensor::F64(typed_same_shape_binary_view_with_pool(
+                "minimum",
+                buffers,
+                &a,
+                &b,
+                OrderedElem::min_elem,
+            )?))
+        }
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => {
+            Ok(Tensor::I32(typed_same_shape_binary_view_with_pool(
+                "minimum",
+                buffers,
+                &a,
+                &b,
+                OrderedElem::min_elem,
+            )?))
+        }
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => {
+            Ok(Tensor::I64(typed_same_shape_binary_view_with_pool(
+                "minimum",
+                buffers,
+                &a,
+                &b,
+                OrderedElem::min_elem,
+            )?))
+        }
         _ => Err(dtype_pair_error("minimum", lhs_dtype, rhs_dtype)),
     }
 }
@@ -3480,46 +3008,7 @@ pub fn typed_add_with_pool<T>(
 where
     T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
 {
-    if lhs.shape() == rhs.shape() {
-        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-        zip_map2_into(
-            &mut out.as_uninit_view_mut()?,
-            &typed_view("add", lhs)?,
-            &typed_view("add", rhs)?,
-            |x, y| MaybeUninit::new(x + y),
-        )
-        .map_err(|err| crate::Error::backend_source("add", err))?;
-        // SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view.
-        Ok(unsafe { out.assume_init()? })
-    } else if lhs.shape().is_empty() {
-        let scalar = typed_host_data("add", lhs)?[0];
-        let mut out = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
-        map_into(
-            &mut out.as_uninit_view_mut()?,
-            &typed_view("add", rhs)?,
-            |x| MaybeUninit::new(scalar + x),
-        )
-        .map_err(|err| crate::Error::backend_source("add", err))?;
-        // SAFETY: the successful add scalar map replay writes every logical destination element and retains no destination view.
-        Ok(unsafe { out.assume_init()? })
-    } else if rhs.shape().is_empty() {
-        let scalar = typed_host_data("add", rhs)?[0];
-        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-        map_into(
-            &mut out.as_uninit_view_mut()?,
-            &typed_view("add", lhs)?,
-            |x| MaybeUninit::new(x + scalar),
-        )
-        .map_err(|err| crate::Error::backend_source("add", err))?;
-        // SAFETY: the successful add scalar map replay writes every logical destination element and retains no destination view.
-        Ok(unsafe { out.assume_init()? })
-    } else {
-        Err(crate::Error::shape_mismatch(
-            "add",
-            lhs.shape().to_vec(),
-            rhs.shape().to_vec(),
-        ))
-    }
+    typed_binary_with_pool("add", buffers, lhs, rhs, Add::add)
 }
 
 fn typed_binary_with_pool<T>(
@@ -3534,31 +3023,37 @@ where
 {
     if lhs.shape() == rhs.shape() {
         let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-        zip_map2_into(
+        replay_binary(
+            op,
             &mut out.as_uninit_view_mut()?,
             &typed_view(op, lhs)?,
             &typed_view(op, rhs)?,
-            |x, y| MaybeUninit::new(f(x, y)),
-        )
-        .map_err(|err| crate::Error::backend_source(op, err))?;
+            f,
+        )?;
         // SAFETY: the successful binary zip/map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data(op, lhs)?[0];
         let mut out = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
-        map_into(&mut out.as_uninit_view_mut()?, &typed_view(op, rhs)?, |x| {
-            MaybeUninit::new(f(scalar, x))
-        })
-        .map_err(|err| crate::Error::backend_source(op, err))?;
+        replay_scalar_left(
+            op,
+            &mut out.as_uninit_view_mut()?,
+            &typed_view(op, rhs)?,
+            scalar,
+            f,
+        )?;
         // SAFETY: the successful binary scalar map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data(op, rhs)?[0];
         let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-        map_into(&mut out.as_uninit_view_mut()?, &typed_view(op, lhs)?, |x| {
-            MaybeUninit::new(f(x, scalar))
-        })
-        .map_err(|err| crate::Error::backend_source(op, err))?;
+        replay_scalar_right(
+            op,
+            &mut out.as_uninit_view_mut()?,
+            &typed_view(op, lhs)?,
+            scalar,
+            f,
+        )?;
         // SAFETY: the successful binary scalar map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else {
@@ -3578,7 +3073,13 @@ fn typed_wrapping_add_with_pool<T>(
 where
     T: WrappingIntegerElem + Mul<Output = T>,
 {
-    typed_binary_with_pool("add", buffers, lhs, rhs, |x, y| x.wrapping_add_elem(y))
+    typed_binary_with_pool(
+        "add",
+        buffers,
+        lhs,
+        rhs,
+        WrappingIntegerElem::wrapping_add_elem,
+    )
 }
 
 fn typed_wrapping_add_view_with_pool<T, L, R>(
@@ -3591,7 +3092,13 @@ where
     L: TensorRank,
     R: TensorRank,
 {
-    typed_binary_view_with_pool("add", buffers, lhs, rhs, |x, y| x.wrapping_add_elem(y))
+    typed_binary_view_with_pool(
+        "add",
+        buffers,
+        lhs,
+        rhs,
+        WrappingIntegerElem::wrapping_add_elem,
+    )
 }
 
 #[doc(hidden)]
@@ -3605,46 +3112,7 @@ where
     L: TensorRank,
     R: TensorRank,
 {
-    if lhs.shape() == rhs.shape() {
-        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-        zip_map2_into(
-            &mut out.as_uninit_view_mut()?,
-            &typed_view_from_view("add", lhs)?,
-            &typed_view_from_view("add", rhs)?,
-            |x, y| MaybeUninit::new(x + y),
-        )
-        .map_err(|err| crate::Error::backend_source("add", err))?;
-        // SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view.
-        Ok(unsafe { out.assume_init()? })
-    } else if lhs.shape().is_empty() {
-        let scalar = typed_view_from_view("add", lhs)?.get(&[]);
-        let mut out = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
-        map_into(
-            &mut out.as_uninit_view_mut()?,
-            &typed_view_from_view("add", rhs)?,
-            |x| MaybeUninit::new(scalar + x),
-        )
-        .map_err(|err| crate::Error::backend_source("add", err))?;
-        // SAFETY: the successful add scalar-map replay writes every logical destination element and retains no destination view.
-        Ok(unsafe { out.assume_init()? })
-    } else if rhs.shape().is_empty() {
-        let scalar = typed_view_from_view("add", rhs)?.get(&[]);
-        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-        map_into(
-            &mut out.as_uninit_view_mut()?,
-            &typed_view_from_view("add", lhs)?,
-            |x| MaybeUninit::new(x + scalar),
-        )
-        .map_err(|err| crate::Error::backend_source("add", err))?;
-        // SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view.
-        Ok(unsafe { out.assume_init()? })
-    } else {
-        Err(crate::Error::shape_mismatch(
-            "add",
-            lhs.shape().to_vec(),
-            rhs.shape().to_vec(),
-        ))
-    }
+    typed_binary_view_with_pool("add", buffers, lhs, rhs, Add::add)
 }
 
 #[doc(hidden)]
@@ -3656,7 +3124,7 @@ pub fn typed_sub_with_pool<T>(
 where
     T: Copy + PoolScalar + Sub<Output = T> + 'static,
 {
-    typed_binary_with_pool("sub", buffers, lhs, rhs, |x, y| x - y)
+    typed_binary_with_pool("sub", buffers, lhs, rhs, Sub::sub)
 }
 
 fn typed_wrapping_sub_with_pool<T>(
@@ -3667,7 +3135,13 @@ fn typed_wrapping_sub_with_pool<T>(
 where
     T: WrappingIntegerElem,
 {
-    typed_binary_with_pool("sub", buffers, lhs, rhs, |x, y| x.wrapping_sub_elem(y))
+    typed_binary_with_pool(
+        "sub",
+        buffers,
+        lhs,
+        rhs,
+        WrappingIntegerElem::wrapping_sub_elem,
+    )
 }
 
 fn typed_wrapping_sub_view_with_pool<T, L, R>(
@@ -3680,7 +3154,13 @@ where
     L: TensorRank,
     R: TensorRank,
 {
-    typed_binary_view_with_pool("sub", buffers, lhs, rhs, |x, y| x.wrapping_sub_elem(y))
+    typed_binary_view_with_pool(
+        "sub",
+        buffers,
+        lhs,
+        rhs,
+        WrappingIntegerElem::wrapping_sub_elem,
+    )
 }
 
 #[doc(hidden)]
@@ -3694,7 +3174,7 @@ where
     L: TensorRank,
     R: TensorRank,
 {
-    typed_binary_view_with_pool("sub", buffers, lhs, rhs, |x, y| x - y)
+    typed_binary_view_with_pool("sub", buffers, lhs, rhs, Sub::sub)
 }
 
 #[doc(hidden)]
@@ -3717,7 +3197,7 @@ where
         // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else {
-        typed_binary_with_pool("mul", buffers, lhs, rhs, |x, y| x * y)
+        typed_binary_with_pool("mul", buffers, lhs, rhs, Mul::mul)
     }
 }
 
@@ -3740,7 +3220,13 @@ where
         // SAFETY: the successful wrapping multiplication kernel writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else {
-        typed_binary_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
+        typed_binary_with_pool(
+            "mul",
+            buffers,
+            lhs,
+            rhs,
+            WrappingIntegerElem::wrapping_mul_elem,
+        )
     }
 }
 
@@ -3765,7 +3251,13 @@ where
         // SAFETY: the successful wrapping multiplication kernel writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else {
-        typed_binary_view_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
+        typed_binary_view_with_pool(
+            "mul",
+            buffers,
+            lhs,
+            rhs,
+            WrappingIntegerElem::wrapping_mul_elem,
+        )
     }
 }
 
@@ -3791,7 +3283,7 @@ where
         // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else {
-        typed_binary_view_with_pool("mul", buffers, lhs, rhs, |x, y| x * y)
+        typed_binary_view_with_pool("mul", buffers, lhs, rhs, Mul::mul)
     }
 }
 
@@ -3804,7 +3296,7 @@ pub fn typed_div_with_pool<T>(
 where
     T: Copy + Clone + Zero + Div<Output = T> + PoolScalar + 'static,
 {
-    typed_binary_with_pool("div", buffers, lhs, rhs, |x, y| x / y)
+    typed_binary_with_pool("div", buffers, lhs, rhs, Div::div)
 }
 
 fn typed_integer_div_with_pool<T>(
@@ -3817,7 +3309,13 @@ where
 {
     let rhs_view = typed_view("div", rhs)?;
     ensure_no_zero_divisor("div", &rhs_view)?;
-    typed_binary_with_pool("div", buffers, lhs, rhs, |x, y| x.wrapping_div_elem(y))
+    typed_binary_with_pool(
+        "div",
+        buffers,
+        lhs,
+        rhs,
+        WrappingIntegerElem::wrapping_div_elem,
+    )
 }
 
 fn typed_integer_div_view_with_pool<T, L, R>(
@@ -3832,7 +3330,13 @@ where
 {
     let rhs_view = typed_view_from_view("div", rhs)?;
     ensure_no_zero_divisor("div", &rhs_view)?;
-    typed_binary_view_with_pool("div", buffers, lhs, rhs, |x, y| x.wrapping_div_elem(y))
+    typed_binary_view_with_pool(
+        "div",
+        buffers,
+        lhs,
+        rhs,
+        WrappingIntegerElem::wrapping_div_elem,
+    )
 }
 
 fn typed_rem_with_pool<T>(
@@ -3843,7 +3347,7 @@ fn typed_rem_with_pool<T>(
 where
     T: Copy + Clone + Zero + StdRem<Output = T> + PoolScalar + 'static,
 {
-    typed_binary_with_pool("rem", buffers, lhs, rhs, |x, y| x % y)
+    typed_binary_with_pool("rem", buffers, lhs, rhs, StdRem::rem)
 }
 
 fn typed_integer_rem_with_pool<T>(
@@ -3856,7 +3360,13 @@ where
 {
     let rhs_view = typed_view("rem", rhs)?;
     ensure_no_zero_divisor("rem", &rhs_view)?;
-    typed_binary_with_pool("rem", buffers, lhs, rhs, |x, y| x.wrapping_rem_elem(y))
+    typed_binary_with_pool(
+        "rem",
+        buffers,
+        lhs,
+        rhs,
+        WrappingIntegerElem::wrapping_rem_elem,
+    )
 }
 
 fn typed_integer_rem_view_with_pool<T, L, R>(
@@ -3871,7 +3381,13 @@ where
 {
     let rhs_view = typed_view_from_view("rem", rhs)?;
     ensure_no_zero_divisor("rem", &rhs_view)?;
-    typed_binary_view_with_pool("rem", buffers, lhs, rhs, |x, y| x.wrapping_rem_elem(y))
+    typed_binary_view_with_pool(
+        "rem",
+        buffers,
+        lhs,
+        rhs,
+        WrappingIntegerElem::wrapping_rem_elem,
+    )
 }
 
 #[doc(hidden)]
@@ -3886,12 +3402,12 @@ where
     O: Clone + PoolScalar,
 {
     let mut out = PooledUninitOutput::<O>::new(buffers, input.shape().to_vec())?;
-    map_into(
+    replay_unary(
+        op,
         &mut out.as_uninit_view_mut()?,
         &typed_view(op, input)?,
-        |x| MaybeUninit::new(f(x)),
-    )
-    .map_err(|err| crate::Error::backend_source(op, err))?;
+        f,
+    )?;
     // SAFETY: the successful same-shape replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -3904,7 +3420,7 @@ pub fn typed_neg_with_pool<T>(
 where
     T: Copy + Clone + Zero + Neg<Output = T> + PoolScalar + 'static,
 {
-    typed_map_with_pool("neg", buffers, input, |x| -x)
+    typed_map_with_pool("neg", buffers, input, Neg::neg)
 }
 
 fn typed_wrapping_unary_with_pool<T>(
@@ -3926,7 +3442,12 @@ fn typed_wrapping_neg_with_pool<T>(
 where
     T: WrappingIntegerElem,
 {
-    typed_wrapping_unary_with_pool("neg", buffers, input, |x| x.wrapping_neg_elem())
+    typed_wrapping_unary_with_pool(
+        "neg",
+        buffers,
+        input,
+        WrappingIntegerElem::wrapping_neg_elem,
+    )
 }
 
 fn typed_wrapping_abs_with_pool<T>(
@@ -3936,7 +3457,12 @@ fn typed_wrapping_abs_with_pool<T>(
 where
     T: WrappingIntegerElem,
 {
-    typed_wrapping_unary_with_pool("abs", buffers, input, |x| x.wrapping_abs_elem())
+    typed_wrapping_unary_with_pool(
+        "abs",
+        buffers,
+        input,
+        WrappingIntegerElem::wrapping_abs_elem,
+    )
 }
 
 #[doc(hidden)]
@@ -3947,7 +3473,7 @@ pub fn typed_conj_with_pool<T>(
 where
     T: Copy + Clone + Zero + ConjElem + PoolScalar + 'static,
 {
-    typed_map_with_pool("conj", buffers, input, |x| x.conj_elem())
+    typed_map_with_pool("conj", buffers, input, ConjElem::conj_elem)
 }
 
 #[doc(hidden)]
@@ -3958,7 +3484,7 @@ pub fn typed_abs_with_pool<T>(
 where
     T: Tier2Elem + PoolScalar + 'static,
 {
-    typed_map_with_pool("abs", buffers, input, |x| x.abs_elem())
+    typed_map_with_pool("abs", buffers, input, Tier2Elem::abs_elem)
 }
 
 fn typed_complex_abs_with_pool<T>(
@@ -3969,7 +3495,7 @@ where
     T: num_traits::Float + PoolScalar + 'static,
     Complex<T>: TensorScalar,
 {
-    typed_map_with_pool("abs", buffers, input, |x| x.norm())
+    typed_map_with_pool("abs", buffers, input, Complex::norm)
 }
 
 fn typed_complex_abs_view_with_pool<T, R>(
@@ -3981,12 +3507,12 @@ where
     R: TensorRank,
 {
     let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
-    map_into(
+    replay_unary(
+        "abs",
         &mut out.as_uninit_view_mut()?,
         &typed_view_from_view("abs", input)?,
-        |x| MaybeUninit::new(x.norm()),
-    )
-    .map_err(|err| crate::Error::backend_source("abs", err))?;
+        Complex::norm,
+    )?;
     // SAFETY: the successful unary map replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -3999,7 +3525,7 @@ pub fn typed_sign_with_pool<T>(
 where
     T: Tier2Elem + PoolScalar + 'static,
 {
-    typed_map_with_pool("sign", buffers, input, |x| x.sign_elem())
+    typed_map_with_pool("sign", buffers, input, Tier2Elem::sign_elem)
 }
 
 fn typed_integer_sign_with_pool<T>(
@@ -4009,7 +3535,7 @@ fn typed_integer_sign_with_pool<T>(
 where
     T: WrappingIntegerElem,
 {
-    typed_wrapping_unary_with_pool("sign", buffers, input, |x| x.signum_elem())
+    typed_wrapping_unary_with_pool("sign", buffers, input, WrappingIntegerElem::signum_elem)
 }
 
 #[doc(hidden)]
@@ -4029,13 +3555,13 @@ where
         ));
     }
     let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-    zip_map2_into(
+    replay_binary(
+        "maximum",
         &mut out.as_uninit_view_mut()?,
         &typed_view("maximum", lhs)?,
         &typed_view("maximum", rhs)?,
-        |x, y| MaybeUninit::new(x.max_elem(y)),
-    )
-    .map_err(|err| crate::Error::backend_source("maximum", err))?;
+        OrderedElem::max_elem,
+    )?;
     // SAFETY: the successful binary zip replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -4057,13 +3583,13 @@ where
         ));
     }
     let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
-    zip_map2_into(
+    replay_binary(
+        "minimum",
         &mut out.as_uninit_view_mut()?,
         &typed_view("minimum", lhs)?,
         &typed_view("minimum", rhs)?,
-        |x, y| MaybeUninit::new(x.min_elem(y)),
-    )
-    .map_err(|err| crate::Error::backend_source("minimum", err))?;
+        OrderedElem::min_elem,
+    )?;
     // SAFETY: the successful binary zip replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -4122,14 +3648,12 @@ where
         ));
     }
     let mut out = PooledUninitOutput::<T>::new(buffers, pred.shape().to_vec())?;
-    zip_map3_into(
+    replay_select(
         &mut out.as_uninit_view_mut()?,
         &typed_view("select", pred)?,
         &typed_view("select", on_true)?,
         &typed_view("select", on_false)?,
-        |p, t, f| MaybeUninit::new(if p { t } else { f }),
-    )
-    .map_err(|err| crate::Error::backend_source("select", err))?;
+    )?;
     // SAFETY: the successful select replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }
@@ -4159,14 +3683,12 @@ where
         ));
     }
     let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
-    zip_map3_into(
+    replay_clamp(
         &mut out.as_uninit_view_mut()?,
         &typed_view("clamp", input)?,
         &typed_view("clamp", lower)?,
         &typed_view("clamp", upper)?,
-        |x, lo, hi| MaybeUninit::new(hi.min_elem(lo.max_elem(x))),
-    )
-    .map_err(|err| crate::Error::backend_source("clamp", err))?;
+    )?;
     // SAFETY: the successful clamp replay writes every logical destination element and retains no destination view.
     Ok(unsafe { out.assume_init()? })
 }

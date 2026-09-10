@@ -95,8 +95,9 @@ transpose, and diagonal operations.
 
 CPU execution is handled by `CpuBackend`:
 
-- elementwise/reduction/structural work uses strided-kernel and dedicated CPU
-  implementations,
+- elementwise/reduction/structural work uses the split strided-basic,
+  strided-kernel and strided-fused implementations plus dedicated CPU
+  semantics, with automatic fusion retaining the enclosing context and pool,
 - `dot_general` uses the selected CPU provider (`cpu-faer`, `cpu-blas`, or
   an optional external general-contraction provider for supported contractions),
 - faer-backed work runs inside the `CpuContext` Rayon pool through

@@ -1,7 +1,7 @@
 use super::*;
 use tenferro_tensor::{
-    BackendStorageHandle, MemoryKind, Placement, StorageBuffer, TensorViewCanonicalization,
-    TypedTensorView, TypedTensorViewMut,
+    BackendStorageHandle, ElementwiseReadOp, MemoryKind, Placement, StorageBuffer,
+    TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
 };
 
 fn opaque_backend_placement() -> Placement {
@@ -1418,6 +1418,15 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     }
 
     impl TensorElementwise for DefaultOnlyBackend {
+        fn elementwise_read_into(
+            &mut self,
+            op: ElementwiseReadOp,
+            inputs: &[TensorRead<'_>],
+            out: TensorWrite<'_>,
+        ) -> crate::Result<()> {
+            CpuBackend::new().elementwise_read_into(op, inputs, out)
+        }
+
         panic_backend_methods! {
         sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -1550,6 +1559,15 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     struct DefaultOnlyExec;
 
     impl TensorElementwise for DefaultOnlyExec {
+        fn elementwise_read_into(
+            &mut self,
+            op: ElementwiseReadOp,
+            inputs: &[TensorRead<'_>],
+            out: TensorWrite<'_>,
+        ) -> crate::Result<()> {
+            CpuBackend::new().elementwise_read_into(op, inputs, out)
+        }
+
         panic_backend_methods! {
         sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;

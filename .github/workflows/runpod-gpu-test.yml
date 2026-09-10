@@ -333,15 +333,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Gate paid RunPod startup on checks that best predict a broken PR:
-            // repository policy, formatting, lint, coverage, and the full
-            // non-GPU workspace test aggregate. CUDA archive compilation still
-            // runs on a cheap hosted runner in parallel.
+            // Gate paid RunPod startup on every required non-GPU check that
+            // can already establish that this PR cannot merge: repository
+            // policy, formatting, lint, coverage, docs, and the full non-GPU
+            // workspace test aggregate. CUDA archive compilation still runs
+            // on a cheap hosted runner in parallel.
             const required = [
               "repository rules review gate",
               "rustfmt",
               "clippy",
               "coverage",
+              "docs-site",
               "CI gate (PR workspace tests)",
             ];
 

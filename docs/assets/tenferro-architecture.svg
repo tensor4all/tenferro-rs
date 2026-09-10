@@ -81,7 +81,7 @@
   <text x="322" y="375" class="sub">backend traits</text>
   <rect x="395" y="320" width="125" height="68" rx="6" class="box"/>
   <text x="457" y="342" class="name" style="font-size:12px">tenferro-cpu</text>
-  <text x="457" y="359" class="sub">CPU backend</text>
+  <text x="457" y="359" class="sub">CPU backend · sessions</text>
   <text x="457" y="375" class="sub" style="font-size:9px">faer | BLAS/LAPACK</text>
   <rect x="530" y="320" width="120" height="68" rx="6" class="box"/>
   <text x="590" y="342" class="name" style="font-size:12px">tenferro-gpu</text>
@@ -112,7 +112,7 @@
   <text x="105" y="233" class="sub">generic graph engine</text>
   <rect x="20" y="320" width="170" height="52" rx="6" class="ext"/>
   <text x="105" y="340" class="name">strided-rs</text>
-  <text x="105" y="357" class="sub">strided views · CPU kernels</text>
+  <text x="105" y="357" class="sub">basic · ordinary · fused kernels</text>
   <line x1="192" y1="146" x2="256" y2="146" class="use"/>
   <line x1="192" y1="222" x2="256" y2="222" class="use"/>
   <line x1="192" y1="346" x2="256" y2="346" class="use"/>

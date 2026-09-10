@@ -17,8 +17,8 @@ use tenferro_tensor::backend::{
 };
 use tenferro_tensor::{
     BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
-    Error, GatherConfig, PadConfig, ScatterConfig, ShapeMismatch, SliceConfig, TensorBackend,
-    TensorRead, TensorWrite, ValidationError,
+    ElementwiseReadOp, Error, GatherConfig, PadConfig, ScatterConfig, ShapeMismatch, SliceConfig,
+    TensorBackend, TensorRead, TensorWrite, ValidationError,
 };
 
 type TensorResult = tenferro_tensor::Result<Tensor>;
@@ -1070,6 +1070,16 @@ macro_rules! test_backend_impls {
 macro_rules! panic_elementwise {
     ($ty:ident) => {
         impl TensorElementwise for $ty {
+            fn elementwise_read_into(
+                &mut self,
+                op: ElementwiseReadOp,
+                inputs: &[TensorRead<'_>],
+                out: TensorWrite<'_>,
+            ) -> tenferro_tensor::Result<()> {
+                let _ = (op, inputs, out);
+                panic!("elementwise_read_into should not be called in this test")
+            }
+
             panic_backend_methods! {
                 add(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 sub(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
@@ -1262,6 +1272,16 @@ impl BackendSession for WrongDTypeSessionBackend {
 impl TensorBackend for WrongDTypeSessionBackend {}
 
 impl TensorElementwise for WrongDTypeSessionBackend {
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        let _ = (op, inputs, out);
+        panic!("elementwise_read_into should not be called in this test")
+    }
+
     panic_backend_methods! {
         rem(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
         select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult;

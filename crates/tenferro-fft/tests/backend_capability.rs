@@ -6,11 +6,11 @@ use tenferro_gpu::cuda::CudaExecSession;
 use tenferro_runtime::Runtime;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    BackendStorageHandle, CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind,
-    GatherConfig, GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig,
-    StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
-    TensorStructural, TypedTensor,
+    BackendStorageHandle, CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig,
+    ElementwiseReadOp, ErrorKind, GatherConfig, GpuBackendKind, MemoryKind, PadConfig, Placement,
+    ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural, TensorWrite, TypedTensor,
 };
 
 macro_rules! unreachable_backend_methods {
@@ -31,6 +31,16 @@ macro_rules! impl_minimal_tensor_backend {
         }
 
         impl TensorElementwise for $ty {
+            fn elementwise_read_into(
+                &mut self,
+                op: ElementwiseReadOp,
+                inputs: &[TensorRead<'_>],
+                out: TensorWrite<'_>,
+            ) -> tenferro_tensor::Result<()> {
+                let _ = (op, inputs, out);
+                panic!("elementwise_read_into should not be called by this test")
+            }
+
             unreachable_backend_methods! {
                 add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
                 sub(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;

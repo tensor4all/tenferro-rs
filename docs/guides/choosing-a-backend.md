@@ -93,8 +93,9 @@ Panel A: faer (tenferro-managed)
 caller thread
   -> CpuOperationEntry::enter (permit + owned pool entry, budget N fixed)
     -> with_native_parallelism (ExecutionPolicy::Rayon{max_threads: N})
-      -> strided-kernel fanout (<= N partitions on SAME owned pool;
-         nested strided ops inside partition sequential by fanout guard)
+      -> strided-basic / strided-kernel / strided-fused fanout
+         (<= N partitions on SAME owned pool; nested strided ops inside
+         partition sequential by fanout guard)
       -> faer ops (Par::rayon(N) same budget/pool)
 
 Panel B: external BLAS (provider-owned)

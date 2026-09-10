@@ -46,8 +46,12 @@ are not the recommended application-facing API surface.
   data model, dtype tags, scalar traits, rank metadata, and metadata-only views
 - [tenferro-core-ops](./tenferro_core_ops/index.html): internal primitive
   operation catalog metadata
+- [tenferro-cpu-basic](./tenferro_cpu_basic/index.html): shared CPU buffer
+  pool, full-overwrite guard, and host strided adapters
 - [tenferro-internal-cpu-kernels](./tenferro_internal_cpu_kernels/index.html):
-  internal CPU elementwise kernels and typed buffer-pool implementation
+  ordinary CPU dtype-dispatch kernels and pool-aware read-into replay
+- [tenferro-cpu-fused](./tenferro_cpu_fused/index.html): runtime-DAG fused
+  elementwise CPU adapter
 - [tenferro-internal-ops](./tenferro_ops/index.html): graph operation
   vocabulary and AD rule implementations
 - [tenferro-internal-extension-macros](./tenferro_extension_macros/index.html):

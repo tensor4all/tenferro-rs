@@ -78,8 +78,10 @@ CPU provider features are additive:
 - `cpu-faer` for faer-backed GEMM/linalg,
 - `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg.
 
-CPU execution uses strided-kernel for elementwise/reduction/structural work and
-faer or BLAS/LAPACK for GEMM and linalg. `CpuBackend` stores the runtime
+CPU execution uses the split strided-rs families: shared traversal and light
+host operations come from `strided-basic`, ordinary dtype-dispatch kernels from
+`strided-kernel`, and runtime-DAG fusion from `strided-fused`. faer or
+BLAS/LAPACK provide GEMM and linalg. `CpuBackend` stores the runtime
 base-provider selection for an individual backend instance. `CpuBackend::new()`
 chooses the compiled default provider: BLAS if `cpu-blas` is compiled,
 otherwise faer. Explicit constructors such as `CpuBackend::with_kind` and
@@ -95,7 +97,10 @@ multi-thread contexts.
 `CpuBackend::with_backend_session` runs the whole compiled program through
 `CpuExecSession`, reusing the backend buffer pool and avoiding per-op session
 setup. Session execution enters `CpuContext::install`, so strided CPU kernels
-use the backend-owned Rayon pool when `strided-kernel/parallel` is enabled.
+use the backend-owned Rayon pool when the relevant parallel feature is enabled.
+`TensorElementwise::elementwise_read_into` is implemented by each backend;
+`tenferro-cpu-basic` owns the shared pool and overwrite-storage adapters, while
+`tenferro-cpu-fused` receives the same context and pool for automatic fusion.
 faer-backed kernels receive `Par::Seq` for one thread or explicit
 `Par::rayon(n)` from the configured context degree for multi-threaded execution
 inside that pool. BLAS/LAPACK provider threading remains provider-owned; the
