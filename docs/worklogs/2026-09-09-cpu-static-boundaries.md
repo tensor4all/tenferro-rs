@@ -9,10 +9,10 @@ requirement. No package publication is authorized.
 
 The tenferro implementation is rebased onto current main
 `167a8d28dde14cf2d601ab1f7c397ae4de25ca7b`.
-Its strided dependency is now the current split candidate
-`1db88be3bba8882f1c1a1de00315fc341648e75e` (strided-rs PR #254), which includes
-the consumer's prerequisite indexed-kernel work. The initial experiments used
-older commits and are not final performance evidence.
+Its strided dependency now uses the strided-rs #254 merge commit
+`fbd10fa5b70bb462b961cfd9e02faadb6bb95be0`, which includes the consumer's
+prerequisite indexed-kernel work. The initial experiments used older commits
+and are not final performance evidence.
 
 Read: current repository rules and PERFORMANCE_TIPS, current backend/session and
 kernel callers, buffer guard source contracts, the exact strided pin candidate,
@@ -96,22 +96,18 @@ No CUDA hardware execution or final runtime benchmark has yet been run on this
 tenferro candidate. Release verification passed for the three kernel owners
 (**87 tests**) and CPU integration (**50 tests**). `cargo package --no-verify`
 was attempted for the new CPU packages and correctly stopped because
-`strided-basic` is not yet on crates.io; this is the expected publication-order
-blocker while strided PR #254 is unmerged/unpublished, not a package-success
-claim. The build pair was run but is inconclusive because of host load, and
-full aggregate coverage still contains unrelated baseline failures as described
-above.
+`strided-basic` is not yet on crates.io; this remains the expected publication-order
+blocker after strided PR #254 merged, not a package-success claim. The build pair
+was run but is inconclusive because of host load, and full aggregate coverage
+still contains unrelated baseline failures as described above.
 
-## Remaining before PR/merge readiness
+## Post-merge follow-up
 
-- Reconcile the temporary `1db88be` strided git pin after strided PR #254 is
-  merged and use the final merged commit for a tenferro PR. Until then, this
-  worktree is a local integration candidate, not a publishable package state.
-- Run the repository's final local PR gate, applicable feature/no-default and
-  release checks, final diff/self-review, and resolve any new coverage finding.
-  Hosted CI owns the broader matrix after PR creation.
-- Measure the final fusion-preserving light/extensions/combined configurations
-  under a predeclared protocol. Historical fusion-disabled timings and the
-  earlier scalar-division regression do not certify this composition.
-- Create the tenferro PR only after the exact dependency/order decision is
-  resolved. Do not merge or publish without explicit authorization.
+- The temporary strided pin was reconciled to merge commit `fbd10fa5`; the
+  tenferro implementation is already merged, while registry publication remains
+  intentionally out of scope.
+- The final fusion-preserving light/extensions/combined configurations still
+  need a predeclared measurement protocol. Historical fusion-disabled timings
+  and the earlier scalar-division regression do not certify this composition.
+- Registry publication remains blocked until the split packages are published;
+  no publication is authorized by this worklog.
