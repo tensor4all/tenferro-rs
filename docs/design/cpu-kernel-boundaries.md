@@ -53,7 +53,6 @@ their original owner.
 
 ## Dependency staging
 
-The tenferro worktree temporarily pins all strided packages to the exact
-strided-rs PR #254 head used for this integration candidate. After that PR is
-merged, update the pin to its merged commit before merging or publishing the
-tenferro change. Registry publication is not part of this implementation.
+The tenferro integration uses the strided-rs #254 merge commit
+`fbd10fa5b70bb462b961cfd9e02faadb6bb95be0`. The split packages remain
+unpublished; registry publication is not part of this implementation.

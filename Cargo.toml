@@ -55,14 +55,13 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# Temporary integration pin to strided-rs PR #254; replace with its merged
-# commit before merging or publishing the tenferro change.
-strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0", features = ["parallel"] }
-strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0", default-features = false }
-strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0", default-features = false, features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1db88be3bba8882f1c1a1de00315fc341648e75e", version = "0.4.0", features = ["parallel"] }
+# strided-rs #254 merge commit; update only with an intentional dependency bump.
+strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "fbd10fa5b70bb462b961cfd9e02faadb6bb95be0", version = "0.4.0" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "fbd10fa5b70bb462b961cfd9e02faadb6bb95be0", version = "0.4.0" }
+strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "fbd10fa5b70bb462b961cfd9e02faadb6bb95be0", version = "0.4.0", features = ["parallel"] }
+strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "fbd10fa5b70bb462b961cfd9e02faadb6bb95be0", version = "0.4.0", default-features = false }
+strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "fbd10fa5b70bb462b961cfd9e02faadb6bb95be0", version = "0.4.0", default-features = false, features = ["parallel"] }
+strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "fbd10fa5b70bb462b961cfd9e02faadb6bb95be0", version = "0.4.0", features = ["parallel"] }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
