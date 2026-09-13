@@ -919,6 +919,48 @@ where
     Ok(output)
 }
 
+/// Launch a binary tensor kernel from already prepared operand bindings.
+///
+/// [`launch_binary_tensor`] derives the operand bindings from owned tensors.
+/// Fused entry points that also accept a compact borrowed view build the
+/// bindings themselves and reuse this helper for the output allocation and
+/// launch.
+pub(crate) fn launch_binary_bindings<TOut>(
+    rt: &CudaRuntime,
+    lhs_arg: TensorBinding<CubeclCudaRuntime>,
+    rhs_arg: TensorBinding<CubeclCudaRuntime>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<TOut>>
+where
+    TOut: CubeElement + TensorScalar + Clone,
+{
+    let output = alloc_output::<TOut>(rt, out_shape)?;
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(output);
+    }
+    let client = rt.client();
+    let output_arg = typed_tensor_binding(&output, op)?;
+    launch(
+        client,
+        cube_count_for_len(len)?,
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+    );
+    Ok(output)
+}
+
 pub(crate) fn launch_select_bool<T>(
     rt: &CudaRuntime,
     pred: &TypedTensor<bool>,
