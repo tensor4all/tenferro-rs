@@ -3729,7 +3729,144 @@ where
     Ok(output)
 }
 
+/// Operand accepted by a CUDA `_read` entry point.
+///
+/// The traced runtime prepares operands as `TensorRead`, which is either an
+/// owned tensor or a borrowed view over another tensor's storage. CUDA kernels
+/// consume owned compact tensors, so a borrowed view is materialized once
+/// through this backend's own `to_contiguous_read`.
+enum CudaReadInput<'a> {
+    /// The caller owns the tensor for the duration of the call.
+    Borrowed(&'a Tensor),
+    /// A borrowed view materialized into backend storage for the call.
+    Materialized(Box<Tensor>),
+}
+
+impl CudaReadInput<'_> {
+    fn as_tensor(&self) -> &Tensor {
+        match self {
+            Self::Borrowed(tensor) => tensor,
+            Self::Materialized(tensor) => tensor,
+        }
+    }
+}
+
+impl CudaBackend {
+    /// Accept a read operand the runtime prepared, materializing a view.
+    ///
+    /// Keeping the materialized tensor inside [`CudaReadInput`] bounds the
+    /// view's device storage to the call that needs it; the traced runtime
+    /// releases it together with the operation result.
+    fn read_input<'a>(&mut self, input: TensorRead<'a>) -> crate::Result<CudaReadInput<'a>> {
+        match input.as_tensor() {
+            Some(tensor) => Ok(CudaReadInput::Borrowed(tensor)),
+            None => Ok(CudaReadInput::Materialized(Box::new(
+                self.to_contiguous_read(input)?,
+            ))),
+        }
+    }
+}
+
 impl TensorElementwise for CudaBackend {
+    // Borrowed-view entry points. The traced runtime prepares operands as
+    // `TensorRead`; a view is materialized before the CUDA kernel runs.
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.add(lhs.as_tensor(), rhs.as_tensor())
+    }
+
+    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.sub(lhs.as_tensor(), rhs.as_tensor())
+    }
+
+    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.mul(lhs.as_tensor(), rhs.as_tensor())
+    }
+
+    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.neg(input.as_tensor())
+    }
+
+    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.conj(input.as_tensor())
+    }
+
+    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.div(lhs.as_tensor(), rhs.as_tensor())
+    }
+
+    fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.rem(lhs.as_tensor(), rhs.as_tensor())
+    }
+
+    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.abs(input.as_tensor())
+    }
+
+    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.sign(input.as_tensor())
+    }
+
+    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.maximum(lhs.as_tensor(), rhs.as_tensor())
+    }
+
+    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.minimum(lhs.as_tensor(), rhs.as_tensor())
+    }
+
+    fn compare_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        dir: &CompareDir,
+    ) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.compare(lhs.as_tensor(), rhs.as_tensor(), dir)
+    }
+
+    fn select_read(
+        &mut self,
+        pred: TensorRead<'_>,
+        on_true: TensorRead<'_>,
+        on_false: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        let pred = self.read_input(pred)?;
+        let on_true = self.read_input(on_true)?;
+        let on_false = self.read_input(on_false)?;
+        self.select(pred.as_tensor(), on_true.as_tensor(), on_false.as_tensor())
+    }
+
+    fn clamp_read(
+        &mut self,
+        input: TensorRead<'_>,
+        lower: TensorRead<'_>,
+        upper: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        let lower = self.read_input(lower)?;
+        let upper = self.read_input(upper)?;
+        self.clamp(input.as_tensor(), lower.as_tensor(), upper.as_tensor())
+    }
+
     fn elementwise_read_into(
         &mut self,
         op: ElementwiseReadOp,
@@ -4437,6 +4574,59 @@ impl TensorElementwise for CudaBackend {
 }
 
 impl TensorAnalytic for CudaBackend {
+    // Borrowed-view entry points. The traced runtime prepares operands as
+    // `TensorRead`; a view is materialized before the CUDA kernel runs.
+    fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.exp(input.as_tensor())
+    }
+
+    fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.log(input.as_tensor())
+    }
+
+    fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.sin(input.as_tensor())
+    }
+
+    fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.cos(input.as_tensor())
+    }
+
+    fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.tanh(input.as_tensor())
+    }
+
+    fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.sqrt(input.as_tensor())
+    }
+
+    fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.rsqrt(input.as_tensor())
+    }
+
+    fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let lhs = self.read_input(lhs)?;
+        let rhs = self.read_input(rhs)?;
+        self.pow(lhs.as_tensor(), rhs.as_tensor())
+    }
+
+    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.expm1(input.as_tensor())
+    }
+
+    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.log1p(input.as_tensor())
+    }
+
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Exp, exp_float)
     }
@@ -4619,6 +4809,28 @@ impl TensorAnalytic for CudaBackend {
 }
 
 impl TensorStructural for CudaBackend {
+    // Borrowed-view entry points. The traced runtime prepares operands as
+    // `TensorRead`; a view is materialized before the CUDA kernel runs.
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.transpose(input.as_tensor(), perm)
+    }
+
+    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.reshape(input.as_tensor(), shape)
+    }
+
+    fn broadcast_in_dim_read(
+        &mut self,
+        input: TensorRead<'_>,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.broadcast_in_dim(input.as_tensor(), shape, dims)
+    }
+
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         macro_rules! materialize_cutensor {
             ($variant:ident, $view:expr) => {{
@@ -5040,6 +5252,28 @@ impl TensorStructural for CudaBackend {
 }
 
 impl TensorReduction for CudaBackend {
+    // Borrowed-view entry points. The traced runtime prepares operands as
+    // `TensorRead`; a view is materialized before the CUDA kernel runs.
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.reduce_sum(input.as_tensor(), axes)
+    }
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.reduce_prod(input.as_tensor(), axes)
+    }
+
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.reduce_max(input.as_tensor(), axes)
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.reduce_min(input.as_tensor(), axes)
+    }
+
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         let op = op_name(
             PrimitiveOpKind::ReduceSum,

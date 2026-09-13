@@ -1,5 +1,7 @@
 #[path = "integration/apple_context.rs"]
 mod apple_context;
+#[path = "integration/backend_read_contract.rs"]
+mod backend_read_contract;
 #[path = "integration/cubecl_launch_contract.rs"]
 mod cubecl_launch_contract;
 #[path = "integration/kernel_metadata_contract.rs"]

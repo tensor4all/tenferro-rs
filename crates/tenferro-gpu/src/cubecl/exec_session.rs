@@ -405,6 +405,20 @@ macro_rules! delegate {
 }
 
 delegate!(TensorElementwise {
+    fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn neg_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn conj_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn rem_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn abs_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn sign_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> crate::Result<Tensor>;
+    fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> crate::Result<Tensor>;
     fn elementwise_read_into(op: ElementwiseReadOp, inputs: &[TensorRead<'_>], out: TensorWrite<'_>) -> crate::Result<()>;
     fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -423,6 +437,16 @@ delegate!(TensorElementwise {
 });
 
 delegate!(TensorAnalytic {
+    fn exp_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn log_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn sin_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn cos_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn tanh_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn sqrt_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn rsqrt_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn expm1_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn log1p_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn exp(input: &Tensor) -> crate::Result<Tensor>;
     fn log(input: &Tensor) -> crate::Result<Tensor>;
     fn sin(input: &Tensor) -> crate::Result<Tensor>;
@@ -436,6 +460,9 @@ delegate!(TensorAnalytic {
 });
 
 delegate!(TensorStructural {
+    fn transpose_read(input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor>;
+    fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor>;
+    fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
     fn to_contiguous_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()>;
     fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
@@ -449,6 +476,10 @@ delegate!(TensorStructural {
 });
 
 delegate!(TensorReduction {
+    fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
+    fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
+    fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
+    fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
