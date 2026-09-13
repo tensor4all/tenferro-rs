@@ -5,8 +5,9 @@ use std::time::Instant;
 use crate::{DType, DeviceId, DeviceKind, Error, MemoryKind, Placement, Tensor, TypedTensor};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    BackendSession, GpuBackendKind, StridedSliceSpec, TensorIndexing, TensorRead, TensorStructural,
-    TensorView, TensorViewCanonicalization, TensorViewMut, TensorWrite,
+    backend::BackendSessionHost, BackendSession, GpuBackendKind, StridedSliceSpec,
+    TensorElementwise, TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView,
+    TensorViewCanonicalization, TensorViewMut, TensorWrite,
 };
 
 use super::super::CudaBackend;
@@ -121,6 +122,66 @@ fn cuda_bool_structural_ops_match_cpu() {
         gpu.concatenate(&[&gm, &gm], 2)
     );
     error_parity!(cpu.reverse(&matrix, &[2]), gpu.reverse(&gm, &[2]));
+}
+
+/// The traced runtime prepares operation operands as [`TensorRead`], which is
+/// an owned tensor or a borrowed view over already-resident storage. Every
+/// CUDA `_read` entry point must accept that shape; the unoverridden trait
+/// defaults reject it, which broke traced linalg AD graphs with
+/// "backend does not accept borrowed tensor views at this execution boundary".
+#[test]
+#[ignore]
+fn test_cuda_read_entry_points_accept_borrowed_views() {
+    let host = tensor_f64(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let scalar = tensor_f64(vec![], vec![2.0]);
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let device = upload(&gpu, &host);
+    let device_scalar = upload(&gpu, &scalar);
+
+    let Tensor::F64(device_typed) = &device else {
+        unreachable!("f64 upload preserves the dtype")
+    };
+    let Tensor::F64(scalar_typed) = &device_scalar else {
+        unreachable!("f64 upload preserves the dtype")
+    };
+    let view = || TensorRead::from_view(TensorView::F64(device_typed.as_view()));
+    let scalar_view = || TensorRead::from_view(TensorView::F64(scalar_typed.as_view()));
+
+    let expected = cpu.transpose(&host, &[1, 0]).unwrap();
+    let out = gpu.transpose_read(view(), &[1, 0]).unwrap();
+    assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
+
+    let expected = cpu.reshape(&host, &[3, 2]).unwrap();
+    let out = gpu.reshape_read(view(), &[3, 2]).unwrap();
+    assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
+
+    let expected = cpu.broadcast_in_dim(&scalar, &[2, 3], &[]).unwrap();
+    let out = gpu
+        .broadcast_in_dim_read(scalar_view(), &[2, 3], &[])
+        .unwrap();
+    assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
+
+    let expected = cpu.reduce_sum(&host, &[1]).unwrap();
+    let out = gpu.reduce_sum_read(view(), &[1]).unwrap();
+    assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
+
+    let expected = cpu.add(&host, &host).unwrap();
+    let out = gpu.add_read(view(), view()).unwrap();
+    assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
+
+    // The traced runtime reaches these entry points through the erased backend
+    // session, so the session must forward the borrowed-view spellings too.
+    let expected = cpu.transpose(&host, &[1, 0]).unwrap();
+    let session_out = gpu.with_backend_session(|session| {
+        session
+            .transpose_read(
+                TensorRead::from_view(TensorView::F64(device_typed.as_view())),
+                &[1, 0],
+            )
+            .unwrap()
+    });
+    assert_tensor_close(&download(&gpu, &session_out), &expected, 1e-12);
 }
 
 #[test]
