@@ -805,6 +805,9 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send + 'static>) -> St
     reason = "Phase 5 runtime execution task adds erased dispatch methods"
 )]
 pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
+    fn execution_scope(&self) -> Result<Option<Box<dyn tenferro_tensor::BackendExecutionScope>>> {
+        Ok(None)
+    }
     fn backend_type_name(&self) -> &'static str;
     fn extension_cache_stats(&self) -> std::result::Result<CacheStats, CacheOwnerError>;
     fn clear_extension_caches(&self) -> std::result::Result<(), CacheOwnerError>;
@@ -1022,6 +1025,10 @@ impl<B> ErasedTensorBackendExecutor for TensorBackendExecutor<B>
 where
     B: TensorBackend + Send + Sync + 'static,
 {
+    fn execution_scope(&self) -> Result<Option<Box<dyn tenferro_tensor::BackendExecutionScope>>> {
+        let mut lease = self.lease_state("Runtime execution scope")?;
+        Ok(lease.state_mut().backend.execution_scope())
+    }
     fn backend_type_name(&self) -> &'static str {
         std::any::type_name::<B>()
     }
@@ -1053,27 +1060,29 @@ where
         operations: &[PreparedOperationPlan],
         inputs: Vec<Tensor>,
     ) -> Result<Vec<Tensor>> {
-        validate_exec_input_count(program, inputs.len())?;
-        let mut lease = self.lease_state("Runtime::run_compiled")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            slot_workspace,
-            borrowed_slot_workspace_capacity: _,
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        crate::segment::eval_exec_segmented_with_cache_and_workspace(
-            backend,
-            program,
-            inputs,
-            slot_workspace,
-            backend_cache,
-            Some(&mut extension_dispatch),
-        )
+        with_executor_scope(self, || {
+            validate_exec_input_count(program, inputs.len())?;
+            let mut lease = self.lease_state("Runtime::run_compiled")?;
+            let TensorBackendExecutorState {
+                backend,
+                backend_cache,
+                extension_caches,
+                slot_workspace,
+                borrowed_slot_workspace_capacity: _,
+            } = lease.state_mut();
+            let mut extension_dispatch = ExtensionExecutionDispatch {
+                operations,
+                caches: extension_caches,
+            };
+            crate::segment::eval_exec_segmented_with_cache_and_workspace(
+                backend,
+                program,
+                inputs,
+                slot_workspace,
+                backend_cache,
+                Some(&mut extension_dispatch),
+            )
+        })
     }
 
     fn execute_tensor_refs(
@@ -1082,34 +1091,36 @@ where
         operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> Result<Vec<Tensor>> {
-        validate_exec_input_count(program, inputs.len())?;
-        let inputs = inputs
-            .iter()
-            .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
-            .collect();
-        let mut lease = self.lease_state("Runtime::run_compiled")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            borrowed_slot_workspace_capacity,
-            ..
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        let mut slot_workspace = Vec::with_capacity(*borrowed_slot_workspace_capacity);
-        let result = crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
-            backend,
-            program,
-            inputs,
-            &mut slot_workspace,
-            backend_cache,
-            Some(&mut extension_dispatch),
-        );
-        *borrowed_slot_workspace_capacity = slot_workspace.capacity();
-        result
+        with_executor_scope(self, || {
+            validate_exec_input_count(program, inputs.len())?;
+            let inputs = inputs
+                .iter()
+                .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+                .collect();
+            let mut lease = self.lease_state("Runtime::run_compiled")?;
+            let TensorBackendExecutorState {
+                backend,
+                backend_cache,
+                extension_caches,
+                borrowed_slot_workspace_capacity,
+                ..
+            } = lease.state_mut();
+            let mut extension_dispatch = ExtensionExecutionDispatch {
+                operations,
+                caches: extension_caches,
+            };
+            let mut slot_workspace = Vec::with_capacity(*borrowed_slot_workspace_capacity);
+            let result = crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
+                backend,
+                program,
+                inputs,
+                &mut slot_workspace,
+                backend_cache,
+                Some(&mut extension_dispatch),
+            );
+            *borrowed_slot_workspace_capacity = slot_workspace.capacity();
+            result
+        })
     }
 
     fn execute_values(
@@ -1118,28 +1129,30 @@ where
         operations: &[PreparedOperationPlan],
         inputs: Vec<Tensor>,
     ) -> Result<Vec<TensorValue>> {
-        validate_exec_input_count(program, inputs.len())?;
-        let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
-        let mut lease = self.lease_state("Runtime::run_compiled_values")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            slot_workspace,
-            borrowed_slot_workspace_capacity: _,
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
-            backend,
-            program,
-            inputs,
-            slot_workspace,
-            backend_cache,
-            Some(&mut extension_dispatch),
-        )
+        with_executor_scope(self, || {
+            validate_exec_input_count(program, inputs.len())?;
+            let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
+            let mut lease = self.lease_state("Runtime::run_compiled_values")?;
+            let TensorBackendExecutorState {
+                backend,
+                backend_cache,
+                extension_caches,
+                slot_workspace,
+                borrowed_slot_workspace_capacity: _,
+            } = lease.state_mut();
+            let mut extension_dispatch = ExtensionExecutionDispatch {
+                operations,
+                caches: extension_caches,
+            };
+            crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
+                backend,
+                program,
+                inputs,
+                slot_workspace,
+                backend_cache,
+                Some(&mut extension_dispatch),
+            )
+        })
     }
 
     fn execute_value_refs(
@@ -1148,34 +1161,36 @@ where
         operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> Result<Vec<TensorValue>> {
-        validate_exec_input_count(program, inputs.len())?;
-        let inputs = inputs
-            .iter()
-            .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
-            .collect();
-        let mut lease = self.lease_state("Runtime::run_compiled_values")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            borrowed_slot_workspace_capacity,
-            ..
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        let mut slot_workspace = Vec::with_capacity(*borrowed_slot_workspace_capacity);
-        let result = crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
-            backend,
-            program,
-            inputs,
-            &mut slot_workspace,
-            backend_cache,
-            Some(&mut extension_dispatch),
-        );
-        *borrowed_slot_workspace_capacity = slot_workspace.capacity();
-        result
+        with_executor_scope(self, || {
+            validate_exec_input_count(program, inputs.len())?;
+            let inputs = inputs
+                .iter()
+                .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+                .collect();
+            let mut lease = self.lease_state("Runtime::run_compiled_values")?;
+            let TensorBackendExecutorState {
+                backend,
+                backend_cache,
+                extension_caches,
+                borrowed_slot_workspace_capacity,
+                ..
+            } = lease.state_mut();
+            let mut extension_dispatch = ExtensionExecutionDispatch {
+                operations,
+                caches: extension_caches,
+            };
+            let mut slot_workspace = Vec::with_capacity(*borrowed_slot_workspace_capacity);
+            let result = crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
+                backend,
+                program,
+                inputs,
+                &mut slot_workspace,
+                backend_cache,
+                Some(&mut extension_dispatch),
+            );
+            *borrowed_slot_workspace_capacity = slot_workspace.capacity();
+            result
+        })
     }
 
     fn execute_slot_instruction<'input>(
@@ -1187,61 +1202,67 @@ where
         output_mode: RuntimeOutputMode,
         terminal_slots: &[bool],
     ) -> Result<()> {
-        let mut lease = self.lease_state("Runtime::run_compiled scheduled instruction")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            ..
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-
-        if matches!(output_mode, RuntimeOutputMode::Value)
-            && backend.with_backend_session(|exec| {
-                crate::exec::try_execute_terminal_value_instruction(
-                    exec,
-                    slots,
-                    instruction,
-                    terminal_slots,
-                )
-            })?
-        {
-            // Already handled as a metadata-only TensorValue.
-        } else if crate::exec::is_host_instruction(instruction) {
-            crate::exec::execute_host_instruction(backend, slots, instruction)?;
-        } else if crate::exec::is_ffi_instruction(instruction) {
-            crate::exec::execute_ffi_instruction_cached(
+        with_executor_scope(self, || {
+            let mut lease = self.lease_state("Runtime::run_compiled scheduled instruction")?;
+            let TensorBackendExecutorState {
                 backend,
                 backend_cache,
-                slots,
-                instruction,
-                DispatchMode::Unsegmented,
-                Some(instruction_index),
-                Some(&mut extension_dispatch),
-            )?;
-        } else {
-            let result = backend.with_backend_session(|exec| {
-                crate::exec::execute_backend_op(exec, slots, instruction)
-            })?;
-            slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
-        }
-        crate::exec::reclaim_last_use_inputs_backend(slots, instruction, backend);
-        Ok(())
+                extension_caches,
+                ..
+            } = lease.state_mut();
+            let mut extension_dispatch = ExtensionExecutionDispatch {
+                operations,
+                caches: extension_caches,
+            };
+
+            if matches!(output_mode, RuntimeOutputMode::Value)
+                && backend.with_backend_session(|exec| {
+                    crate::exec::try_execute_terminal_value_instruction(
+                        exec,
+                        slots,
+                        instruction,
+                        terminal_slots,
+                    )
+                })?
+            {
+                // Already handled as a metadata-only TensorValue.
+            } else if crate::exec::is_host_instruction(instruction) {
+                crate::exec::execute_host_instruction(backend, slots, instruction)?;
+            } else if crate::exec::is_ffi_instruction(instruction) {
+                crate::exec::execute_ffi_instruction_cached(
+                    backend,
+                    backend_cache,
+                    slots,
+                    instruction,
+                    DispatchMode::Unsegmented,
+                    Some(instruction_index),
+                    Some(&mut extension_dispatch),
+                )?;
+            } else {
+                let result = backend.with_backend_session(|exec| {
+                    crate::exec::execute_backend_op(exec, slots, instruction)
+                })?;
+                slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
+            }
+            crate::exec::reclaim_last_use_inputs_backend(slots, instruction, backend);
+            Ok(())
+        })
     }
 
     fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor> {
-        let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
-        let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| slot.into_tensor(exec))
+        with_executor_scope(self, || {
+            let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
+            let backend = &mut lease.state_mut().backend;
+            backend.with_backend_session(|exec| slot.into_tensor(exec))
+        })
     }
 
     fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue> {
-        let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
-        let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| slot.into_value(exec))
+        with_executor_scope(self, || {
+            let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
+            let backend = &mut lease.state_mut().backend;
+            backend.with_backend_session(|exec| slot.into_value(exec))
+        })
     }
 }
 
@@ -1627,25 +1648,66 @@ fn validate_prepared_epoch(
     Ok(())
 }
 
+/// Retain one admission/executor scope for a homogeneous CPU schedule.
+/// Native event domains and transfer schedules keep their own sequencing.
+fn with_scheduled_execution_scope<R: Send>(
+    schedule: &ScheduledGraph,
+    f: impl FnOnce() -> Result<R> + Send,
+) -> Result<R> {
+    let executor = schedule.root_location().witness().executor();
+    let homogeneous = schedule
+        .nodes()
+        .iter()
+        .all(|node| matches!(node, ScheduledNode::Operation(_)))
+        && schedule
+            .operation_locations()
+            .iter()
+            .all(|location| Arc::ptr_eq(executor, location.witness().executor()));
+    if homogeneous {
+        return with_executor_scope(executor.as_ref(), f);
+    }
+    f()
+}
+
+fn with_executor_scope<R: Send>(
+    executor: &dyn ErasedTensorBackendExecutor,
+    f: impl FnOnce() -> Result<R> + Send,
+) -> Result<R> {
+    if let Some(scope) = executor.execution_scope()? {
+        let mut result = None;
+        scope.run(Box::new(|| result = Some(f())));
+        return result.ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime execution scope",
+                ErrorPhase::Execution,
+                "backend execution scope did not run its callback",
+            )
+        })?;
+    }
+    f()
+}
+
 fn execute_scheduled_reads(
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
     inputs: &[TensorRead<'_>],
 ) -> Result<Vec<Tensor>> {
-    validate_exec_input_count(program, inputs.len())?;
-    crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
-    let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    execute_scheduled_slots(
-        program,
-        schedule,
-        operations,
-        inputs,
-        RuntimeOutputMode::Tensor,
-    )
-    .and_then(|mut slots| {
-        collect_tensor_outputs_with(program, &mut slots, |location, slot| {
-            location.witness().executor().materialize_slot(slot)
+    with_scheduled_execution_scope(schedule, || {
+        validate_exec_input_count(program, inputs.len())?;
+        crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
+        let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
+        execute_scheduled_slots(
+            program,
+            schedule,
+            operations,
+            inputs,
+            RuntimeOutputMode::Tensor,
+        )
+        .and_then(|mut slots| {
+            collect_tensor_outputs_with(program, &mut slots, |location, slot| {
+                location.witness().executor().materialize_slot(slot)
+            })
         })
     })
 }
@@ -1656,19 +1718,21 @@ fn execute_scheduled_value_reads(
     operations: &[PreparedOperationPlan],
     inputs: &[TensorRead<'_>],
 ) -> Result<Vec<TensorValue>> {
-    validate_exec_input_count(program, inputs.len())?;
-    crate::exec::validate_exec_program(program, "scheduled value executor")?;
-    let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    execute_scheduled_slots(
-        program,
-        schedule,
-        operations,
-        inputs,
-        RuntimeOutputMode::Value,
-    )
-    .and_then(|mut slots| {
-        collect_value_outputs_with(program, &mut slots, |location, slot| {
-            location.witness().executor().materialize_slot_value(slot)
+    with_scheduled_execution_scope(schedule, || {
+        validate_exec_input_count(program, inputs.len())?;
+        crate::exec::validate_exec_program(program, "scheduled value executor")?;
+        let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
+        execute_scheduled_slots(
+            program,
+            schedule,
+            operations,
+            inputs,
+            RuntimeOutputMode::Value,
+        )
+        .and_then(|mut slots| {
+            collect_value_outputs_with(program, &mut slots, |location, slot| {
+                location.witness().executor().materialize_slot_value(slot)
+            })
         })
     })
 }
@@ -1718,82 +1782,116 @@ fn execute_scheduled_slots<'input>(
                 value,
             });
         }
-        for (node_index, node) in schedule.nodes().iter().enumerate() {
-            match node {
-                ScheduledNode::Operation(operation_node) => {
-                    let mut launch = || {
-                        let instruction_index = operation_node.instruction_index();
-                        let instruction =
-                            program.instructions.get(instruction_index).ok_or_else(|| {
-                                Error::runtime_state(
-                                    "Runtime::run_compiled",
-                                    ErrorPhase::Execution,
-                                    format!(
-                                        "scheduled operation references instruction \
+        let mut next_node = 0;
+        while next_node < schedule.nodes().len() {
+            let first = next_node;
+            let executor = match &schedule.nodes()[first] {
+                ScheduledNode::Operation(operation) => {
+                    Some(operation.location().witness().executor())
+                }
+                _ => None,
+            };
+            next_node += 1;
+            if let Some(executor) = executor {
+                while let Some(ScheduledNode::Operation(operation)) =
+                    schedule.nodes().get(next_node)
+                {
+                    if !Arc::ptr_eq(executor, operation.location().witness().executor()) {
+                        break;
+                    }
+                    next_node += 1;
+                }
+            }
+            let mut execute_region = || {
+                for node_index in first..next_node {
+                    let node = &schedule.nodes()[node_index];
+                    match node {
+                        ScheduledNode::Operation(operation_node) => {
+                            let mut launch = || {
+                                let instruction_index = operation_node.instruction_index();
+                                let instruction = program
+                                    .instructions
+                                    .get(instruction_index)
+                                    .ok_or_else(|| {
+                                        Error::runtime_state(
+                                            "Runtime::run_compiled",
+                                            ErrorPhase::Execution,
+                                            format!(
+                                                "scheduled operation references instruction \
                                          {instruction_index}, but the execution program has {} \
                                          instructions",
-                                        program.instructions.len()
-                                    ),
-                                )
-                            })?;
-                        let operation = instruction_execution(schedule, instruction)?;
-                        if operation.location() != operation_node.location() {
-                            return Err(Error::runtime_state(
-                                "Runtime::run_compiled",
-                                ErrorPhase::Execution,
-                                format!(
+                                                program.instructions.len()
+                                            ),
+                                        )
+                                    })?;
+                                let operation = instruction_execution(schedule, instruction)?;
+                                if operation.location() != operation_node.location() {
+                                    return Err(Error::runtime_state(
+                                        "Runtime::run_compiled",
+                                        ErrorPhase::Execution,
+                                        format!(
                                     "scheduled instruction {instruction_index} location does not \
                                      match its prepared executor"
                                 ),
+                                    ));
+                                }
+                                stage_instruction_inputs(
+                                    instruction,
+                                    operation.location(),
+                                    &mut located,
+                                    &mut staged,
+                                )?;
+                                operation.executor().execute_slot_instruction(
+                                    instruction_index,
+                                    instruction,
+                                    operations,
+                                    &mut staged,
+                                    output_mode,
+                                    &terminal_slots,
+                                )?;
+                                validate_instruction_outputs(
+                                    instruction_index,
+                                    instruction,
+                                    operation.location(),
+                                    &staged,
+                                )?;
+                                retain_instruction_results(
+                                    instruction,
+                                    operation.location(),
+                                    &mut located,
+                                    &mut staged,
+                                )
+                            };
+                            event_domains.enqueue(node_index, node, &mut launch)?;
+                        }
+                        ScheduledNode::Transfer(transfer) => {
+                            let mut launch = || execute_scheduled_transfer(transfer, &mut located);
+                            event_domains.enqueue(node_index, node, &mut launch)?;
+                        }
+                        ScheduledNode::Collective(_) => {
+                            return Err(Error::runtime_state_source(
+                                "Runtime::run_compiled",
+                                ErrorPhase::Execution,
+                                UnsupportedScheduledNodeError {
+                                    node_index,
+                                    node_kind: ScheduledNodeKind::Collective,
+                                },
                             ));
                         }
-                        stage_instruction_inputs(
-                            instruction,
-                            operation.location(),
-                            &mut located,
-                            &mut staged,
-                        )?;
-                        operation.executor().execute_slot_instruction(
-                            instruction_index,
-                            instruction,
-                            operations,
-                            &mut staged,
-                            output_mode,
-                            &terminal_slots,
-                        )?;
-                        validate_instruction_outputs(
-                            instruction_index,
-                            instruction,
-                            operation.location(),
-                            &staged,
-                        )?;
-                        retain_instruction_results(
-                            instruction,
-                            operation.location(),
-                            &mut located,
-                            &mut staged,
-                        )
-                    };
-                    event_domains.enqueue(node_index, node, &mut launch)?;
+                        ScheduledNode::Barrier(_) => {
+                            let mut launch = || Ok(());
+                            event_domains.enqueue(node_index, node, &mut launch)?;
+                        }
+                    }
                 }
-                ScheduledNode::Transfer(transfer) => {
-                    let mut launch = || execute_scheduled_transfer(transfer, &mut located);
-                    event_domains.enqueue(node_index, node, &mut launch)?;
-                }
-                ScheduledNode::Collective(_) => {
-                    return Err(Error::runtime_state_source(
-                        "Runtime::run_compiled",
-                        ErrorPhase::Execution,
-                        UnsupportedScheduledNodeError {
-                            node_index,
-                            node_kind: ScheduledNodeKind::Collective,
-                        },
-                    ));
-                }
-                ScheduledNode::Barrier(_) => {
-                    let mut launch = || Ok(());
-                    event_domains.enqueue(node_index, node, &mut launch)?;
-                }
+                Ok(())
+            };
+            // Bound scopes to contiguous operations on one executor. Transfer,
+            // collective, and barrier nodes retain their event-domain boundary.
+            if let Some(executor) = executor {
+                with_executor_scope(executor.as_ref(), execute_region)?;
+            } else {
+                execute_region()?;
             }
         }
         Ok(())

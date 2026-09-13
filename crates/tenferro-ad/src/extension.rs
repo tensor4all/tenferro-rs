@@ -189,17 +189,19 @@ pub fn adopt_untracked_eager_value(
 /// backend, extension, and runtime-state failures retain their typed sources.
 pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
-    let std_op = StdTensorOp::Extension(op);
-    let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
-    // Native immediate path: resolve the extension engine from the runtime
-    // snapshot, prepare the op, and execute through the prepared plan's
-    // scheduler-session executor when it is session-capable. This skips the
-    // SemanticProgram build/compile + run_compiled cost on every call.
-    if let Some(outputs) = try_prepared_eager_extension(&ctx, &std_op, &input_reads)? {
-        return finish_eager_extension_outputs(ctx, std_op, inputs, outputs);
-    }
-    let outputs = ctx.exec_outputs_read(&std_op, &input_reads)?;
-    finish_eager_extension_outputs(ctx, std_op, inputs, outputs)
+    ctx.with_execution_scope(|| {
+        let std_op = StdTensorOp::Extension(op);
+        let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
+        // Native immediate path: resolve the extension engine from the runtime
+        // snapshot, prepare the op, and execute through the prepared plan's
+        // scheduler-session executor when it is session-capable. This skips the
+        // SemanticProgram build/compile + run_compiled cost on every call.
+        if let Some(outputs) = try_prepared_eager_extension(&ctx, &std_op, &input_reads)? {
+            return finish_eager_extension_outputs(Arc::clone(&ctx), std_op, inputs, outputs);
+        }
+        let outputs = ctx.exec_outputs_read(&std_op, &input_reads)?;
+        finish_eager_extension_outputs(Arc::clone(&ctx), std_op, inputs, outputs)
+    })?
 }
 
 /// Run one extension op through the snapshot-resolved native prepared path.

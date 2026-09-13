@@ -34,6 +34,7 @@ use tenferro_tensor::{TensorFusion, TensorRead, TensorStructural, TensorView, Te
 use crate::eager_backend::EagerBackend;
 use crate::eager_exec::exec_op_on_tensor_reads_with_runtime;
 
+mod execution_scope;
 mod placement_bound;
 mod runtime_snapshot;
 

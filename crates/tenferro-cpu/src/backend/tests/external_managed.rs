@@ -1624,3 +1624,31 @@ impl CpuDomainExecutor for RejectingExecutor {
         })
     }
 }
+
+#[test]
+fn workflow_scope_keeps_external_admission_per_operation() {
+    let installs = Arc::new(AtomicUsize::new(0));
+    let backend = external_backend(
+        CpuDomainId::new(1),
+        [external_domain(
+            1,
+            node_placement(0, cpu_set([0])),
+            1,
+            1,
+            CpuPlacementGuarantee::ExactDeclared,
+            Arc::clone(&installs),
+        )],
+        topology([0]),
+    )
+    .unwrap();
+    assert!(backend.execution_scope().is_none());
+    let mut operations = backend.clone();
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    backend.with_execution_scope(|| {
+        for _ in 0..3 {
+            let output = operations.add(&input, &input).unwrap();
+            assert_eq!(output.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+        }
+    });
+    assert_eq!(installs.load(Ordering::Relaxed), 3);
+}

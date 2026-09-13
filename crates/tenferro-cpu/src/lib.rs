@@ -54,6 +54,7 @@ mod analytic;
 mod arbiter;
 pub mod backend;
 mod blas1;
+mod execution_scope;
 pub(crate) mod buffer_pool {
     pub use tenferro_cpu_basic::buffer_pool::*;
 }

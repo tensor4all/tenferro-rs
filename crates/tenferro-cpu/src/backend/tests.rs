@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use super::*;
 
+mod execution_scope;
 mod external_managed;
 mod output_affinity;
 #[cfg(feature = "cpu-blas")]

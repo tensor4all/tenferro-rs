@@ -536,10 +536,10 @@ impl EagerTensor {
     /// conversion overflow, or a typed backend/runtime-state error.
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
         let (indices, config) = index_select_config(self.shape(), axis, positions)?;
-        let indices = {
+        let indices = self.ctx.with_execution_scope(|| -> Result<_> {
             let mut backend = self.ctx.lock_backend()?;
-            backend.upload_host_tensor(TensorRead::from_tensor(&indices))?
-        };
+            Ok(backend.upload_host_tensor(TensorRead::from_tensor(&indices))?)
+        })??;
         let indices = self.ctx.constant_from(indices)?;
         self.gather(&indices, config)
     }

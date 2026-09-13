@@ -986,6 +986,7 @@ pub struct EagerRuntime {
     // together during construction and remain paired for this runtime's
     // lifetime. The mutex only serializes mutable backend operations.
     backend: Mutex<EagerBackend>,
+    execution_cpu: Option<CpuBackend>,
     extension_install_lock: Mutex<()>,
     pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
     semantic_extension_rules: SemanticExtensionRuleSet,
@@ -1147,6 +1148,7 @@ impl EagerRuntime {
         Ok(Self {
             id: ContextId::fresh(),
             runtime,
+            execution_cpu: backend.cpu_snapshot(),
             backend: Mutex::new(backend),
             extension_install_lock: Mutex::new(()),
             extension_caches: Mutex::new(ExtensionCacheStore::new()),
@@ -1828,13 +1830,67 @@ impl EagerRuntime {
         &self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> Result<R> {
-        let mut backend = self.lock_backend()?;
-        Ok(backend.with_backend_session(f))
+        self.with_execution_scope(|| {
+            let mut backend = self.lock_backend()?;
+            Ok(backend.with_backend_session(f))
+        })?
     }
 
-    // Lock ordering: the eager backend owner is locked first; the
-    // extension-cache lock is acquired only after it and remains held through
-    // the borrowed session callback.
+    /// Share executor admission across an eager workflow and its derivatives.
+    ///
+    /// Ordinary operations, extension operations, and backward/VJP/JVP calls
+    /// may use this runtime inside the callback. Backend locks are taken only
+    /// by the individual operations. Managed CPU execution enters its executor
+    /// once; other backends retain their normal execution/admission contract.
+    /// Nested scopes on the same CPU domain reuse the enclosing scope.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// let runtime = EagerRuntime::new()?;
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, runtime.clone(),
+    /// )?;
+    /// runtime.with_execution_scope(|| -> tenferro_ad::Result<()> {
+    ///     let loss = x.mul(&x)?.reduce_sum(Some(&[0]))?;
+    ///     loss.backward()?;
+    ///     Ok(())
+    /// })??;
+    /// assert_eq!(x.grad()?.unwrap().as_slice::<f64>()?, &[4.0, 6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] if the backend lock is poisoned.
+    /// Callback errors remain in the returned callback result.
+    ///
+    /// # Panics
+    ///
+    /// Managed CPU execution rejects recursive entry from an active operation,
+    /// calls from managed Rayon child tasks during operations, and entry into
+    /// a different CPU engine.
+    /// The callback must use this runtime serially. Do not dispatch backend calls
+    /// as parallel tasks or wait for a competing CPU workflow inside it.
+    pub fn with_execution_scope<R: Send>(&self, f: impl FnOnce() -> R + Send) -> Result<R> {
+        if self.backend.is_poisoned() {
+            return Err(Error::runtime_state(
+                "eager_backend",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            ));
+        }
+        // The immutable engine handle lets recursive entry fail before taking
+        // the operation's backend mutex, which may already be borrowed.
+        Ok(match &self.execution_cpu {
+            Some(cpu) => cpu.with_execution_scope(f),
+            None => f(),
+        })
+    }
+
+    // Lock ordering: managed CPU admission, eager backend owner, then extension
+    // cache. The short backend/cache borrows span only the session callback.
     /// Run an extension-owned eager operation with a borrowed backend session
     /// and the eager runtime's extension cache store.
     ///
@@ -1874,14 +1930,16 @@ impl EagerRuntime {
             ) -> R
             + Send,
     ) -> Result<R> {
-        let mut backend = self.lock_backend()?;
-        let mut extension_cache_guard = self.lock_extension_caches()?;
-        let extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
-        Ok(backend.with_backend_session(move |session| {
-            let mut extension_ctx =
-                tenferro_runtime::ExtensionExecutionContext::new(session, extension_caches);
-            f(&mut extension_ctx)
-        }))
+        self.with_execution_scope(|| {
+            let mut backend = self.lock_backend()?;
+            let mut extension_cache_guard = self.lock_extension_caches()?;
+            let extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
+            Ok(backend.with_backend_session(move |session| {
+                let mut extension_ctx =
+                    tenferro_runtime::ExtensionExecutionContext::new(session, extension_caches);
+                f(&mut extension_ctx)
+            }))
+        })?
     }
 
     /// Run a prepared extension executor through the runtime-owned erased
@@ -1897,11 +1955,13 @@ impl EagerRuntime {
         f: impl FnOnce(&mut tenferro_runtime::ErasedExecutionContext<'_>, &mut ExtensionCacheStore) -> R
             + Send,
     ) -> Result<R> {
-        let mut backend = self.lock_backend()?;
-        let mut extension_cache_guard = self.lock_extension_caches()?;
-        let extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
-        let mut erased = backend.erased_context();
-        Ok(f(&mut erased, extension_caches))
+        self.with_execution_scope(|| {
+            let mut backend = self.lock_backend()?;
+            let mut extension_cache_guard = self.lock_extension_caches()?;
+            let extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
+            let mut erased = backend.erased_context();
+            Ok(f(&mut erased, extension_caches))
+        })?
     }
 
     /// Block the current thread until backend work submitted by this eager runtime completes.
@@ -1928,19 +1988,22 @@ impl EagerRuntime {
         self.lock_backend()?.synchronize().map_err(Error::from)
     }
 
-    fn exec_outputs_with_runtime<R>(
+    fn exec_outputs_with_runtime<R: Send>(
         &self,
         lock_backend_section: &'static str,
         exec_section: &'static str,
         op: &StdTensorOp,
-        execute: impl FnOnce(&mut EagerBackend, Option<&Runtime>) -> Result<R>,
+        execute: impl FnOnce(&mut EagerBackend, Option<&Runtime>) -> Result<R> + Send,
     ) -> Result<R> {
-        // Lock ordering: eager execution holds the backend lock while standard
-        // ops run without runtime extension access; extension ops receive the
-        // runtime so extension cache locks are acquired only from that path.
-        let mut backend = profile_eager_op_section(lock_backend_section, || self.lock_backend())?;
-        let runtime = matches!(op, StdTensorOp::Extension(_)).then_some(&self.runtime);
-        profile_eager_op_section(exec_section, || execute(&mut backend, runtime))
+        self.with_execution_scope(|| {
+            // Lock ordering: eager execution holds the backend lock while standard
+            // ops run without runtime extension access; extension ops receive the
+            // runtime so extension cache locks are acquired only from that path.
+            let mut backend =
+                profile_eager_op_section(lock_backend_section, || self.lock_backend())?;
+            let runtime = matches!(op, StdTensorOp::Extension(_)).then_some(&self.runtime);
+            profile_eager_op_section(exec_section, || execute(&mut backend, runtime))
+        })?
     }
 
     pub(crate) fn exec_outputs(&self, op: &StdTensorOp, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
@@ -1971,76 +2034,78 @@ impl EagerRuntime {
         graph: &Graph<StdTensorOp>,
         initial_data: HashMap<ValueKey<StdTensorOp>, Tensor>,
     ) -> Result<EagerGraphExecution> {
-        let mut backend =
-            profile_eager_op_section("exec_graph.lock_backend", || self.lock_backend())?;
-        let mut all_values = initial_data;
+        self.with_execution_scope(|| {
+            let mut backend =
+                profile_eager_op_section("exec_graph.lock_backend", || self.lock_backend())?;
+            let mut all_values = initial_data;
 
-        profile_eager_op_section("exec_graph.with_backend_session", || {
-            backend.with_backend_session(|exec| -> Result<()> {
-                for op_node in graph.operations() {
-                    let outputs = {
-                        let input_values = op_node
-                            .inputs
-                            .iter()
-                            .map(|input| {
-                                let key = match input {
-                                    ValueRef::Local(local_id) => &graph.values()[*local_id].key,
-                                    ValueRef::External(key) => key,
-                                };
-                                all_values.get(key).ok_or_else(|| {
-                                    Error::Internal(format!(
+            profile_eager_op_section("exec_graph.with_backend_session", || {
+                backend.with_backend_session(|exec| -> Result<()> {
+                    for op_node in graph.operations() {
+                        let outputs = {
+                            let input_values = op_node
+                                .inputs
+                                .iter()
+                                .map(|input| {
+                                    let key = match input {
+                                        ValueRef::Local(local_id) => &graph.values()[*local_id].key,
+                                        ValueRef::External(key) => key,
+                                    };
+                                    all_values.get(key).ok_or_else(|| {
+                                        Error::Internal(format!(
                                         "standard graph eager execution missing value for {key:?}"
                                     ))
+                                    })
                                 })
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        let input_reads = input_values
-                            .iter()
-                            .map(|value| TensorRead::from_tensor(value))
-                            .collect::<Vec<_>>();
-                        exec_standard_op_on_tensor_reads_in_session(
-                            &op_node.operation,
-                            &input_reads,
-                            exec,
-                        )?
-                    };
+                                .collect::<Result<Vec<_>>>()?;
+                            let input_reads = input_values
+                                .iter()
+                                .map(|value| TensorRead::from_tensor(value))
+                                .collect::<Vec<_>>();
+                            exec_standard_op_on_tensor_reads_in_session(
+                                &op_node.operation,
+                                &input_reads,
+                                exec,
+                            )?
+                        };
 
-                    if outputs.len() != op_node.outputs.len() {
-                        return Err(Error::Internal(format!(
+                        if outputs.len() != op_node.outputs.len() {
+                            return Err(Error::Internal(format!(
                             "standard graph eager execution expected {} outputs for {:?}, got {}",
                             op_node.outputs.len(),
                             op_node.operation,
                             outputs.len()
                         )));
+                        }
+
+                        for (output_id, output) in op_node.outputs.iter().zip(outputs) {
+                            let key = graph.values()[*output_id].key.clone();
+                            all_values.insert(key, output);
+                        }
                     }
+                    Ok(())
+                })
+            })?;
 
-                    for (output_id, output) in op_node.outputs.iter().zip(outputs) {
-                        let key = graph.values()[*output_id].key.clone();
-                        all_values.insert(key, output);
-                    }
-                }
-                Ok(())
-            })
-        })?;
+            let outputs = graph
+                .outputs()
+                .iter()
+                .map(|&output_id| {
+                    let key = &graph.values()[output_id].key;
+                    all_values
+                        .get(key)
+                        .ok_or_else(|| {
+                            Error::Internal(format!(
+                                "standard graph eager execution missing graph output {key:?}"
+                            ))
+                        })?
+                        .duplicate()
+                        .map_err(Error::from)
+                })
+                .collect::<Result<Vec<_>>>()?;
 
-        let outputs = graph
-            .outputs()
-            .iter()
-            .map(|&output_id| {
-                let key = &graph.values()[output_id].key;
-                all_values
-                    .get(key)
-                    .ok_or_else(|| {
-                        Error::Internal(format!(
-                            "standard graph eager execution missing graph output {key:?}"
-                        ))
-                    })?
-                    .duplicate()
-                    .map_err(Error::from)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(EagerGraphExecution { outputs })
+            Ok(EagerGraphExecution { outputs })
+        })?
     }
 
     pub(crate) fn try_register_grad_slot(
@@ -2267,6 +2332,14 @@ impl EagerRuntime {
         output: &EagerTensor,
         wrt: &EagerTensor,
     ) -> Result<Option<EagerTensor>> {
+        self.with_execution_scope(|| self.grad_optional_in_scope(output, wrt))?
+    }
+
+    fn grad_optional_in_scope(
+        self: &Arc<Self>,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
         if !output.shape().is_empty() {
             return Err(Error::NonScalarGrad {
                 shape: output.shape().to_vec(),
@@ -2359,6 +2432,15 @@ impl EagerRuntime {
         wrt: &EagerTensor,
         cotangent: &EagerTensor,
     ) -> Result<Option<EagerTensor>> {
+        self.with_execution_scope(|| self.vjp_optional_in_scope(output, wrt, cotangent))?
+    }
+
+    fn vjp_optional_in_scope(
+        self: &Arc<Self>,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        cotangent: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
         validate_same_runtime(self, output, "vjp output")?;
         validate_same_runtime(self, wrt, "vjp wrt")?;
         validate_same_runtime(self, cotangent, "vjp cotangent")?;
@@ -2442,6 +2524,15 @@ impl EagerRuntime {
     /// match `wrt`, [`Error::UnsupportedAdRule`] when a rule is unavailable, or
     /// a typed backend/runtime-state error.
     pub fn jvp_optional(
+        self: &Arc<Self>,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        tangent: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
+        self.with_execution_scope(|| self.jvp_optional_in_scope(output, wrt, tangent))?
+    }
+
+    fn jvp_optional_in_scope(
         self: &Arc<Self>,
         output: &EagerTensor,
         wrt: &EagerTensor,
@@ -3920,6 +4011,10 @@ impl EagerTensor {
     /// [`Error::UnsupportedAdRule`] when a graph operation lacks a reverse rule,
     /// or a typed validation/backend/runtime-state error during the reverse pass.
     pub fn backward(&self) -> Result<Gradients> {
+        self.ctx.with_execution_scope(|| self.backward_in_scope())?
+    }
+
+    fn backward_in_scope(&self) -> Result<Gradients> {
         if !self.shape().is_empty() {
             return Err(Error::NonScalarGrad {
                 shape: self.shape().to_vec(),
@@ -3969,6 +4064,11 @@ impl EagerTensor {
     /// valid seed, [`Error::UnsupportedAdRule`] for an unavailable reverse
     /// rule, or a typed backend/runtime-state error during execution.
     pub fn backward_with(&self, cotangent: &EagerTensor) -> Result<Gradients> {
+        self.ctx
+            .with_execution_scope(|| self.backward_with_in_scope(cotangent))?
+    }
+
+    fn backward_with_in_scope(&self, cotangent: &EagerTensor) -> Result<Gradients> {
         if !self.same_context(cotangent) {
             return Err(Error::ContextMismatch {
                 lhs: self.ctx_id(),

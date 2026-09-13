@@ -338,6 +338,19 @@ Audit hints:
   resource permit for the entire session; preserve provider exclusion,
   nested-entry rejection, and unwind recovery. Fallible external executors
   retain their explicit operation-level admission contract.
+- Extend admission reuse to the widest serial workflow that uses one engine:
+  an explicit `CpuBackend::with_execution_scope` or
+  `EagerRuntime::with_execution_scope`, a complete eager derivative call, and
+  each contiguous executor region of prepared execution. Homogeneous graphs
+  also include input ingress and output materialization. Host/native/FFI and
+  extension boundaries alone must not force another executor entry. Release
+  mutable buffer/cache borrows between ordinary operation sessions. All
+  executing entrances must acquire admission before backend/cache locks, including
+  competing one-shot calls and output materialization; retaining
+  admission does not authorize recursive operations or parallel child entry.
+  Match the actual owned engine, never a coordinator-local numeric domain ID.
+  End automatic regions at engine changes, transfers, collectives, and barriers;
+  preserve GPU event sequencing and external executor admission contracts.
 - For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.
 - Do not derive faer parallelism independently inside individual ops or helpers.
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.

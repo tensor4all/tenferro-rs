@@ -101,6 +101,52 @@ its single executor entry, and is released on normal return or unwind.
 Fallible external executors retain operation-level entry so their
 typed admission failures are not replaced by panic or fallback.
 
+## Workflow execution scopes
+
+`CpuBackend::with_execution_scope` retains one managed admission permit and one
+executor entry across ordinary backend calls. `EagerRuntime::with_execution_scope`
+exposes the same boundary around a user forward/derivative workflow. Eager
+backward, backward-with-seed, functional grad/VJP/JVP, and extension application
+enter a scope automatically; same-engine nested scopes reuse the outer entry.
+A caller may therefore group many small operations without constructing a new
+runtime or passing a borrowed backend session through every high-level API.
+
+The scope owns an engine handle and an admission permit. Thread-local state
+carries those owned values only during the serial callback; it stores no
+borrowed backend pointer, buffer, or cache. Each ordinary operation takes its
+own short-lived engine resource borrow. An operation-active guard rejects
+recursive public calls while such a borrow exists. Existing managed-worker
+re-entry guards continue to reject calls from parallel child tasks. RAII clears
+scope state and releases admission on normal return, callback error, or unwind.
+All executing eager entrances, including direct conjugated dot and hidden index
+uploads, acquire workflow admission before the eager backend mutex. Runtime
+execution and output materialization likewise acquire admission before leasing
+executor state. Otherwise a concurrent one-shot call could hold that mutex while
+waiting for the workflow permit, blocking the workflow's next operation.
+Metadata-only backend inspection does not wait for execution admission.
+
+Engine identity uses the owned object, because numeric domain IDs are local to
+a coordinator and can coincide across independent backends.
+
+`BackendSessionHost::execution_scope` supplies an optional owned
+`BackendExecutionScope` capability without entering an executor or retaining a
+backend borrow. Runtime uses this backend-independent capability before leasing
+mutable execution state. A homogeneous prepared graph keeps one scope through
+input ingress, all instructions, and output materialization. Mixed schedules
+share contiguous same-executor operation regions, stopping at transfers,
+collectives, barriers, and executor changes. Legacy segmented tensor/value and
+borrowed/owned execution entry points use the same capability. Non-session
+extension calls can share workflow admission while retaining their own short
+backend borrows.
+
+Only Tenferro-managed CPU engines currently provide the capability. External
+executors and GPU backends keep their existing operation/event contracts. An
+explicit CPU scope cannot span another engine: callers must end that scope
+before switching engines or waiting for a competing admitted workflow. Automatic
+runtime regions make those boundaries without holding one engine's permit while
+entering another. BLAS scopes retain provider-exclusive admission; provider
+worker settings remain independent of the owned Rayon executor entry.
+
 Every successfully returned fresh CPU allocation records the selected resource
 domain as `Placement::cpu_affinity`. The tag is routing/locality metadata, not
 allocation ownership or evidence of NUMA page placement, worker pinning, or

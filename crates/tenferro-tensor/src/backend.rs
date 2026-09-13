@@ -3743,6 +3743,39 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
     }
 }
 
+/// Owned admission capability spanning several ordinary backend sessions.
+///
+/// Implementations invoke the callback synchronously and exactly once, retaining
+/// admission until it returns or unwinds. They must not hold a mutable backend
+/// borrow across the callback: operations obtain their own short-lived borrows.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::BackendExecutionScope;
+/// #[derive(Debug)]
+/// struct Inline;
+/// impl BackendExecutionScope for Inline {
+///     fn run(&self, task: Box<dyn FnOnce() + Send + '_>) { task(); }
+/// }
+/// let mut result = 0;
+/// Inline.run(Box::new(|| result = 7));
+/// assert_eq!(result, 7);
+/// ```
+pub trait BackendExecutionScope: std::fmt::Debug + Send + Sync {
+    /// Execute one workflow while retaining this capability's admission.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::BackendExecutionScope;
+    /// fn invoke(scope: &dyn BackendExecutionScope, value: &mut usize) {
+    ///     scope.run(Box::new(|| *value += 1));
+    /// }
+    /// ```
+    fn run(&self, task: Box<dyn FnOnce() + Send + '_>);
+}
+
 /// Backend execution-session entry points.
 ///
 /// `with_backend_session` is the canonical user entry; one-shot concrete ops
@@ -3757,6 +3790,25 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
 /// fn accepts_session_host<B: BackendSessionHost>(_backend: &mut B) {}
 /// ```
 pub trait BackendSessionHost: BackendRuntimeCache {
+    /// Acquire an owned capability for grouping ordinary operation sessions.
+    ///
+    /// `None` preserves the backend's operation-level admission policy. Merely
+    /// obtaining the capability does not enter an executor or hold admission.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::BackendSessionHost;
+    /// fn workflow<B: BackendSessionHost>(backend: &B, value: &mut usize) {
+    ///     if let Some(scope) = backend.execution_scope() {
+    ///         scope.run(Box::new(|| *value += 1));
+    ///     }
+    /// }
+    /// ```
+    fn execution_scope(&self) -> Option<Box<dyn BackendExecutionScope>> {
+        None
+    }
+
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,

@@ -28,6 +28,9 @@ pub(crate) const BACKEND_REENTRY_PANIC: &str =
     "CpuBackend cannot be re-entered while another CPU backend execution is active on this thread or managed Rayon scope";
 
 pub(crate) fn inherited_or_new_execution_owner() -> ResourceOwner {
+    if let Some(owner) = crate::execution_scope::idle_owner() {
+        return owner;
+    }
     if WORKER_EXECUTION_SCOPE.with(|scope| {
         scope
             .borrow()
@@ -447,6 +450,7 @@ impl ResourceArbiter {
 }
 
 enum ResourcePermitKind {
+    Shared { permit: Arc<ResourcePermit> },
     Arbitrated { inner: Arc<ArbiterInner>, id: u64 },
     CallerManaged { active: Arc<AtomicBool> },
 }
@@ -458,6 +462,13 @@ pub(crate) struct ResourcePermit {
 }
 
 impl ResourcePermit {
+    pub(crate) fn shared(permit: Arc<Self>) -> Self {
+        Self {
+            owner: permit.owner,
+            reentrant: false,
+            kind: ResourcePermitKind::Shared { permit },
+        }
+    }
     pub(crate) fn caller_managed(active: Arc<AtomicBool>, owner: ResourceOwner) -> Self {
         if active
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -485,6 +496,7 @@ impl fmt::Debug for ResourcePermit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut permit = f.debug_struct("ResourcePermit");
         match &self.kind {
+            ResourcePermitKind::Shared { permit: shared } => permit.field("shared", shared),
             ResourcePermitKind::Arbitrated { id, .. } => permit.field("id", id),
             ResourcePermitKind::CallerManaged { .. } => {
                 permit.field("admission", &"caller-managed")
@@ -497,6 +509,7 @@ impl fmt::Debug for ResourcePermit {
 impl Drop for ResourcePermit {
     fn drop(&mut self) {
         match &self.kind {
+            ResourcePermitKind::Shared { .. } => {}
             ResourcePermitKind::Arbitrated { inner, id } => {
                 let mut state = inner
                     .state

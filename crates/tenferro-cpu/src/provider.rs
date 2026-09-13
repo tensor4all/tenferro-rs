@@ -485,6 +485,12 @@ impl<'a> CpuOperationEntry<'a> {
             });
         }
         let owner = self.permit.owner();
+        if crate::execution_scope::matches(self.domain, owner) {
+            return Ok(crate::execution_scope::operation(|| {
+                let context = CpuExecutionContext::entered(self.domain, parallel_mode);
+                operation(&context)
+            }));
+        }
         with_execution_owner(owner, || {
             install_scoped(self.domain.executor().as_ref(), || {
                 with_execution_owner(owner, || {

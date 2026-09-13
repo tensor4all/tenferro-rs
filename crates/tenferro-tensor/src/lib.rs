@@ -63,11 +63,11 @@ pub mod types;
 pub mod validate;
 
 pub use backend::{
-    default_backend_session, with_session_entry_guard, BackendCachedDot, BackendRuntimeCache,
-    BackendSession, BackendSessionHost, ContractionScalar, DotGeneralAccumulation,
-    ElementwiseReadOp, SessionCachedDot, TensorAnalytic, TensorBackend, TensorBackendOps,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorReduction, TensorStructural, TensorViewCanonicalization,
+    default_backend_session, with_session_entry_guard, BackendCachedDot, BackendExecutionScope,
+    BackendRuntimeCache, BackendSession, BackendSessionHost, ContractionScalar,
+    DotGeneralAccumulation, ElementwiseReadOp, SessionCachedDot, TensorAnalytic, TensorBackend,
+    TensorBackendOps, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise,
+    TensorFusion, TensorIndexing, TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 pub use cache::{CacheStats, RuntimeCacheControl};
 pub use capability::{

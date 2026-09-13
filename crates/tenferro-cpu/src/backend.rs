@@ -2595,6 +2595,53 @@ impl CpuBackend {
         Ok(())
     }
 
+    /// Share CPU admission and executor entry across a serial workflow.
+    ///
+    /// Ordinary operations on this backend or its clones may run in the callback.
+    /// Each operation borrows buffers separately; no backend/resource lock is held
+    /// across the workflow. Nested scopes on the same domain reuse the outer scope.
+    /// External executors retain their existing per-operation admission contract.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    /// let scope = CpuBackend::with_threads(2)?;
+    /// let mut backend = scope.clone();
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?;
+    /// let y = scope.with_execution_scope(|| {
+    ///     let doubled = backend.add(&x, &x)?;
+    ///     backend.mul(&doubled, &x)
+    /// })?;
+    /// assert_eq!(y.as_slice::<f64>()?, &[8.0, 18.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics on entry from a borrowed operation session, a managed worker child,
+    /// or a workflow belonging to a different CPU domain. The callback must not
+    /// wait for a competing CPU workflow while holding its admission permit.
+    /// The workflow is serial: do not dispatch backend calls as parallel tasks.
+    pub fn with_execution_scope<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
+        let owner = inherited_or_new_execution_owner();
+        let domain = self.engine.domain();
+        if crate::execution_scope::matches(domain, owner) {
+            return op();
+        }
+        // Validate a surrounding scope's domain before acquiring admission.
+        let _ = crate::execution_scope::shared_permit(domain);
+        if domain.ownership() != crate::CpuDomainOwnership::Managed {
+            return op();
+        }
+        let permit = Arc::new(self.acquire_execution_permit(owner));
+        let entry = CpuOperationEntry::new(domain, &permit);
+        entry.enter_managed_session(|_| {
+            crate::execution_scope::run(Arc::clone(&self.engine), Arc::clone(&permit), op)
+        })
+    }
+
     /// Run a closure in this backend's CPU execution scope.
     ///
     /// # Examples
@@ -2842,6 +2889,9 @@ impl CpuBackend {
     }
 
     fn acquire_execution_permit(&self, owner: ResourceOwner) -> ResourcePermit {
+        if let Some(permit) = crate::execution_scope::shared_permit(self.engine.domain()) {
+            return permit;
+        }
         match &self.resolved {
             ResolvedCpuExecution::Managed(placement)
             | ResolvedCpuExecution::ExternalManaged(placement) => self
@@ -3660,6 +3710,10 @@ impl CpuBackend {
 }
 
 impl BackendSessionHost for CpuBackend {
+    fn execution_scope(&self) -> Option<Box<dyn tenferro_tensor::BackendExecutionScope>> {
+        (self.engine.domain().ownership() == crate::CpuDomainOwnership::Managed)
+            .then(|| Box::new(crate::execution_scope::CpuWorkflowScope(self.clone())) as _)
+    }
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
