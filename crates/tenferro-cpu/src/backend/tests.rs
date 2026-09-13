@@ -561,12 +561,20 @@ fn execution_info_exposes_stable_kind_and_placement_contract() {
 
 #[test]
 #[cfg(feature = "cpu-blas")]
-fn single_thread_blas_session_does_not_create_a_rayon_worker() {
-    use tenferro_tensor::BackendSessionHost;
-
+fn single_thread_blas_session_reuses_context_with_sequential_policy() {
     let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
-    backend.with_backend_session(|_| {
-        assert!(rayon::current_thread_index().is_none());
+    backend.with_backend_session(|session| {
+        crate::with_cpu_exec_session(session, |cpu| {
+            assert!(cpu.entered.is_some());
+            cpu.with_linalg_pool(|context, _| {
+                // Linux placement may use a pinned worker even at one thread.
+                // The contract is sequential native policy, not caller-thread identity.
+                assert_eq!(context.parallel_mode(), crate::ParallelMode::Sequential);
+                Ok(())
+            })
+            .unwrap();
+        })
+        .unwrap();
     });
 }
 
