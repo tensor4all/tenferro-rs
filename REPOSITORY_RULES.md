@@ -202,17 +202,16 @@ repeatedly reporting the same intentional invariant.
 
 ## Work Logs And Design Records
 
-- Nontrivial refactors, cleanup streams, AI-assisted implementation, and PRs
-  with explicit design tradeoffs leave a curated work log under
-  `docs/worklogs/` recording the session summary, code and documents read,
-  reference implementations considered, decisions, alternatives rejected or
-  deferred, verification performed, and remaining risks.
-- Work logs are reviewer-facing decision records, not raw transcripts or
-  implementation plans: concise enough to review, specific enough to explain
-  why an abstraction, split, macro, descriptor, public API choice, or deferral
-  was selected.
-- PR bodies for such work link the `docs/worklogs/` file. Reviewers should read
-  linked work logs before challenging scope, abstraction, or design intent.
+- Follow the shared Work Logs And Design Records policy; keep a lightweight
+  record for nontrivial multi-phase changes, non-obvious design choices, or
+  performance experiments under `docs/worklogs/`. Small fixes and AI assistance
+  alone do not require one.
+- Use the [work-log format](docs/worklogs/README.md) to record decisions and
+  reasons, important alternatives, verification conclusions, and remaining
+  constraints, not command histories or lists of files read. Link the record
+  from the PR and update it only when those conclusions change.
+- Reviewers read a linked work log when reviewing the decisions it explains;
+  it is not a prerequisite for every code review.
 - When a PR establishes or changes durable design intent, update the relevant
   `docs/design/` document in the same PR. Work logs hold session-level
   rationale; design docs hold decisions future implementation and review

@@ -277,10 +277,12 @@ diff-scoped review bot.
 - If a predeclared host-noise or validity gate fails, classify the entire
   paired experiment as `INCONCLUSIVE`. Reconsideration requires a complete
   paired rerun under the same protocol.
-- Record every measured case, confidence interval, validity observation, and
-  regression in the worklog. A negative or inconclusive primary result is
-  evidence and must not be rewritten as success because secondary cases
-  improved.
+- Summarize the decision, primary result, validity, and remaining limitations
+  in the work log. Retain every measured case, confidence interval, validity
+  observation, regression, and reproduction-critical setting in the experiment
+  results, linked from the work log; do not copy the full results or command
+  history into it. A negative or inconclusive primary result is evidence and
+  must not be rewritten as success because secondary cases improved.
 - Promote a performance-gated change only when its predeclared primary gate
   and all required non-regression/correctness gates pass. Do not relax
   thresholds, redefine the primary metric, or add post-hoc exclusions after
@@ -290,7 +292,7 @@ Audit hints:
 
 - Detect: an optimization PR or issue without a recorded end-to-end share,
   predeclared thresholds, or a complete paired run; selective retries or
-  post-hoc exclusions in the worklog.
+  post-hoc exclusions in the linked experiment evidence.
 - Fix: record the need measurement and protocol in the issue before code
   changes; report negative or inconclusive results as such.
 

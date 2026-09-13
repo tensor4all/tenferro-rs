@@ -31,10 +31,12 @@ AD semantics.
 
 ## Classification Ledger
 
-Before implementation, maintain a local classification ledger for the findings
-in scope. The ledger may live in a work log, PR body draft, or uncommitted
-scratch file outside the repository, but the final PR must include the same
-information in reviewable form.
+Before implementation, maintain one classification ledger for the findings in
+scope, in a PR body draft or a task-local scratch file outside the repository.
+At handoff, put its final dispositions in the PR or link a durable existing
+issue record; do not maintain duplicate ledgers in the PR and work log. Use the
+[work-log format](../../docs/worklogs/README.md) only for decisions, verification
+conclusions, and remaining constraints worth retaining beyond that ledger.
 
 For each finding, record:
 
@@ -381,8 +383,9 @@ Use `.github/pull_request_template.md` and include:
 - issue or finding list with status;
 - commit grouping rationale when useful for review;
 - neighborhood scans performed;
-- tests and commands run;
-- skipped checks and why;
+- verification conclusions and unverified areas, with reasons;
+- links to supporting evidence or special reproduction conditions when needed,
+  not a command history;
 - `REPOSITORY_RULES.md` side-review outcome;
 - residual risks and design-gated follow-ups.
 

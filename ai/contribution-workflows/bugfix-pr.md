@@ -159,9 +159,9 @@ Before creating the PR, prepare a body that includes:
 - The rule-inventory decision when adding or changing an audit rule: reused an
   existing rule, merged overlapping rules, or added a new rule because no
   existing rule fit
-- Regression test or verification commands
-- Related issue
-- Any skipped checks or residual risk
+- Regression coverage and verification conclusions, not a command history
+- Related issue and supporting evidence or special reproduction conditions when needed
+- Any unverified areas or residual risk
 
 Use `.github/pull_request_template.md`. If the PR is AI-assisted, state that
 the bug-fix scope gate was applied.

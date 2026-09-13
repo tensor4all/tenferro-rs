@@ -29,10 +29,9 @@ Fixes/Refs #
 
 ## Work log
 
-<!-- Link docs/worklogs/<date>-<topic>.md when this PR is a nontrivial refactor,
-cleanup stream, AI-assisted implementation, or explicit design tradeoff. Include
-the context read, reference code, decisions, rejected/deferred options, and
-residual risks there instead of relying only on this PR body. -->
+<!-- When the shared work-log policy calls for a record, link it here rather
+than repeating it. See docs/worklogs/README.md. Small fixes and AI assistance
+alone do not require one. -->
 
 ## Checklist
 

@@ -129,11 +129,11 @@ See [`docs/design/`](docs/design/).
 
 ### Work Logs And Review Intent
 
-For nontrivial refactors, cleanup streams, AI-assisted implementation, or
-explicit design tradeoffs, read [`docs/worklogs/`](docs/worklogs/) before
-reviewing code. Work logs record session summary, context read, reference code,
-chosen design, rejected alternatives, and residual risks. A review challenging
-scope, abstraction, or design intent should engage with the linked work log.
+Follow the shared Work Logs And Design Records policy and the
+[local format](docs/worklogs/README.md). Keep lightweight records for nontrivial
+multi-phase changes, non-obvious design choices, or performance experiments;
+small fixes and AI assistance alone do not require one. Read the linked record
+when reviewing the decisions it explains, not the whole work-log directory.
 
 When a PR establishes or changes durable design intent, update the relevant
 document under [`docs/design/`](docs/design/) in the same PR. Work logs explain
@@ -259,7 +259,7 @@ Also verify before pushing:
 - **Sample code verification**: all examples in `README.md` and `docs/getting-started/` compile and run. Extract and test changed examples.
 - **Design document updates**: when code changes affect architecture or specifications, update `docs/architecture/`, `docs/spec/`, or `docs/design/`, plus affected diagrams under `docs/assets/` or embedded in Markdown. Stale documentation is worse than none.
 - **Agent skill freshness**: when a PR changes public API surface, feature flags, crate boundaries, or documented idioms, review `.agents/skills/tenferro-compute/` and the other shipped skill mirrors, and update them in the same PR when they no longer match.
-- **Work log updates**: for nontrivial refactors, cleanup streams, AI-assisted implementation, or explicit tradeoffs, add or update a work log under `docs/worklogs/` and link it from the PR body.
+- **Work log**: when the shared policy calls for one, link the lightweight record from the PR. Update it only when decisions, verification conclusions, or constraints change; no command or read-file inventories.
 
 ### Local Rust Build Acceleration
 

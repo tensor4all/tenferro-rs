@@ -1,23 +1,30 @@
-# Work logs
+# Work Logs
 
-Work logs are reviewer-facing records for completed nontrivial work. Use them
-when a PR includes a refactor, cleanup stream, AI-assisted implementation, or
-explicit design tradeoff.
+Keep lightweight decision records for nontrivial multi-phase changes,
+non-obvious design choices, or performance experiments, following the shared
+[Work Logs And Design Records policy](https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/common/repository.md#work-logs-and-design-records).
+Small fixes and AI assistance alone do not require a work log.
 
-Unlike `docs/plans/`, work logs describe what actually happened during the
-session and why the final design was chosen. They should be curated summaries,
-not raw transcripts.
+Use one file per change theme and link it from the PR. Start with a few lines:
 
-Include the following sections when they are relevant:
+```markdown
+# <Change theme>
 
-- Session summary
-- Context read
-- Reference code or prior art consulted
-- Decisions made
-- Rejected or deferred alternatives
-- Verification performed
-- Remaining risks or follow-up work
+## Decisions
+- Chosen approach and why; important rejected alternatives, if any.
 
-If a decision should guide future implementation beyond the current PR, record
-that durable design intent in `docs/design/` as well and link it from the work
-log.
+## Verification conclusions and constraints
+- What the final state establishes, and what remains unverified or limited.
+- Links to detailed evidence or special reproduction conditions, when needed.
+```
+
+Do not include commands run (Cargo or otherwise), files read, agent activity,
+or edit/review chronology. Mention failed attempts only when they explain a
+choice or limitation. Update the same record when its conclusions change,
+not after every correction; do not rewrite historical logs for this format.
+
+Keep complete performance results in linked experiment evidence rather than
+copying them into the work log. Required validation is unchanged. Durable
+architecture and public contracts belong in `docs/design/`; link them instead
+of repeating their contents. Work logs survive either squash or non-squash
+merge; no merge-policy change is required.
