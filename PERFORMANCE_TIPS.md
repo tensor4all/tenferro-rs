@@ -331,6 +331,13 @@ Audit hints:
 
 ## CPU Threading Contract
 
+- A shared session in a Tenferro-managed CPU domain enters its executor once
+  and reuses the entered `CpuExecutionContext` across all operations in the
+  callback, including BLAS/LAPACK and native kernels. Provider-owned worker
+  threading does not justify per-operation executor re-entry. Hold the same
+  resource permit for the entire session; preserve provider exclusion,
+  nested-entry rejection, and unwind recovery. Fallible external executors
+  retain their explicit operation-level admission contract.
 - For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.
 - Do not derive faer parallelism independently inside individual ops or helpers.
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
@@ -345,8 +352,11 @@ Audit hints:
 
 Audit hints:
 
-- Detect: faer or `strided-kernel` work outside `ctx.install(...)`;
+- Detect: repeated executor entry inside a managed shared session, including
+  BLAS-specific exclusions from entered-context reuse; faer or `strided-kernel`
+  work outside `ctx.install(...)`;
   `rayon::current_num_threads`, `ThreadPoolBuilder`, or `Par::rayon(0)` used
   to derive policy; thread counts chosen inside op helpers.
-- Fix: take the degree from `CpuContext` and run inside its installed pool;
+- Fix: enter once at the managed session boundary and reuse its context and
+  permit; take the degree from `CpuContext` and run inside its installed pool;
   leave provider-owned threading to the provider variables.

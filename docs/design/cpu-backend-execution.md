@@ -94,7 +94,11 @@ ownership so clone handles do not duplicate retained execution state.
 The session stores `CpuOperationEntry` plus an optional entered execution
 context. Tenferro-managed sessions enter once and reuse that executor boundary
 while selecting an explicit logical mode for each native or provider
-operation. Fallible external executors retain operation-level entry so their
+operation. This includes BLAS/LAPACK sessions in `ProviderDefaultExclusive`
+mode: provider-owned worker threading is independent of session executor
+entry. The provider-exclusive permit spans the complete callback, including
+its single executor entry, and is released on normal return or unwind.
+Fallible external executors retain operation-level entry so their
 typed admission failures are not replaced by panic or fallback.
 
 Every successfully returned fresh CPU allocation records the selected resource

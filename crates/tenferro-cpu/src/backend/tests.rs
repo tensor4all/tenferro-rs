@@ -5,6 +5,8 @@ use super::*;
 
 mod external_managed;
 mod output_affinity;
+#[cfg(feature = "cpu-blas")]
+mod provider_session;
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
@@ -559,7 +561,7 @@ fn execution_info_exposes_stable_kind_and_placement_contract() {
 
 #[test]
 #[cfg(feature = "cpu-blas")]
-fn blas_provider_session_body_stays_outside_the_rayon_engine() {
+fn single_thread_blas_session_does_not_create_a_rayon_worker() {
     use tenferro_tensor::BackendSessionHost;
 
     let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();

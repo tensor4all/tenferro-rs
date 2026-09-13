@@ -3620,11 +3620,9 @@ impl CpuBackend {
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
         let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
-        let enter_managed_session = entry.supports_infallible_session_entry()
-            && !matches!(
-                &self.resolved,
-                ResolvedCpuExecution::ProviderDefaultExclusive
-            );
+        // Provider-owned BLAS threading does not change session entry: the
+        // permit, including provider exclusion, spans this entire callback.
+        let enter_managed_session = entry.supports_infallible_session_entry();
         let run = |entered| {
             self.with_execution_resources(&permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
