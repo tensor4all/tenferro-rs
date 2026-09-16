@@ -1027,3 +1027,21 @@ That is a public-contract change to the einsum crate, and #1793's own text says 
 not authorize a feature implementation PR, so it stays a decision with a measured cost in the
 inventory rather than something this branch invents. The typed rejection at the boundary, the
 tropical precedent, and this count are what a decision needs.
+
+## The panic-shaped paths, swept once more on the final head
+
+The goal requires the C API, XLA, and serialization boundaries to carry explicit decisions rather
+than a blanket `unreachable!` on a reachable path, and my inventory claimed that without checking
+the final head. Sweeping it finds four `unreachable!` sites that could mention an externally defined
+value, and three of them cannot be reached at all: they call a private `kernel_dtype` with
+`T::dtype()` inside functions bounded by the sealed `TensorScalar`, so `DType::External` is
+unconstructible there rather than filtered out, and the fused path additionally returns `false`
+from `dtype_supports_erased_fusion` for an external dtype. The fourth, in the eager einsum view
+conversion, matches a concrete `Tensor` and is protected by the surface instead: the eager entries
+take traced values, and the extension path rejects an external input dtype with a typed error that
+a test executes and the coverage record counts.
+
+The rest of the boundary is explicit rejection. `tenferro-xla`'s lowering matches
+`DType::External(_)` beside its unsupported preset types, the program builder returns
+`ExternalScalarWithoutIdentity`, and the snapshot module's only panics are test code. There is no C
+API in this repository, so the public Rust surface is the boundary this branch can and does decide.

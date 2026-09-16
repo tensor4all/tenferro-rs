@@ -1406,6 +1406,34 @@ directional derivative, which no `f64` intermediate could resolve. The duality c
 reproduces the orientation gradient `[[6], [8]]`, which guards that the two programs' inputs were
 bound in the order they expect.
 
+### 5.20c The remaining `unreachable!` sites, and why each one is safe
+
+The goal requires the storage, runtime metadata and IR, cache identity, and the C API, XLA, and
+serialization boundaries to carry explicit conversion-or-rejection decisions rather than a blanket
+`unreachable!` on a path a caller can reach. Sweeping the final head for panic-shaped paths that
+could meet an externally defined value finds four `unreachable!` sites, and each one is justified
+rather than assumed:
+
+- `tenferro-cpu/src/indexing.rs`, `tenferro-cpu/src/reduction.rs`, and
+  `tenferro-cpu-fused/src/lib.rs` call a private `kernel_dtype` with `T::dtype()` inside functions
+  bounded by `T: TensorScalar`. That trait is sealed to the seven preset scalars, so `DType::External`
+  cannot be produced at those sites at all: the arm is unreachable by construction rather than by
+  validation order. The fused path additionally rejects an external dtype explicitly, because
+  `dtype_supports_erased_fusion` returns `false` for `DType::External(_)` and its caller checks that
+  before reaching `kernel_dtype`.
+- `tenferro-einsum/src/eager.rs` matches a concrete `Tensor`, so its arm is not protected by the
+  sealed trait. It is protected by the surface: the eager entry points take traced values rather
+  than `&Tensor`, and the extension path rejects an externally defined input dtype with a typed
+  error, which `crates/tenferro-einsum/src/extension/tests.rs` executes and the coverage record
+  counts.
+
+The other boundaries are explicit rejections rather than assertions: `tenferro-xla`'s lowering
+matches `DType::External(_)` beside the unsupported preset types, the runtime's program builder
+returns `ProgramBuildError::ExternalScalarWithoutIdentity` for an external value that does not
+declare its scalar, and the runtime's snapshot module contains no panic outside test code. There is
+no C API in this repository (the sibling `tensor4all-rs` owns it), so the equivalent boundary here is
+the public Rust surface, which is the one this inventory lists.
+
 ### 5.21 What an external scalar reaches, and what supporting it would cost
 
 #1789's first acceptance item asks for a public external-crate probe that records each missing
