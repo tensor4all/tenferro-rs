@@ -560,7 +560,7 @@ fn gpu_solve_paths_validate_residency_before_dtype_and_zero_fast_paths() {
         assert_before(
             lu_solve_prepared,
             needle,
-            "if !matches!(pivots, Tensor::I32(_))",
+            "if !matches!(pivots.dtype(), DType::I32)",
         );
         assert_before(
             lu_solve_prepared,
