@@ -1028,34 +1028,36 @@ measured with `git diff --numstat <start>..<end>`:
 | 1a unified tag, sealed adapter, shared dispatch | 6 | 19 | 795 | 121 |
 | 1b entry points, admission, the contribution | 5 | 7 | 716 | 373 |
 | 2.1 the scalar set generated from one declaration | 4 | 8 | 338 | 3 |
-| 2.2 and the work built on it (views, AD, QR, consumers, bf16, einsum, CI) | 109 | 148 | 16293 | 534 |
-| **total** | **124** | **182** | **18142** | **1031** |
+| 2.2 and the work built on it (views, AD, QR, consumers, bf16, einsum, CI, the arm conversions) | 172 | 155 | 21364 | 2131 |
+| **total** | **187** | **189** | **23213** | **2628** |
 
 The stages are separated by the commit that introduced each stage's defining artifact and each is
 measured with `git diff --numstat <start>..<end>`, as stated above, so the numbers belong to a
-commit rather than to a moving head: this table was measured at `0fbe671c` and is reproduced by
+commit rather than to a moving head: this table was measured at `07a0561b` and is reproduced by
 re-running that command over the same four ranges.
 
 The file counts are summed per stage, so a file changed in two stages is counted twice; the
-branch touches 156 distinct files and 18023 insertions with 912 deletions
-(`git diff --shortstat origin/main..HEAD`). The last row carries
+branch touches 163 distinct files and 23094 insertions with 2509 deletions
+(`git diff --numstat origin/main..HEAD` summed). The last row carries
 the feature work built on Stage 2.2's representation change, not the representation change alone.
 
-Taken together with the per-area measurements on this head (`git diff --numstat origin/main..HEAD`:
-119 files, 10964 insertions, 807 deletions), the largest areas are
+Taken together with the per-area measurements on this head (`git diff --numstat origin/main..HEAD`
+grouped by area: 23094 insertions and 2509 deletions in total), the largest areas are
 
 | Area | Added | Removed |
 | --- | --- | --- |
-| `ext/df64-proof` (the contribution) | 4265 | 0 |
-| `crates/tenferro-tensor-core` | 1827 | 38 |
-| `docs` | 1691 | 3 |
-| `crates/tenferro-internal-cpu-kernels` | 542 | 333 |
-| `ext/scalar-consumer-application` | 525 | 0 |
-| `crates/tenferro-runtime` | 448 | 72 |
-| `crates/tenferro-tensor` | 368 | 101 |
-| `ext/scalar-consumer-algorithm` | 250 | 0 |
-| `scripts` | 201 | 0 |
-| `crates/tenferro-linalg` | 179 | 193 |
+| `ext/df64-proof` (the contribution) | 7831 | 0 |
+| `docs` | 3740 | 102 |
+| `crates/tenferro-gpu` (the CubeCL and WebGPU arm conversions) | 1966 | 887 |
+| `crates/tenferro-tensor-core` | 1855 | 38 |
+| `ext/bf16-proof` (the bf16 contribution) | 1689 | 0 |
+| `crates/tenferro-linalg` (the provider tables) | 1461 | 669 |
+| `ext/scalar-consumer-application` | 1122 | 0 |
+| `crates/tenferro-internal-cpu-kernels` | 1029 | 482 |
+| `crates/tenferro-runtime` | 511 | 88 |
+| `crates/tenferro-tensor` | 426 | 106 |
+| `crates/tenferro-cpu` | 394 | 73 |
+| `scripts` | 390 | 2 |
 
 Coverage of the contribution and the consumer crates, measured with
 `cargo llvm-cov -p tenferro-df64-proof -p tenferro-scalar-consumer-algorithm -p
