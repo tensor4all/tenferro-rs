@@ -97,6 +97,12 @@ fn flatten_compact_read(
         TensorRead::View(TensorView::Bool(view)) => flatten!(Bool, view),
         TensorRead::View(TensorView::C32(view)) => flatten!(C32, view),
         TensorRead::View(TensorView::C64(view)) => flatten!(C64, view),
+        // A caller-owned payload has no compact runtime view to flatten.
+        TensorRead::Tensor(Tensor::External(payload, _)) => Err(crate::Error::unsupported_dtype(
+            "flatten_compact_read",
+            tenferro_tensor::DType::External(payload.element_type_id()),
+            "an externally defined payload is not a compact runtime read",
+        )),
     }
 }
 
@@ -842,6 +848,8 @@ impl TensorBuffer for CpuExecSession<'_> {
             Tensor::Bool(t) => reclaim_typed(self.buffers, t),
             Tensor::C32(t) => reclaim_typed(self.buffers, t),
             Tensor::C64(t) => reclaim_typed(self.buffers, t),
+            // A caller-owned payload owns no pooled storage.
+            Tensor::External(..) => {}
         }
     }
 }

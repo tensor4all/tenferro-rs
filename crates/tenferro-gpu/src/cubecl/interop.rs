@@ -382,6 +382,11 @@ fn ensure_tensor_write_resident(
             crate::Tensor::Bool(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
             crate::Tensor::C32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
             crate::Tensor::C64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            // A caller-owned payload has no GPU implementation for this operation.
+            crate::Tensor::External(..) => Err(crate::Error::unsupported(
+                "ensure_tensor_write_resident",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         },
         TensorRead::View(output) => match output {
             crate::TensorView::F32(output) => {

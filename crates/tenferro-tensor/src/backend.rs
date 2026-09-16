@@ -1576,6 +1576,15 @@ fn tensor_read_storage_identity(input: &TensorRead<'_>) -> crate::Result<Storage
                 Tensor::Bool(value) => typed_tensor_storage_identity(value),
                 Tensor::C32(value) => typed_tensor_storage_identity(value),
                 Tensor::C64(value) => typed_tensor_storage_identity(value),
+                // A caller-owned payload has no allocation identity, so it cannot
+                // take part in an aliasing check.
+                Tensor::External(payload, _) => {
+                    return Err(crate::Error::unsupported_dtype(
+                        "storage_identity",
+                        DType::External(payload.element_type_id()),
+                        "an externally defined payload has no storage identity",
+                    ));
+                }
             }
         };
     }

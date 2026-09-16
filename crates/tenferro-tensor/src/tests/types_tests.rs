@@ -2252,3 +2252,27 @@ fn value_types_are_send_and_sync() {
     assert_send_sync::<Tensor>();
     assert_send_sync::<TensorView<'_>>();
 }
+
+#[test]
+fn an_external_payload_is_carried_by_the_value_type() {
+    use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+
+    let payload =
+        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let element = payload.element_type_id();
+    let tensor = Tensor::external(payload);
+
+    assert_eq!(tensor.dtype(), DType::External(element));
+    assert_eq!(tensor.shape(), &[2]);
+    assert_eq!(tensor.placement().memory_kind, MemoryKind::UnpinnedHost);
+    assert!(!tensor.is_backend_buffer());
+
+    // The value type answers what it holds, and operations with no externally
+    // defined implementation reject it with a typed error instead of guessing.
+    let duplicate = tensor.duplicate().expect_err("duplication is rejected");
+    assert_eq!(
+        duplicate.kind(),
+        tenferro_tensor_core::ErrorKind::Unsupported
+    );
+    assert!(tensor.layout_linear_offset(&[0]).is_err());
+}

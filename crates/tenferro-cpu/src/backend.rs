@@ -63,6 +63,8 @@ pub(crate) fn tag_fresh_output(output: &mut Tensor, domain: CpuDomainId) {
         Tensor::Bool(tensor) => tag!(tensor),
         Tensor::C32(tensor) => tag!(tensor),
         Tensor::C64(tensor) => tag!(tensor),
+        // A caller-owned payload has no pooled storage to tag.
+        Tensor::External(..) => {}
     }
 }
 
@@ -3723,6 +3725,8 @@ impl TensorBuffer for CpuBackend {
                     Tensor::Bool(t) => reclaim_typed(buffers, t),
                     Tensor::C32(t) => reclaim_typed(buffers, t),
                     Tensor::C64(t) => reclaim_typed(buffers, t),
+                    // A caller-owned payload owns no pooled storage.
+                    Tensor::External(..) => {}
                 }
             })
         })

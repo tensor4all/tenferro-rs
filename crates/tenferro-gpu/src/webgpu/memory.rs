@@ -35,6 +35,11 @@ pub fn upload_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Resul
         Tensor::Bool(t) => upload_bool(rt, t).map(Tensor::Bool),
         Tensor::C64(t) => upload_typed::<Complex64>(rt, t).map(Tensor::C64),
         Tensor::C32(t) => upload_typed::<Complex32>(rt, t).map(Tensor::C32),
+        // A caller-owned payload has no GPU implementation for this operation.
+        Tensor::External(..) => Err(crate::Error::unsupported(
+            "upload_webgpu_tensor",
+            "an externally defined payload is not supported by this GPU operation",
+        )),
     }
 }
 
@@ -64,6 +69,11 @@ pub fn download_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Res
         Tensor::Bool(t) => download_bool(rt, client, t).map(Tensor::Bool),
         Tensor::C64(t) => download_typed::<Complex64>(rt, client, t).map(Tensor::C64),
         Tensor::C32(t) => download_typed::<Complex32>(rt, client, t).map(Tensor::C32),
+        // A caller-owned payload has no GPU implementation for this operation.
+        Tensor::External(..) => Err(crate::Error::unsupported(
+            "download_webgpu_tensor",
+            "an externally defined payload is not supported by this GPU operation",
+        )),
     }
 }
 

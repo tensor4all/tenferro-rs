@@ -180,6 +180,13 @@ fn tensor_host_bytes<'a>(op: &'static str, input: &'a Tensor) -> crate::Result<&
         Tensor::Bool(tensor) => bytes!(tensor),
         Tensor::C32(tensor) => bytes!(tensor),
         Tensor::C64(tensor) => bytes!(tensor),
+        // A caller-owned payload is opaque here, so the fused path rejects it
+        // instead of reading bytes it cannot interpret.
+        Tensor::External(..) => Err(crate::Error::unsupported_dtype(
+            op,
+            input.dtype(),
+            "an externally defined payload is not a fused input",
+        )),
     }
 }
 

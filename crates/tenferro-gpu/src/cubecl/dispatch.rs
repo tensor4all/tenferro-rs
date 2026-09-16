@@ -1354,6 +1354,11 @@ macro_rules! dispatch_unary_float_complex_int {
                 C64
             ),
             Tensor::Bool(_) => Err($crate::cubecl::unsupported_dtype(op, input.dtype())),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "compare_mode",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }};
 }

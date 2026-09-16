@@ -139,6 +139,12 @@ macro_rules! dispatch_tensor_unary_result {
             Tensor::Bool($tensor) => Ok(Tensor::Bool($body?)),
             Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
             Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
+            // A caller-owned payload has no CPU operation implementation.
+            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+                "cpu",
+                tenferro_tensor::DType::External(payload.element_type_id()),
+                "an externally defined payload is not supported by this CPU operation",
+            )),
         }
     };
 }
@@ -834,11 +840,13 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
             "configuration",
             "bool index tensors are not supported; supported index dtypes: I32/I64/F32/F64",
         )),
-        Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::invalid_argument(
-            "index_tensor",
-            "configuration",
-            "complex index tensors are not supported; supported index dtypes: I32/I64/F32/F64",
-        )),
+        Tensor::C32(_) | Tensor::C64(_) | Tensor::External(..) => {
+            Err(crate::Error::invalid_argument(
+                "index_tensor",
+                "configuration",
+                "complex index tensors are not supported; supported index dtypes: I32/I64/F32/F64",
+            ))
+        }
     }
 }
 

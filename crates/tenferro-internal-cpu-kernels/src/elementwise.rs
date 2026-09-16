@@ -731,6 +731,11 @@ fn read_as_cpu_view(input: TensorRead<'_>) -> CpuReadView<'_> {
         TensorRead::Tensor(Tensor::Bool(tensor)) => CpuReadView::Bool(tensor.as_view()),
         TensorRead::Tensor(Tensor::C32(tensor)) => CpuReadView::C32(tensor.as_view()),
         TensorRead::Tensor(Tensor::C64(tensor)) => CpuReadView::C64(tensor.as_view()),
+        // INVARIANT: callers reject an unsupported dtype before adapting a read
+        // target, and `CpuReadView` has no externally defined variant.
+        TensorRead::Tensor(Tensor::External(..)) => {
+            unreachable!("the CPU read view covers the preset scalars")
+        }
         TensorRead::View(TensorView::F32(view)) => CpuReadView::F32(view),
         TensorRead::View(TensorView::F64(view)) => CpuReadView::F64(view),
         TensorRead::View(TensorView::I32(view)) => CpuReadView::I32(view),
@@ -2031,7 +2036,7 @@ pub fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_neg_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_neg_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(unary_dtype_error(
+        Tensor::Bool(_) | Tensor::External(..) => Err(unary_dtype_error(
             "neg",
             input.dtype(),
             "F32/F64/I32/I64/C32/C64",
@@ -2119,12 +2124,9 @@ pub fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_conj_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_conj_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(unary_dtype_error(
-            "conj",
-            input.dtype(),
-            "F32/F64/C32/C64",
-            true,
-        )),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::External(..) => Err(
+            unary_dtype_error("conj", input.dtype(), "F32/F64/C32/C64", true),
+        ),
         Tensor::C32(t) => Ok(Tensor::C32(typed_conj_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_conj_with_pool(buffers, t)?)),
     }
@@ -2193,7 +2195,7 @@ pub fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_abs_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_abs_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(unary_dtype_error(
+        Tensor::Bool(_) | Tensor::External(..) => Err(unary_dtype_error(
             "abs",
             input.dtype(),
             "F32/F64/I32/I64/C32/C64",
@@ -2272,7 +2274,7 @@ pub fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_integer_sign_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_integer_sign_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(unary_dtype_error(
+        Tensor::Bool(_) | Tensor::External(..) => Err(unary_dtype_error(
             "sign",
             input.dtype(),
             "F32/F64/I32/I64/C32/C64",

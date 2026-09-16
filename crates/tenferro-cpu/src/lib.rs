@@ -417,6 +417,13 @@ pub(crate) fn copy_tensor_read_into(
         TensorRead::View(TensorView::Bool(src)) => copy_source!(Bool, src),
         TensorRead::View(TensorView::C32(src)) => copy_source!(C32, src),
         TensorRead::View(TensorView::C64(src)) => copy_source!(C64, src),
+        // A caller-owned payload is opaque here, so it cannot be copied into a
+        // runtime destination.
+        TensorRead::Tensor(Tensor::External(payload, _)) => Err(crate::Error::unsupported_dtype(
+            "copy_tensor_read_into",
+            tenferro_tensor::DType::External(payload.element_type_id()),
+            "an externally defined payload is not a runtime read",
+        )),
     }
 }
 
@@ -437,6 +444,12 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Te
         Tensor::Bool(tensor) => clone_host!(Bool, tensor),
         Tensor::C32(tensor) => clone_host!(C32, tensor),
         Tensor::C64(tensor) => clone_host!(C64, tensor),
+        // A caller-owned payload must be duplicated by its owner.
+        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            op,
+            tenferro_tensor::DType::External(payload.element_type_id()),
+            "an externally defined payload must be duplicated by its owner",
+        )),
     }
 }
 

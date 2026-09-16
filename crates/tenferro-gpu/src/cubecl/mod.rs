@@ -3981,6 +3981,11 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "conj",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -4323,6 +4328,11 @@ impl TensorElementwise for CudaBackend {
             )
             .map(Tensor::F64),
             Tensor::Bool(_) => Err(unsupported_dtype(op, input.dtype())),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "abs",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -4869,6 +4879,11 @@ impl TensorStructural for CudaBackend {
             )),
             TensorRead::View(TensorView::C32(input)) => materialize_cutensor!(C32, input),
             TensorRead::View(TensorView::C64(input)) => materialize_cutensor!(C64, input),
+            // A caller-owned payload has no GPU implementation for this operation.
+            TensorRead::Tensor(Tensor::External(..)) => Err(crate::Error::unsupported(
+                "CudaBackend::to_contiguous_read",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -4952,6 +4967,11 @@ impl TensorStructural for CudaBackend {
             TensorRead::View(TensorView::Bool(_)) => reject_bool_source!(),
             TensorRead::View(TensorView::C32(src)) => copy_source_cutensor!(C32, src),
             TensorRead::View(TensorView::C64(src)) => copy_source_cutensor!(C64, src),
+            // A caller-owned payload has no GPU implementation for this operation.
+            TensorRead::Tensor(Tensor::External(..)) => Err(crate::Error::unsupported(
+                "copy_read_into",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -4964,6 +4984,11 @@ impl TensorStructural for CudaBackend {
             Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool),
             Tensor::C32(t) => permutation::transpose(self, t, perm).map(Tensor::C32),
             Tensor::C64(t) => permutation::transpose(self, t, perm).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "transpose",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5009,6 +5034,11 @@ impl TensorStructural for CudaBackend {
             Tensor::C64(t) => {
                 cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::C64)
             }
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "reshape",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5026,6 +5056,11 @@ impl TensorStructural for CudaBackend {
             Tensor::Bool(t) => self.broadcast_bool(t, shape, dims).map(Tensor::Bool),
             Tensor::C32(t) => self.broadcast_typed(t, shape, dims).map(Tensor::C32),
             Tensor::C64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "broadcast_in_dim",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5168,6 +5203,11 @@ impl TensorStructural for CudaBackend {
             (Tensor::C64(t), crate::DType::C32) => self
                 .convert_complex_to_complex::<Complex64, Complex32, f64, f32>(t)
                 .map(Tensor::C32),
+            // A caller-owned payload has no GPU implementation for this operation.
+            (Tensor::External(..), _) => Err(crate::Error::unsupported(
+                "cast",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5199,6 +5239,11 @@ impl TensorStructural for CudaBackend {
             Tensor::C64(t) => self
                 .extract_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "extract_diagonal",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5230,6 +5275,11 @@ impl TensorStructural for CudaBackend {
             Tensor::C64(t) => self
                 .embed_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "embed_diagonal",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5242,6 +5292,11 @@ impl TensorStructural for CudaBackend {
             Tensor::Bool(t) => self.tril_bool(t, k).map(Tensor::Bool),
             Tensor::C32(t) => self.tril_typed(t, k).map(Tensor::C32),
             Tensor::C64(t) => self.tril_typed(t, k).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "tril",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5254,6 +5309,11 @@ impl TensorStructural for CudaBackend {
             Tensor::Bool(t) => self.triu_bool(t, k).map(Tensor::Bool),
             Tensor::C32(t) => self.triu_typed(t, k).map(Tensor::C32),
             Tensor::C64(t) => self.triu_typed(t, k).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "triu",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 }
@@ -5294,6 +5354,11 @@ impl TensorReduction for CudaBackend {
             Tensor::Bool(_) => Err(unsupported_dtype(op, input.dtype())),
             Tensor::C32(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "reduce_sum",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5342,6 +5407,11 @@ impl TensorReduction for CudaBackend {
             Tensor::Bool(_) => Err(unsupported_dtype(op, input.dtype())),
             Tensor::C32(t) => self.reduce_prod_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_prod_complex_typed(t, axes).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "reduce_prod",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5358,6 +5428,11 @@ impl TensorReduction for CudaBackend {
             Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
                 Err(unsupported_dtype(op, input.dtype()))
             }
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "reduce_max",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5374,6 +5449,11 @@ impl TensorReduction for CudaBackend {
             Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
                 Err(unsupported_dtype(op, input.dtype()))
             }
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "reduce_min",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 }
@@ -5509,6 +5589,13 @@ impl TensorIndexing for CudaBackend {
                 Err(unsupported_dtype("gather", start_indices.dtype()))
             }
             (Tensor::I64(_), _) => Err(unsupported_dtype("gather", operand.dtype())),
+            // A caller-owned payload has no GPU implementation for this operation.
+            (Tensor::External(..), _) | (_, Tensor::External(..)) => {
+                Err(crate::Error::unsupported(
+                    "gather",
+                    "an externally defined payload is not supported by this GPU operation",
+                ))
+            }
         }
     }
 
@@ -5597,6 +5684,11 @@ impl TensorIndexing for CudaBackend {
             Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool),
             Tensor::C32(t) => self.slice_typed(t, config).map(Tensor::C32),
             Tensor::C64(t) => self.slice_typed(t, config).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "slice",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5684,6 +5776,13 @@ impl TensorIndexing for CudaBackend {
                 Err(unsupported_dtype("dynamic_slice", starts.dtype()))
             }
             (Tensor::I64(_), _) => Err(unsupported_dtype("dynamic_slice", input.dtype())),
+            // A caller-owned payload has no GPU implementation for this operation.
+            (Tensor::External(..), _) | (_, Tensor::External(..)) => {
+                Err(crate::Error::unsupported(
+                    "dynamic_slice",
+                    "an externally defined payload is not supported by this GPU operation",
+                ))
+            }
         }
     }
 
@@ -5708,6 +5807,11 @@ impl TensorIndexing for CudaBackend {
             Tensor::Bool(t) => self.pad_bool(t, config).map(Tensor::Bool),
             Tensor::C32(t) => self.pad_typed(t, config).map(Tensor::C32),
             Tensor::C64(t) => self.pad_typed(t, config).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "pad",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5790,6 +5894,11 @@ impl TensorIndexing for CudaBackend {
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::C64)
             }
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "concatenate",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
@@ -5802,6 +5911,11 @@ impl TensorIndexing for CudaBackend {
             Tensor::Bool(t) => self.reverse_bool(t, axes).map(Tensor::Bool),
             Tensor::C32(t) => self.reverse_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reverse_typed(t, axes).map(Tensor::C64),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "reverse",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 }

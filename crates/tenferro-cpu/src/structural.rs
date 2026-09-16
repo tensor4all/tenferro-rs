@@ -88,6 +88,12 @@ macro_rules! dispatch_tensor_unary_result {
             Tensor::Bool($tensor) => Ok(Tensor::Bool($body?)),
             Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
             Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
+            // A caller-owned payload has no CPU implementation for this operation.
+            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+                "structural",
+                tenferro_tensor::DType::External(payload.element_type_id()),
+                "an externally defined payload is not supported by this CPU operation",
+            )),
         }
     };
 }
@@ -116,6 +122,12 @@ macro_rules! dispatch_tensor_unary_with_bool_special_result {
             Tensor::Bool($bool_tensor) => Ok(Tensor::Bool($bool_body?)),
             Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
             Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
+            // A caller-owned payload has no CPU implementation for this operation.
+            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+                "structural",
+                tenferro_tensor::DType::External(payload.element_type_id()),
+                "an externally defined payload is not supported by this CPU operation",
+            )),
         }
     };
 }
@@ -660,6 +672,11 @@ pub(crate) fn cast_with_pool(
         // An externally defined destination has no conversion table here, so the
         // conversion rejects it explicitly rather than guessing a representation.
         (_, DType::External(_)) => Err(crate::Error::dtype_mismatch("convert", input.dtype(), to)),
+        // A caller-owned payload has no conversion table here, so the conversion
+        // rejects it instead of guessing a representation.
+        (Tensor::External(..), _) => {
+            Err(crate::Error::dtype_mismatch("convert", input.dtype(), to))
+        }
     }
 }
 

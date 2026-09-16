@@ -186,6 +186,11 @@ impl CudaExecSession<'_> {
             Tensor::Bool(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
             Tensor::C32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
             Tensor::C64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            // A caller-owned payload has no GPU implementation for this operation.
+            Tensor::External(..) => Err(crate::Error::unsupported(
+                "ensure_gpu_resident",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 

@@ -450,6 +450,8 @@ fn reclaim_tensor(buffers: &mut BufferPool, tensor: Tensor) {
         Tensor::Bool(tensor) => crate::backend::reclaim_typed(buffers, tensor),
         Tensor::C32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
         Tensor::C64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        // A caller-owned payload owns no pooled storage.
+        Tensor::External(..) => {}
     }
 }
 

@@ -278,6 +278,16 @@ impl ExtensionOp for EinsumExtensionOp {
                 output_shape.len(),
             ));
         }
+        if let Some(external) = input_dtypes
+            .iter()
+            .find(|dtype| matches!(dtype, DType::External(_)))
+        {
+            return Err(TensorError::unsupported_dtype(
+                "einsum",
+                *external,
+                "einsum takes preset scalars only; an externally defined scalar is not supported",
+            ));
+        }
         Ok(vec![(
             promote_dtypes(input_dtypes.iter().copied()),
             output_shape,

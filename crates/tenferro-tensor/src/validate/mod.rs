@@ -420,12 +420,14 @@ pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
         Tensor::F32(t) => check_singular_diagonal(t),
         Tensor::C64(t) => check_singular_diagonal(t),
         Tensor::C32(t) => check_singular_diagonal(t),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(Error::extension(
-            "solve",
-            "tensor-validation",
-            ErrorKind::Unsupported,
-            DiagonalError::UnsupportedDType { dtype: u.dtype() },
-        )),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::External(..) => {
+            Err(Error::extension(
+                "solve",
+                "tensor-validation",
+                ErrorKind::Unsupported,
+                DiagonalError::UnsupportedDType { dtype: u.dtype() },
+            ))
+        }
     }
 }
 

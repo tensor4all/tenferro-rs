@@ -26,6 +26,8 @@ impl FreshLinalgOutput for Tensor {
             }};
         }
         match self {
+            // A caller-owned payload has no pooled storage to tag.
+            Tensor::External(..) => {}
             Tensor::F32(tensor) => tag!(tensor),
             Tensor::F64(tensor) => tag!(tensor),
             Tensor::I32(tensor) => tag!(tensor),
@@ -1071,6 +1073,11 @@ fn linalg_provider_kind(
 
 fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
     match input {
+        // A caller-owned payload is not a linalg operand.
+        Tensor::External(payload, _) => Err(unsupported_dtype(
+            op,
+            DType::External(payload.element_type_id()),
+        )),
         Tensor::F32(t) => ensure_host_typed_tensor(op, t),
         Tensor::F64(t) => ensure_host_typed_tensor(op, t),
         Tensor::I32(t) => ensure_host_typed_tensor(op, t),
@@ -1410,6 +1417,11 @@ fn solve_read_into_entered(
 
 fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {
     match out {
+        // INVARIANT: linalg rejects an externally defined dtype before adapting a
+        // write target, and `TensorViewMut` has no externally defined variant.
+        TensorWrite::Tensor(Tensor::External(..)) => {
+            unreachable!("linalg validates its input dtypes first")
+        }
         TensorWrite::Tensor(tensor) => match tensor {
             Tensor::F32(tensor) => TensorViewMut::F32(tensor.as_view_mut()),
             Tensor::F64(tensor) => TensorViewMut::F64(tensor.as_view_mut()),
@@ -1418,6 +1430,8 @@ fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {
             Tensor::Bool(tensor) => TensorViewMut::Bool(tensor.as_view_mut()),
             Tensor::C32(tensor) => TensorViewMut::C32(tensor.as_view_mut()),
             Tensor::C64(tensor) => TensorViewMut::C64(tensor.as_view_mut()),
+            // Handled by the outer arm before the typed write-view dispatch.
+            Tensor::External(..) => unreachable!("handled before the typed write view"),
         },
         TensorWrite::View(view) => view,
     }
@@ -2331,6 +2345,8 @@ fn faer_strided_read_ok(input: &TensorRead<'_>) -> bool {
         TensorRead::View(TensorView::F64(view)) => linalg::faer::faer_strided_ok(view),
         TensorRead::View(TensorView::C32(view)) => linalg::faer::faer_strided_ok(view),
         TensorRead::View(TensorView::C64(view)) => linalg::faer::faer_strided_ok(view),
+        // A caller-owned payload is not a faer operand.
+        TensorRead::Tensor(Tensor::External(..)) => false,
         TensorRead::Tensor(Tensor::I32(_))
         | TensorRead::Tensor(Tensor::I64(_))
         | TensorRead::Tensor(Tensor::Bool(_))
@@ -2596,6 +2612,13 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
 
 fn zeros_like_tensor(input: &Tensor) -> tenferro_tensor::Result<Tensor> {
     Ok(match input {
+        // A caller-owned payload has no zero-like runtime tensor.
+        Tensor::External(payload, _) => {
+            return Err(unsupported_dtype(
+                "zeros_like_tensor",
+                DType::External(payload.element_type_id()),
+            ));
+        }
         Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape().to_vec())?),
         Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape().to_vec())?),
         Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape().to_vec())?),
@@ -2782,7 +2805,7 @@ fn apply_lu_pivots_cpu(
         Tensor::F64(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::F64),
         Tensor::C32(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::C32),
         Tensor::C64(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::C64),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::External(..) => {
             Err(unsupported_dtype("lu_solve_prepared", input.dtype()))
         }
     }

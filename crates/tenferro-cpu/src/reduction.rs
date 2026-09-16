@@ -66,6 +66,12 @@ fn ensure_host_tensor(op: &'static str, input: &Tensor) -> crate::Result<()> {
         Tensor::Bool(t) => ensure!(t),
         Tensor::C32(t) => ensure!(t),
         Tensor::C64(t) => ensure!(t),
+        // A caller-owned payload has no CPU implementation for this operation.
+        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            "ensure_host_tensor",
+            tenferro_tensor::DType::External(payload.element_type_id()),
+            "an externally defined payload is not supported by this CPU operation",
+        )),
     }
 }
 
@@ -232,6 +238,12 @@ pub(crate) fn reduce_sum(
         )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_sum(t, axes, exec_context)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_sum(t, axes, exec_context)?)),
+        // A caller-owned payload has no CPU implementation for this operation.
+        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            "reduce_sum",
+            tenferro_tensor::DType::External(payload.element_type_id()),
+            "an externally defined payload is not supported by this CPU operation",
+        )),
     }
 }
 
@@ -519,6 +531,12 @@ pub(crate) fn reduce_prod(
         )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_prod(t, axes, exec_context)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_prod(t, axes, exec_context)?)),
+        // A caller-owned payload has no CPU implementation for this operation.
+        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            "reduce_prod",
+            tenferro_tensor::DType::External(payload.element_type_id()),
+            "an externally defined payload is not supported by this CPU operation",
+        )),
     }
 }
 
@@ -614,6 +632,12 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
             input.dtype(),
             "F32/F64/I32/I64",
         )),
+        // A caller-owned payload has no CPU implementation for this operation.
+        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            "reduce_max",
+            tenferro_tensor::DType::External(payload.element_type_id()),
+            "an externally defined payload is not supported by this CPU operation",
+        )),
     }
 }
 
@@ -703,6 +727,12 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
             "reduce_min",
             input.dtype(),
             "F32/F64/I32/I64",
+        )),
+        // A caller-owned payload has no CPU implementation for this operation.
+        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            "reduce_min",
+            tenferro_tensor::DType::External(payload.element_type_id()),
+            "an externally defined payload is not supported by this CPU operation",
         )),
     }
 }

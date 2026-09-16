@@ -38,6 +38,11 @@ pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor>
         Tensor::Bool(t) => upload_bool(rt, client, t).map(Tensor::Bool),
         Tensor::C64(t) => upload_typed::<Complex64>(rt, client, t).map(Tensor::C64),
         Tensor::C32(t) => upload_typed::<Complex32>(rt, client, t).map(Tensor::C32),
+        // A caller-owned payload has no GPU implementation for this operation.
+        Tensor::External(..) => Err(crate::Error::unsupported(
+            "upload_tensor",
+            "an externally defined payload is not supported by this GPU operation",
+        )),
     }
 }
 
@@ -67,6 +72,11 @@ pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tenso
         Tensor::Bool(t) => download_bool(rt, t).map(Tensor::Bool),
         Tensor::C64(t) => download_typed::<Complex64>(rt, t).map(Tensor::C64),
         Tensor::C32(t) => download_typed::<Complex32>(rt, t).map(Tensor::C32),
+        // A caller-owned payload has no GPU implementation for this operation.
+        Tensor::External(..) => Err(crate::Error::unsupported(
+            "download_tensor",
+            "an externally defined payload is not supported by this GPU operation",
+        )),
     }
 }
 
@@ -257,6 +267,11 @@ fn ensure_tensor_resident_on_runtime(
         Tensor::Bool(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
         Tensor::C64(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
         Tensor::C32(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+        // A caller-owned payload has no GPU implementation for this operation.
+        Tensor::External(..) => Err(crate::Error::unsupported(
+            "ensure_tensor_resident_on_runtime",
+            "an externally defined payload is not supported by this GPU operation",
+        )),
     }
 }
 

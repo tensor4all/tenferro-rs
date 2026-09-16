@@ -1030,6 +1030,8 @@ fn allocate_canonical_operand(
 
 fn reclaim_temporary(buffers: &mut BufferPool, tensor: Tensor) {
     match tensor {
+        // A caller-owned payload owns no pooled storage.
+        Tensor::External(..) => {}
         Tensor::F32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
         Tensor::F64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
         Tensor::I32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
@@ -1867,6 +1869,12 @@ macro_rules! validate_write_view_layout {
 fn validate_read_layout(tensor: &TensorRead<'_>, role: &'static str) -> Result<usize> {
     match tensor {
         TensorRead::Tensor(tensor) => match tensor {
+            // A caller-owned payload is not a runtime operand.
+            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+                "validate_read_layout",
+                tenferro_tensor::DType::External(payload.element_type_id()),
+                "an externally defined payload is not a runtime operand",
+            )),
             Tensor::F32(tensor) => validate_owned_layout!(tensor, role),
             Tensor::F64(tensor) => validate_owned_layout!(tensor, role),
             Tensor::I32(tensor) => validate_owned_layout!(tensor, role),
@@ -1890,6 +1898,12 @@ fn validate_read_layout(tensor: &TensorRead<'_>, role: &'static str) -> Result<u
 fn validate_write_layout(tensor: &TensorWrite<'_>, role: &'static str) -> Result<usize> {
     match tensor {
         TensorWrite::Tensor(tensor) => match tensor {
+            // A caller-owned payload is not a runtime destination.
+            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+                "validate_write_layout",
+                tenferro_tensor::DType::External(payload.element_type_id()),
+                "an externally defined payload is not a runtime destination",
+            )),
             Tensor::F32(tensor) => validate_owned_layout!(tensor, role),
             Tensor::F64(tensor) => validate_owned_layout!(tensor, role),
             Tensor::I32(tensor) => validate_owned_layout!(tensor, role),

@@ -184,8 +184,8 @@ enum AnalyticReadView<'a> {
     C64(TypedTensorView<'a, Complex64>),
 }
 
-fn read_as_analytic_view(input: TensorRead<'_>) -> AnalyticReadView<'_> {
-    match input {
+fn read_as_analytic_view(input: TensorRead<'_>) -> crate::Result<AnalyticReadView<'_>> {
+    Ok(match input {
         TensorRead::Tensor(Tensor::F32(tensor)) => AnalyticReadView::F32(tensor.as_view()),
         TensorRead::Tensor(Tensor::F64(tensor)) => AnalyticReadView::F64(tensor.as_view()),
         TensorRead::Tensor(Tensor::I32(tensor)) => AnalyticReadView::I32(tensor.as_view()),
@@ -200,7 +200,15 @@ fn read_as_analytic_view(input: TensorRead<'_>) -> AnalyticReadView<'_> {
         TensorRead::View(TensorView::Bool(_)) => AnalyticReadView::Bool,
         TensorRead::View(TensorView::C32(view)) => AnalyticReadView::C32(view),
         TensorRead::View(TensorView::C64(view)) => AnalyticReadView::C64(view),
-    }
+        // A caller-owned payload has no analytic read view.
+        TensorRead::Tensor(Tensor::External(payload, _)) => {
+            return Err(crate::Error::unsupported_dtype(
+                "read_as_analytic_view",
+                tenferro_tensor::DType::External(payload.element_type_id()),
+                "an externally defined payload has no analytic read view",
+            ));
+        }
+    })
 }
 
 // Share the traversal for owned/read entrypoints while keeping F statically known.
@@ -547,7 +555,8 @@ pub(crate) fn pow_read_with_pool(
 ) -> crate::Result<Tensor> {
     let lhs_dtype = lhs.dtype();
     let rhs_dtype = rhs.dtype();
-    match (read_as_analytic_view(lhs), read_as_analytic_view(rhs)) {
+    let (lhs_view, rhs_view) = (read_as_analytic_view(lhs)?, read_as_analytic_view(rhs)?);
+    match (lhs_view, rhs_view) {
         (AnalyticReadView::F32(a), AnalyticReadView::F32(b)) => Ok(Tensor::F32(
             typed_pow_view_with_pool("pow", buffers, &a, &b)?,
         )),

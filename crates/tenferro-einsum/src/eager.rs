@@ -80,6 +80,9 @@ impl<'a> TensorValue<'a> {
 
 fn tensor_as_view(tensor: &Tensor) -> TensorView<'_> {
     match tensor {
+        // INVARIANT: einsum rejects an externally defined dtype before it borrows
+        // a runtime view, and `TensorView` has no externally defined variant.
+        Tensor::External(..) => unreachable!("einsum validates its input dtypes first"),
         Tensor::F32(tensor) => TensorView::F32(tensor.as_view()),
         Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
         Tensor::I32(tensor) => TensorView::I32(tensor.as_view()),

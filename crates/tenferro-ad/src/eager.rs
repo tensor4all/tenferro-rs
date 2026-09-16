@@ -4331,6 +4331,17 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(
     backend: &mut B,
 ) -> Result<Tensor> {
     let host = match input {
+        // A caller-owned payload has no zero-like runtime tensor.
+        Tensor::External(payload, _) => {
+            return Err(Error::unsupported(
+                "zero_like_tensor",
+                ErrorPhase::GraphBuild,
+                format!(
+                    "an externally defined payload ({:?}) has no zero-like runtime tensor",
+                    DType::External(payload.element_type_id())
+                ),
+            ));
+        }
         Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())?),
         Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())?),
         Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())?),

@@ -2548,6 +2548,8 @@ fn tensor_buffer_len(tensor: &Tensor) -> usize {
         Tensor::Bool(tensor) => tensor.buffer().len(),
         Tensor::C32(tensor) => tensor.buffer().len(),
         Tensor::C64(tensor) => tensor.buffer().len(),
+        // A caller-owned payload has no runtime buffer length to report.
+        Tensor::External(..) => 0,
     }
 }
 

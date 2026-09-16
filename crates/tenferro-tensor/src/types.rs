@@ -3732,9 +3732,41 @@ pub enum Tensor {
     Bool(TypedTensor<bool>),
     C32(TypedTensor<Complex<f32>>),
     C64(TypedTensor<Complex<f64>>),
+    /// A scalar tenferro does not declare, carried by a caller-owned payload.
+    ///
+    /// The payload keeps its own concrete element type and is recovered by that
+    /// type, so this variant admits a scalar the crate does not know without
+    /// reinterpreting any bytes. Operations with no externally defined
+    /// implementation reject it with a typed error, and cleanup helpers treat it
+    /// as caller-owned.
+    External(tenferro_tensor_core::ErasedHostTensor, Placement),
 }
 
 impl Tensor {
+    /// Carry an externally defined scalar as a caller-owned payload.
+    ///
+    /// The payload keeps its own element type and is recovered by that type, so no
+    /// bytes are reinterpreted. Placement defaults to unpinned host memory, which
+    /// is where a caller-owned payload lives.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor};
+    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    ///
+    /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let element = payload.element_type_id();
+    /// let tensor = Tensor::external(payload);
+    /// assert_eq!(tensor.dtype(), DType::External(element));
+    /// assert_eq!(tensor.shape(), &[1]);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
+    #[must_use]
+    pub fn external(payload: tenferro_tensor_core::ErasedHostTensor) -> Self {
+        Self::External(payload, Placement::default())
+    }
+
     pub(crate) fn into_group_parts(self) -> (AllocationGroup, DescriptorSlot) {
         match self {
             Self::F32(tensor) => tensor.group.into_parts(),
@@ -3744,6 +3776,10 @@ impl Tensor {
             Self::Bool(tensor) => tensor.group.into_parts(),
             Self::C32(tensor) => tensor.group.into_parts(),
             Self::C64(tensor) => tensor.group.into_parts(),
+            // INVARIANT: a caller-owned payload has no allocation group.
+            Self::External(..) => {
+                unreachable!("an externally defined payload has no allocation group")
+            }
         }
     }
 }
@@ -4507,6 +4543,17 @@ impl TensorValue {
 
 fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
     match tensor {
+        // A caller-owned payload is a compact column-major host tensor, so its
+        // layout follows from its shape.
+        Tensor::External(payload, _) => TensorLayout::<DynRank>::compact(
+            tenferro_tensor_core::ShapeVec::from_slice(payload.shape()),
+        )
+        .unwrap_or_else(|_| {
+            // INVARIANT: the payload's shape product was validated when the host
+            // tensor it was built from was created, so compact layout construction
+            // cannot overflow here.
+            unreachable!("a validated payload yields a compact column-major layout")
+        }),
         Tensor::F32(tensor) => tensor.layout.clone(),
         Tensor::F64(tensor) => tensor.layout.clone(),
         Tensor::I32(tensor) => tensor.layout.clone(),
@@ -4519,6 +4566,8 @@ fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
 
 fn tensor_buffer_len(tensor: &Tensor) -> usize {
     match tensor {
+        // A caller-owned payload stores its element count directly.
+        Tensor::External(payload, _) => payload.element_count(),
         Tensor::F32(tensor) => tensor.buffer_len(),
         Tensor::F64(tensor) => tensor.buffer_len(),
         Tensor::I32(tensor) => tensor.buffer_len(),
@@ -4574,6 +4623,9 @@ fn cast_view_slice<S: 'static, T: TensorScalar>(source: &[S]) -> crate::Result<&
 
 fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> TensorView<'_> {
     match tensor {
+        // INVARIANT: `TensorView` has no externally defined variant, and a view is
+        // never requested for a caller-owned payload.
+        Tensor::External(..) => unreachable!("views cover the preset scalars"),
         Tensor::F32(tensor) => TensorView::F32(typed_view_with_layout(tensor, layout)),
         Tensor::F64(tensor) => TensorView::F64(typed_view_with_layout(tensor, layout)),
         Tensor::I32(tensor) => TensorView::I32(typed_view_with_layout(tensor, layout)),
@@ -5556,6 +5608,8 @@ impl<'a> TensorRead<'a> {
     pub fn backend_family(&self) -> Option<&'static str> {
         match self {
             Self::Tensor(tensor) => match tensor {
+                // A caller-owned payload is host memory without backend family.
+                Tensor::External(..) => None,
                 Tensor::F32(t) => t.backend_family(),
                 Tensor::F64(t) => t.backend_family(),
                 Tensor::I32(t) => t.backend_family(),
@@ -5582,6 +5636,8 @@ impl<'a> TensorRead<'a> {
     pub fn allocation_domain(&self) -> Option<AllocationDomainId> {
         match self {
             Self::Tensor(tensor) => match tensor {
+                // A caller-owned payload has no allocation domain.
+                Tensor::External(..) => None,
                 Tensor::F32(t) => t.allocation_domain(),
                 Tensor::F64(t) => t.allocation_domain(),
                 Tensor::I32(t) => t.allocation_domain(),
@@ -8173,6 +8229,13 @@ impl Tensor {
             Tensor::Bool(t) => t.duplicate().map(Tensor::Bool),
             Tensor::C32(t) => t.duplicate().map(Tensor::C32),
             Tensor::C64(t) => t.duplicate().map(Tensor::C64),
+            // The erased payload cannot be cloned without knowing its element type,
+            // so duplication is rejected instead of copying bytes blindly.
+            Tensor::External(..) => Err(crate::Error::unsupported_dtype(
+                "duplicate",
+                self.dtype(),
+                "an externally defined payload must be duplicated by its owner",
+            )),
         }
     }
 
@@ -8223,6 +8286,8 @@ impl Tensor {
             Tensor::Bool(t) => t.shape(),
             Tensor::C32(t) => t.shape(),
             Tensor::C64(t) => t.shape(),
+            // The payload keeps its shape from construction.
+            Tensor::External(payload, _) => payload.shape(),
         }
     }
 
@@ -8245,6 +8310,8 @@ impl Tensor {
             Tensor::Bool(_) => DType::Bool,
             Tensor::C32(_) => DType::C32,
             Tensor::C64(_) => DType::C64,
+            // The tag carries the payload's own element identity.
+            Tensor::External(payload, _) => DType::External(payload.element_type_id()),
         }
     }
 
@@ -8267,6 +8334,8 @@ impl Tensor {
             Tensor::Bool(t) => t.placement(),
             Tensor::C32(t) => t.placement(),
             Tensor::C64(t) => t.placement(),
+            // The placement is stored with the payload.
+            Tensor::External(_, placement) => placement,
         }
     }
 
@@ -8289,6 +8358,8 @@ impl Tensor {
             Tensor::Bool(t) => t.backend_family().is_some(),
             Tensor::C32(t) => t.backend_family().is_some(),
             Tensor::C64(t) => t.backend_family().is_some(),
+            // A caller-owned payload is host memory, never a backend buffer.
+            Tensor::External(..) => false,
         }
     }
 
@@ -8320,6 +8391,12 @@ impl Tensor {
             Tensor::Bool(t) => t.layout_linear_offset(indices),
             Tensor::C32(t) => t.layout_linear_offset(indices),
             Tensor::C64(t) => t.layout_linear_offset(indices),
+            // A caller-owned payload's owner resolves its own offsets.
+            Tensor::External(..) => Err(crate::Error::unsupported_dtype(
+                "layout_linear_offset",
+                self.dtype(),
+                "an externally defined payload resolves its own offsets",
+            )),
         }
     }
 
@@ -8348,6 +8425,8 @@ impl Tensor {
             Tensor::Bool(t) => t.is_col_major_contiguous(),
             Tensor::C32(t) => t.is_col_major_contiguous(),
             Tensor::C64(t) => t.is_col_major_contiguous(),
+            // The payload is a compact column-major host tensor by construction.
+            Tensor::External(..) => Ok(true),
         }
     }
 

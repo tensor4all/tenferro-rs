@@ -476,6 +476,8 @@ fn tensor_alignment_log2(tensor: &Tensor) -> Option<u8> {
         Tensor::Bool(tensor) => typed_tensor_alignment_log2(tensor),
         Tensor::C32(tensor) => typed_tensor_alignment_log2(tensor),
         Tensor::C64(tensor) => typed_tensor_alignment_log2(tensor),
+        // A caller-owned payload's owner declares its own alignment.
+        Tensor::External(..) => None,
     }
 }
 

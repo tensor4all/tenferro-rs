@@ -34,6 +34,15 @@ macro_rules! with_scalar {
             $crate::Tensor::Bool($typed) => $body,
             $crate::Tensor::C32($typed) => $body,
             $crate::Tensor::C64($typed) => $body,
+            // A caller-owned payload has no runtime value in this crate.
+            $crate::Tensor::External(payload, _) => Err($crate::Error::unsupported_dtype(
+                $op,
+                $crate::DType::External(payload.element_type_id()),
+                format!(
+                    "backend {} does not support an externally defined scalar",
+                    $backend
+                ),
+            )),
         }
     }};
     ($tensor:expr, numeric, backend = $backend:expr, op = $op:expr, |$typed:ident| $(-> $ret:ty)? $body:block) => {{
@@ -44,6 +53,15 @@ macro_rules! with_scalar {
             $crate::Tensor::I64($typed) => $body,
             $crate::Tensor::C32($typed) => $body,
             $crate::Tensor::C64($typed) => $body,
+            // A caller-owned payload has no runtime value in this crate.
+            $crate::Tensor::External(payload, _) => Err($crate::Error::unsupported_dtype(
+                $op,
+                $crate::DType::External(payload.element_type_id()),
+                format!(
+                    "backend {} does not support an externally defined scalar",
+                    $backend
+                ),
+            )),
             other => Err($crate::Error::unsupported_dtype(
                 $op,
                 other.dtype(),
@@ -57,6 +75,15 @@ macro_rules! with_scalar {
             $crate::Tensor::F64($typed) => $body,
             $crate::Tensor::C32($typed) => $body,
             $crate::Tensor::C64($typed) => $body,
+            // A caller-owned payload has no runtime value in this crate.
+            $crate::Tensor::External(payload, _) => Err($crate::Error::unsupported_dtype(
+                $op,
+                $crate::DType::External(payload.element_type_id()),
+                format!(
+                    "backend {} does not support an externally defined scalar",
+                    $backend
+                ),
+            )),
             other => Err($crate::Error::unsupported_dtype(
                 $op,
                 other.dtype(),
@@ -131,6 +158,15 @@ macro_rules! with_scalar_read {
                     let $view = tensor.as_view();
                     $body
                 }
+                // A caller-owned payload has no runtime read view in this crate.
+                $crate::Tensor::External(payload, _) => Err($crate::Error::unsupported_dtype(
+                    $op,
+                    $crate::DType::External(payload.element_type_id()),
+                    format!(
+                        "backend {} does not support an externally defined scalar",
+                        $backend
+                    ),
+                )),
             },
             $crate::TensorRead::View(view) => match view {
                 $crate::TensorView::F32($view) => $body,
@@ -177,6 +213,14 @@ macro_rules! with_scalar_read {
                     dtype,
                     format!("backend {} does not support this operation/dtype", $backend),
                 )),
+                $crate::Tensor::External(payload, _) => Err($crate::Error::unsupported_dtype(
+                    $op,
+                    $crate::DType::External(payload.element_type_id()),
+                    format!(
+                        "backend {} does not support an externally defined scalar",
+                        $backend
+                    ),
+                )),
             },
             $crate::TensorRead::View(view) => match view {
                 $crate::TensorView::F32($view) => $body,
@@ -221,6 +265,14 @@ macro_rules! with_scalar_read {
                         format!("backend {} does not support this operation/dtype", $backend),
                     ))
                 }
+                $crate::Tensor::External(payload, _) => Err($crate::Error::unsupported_dtype(
+                    $op,
+                    $crate::DType::External(payload.element_type_id()),
+                    format!(
+                        "backend {} does not support an externally defined scalar",
+                        $backend
+                    ),
+                )),
             },
             $crate::TensorRead::View(view) => match view {
                 $crate::TensorView::F32($view) => $body,
@@ -254,7 +306,8 @@ macro_rules! with_scalar_read {
                 | $crate::Tensor::I64(_)
                 | $crate::Tensor::Bool(_)
                 | $crate::Tensor::C32(_)
-                | $crate::Tensor::C64(_) => Err($crate::Error::unsupported_dtype(
+                | $crate::Tensor::C64(_)
+                | $crate::Tensor::External(..) => Err($crate::Error::unsupported_dtype(
                     $op,
                     dtype,
                     format!("backend {} does not support this operation/dtype", $backend),

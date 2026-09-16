@@ -12,6 +12,9 @@ fn allocation_id(tensor: &Tensor) -> Option<AllocationId> {
         Tensor::Bool(tensor) => tensor.allocation_id(),
         Tensor::C32(tensor) => tensor.allocation_id(),
         Tensor::C64(tensor) => tensor.allocation_id(),
+        // The fixture covers the preset dtypes; an externally defined payload has
+        // no fixture and would change what this test asserts.
+        Tensor::External(..) => None,
     }
 }
 

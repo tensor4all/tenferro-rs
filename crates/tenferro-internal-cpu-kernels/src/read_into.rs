@@ -77,6 +77,9 @@ fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {
             Tensor::Bool(tensor) => TensorViewMut::Bool(tensor.as_view_mut()),
             Tensor::C32(tensor) => TensorViewMut::C32(tensor.as_view_mut()),
             Tensor::C64(tensor) => TensorViewMut::C64(tensor.as_view_mut()),
+            // INVARIANT: callers reject an unsupported dtype before adapting a write
+            // target, and `TensorViewMut` has no externally defined variant.
+            Tensor::External(..) => unreachable!("the write view covers the preset scalars"),
         },
         TensorWrite::View(view) => view,
     }
