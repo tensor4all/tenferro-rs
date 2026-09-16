@@ -987,3 +987,26 @@ the rest. The count is therefore a property of the profile, while the claim is n
 profile names a set. The committed record now carries its profile explicitly, the design doc says
 which number belongs to which profile, and the check stays a parameterization check rather than a
 count — the same conclusion the earlier refuted count hypothesis reached from the other direction.
+
+## bf16 as a contribution, which is the half of the requirement this branch can hold
+
+The goal's constraints keep the sealed pool as a boundary owned by #1789 until that issue's
+contract is agreed, so a bf16 *preset* member is not available here: it needs a new variant in the
+pool's per-member resource pin, which is exactly the boundary the constraint protects. #1785's
+requirement, though, is stated for `half::bf16` as a standard representation, which #1785 contrasts
+with "a local Df64 newtype" and elsewhere calls acceptable for an external adapter. That route needs
+no pool at all, because an external payload is caller-owned.
+
+`ext/bf16-proof` therefore carries the standard `half::bf16` type through the same public boundary,
+with the wrapper only for coherence. The declared contract is stated: storage is bfloat16, a single
+operation computes in f32 and rounds once, and a reduction accumulates in f32 and rounds once at
+the end. #1785 asks for tests that distinguish that promise from repeated rounding, so the tests
+measure the difference rather than asserting closeness: three hundred stored ones give 300 through
+the promised accumulation and 256 through the shared fold, which rounds every step.
+
+Writing the tests corrected three of my own expectations rather than the code: bfloat16 keeps eight
+bits of significand including the implicit one, so its spacing on [1, 2) is 2^-7 and 1 + 2^-8 is
+the midpoint rather than a representable value; `f32::MAX` narrows to infinity because its
+all-ones significand carries past the largest bfloat16, so "every finite f32 stays finite" was
+false; and a duplicate copies the payload while a clone shares it, with a shared payload refusing a
+mutable borrow. All three are now asserted as the contract, and the guide records them.

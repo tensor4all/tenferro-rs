@@ -58,6 +58,7 @@ _MEMBER_CLASSES = {
     # The external-scalar contribution and the two consumer roles are extensions of
     # the documented surface rather than part of a layer: they add a scalar
     # tenferro does not declare and show how an application composes it.
+    "ext/bf16-proof": "extension",
     "ext/df64-proof": "extension",
     "ext/scalar-consumer-algorithm": "extension",
     "ext/scalar-consumer-application": "extension",

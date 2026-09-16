@@ -1,0 +1,16 @@
+[package]
+name = "tenferro-bf16-proof"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Standard bfloat16 through the external-scalar boundary (not published)."
+
+[lib]
+name = "tenferro_bf16_proof"
+
+[dependencies]
+half = { workspace = true }
+tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }
+tenferro-cpu = { path = "../../crates/tenferro-cpu" }
+tenferro-tensor = { path = "../../crates/tenferro-tensor" }

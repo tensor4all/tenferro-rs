@@ -119,6 +119,40 @@ rather than by accident, and it fails with a typed error instead of a zero gradi
 (`tests/ad_rule_boundaries.rs`). Differentiation after the forward session exits is covered by
 `ext/scalar-consumer-application/tests/later_backward.rs`.
 
+## Standard bfloat16
+
+`ext/bf16-proof` carries the standard `half::bf16` type through the same boundary, and its tests
+run with:
+
+```bash
+cargo test -j 16 -p tenferro-bf16-proof
+```
+
+The representation is `half::bf16` itself; the crate wraps it only because a foreign type cannot
+implement tenferro's local scalar traits, which is the same coherence wrapper #1785 accepts for
+the extended scalar. Because the payload is caller-owned, this needs no pooled storage: a
+*standard* member of the default set would need a new variant in the pool's per-member resource pin,
+which is #1789's boundary and stays untouched here.
+
+The contract is stated rather than implied, which is what #1785 asks for:
+
+- **Storage** is bfloat16, so a stored value is the nearest bfloat16 to what was written.
+- **A single operation** is computed in `f32` and rounded back once.
+- **A reduction** accumulates in `f32` and rounds once at the end, and
+  `reduction::sum_in_f32_accumulation` is that contract.
+
+The tests measure the difference between that promise and the weaker one instead of asserting only
+that a sum is close. Summing three hundred stored ones gives `300` through the promised
+accumulation, while the shared fold — which applies the element type's own addition and therefore
+rounds at every step — stalls at `256`, where bfloat16 spacing above one is two. That contrast is
+what #1785 asks for when it requires tests to detect unintended per-step rounding.
+
+Conversions are directed and explicit. Widening is exact, because every bfloat16 is an `f32`.
+Narrowing rounds to nearest with ties to even: `1 + 2^-8` is the midpoint above one and stores as
+`1`, while `1 + 2^-6` is exact. The top of the range is not preserved, and the test says so:
+`f32::MAX` narrows to infinity, because its significand is all ones and the rounding carries past
+the largest finite bfloat16. The bottom is, because the exponent ranges agree.
+
 ## Unsupported cases
 
 The AD contract admits first-order field arithmetic: an order other than one returns

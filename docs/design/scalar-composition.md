@@ -1363,6 +1363,25 @@ less common arms (`ad.rs`, 29), the eager retention guard (`eager.rs`, 16), and 
 `Debug` rendering plus a defensive fallback in `checkpoint.rs` (11) that no public path reaches
 because `RetainedValue` is not a public item.
 
+### 5.20a Standard bfloat16 as a contribution
+
+#1785 asks for `half::bf16` as a standard scalar representation, and #1787 requires bf16 CPU
+storage, conversions, and reached forward arithmetic to execute with documented kernel precision
+and rounding. Both are satisfied by `ext/bf16-proof`, which carries the standard `half::bf16` type
+through the same external boundary the extended scalar uses, so no pooled storage and therefore no
+new variant in `#1789`'s per-member resource pin is involved. A *preset* member would be a
+different change and is still the open one: it would extend the pool boundary this branch is
+required to leave to #1789, so the contribution route is what is delivered here.
+
+The declared behaviour is that a single operation computes in `f32` and rounds once, and that a
+reduction accumulates in `f32` and rounds once at the end. The second claim is the one #1785 asks
+to be tested rather than asserted, so the tests measure the difference against the weaker
+contract: three hundred stored ones sum to 300 through the promised accumulation and to 256 through
+the shared fold, which applies the element type's own addition and rounds at every step. The
+rounding boundaries are asserted as ties to even, and the range test states that `f32::MAX`
+narrows to infinity rather than claiming that every finite `f32` stays finite, which is false: the
+all-ones significand carries past the largest bfloat16.
+
 ### 5.20b The independent references caught a wrong derivative
 
 #1788 requires the factor derivatives to be checked with finite differences and JVP/VJP

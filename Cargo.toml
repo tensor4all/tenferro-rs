@@ -18,6 +18,7 @@ members = [
     "crates/tenferro-linalg",
     "crates/tenferro-fft",
     "docs/tutorial-code",
+    "ext/bf16-proof",
     "ext/df64-proof",
     "ext/scalar-consumer-algorithm",
     "ext/scalar-consumer-application",
@@ -45,6 +46,8 @@ homepage = "https://tensor4all.org/tenferro-rs/"
 
 [workspace.dependencies]
 rand = "0.8"
+# Already in the dependency graph through the GPU stack; centralised here for the bf16 proof crate.
+half = "2.7"
 num-complex = "0.4"
 num-traits = "0.2"
 thiserror = "2"

@@ -45,6 +45,10 @@ one, and their tests are the executable evidence for those boundaries. The
 [adding an external scalar](../guides/external-scalars.md) guide runs the path
 end to end and names the test behind every claim.
 
+- [tenferro-df16-proof](./tenferro_bf16_proof/index.html): standard bfloat16
+  carried as a stored scalar, with the shared elementwise path, directed
+  bfloat16/f32 conversions, and a reduction whose accumulation rule is stated and
+  measured
 - [tenferro-df64-proof](./tenferro_df64_proof/index.html): an externally defined
   scalar with its own arithmetic, QR factorisation, extension operations, and
   first-order AD rules
