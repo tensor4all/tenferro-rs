@@ -1079,3 +1079,24 @@ with typed errors rather than approximated, because they need the diagonal, redu
 permutation stages the ordinary lowering plans; AD through the contraction is refused with
 `AdRuleUnavailable`; and the *ordinary* eager einsum surface still rejects an external dtype, which
 its owner reserves for a separately authorized change.
+
+## The contraction generalised to the reference consumer's bar
+
+The first version of the einsum op accepted only the exact matrix pattern, which was narrower than
+the reference consumer. Reading `ext/tropical` settled the bar: it supports one pairwise step with
+any labels and at least one contracted mode, and refuses diagonal extraction, pre-reduction, and
+N-ary contractions with typed errors. #1787 calls this deliverable "#1793's einsum/tropical
+example", so parity with that example is what the issue asks for.
+
+The operation now accepts any two-input pattern whose labels do not repeat inside one input, which
+adds batched contractions, outer products, and labels the output omits, and it sums those omitted
+labels by walking the output index space and accumulating over the contracted one in the extended
+scalar. The output's extent for a label comes from the input that names it, so the metadata layer
+derives the shape from the labels instead of assuming rank two — which was the first thing the new
+tests caught, since the body had been generalised while the metadata had not. Three further
+corrections followed: a test that encoded the old stricter validator, a message expectation, and an
+unused import.
+
+The refusals are unchanged in kind and typed in every case: a repeated label inside one input, an
+output label no input names, inputs that disagree on a shared label's extent, and differentiation,
+which fails with the family's own missing-rule message.

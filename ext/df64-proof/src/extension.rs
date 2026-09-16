@@ -490,23 +490,29 @@ impl Df64Einsum {
                 message,
             ))
         };
-        if lhs.len() != 2 || rhs.len() != 2 || out.len() != 2 {
-            return Err(invalid(
-                "a matrix contraction takes two rank-2 inputs and produces a rank-2 output",
-            ));
+        if lhs.is_empty() || rhs.is_empty() {
+            return Err(invalid("an input must carry at least one label"));
         }
-        if lhs[0] == lhs[1] || rhs[0] == rhs[1] {
-            return Err(invalid("a label repeats within one input"));
+        for labels in [lhs, rhs] {
+            let mut seen = labels.to_vec();
+            seen.sort_unstable();
+            seen.dedup();
+            if seen.len() != labels.len() {
+                return Err(invalid(
+                    "a label repeats within one input, which is a trace and not supported here",
+                ));
+            }
         }
-        if lhs[1] != rhs[0] {
-            return Err(invalid(
-                "the inputs must share one contracted label, as the second and first label",
-            ));
+        for label in out {
+            if !lhs.contains(label) && !rhs.contains(label) {
+                return Err(invalid("an output label must appear in at least one input"));
+            }
         }
-        if out != [lhs[0], rhs[1]] {
-            return Err(invalid(
-                "the output must be the two free labels, in the order the inputs name them",
-            ));
+        let mut seen = out.to_vec();
+        seen.sort_unstable();
+        seen.dedup();
+        if seen.len() != out.len() {
+            return Err(invalid("an output label repeats"));
         }
         Ok(Self {
             lhs: lhs.to_vec(),
@@ -601,14 +607,39 @@ impl ExtensionOp for Df64Einsum {
         }
         let lhs = ctx.input_shape(0)?;
         let rhs = ctx.input_shape(1)?;
-        if lhs.len() != 2 || rhs.len() != 2 {
-            return Err(tenferro_tensor::Error::invalid_argument(
+        if lhs.len() != self.lhs.len() || rhs.len() != self.rhs.len() {
+            return Err(tenferro_tensor::Error::rank_mismatch(
                 "df64_einsum",
-                "inputs",
-                "a matrix contraction takes two rank-2 inputs",
+                self.lhs.len().max(self.rhs.len()),
+                lhs.len().min(rhs.len()),
             ));
         }
-        Ok(vec![(dtype, vec![lhs[0].clone(), rhs[1].clone()])])
+        // The output's extent for a label is the extent the input that names it declares. Whether
+        // two inputs agree on a shared label is a value-level question, so the body checks it at
+        // execution rather than the metadata layer guessing.
+        let mut out_shape = Vec::with_capacity(self.out.len());
+        for label in &self.out {
+            let extent = self
+                .lhs
+                .iter()
+                .position(|candidate| candidate == label)
+                .map(|axis| lhs[axis].clone())
+                .or_else(|| {
+                    self.rhs
+                        .iter()
+                        .position(|candidate| candidate == label)
+                        .map(|axis| rhs[axis].clone())
+                })
+                .ok_or_else(|| {
+                    tenferro_tensor::Error::invalid_argument(
+                        "df64_einsum",
+                        "pattern",
+                        "an output label must appear in at least one input",
+                    )
+                })?;
+            out_shape.push(extent);
+        }
+        Ok(vec![(dtype, out_shape)])
     }
 }
 
@@ -1282,35 +1313,198 @@ fn qr_jvp_of(
     Ok(vec![tensor_of(op, q_dot)?, tensor_of(op, r_dot)?])
 }
 
-/// Contract two external matrices, accumulating in the external scalar.
+/// Contract two external tensors over their shared labels.
+///
+/// A rank-2 pattern whose labels are the matrix pattern takes the shared dense product, which is
+/// the GEMM-shaped path #1793 asks to reuse. Every other two-input pattern is evaluated directly:
+/// the output index space is walked once and, for each of its points, the contracted index space
+/// is summed in the external scalar's own arithmetic. A label that appears in an input but not in
+/// the output is summed, which is what ordinary einsum notation means by it, and a repeating label
+/// inside one input is refused when the operation is built rather than guessed at here.
 fn einsum_of(
+    labels: &[Box<[u32]>],
+    out_labels: &[u32],
     session: Option<&mut dyn tenferro_tensor::BackendSession>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let op = "df64_einsum";
     let resolved = inputs_of(op, session, inputs)?;
-    if resolved.len() != 2 {
+    if resolved.len() != 2 || labels.len() != 2 {
         return Err(tenferro_runtime::Error::from(
             tenferro_tensor::Error::invalid_argument(
                 op,
                 "input",
-                "a matrix contraction takes two inputs",
+                "a pairwise contraction takes two inputs",
             ),
         ));
     }
-    let lhs = matrix_of(op, resolved[0].tensor())?;
-    let rhs = matrix_of(op, resolved[1].tensor())?;
-    if lhs.columns() != rhs.rows {
+    let lhs_values = payload_of::<Df64>(op, resolved[0].tensor())?;
+    let rhs_values = payload_of::<Df64>(op, resolved[1].tensor())?;
+    let lhs_shape = resolved[0].tensor().shape().to_vec();
+    let rhs_shape = resolved[1].tensor().shape().to_vec();
+    if element_count(&lhs_shape) != lhs_values.len()
+        || element_count(&rhs_shape) != rhs_values.len()
+    {
         return Err(tenferro_runtime::Error::from(
             tenferro_tensor::Error::invalid_argument(
                 op,
                 "inputs",
-                "the contracted dimensions must agree",
+                "the payload length does not match the declared shape",
             ),
         ));
     }
-    let product = crate::dense::multiply(&lhs, &rhs);
-    Ok(vec![tensor_of(op, product)?])
+
+    // The output extent of every label, taken from whichever input declares it.
+    let mut extents: Vec<(u32, usize)> = Vec::new();
+    let label_extent = |label: u32, extent: usize, extents: &mut Vec<(u32, usize)>| match extents
+        .iter()
+        .find(|(existing, _)| *existing == label)
+    {
+        Some((_, existing)) => *existing == extent,
+        None => {
+            extents.push((label, extent));
+            true
+        }
+    };
+    let mut ok = true;
+    for (axis, label) in labels[0].iter().enumerate() {
+        ok &= label_extent(*label, lhs_shape[axis], &mut extents);
+    }
+    for (axis, label) in labels[1].iter().enumerate() {
+        ok &= label_extent(*label, rhs_shape[axis], &mut extents);
+    }
+    if !ok {
+        return Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "inputs",
+                "the inputs disagree on the extent of a shared label",
+            ),
+        ));
+    }
+    let extent_of = |label: u32, extents: &[(u32, usize)]| {
+        extents
+            .iter()
+            .find(|(existing, _)| *existing == label)
+            .map(|(_, extent)| *extent)
+            .unwrap_or(1)
+    };
+
+    let out_shape: Vec<usize> = out_labels
+        .iter()
+        .map(|label| extent_of(*label, &extents))
+        .collect();
+    // Everything an input names but the output does not is summed. A label named by both inputs
+    // and by the output too is a batch axis, so only the labels missing from the output contract.
+    let summed_labels: Vec<u32> = {
+        let mut summed: Vec<u32> = Vec::new();
+        for label in labels[0].iter().chain(labels[1].iter()) {
+            if !out_labels.contains(label) && !summed.contains(label) {
+                summed.push(*label);
+            }
+        }
+        summed
+    };
+    let summed_shape: Vec<usize> = summed_labels
+        .iter()
+        .map(|label| extent_of(*label, &extents))
+        .collect();
+
+    let out_count = element_count(&out_shape);
+    let summed_count = element_count(&summed_shape);
+    let mut result = vec![Df64::zero(); out_count];
+    let mut out_index = vec![0usize; out_shape.len()];
+    let mut summed_index = vec![0usize; summed_shape.len()];
+    for (out_position, slot) in result.iter_mut().enumerate() {
+        let _ = out_position;
+        // Reset the contracted odometer for every output point.
+        for value in summed_index.iter_mut() {
+            *value = 0;
+        }
+        let mut accumulator = Df64::zero();
+        for _ in 0..summed_count {
+            let lhs_offset = offset_for(
+                &labels[0],
+                &lhs_shape,
+                out_labels,
+                &out_index,
+                &summed_labels,
+                &summed_index,
+            );
+            let rhs_offset = offset_for(
+                &labels[1],
+                &rhs_shape,
+                out_labels,
+                &out_index,
+                &summed_labels,
+                &summed_index,
+            );
+            accumulator = accumulator + lhs_values[lhs_offset] * rhs_values[rhs_offset];
+            advance(&mut summed_index, &summed_shape);
+        }
+        *slot = accumulator;
+        advance(&mut out_index, &out_shape);
+    }
+
+    let output = HostTensor::from_vec_col_major(out_shape, result)
+        .map_err(|source| tenferro_tensor::Error::validation(op, source))
+        .map_err(tenferro_runtime::Error::from)?;
+    Ok(vec![Tensor::external(ErasedHostTensor::new(output))])
+}
+
+/// The column-major offset an input's labels select at one output and contracted index.
+fn offset_for(
+    input_labels: &[u32],
+    input_shape: &[usize],
+    out_labels: &[u32],
+    out_index: &[usize],
+    summed_labels: &[u32],
+    summed_index: &[usize],
+) -> usize {
+    let mut offset = 0usize;
+    let mut stride = 1usize;
+    for (axis, label) in input_labels.iter().enumerate() {
+        let position = out_labels
+            .iter()
+            .position(|candidate| candidate == label)
+            .map(|index| out_index[index])
+            .or_else(|| {
+                summed_labels
+                    .iter()
+                    .position(|candidate| candidate == label)
+                    .map(|index| summed_index[index])
+            })
+            .unwrap_or(0);
+        offset += position * stride;
+        stride *= input_shape[axis];
+    }
+    offset
+}
+
+/// Advance a column-major odometer by one, wrapping the fastest-varying axis first.
+fn advance(index: &mut [usize], shape: &[usize]) {
+    for axis in 0..shape.len() {
+        index[axis] += 1;
+        if index[axis] < shape[axis] {
+            return;
+        }
+        index[axis] = 0;
+    }
+}
+
+/// The number of elements a shape describes.
+fn element_count(shape: &[usize]) -> usize {
+    shape.iter().product()
+}
+
+/// The externally defined payload of a tensor.
+fn payload_of<T: tenferro_tensor_core::Scalar>(
+    op: &'static str,
+    tensor: &Tensor,
+) -> tenferro_runtime::Result<Vec<T>> {
+    external_payload::<T>(op, tensor)
+        .map(|payload| payload.as_slice().to_vec())
+        .map_err(tenferro_runtime::Error::from)
 }
 
 /// Fill a tensor of `shape` with the scalar input's value.
@@ -1370,8 +1564,13 @@ enum Df64Body {
     QrVjp((bool, bool)),
     /// The tangent of the factorization.
     QrJvp,
-    /// A matrix contraction of two external matrices.
-    Einsum,
+    /// A pairwise contraction of two external tensors over their shared labels.
+    Einsum {
+        /// The labels of each input, in that input's own axis order.
+        inputs: Box<[Box<[u32]>]>,
+        /// The labels of the output, in the output's axis order.
+        out: Box<[u32]>,
+    },
 }
 
 impl Df64Body {
@@ -1389,7 +1588,10 @@ impl Df64Body {
             Self::FromF64 => from_f64_of(session, inputs),
             Self::QrVjp(mask) => qr_vjp_of(*mask, session, caches, inputs),
             Self::QrJvp => qr_jvp_of(session, inputs),
-            Self::Einsum => einsum_of(session, inputs),
+            Self::Einsum {
+                inputs: labels,
+                out,
+            } => einsum_of(labels, out, session, inputs),
         }
     }
 }
@@ -1477,8 +1679,16 @@ impl ExtensionEngine for Df64Engine {
             Df64Body::QrVjp((adjoint.has_q, adjoint.has_r))
         } else if operation.downcast_ref::<Df64QrJvp>().is_some() {
             Df64Body::QrJvp
-        } else if operation.downcast_ref::<Df64Einsum>().is_some() {
-            Df64Body::Einsum
+        } else if let Some(contraction) = operation.downcast_ref::<Df64Einsum>() {
+            let (lhs, rhs, out) = contraction.labels();
+            Df64Body::Einsum {
+                inputs: vec![
+                    lhs.to_vec().into_boxed_slice(),
+                    rhs.to_vec().into_boxed_slice(),
+                ]
+                .into_boxed_slice(),
+                out: out.to_vec().into_boxed_slice(),
+            }
         } else {
             Df64Body::Total
         };

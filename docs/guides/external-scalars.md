@@ -153,7 +153,7 @@ Narrowing rounds to nearest with ties to even: `1 + 2^-8` is the midpoint above 
 `f32::MAX` narrows to infinity, because its significand is all ones and the rounding carries past
 the largest finite bfloat16. The bottom is, because the exponent ranges agree.
 
-## A matrix contraction in the extended scalar
+## A contraction in the extended scalar
 
 #1793's example is an ordinary einsum: `einsum("ik,kj->ij", A, B)`. The contribution owns that
 contraction, so it runs through the runtime's extension module with the extended scalar's own
@@ -172,13 +172,20 @@ let output = apply(std::sync::Arc::new(op), &[&lhs, &rhs])?;
 names: contracting the row `[1, 1]` with the column `[1, 2^-80]` keeps `2^-80` after subtracting
 one, which an `f64` accumulator cannot. The contrast is asserted in the same test.
 
-The operation accepts one shape of pattern, a two-matrix contraction whose inputs share a single
-contracted label, and refuses anything else with a typed error: a repeated label inside one input,
-a rank-one input, an output that is not the two free labels in order, and inputs whose contracted
-dimensions disagree at execution. The general label cases need the diagonal, reduction, and
-permutation stages that the ordinary lowering plans, and this body does not execute them, so it
-refuses them rather than approximating. First-order AD through the contraction fails explicitly, with the family's own
-message that it has no Linearize rule for the operation, rather than returning a zero gradient.
+Any two-input pattern is accepted, not only the matrix one: a **batched** contraction such as
+`bij,bjk->bik`, an **outer product** with no shared label, and a pattern whose label one input names
+and the output omits, which the notation sums. Each has its own test with hand-checkable values, and
+the summation walks the output index space and accumulates the contracted one in the extended
+scalar, so the low component survives a contraction whose accumulation would otherwise round it
+away.
+
+What is refused is refused with a typed error rather than approximated: a label that repeats inside
+one input, because that is a trace; an output label that no input names; inputs that disagree on the
+extent of a shared label; and differentiating the contraction, which fails with the family's own
+message that it has no Linearize rule for the operation. That capability matches the reference
+consumer in `ext/tropical`, which also refuses diagonal extraction, pre-reduction, and N-ary
+contractions — #1787 calls this deliverable "#1793's einsum/tropical example", so matching that
+example is the bar, and the refusals are typed on both sides.
 
 ## Unsupported cases
 

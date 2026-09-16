@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
-use tenferro_df64_proof::ad::{Df64LinearizeRule, Df64VjpRule};
+use tenferro_df64_proof::ad::Df64LinearizeRule;
 use tenferro_df64_proof::extension::{module, Df64Einsum, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
@@ -134,16 +134,13 @@ fn the_contraction_keeps_the_low_component_an_f64_accumulator_would_drop() {
 }
 
 #[test]
-fn the_pattern_validator_refuses_anything_but_a_matrix_contraction() {
-    // A trace repeats a label inside one input.
-    assert!(Df64Einsum::new(&[0, 0], &[0, 2], &[0, 2]).is_err());
-    // A rank-one input is not a matrix.
-    assert!(Df64Einsum::new(&[0], &[0, 2], &[2]).is_err());
-    // The output must be the free labels in the order the inputs name them.
-    assert!(Df64Einsum::new(&[0, 1], &[1, 2], &[2, 0]).is_err());
-    // A valid pattern reports the labels it was built from.
-    let pattern = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a matrix contraction");
+fn the_pattern_validator_accepts_any_two_input_contraction_and_reports_its_labels() {
+    // The caller may write any labels; the validator checks structure, not the matrix case.
+    let pattern = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
     assert_eq!(pattern.labels(), (&[0, 1][..], &[1, 2][..], &[0, 2][..]));
+    assert!(Df64Einsum::new(&[7, 9], &[9, 4], &[7, 4]).is_ok());
+    // An input with no labels is not a tensor.
+    assert!(Df64Einsum::new(&[], &[0, 2], &[2]).is_err());
 }
 
 #[test]
@@ -165,8 +162,8 @@ fn the_body_refuses_disagreeing_contracted_dimensions() {
         )
         .expect_err("a 1x2 contraction with a 3x1 input has no shape");
     assert!(
-        error.to_string().contains("contracted"),
-        "the failure must name the contracted dimension: {error}"
+        error.to_string().contains("shared label"),
+        "the failure must say the inputs disagree on a shared label: {error}"
     );
 }
 
@@ -210,5 +207,89 @@ fn differentiating_the_contraction_fails_explicitly() {
     assert!(
         message.contains("df64") || message.contains("unsupported") || message.contains("rule"),
         "the refusal must say which rule is missing: {message}"
+    );
+}
+
+/// Contract with an explicit pattern, returning the result's elements.
+fn contract_with(
+    lhs: Vec<Df64>,
+    lhs_shape: Vec<usize>,
+    rhs: Vec<Df64>,
+    rhs_shape: Vec<usize>,
+    pattern: (&[u32], &[u32], &[u32]),
+) -> Vec<Df64> {
+    let op = Df64Einsum::new(pattern.0, pattern.1, pattern.2).expect("a valid pattern");
+    let lhs_leaf = leaf(lhs.clone(), lhs_shape.clone());
+    let rhs_leaf = leaf(rhs.clone(), rhs_shape.clone());
+    let output =
+        apply(std::sync::Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&output[0]).expect("compiled contraction");
+    let results = runtime_with_module()
+        .run_compiled(
+            &program,
+            &[&external(lhs, lhs_shape), &external(rhs, rhs_shape)],
+        )
+        .expect("contraction execution");
+    payload(&results[0])
+}
+
+fn numbers(values: &[f64]) -> Vec<Df64> {
+    values.iter().copied().map(Df64::from_f64).collect()
+}
+
+#[test]
+fn a_batched_contraction_with_a_free_batch_label_runs() {
+    // "bij,bjk->bik" with two batches of a 1x1 matrix: each output entry is the product of that
+    // batch's pair, so the batch label is a free label rather than a contracted one.
+    let results = contract_with(
+        numbers(&[1.0, 2.0]),
+        vec![2, 1, 1],
+        numbers(&[3.0, 4.0]),
+        vec![2, 1, 1],
+        (&[0, 1, 2], &[0, 2, 3], &[0, 1, 3]),
+    );
+    assert_eq!(results, numbers(&[3.0, 8.0]));
+}
+
+#[test]
+fn an_outer_product_has_no_contracted_label() {
+    // "i,j->ij": with no shared label the contraction is a product, which #1793 lists as a
+    // reached operation.
+    let results = contract_with(
+        numbers(&[2.0, 3.0]),
+        vec![2],
+        numbers(&[5.0, 7.0]),
+        vec![2],
+        (&[0], &[1], &[0, 1]),
+    );
+    // [[2 * 5, 2 * 7], [3 * 5, 3 * 7]] in column-major order.
+    assert_eq!(results, numbers(&[10.0, 15.0, 14.0, 21.0]));
+}
+
+#[test]
+fn a_label_that_only_one_input_names_and_the_output_omits_is_summed() {
+    // "ij,kl->ik" sums each input over its omitted label before multiplying, which is what the
+    // notation means by a label the output does not name.
+    let results = contract_with(
+        numbers(&[1.0, 3.0, 2.0, 4.0]),
+        vec![2, 2],
+        numbers(&[5.0, 7.0, 6.0, 8.0]),
+        vec![2, 2],
+        (&[0, 1], &[2, 3], &[0, 2]),
+    );
+    // Rows of A sum to [3, 7] and rows of B to [11, 15], so the product is [[33, 45], [77, 105]].
+    assert_eq!(results, numbers(&[33.0, 77.0, 45.0, 105.0]));
+}
+
+#[test]
+fn the_validator_refuses_a_trace_and_an_unknown_output_label() {
+    assert!(
+        Df64Einsum::new(&[0, 0], &[0, 2], &[0, 2]).is_err(),
+        "a repeated label inside one input is a trace, which the body does not evaluate"
+    );
+    assert!(
+        Df64Einsum::new(&[0, 1], &[1, 2], &[0, 3]).is_err(),
+        "an output label must appear in an input"
     );
 }
