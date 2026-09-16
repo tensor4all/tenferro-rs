@@ -1312,6 +1312,8 @@ arm-dense hold about 1180 of them — 520 in `tenferro-gpu/src/cubecl/mod.rs`, 2
 choice into the public contract needs maintainer acceptance, which is why the design records it
 rather than the branch assuming it.
 
+**Corrected after re-reading the objective:** the removal is not gated on a decision, it is stated in the objective itself, so the honest status is mandated and unattempted rather than awaiting approval. Re-measured on the current head, the conversion it needs is 2832 `Tensor::` variant match sites across 75 files, with the four files the objective names as arm-dense holding 1180 of them; the ordering the objective gives is descending arm density, so the first bounded step is the most arm-dense file, whose conversion is self-contained because it is feature-gated.
+
 **#1793's einsum with an externally defined scalar.** The issue's own example now runs: the
 contribution owns a matrix contraction, `einsum("ik,kj->ij", A, B)`, which reproduces #1793's table
 and keeps `2^-80` through the contraction of `[1, 1]` with `[1, 2^-80]`

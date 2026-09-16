@@ -1278,3 +1278,18 @@ One habit earned its keep here rather than costing anything: after the API chang
 own suite, doctests included, instead of naming test targets. Generalising the adjoint had broken three
 of its doctests because my run had named targets, and the workspace run found them; this time the same
 check was the first one, and it passed.
+
+## Correcting my framing of the last mandated item
+
+I had recorded the removal of the seven `Tensor` variants as needing maintainer acceptance, and that
+framing is wrong: the objective states the removal itself, in its outcome section, so it is mandated
+rather than gated. The honest status is therefore mandated and unattempted, not awaiting a decision,
+and the design doc now says that instead.
+
+Re-measured on the current head, the conversion it needs is unchanged from the earlier measurement:
+2832 `Tensor::` variant match sites across 75 files, with the four files the objective names as
+arm-dense holding 520, 277, 206, and 177 of them. The objective's ordering is descending arm density,
+so the first bounded step is the most arm-dense file, and that conversion is self-contained because the
+file sits behind the GPU features. I have not started it: a partial conversion of that size would leave
+the branch broken across many working sessions, and the honest report of a measured, unattempted
+mandate is worth more than a half-converted tree.
