@@ -317,7 +317,16 @@ a disposable worktree and compiling the workspace:
 | Make `dtype()` return `Option<DType>` instead | 605 call sites |
 
 So the cheap way to open the tag is a `DType` variant, not a fallible accessor, and
-admitting an external member costs roughly 77 explicit arms in total. That is an
+admitting an external member costs roughly 77 explicit arms in total. The tag
+variant's 59 sites break down as 7 in test files, 40 in production code in
+statement position where an arm can reject directly, and 12 in production code in
+value position such as `let eps = match dtype { .. }`, where the enclosing function
+has to start returning a result. Those 12 are why this is a deliberate change
+rather than a sweep.
+
+Both variants are public type changes: `DType` gains a variant and `Tensor` gains
+one, which is a semver break and, under this repository's rules, a change that
+needs maintainer acceptance before a feature pull request can carry it. That is an
 order of magnitude below the 2267 production pattern sites that removing the
 seven variants rewrites, which is the opposite of what was assumed before the
 measurement: the hybrid shape is not the expensive one.
