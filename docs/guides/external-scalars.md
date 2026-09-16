@@ -91,7 +91,10 @@ distinct engine identities, and the typed-rejection path is asserted in case the
 
 ## Derivative order and helper closure
 
-First order is supported, and forward-only use needs no AD registration at all. The rules emit
+First order is supported, and forward-only use needs no AD registration at all. This is a
+contribution-owned rule set registered into the active `AdContext`, not a claim about mainline
+`tensor-ad-oracles` support: the owning issue makes adding an oracle family a condition for
+claiming mainline AD, and nothing here does. The rules emit
 programs and own no resources; `tests/extension_ad.rs`, `tests/connected_conversion_ad.rs`, and
 `tests/connected_qr_ad.rs` run JVP and VJP through the connected graphs. The first-order helpers
 the rules emit are terminal: `Df64QrVjp` and `Df64QrJvp` are runtime-registered execution

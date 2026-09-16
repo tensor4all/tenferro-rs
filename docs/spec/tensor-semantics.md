@@ -35,9 +35,16 @@ contiguous host storage.
 
 Current public concepts:
 
-- `DType`: runtime dtype tags for `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`,
-  and `C64`.
-- `TensorScalar`: sealed scalar trait for supported scalar types.
+- `DType`: runtime dtype tags for the scalars a set declares. The set tenferro
+  ships declares `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, and `C64`; a
+  downstream set declares its own members, and a value whose scalar no preset
+  declares carries `DType::External(TypeId)`. A set is declared once with
+  `define_scalar_set!`, which generates the tag enum, the value enum, and the
+  membership implementations.
+- `TensorScalar`: sealed scalar trait for the members of a declared scalar set.
+  The open boundary a downstream scalar implements is `Scalar` together with the
+  arithmetic and domain traits, and an externally defined scalar travels in an
+  erased host tensor rather than through `TensorScalar`.
 - `HostTensor<T>`: owned typed host tensor with contiguous column-major data.
 - `Tensor`: dynamic host tensor enum over the supported scalar types.
 - `HostTensorView<'a, T>` and `TensorView<'a>`: borrowed metadata-only views.
@@ -100,6 +107,11 @@ pub enum Buffer<T> {
 - `Bool`
 - `C32`
 - `C64`
+- `External(ErasedHostTensor, Placement)` for a scalar type no preset declares.
+  The payload is an erased host tensor that carries its own shape, element
+  strides, and offset, so a view over a caller-owned value is metadata-only and a
+  projection back to the typed scalar is checked rather than a byte
+  reinterpretation.
 
 Runtime placement is explicit metadata:
 

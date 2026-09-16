@@ -917,3 +917,21 @@ Once the numbers were in front of me, the honest statement of them changed. Two 
 12404 and 14455 ns/op for the contribution's warm path, a spread near fifteen percent, so the
 record presents them as a report with the variation visible rather than as a threshold, which is
 also what the protocol's warning about unmeasured regressions is for.
+
+## The owning spec, and the skill check
+
+#1787's last acceptance item asks for runnable documentation and for the owning design and spec
+documents to be updated when APIs change. The second half was undone: `docs/spec/tensor-semantics.md`
+still described `DType` as the closed list of seven tags and `Tensor` as the closed list of seven
+variants, which this branch had made untrue.
+
+The spec now says what the code does: a set declares its members, the shipped set declares the
+seven presets, a value whose scalar no preset declares carries `DType::External(TypeId)`, and the
+value enum gained the `External(ErasedHostTensor, Placement)` variant that carries its own shape,
+strides, and offset so a view over a caller-owned value stays metadata-only. The `TensorScalar`
+bullet now separates the sealed per-set trait from the open `Scalar` boundary a downstream scalar
+implements, which is the distinction this branch actually rests on.
+
+The shipped usage skills were checked rather than assumed: the only dtype mention in
+`.agents/skills/tenferro-compute` is a `DType::F64` in a usage example, which this branch does not
+change, so no skill needed updating.
