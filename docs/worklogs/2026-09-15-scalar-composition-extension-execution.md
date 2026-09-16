@@ -742,3 +742,21 @@ The first round had left three files:
 
 The goal's own bar for changed files is 90%, and the contribution's figure is 78.5% for `ad.rs`
 after this work; the remaining lines there are the arms no public path reaches.
+
+## The coverage gate is fully green
+
+Re-running the repository's coverage check with CI's own command and profile
+(`cargo llvm-cov --workspace --exclude tenferro-tutorial-code --profile ci --ignore-run-fail`
+followed by `scripts/check-coverage.py`) reports **221 of 221 files passing**, with every file
+this branch touches above its threshold.
+
+Two notes on getting there. The one file that still failed, `crates/tenferro-linalg/src/householder.rs`
+at 79.6% against 80%, carries **no lines from this branch at all** (verified with
+`git diff --numstat origin/main -- <file>`), so it was a pre-existing shortfall rather than a
+regression; adding a `Debug` rendering assertion to that file's own existing append test, which
+is a property of the handle it already builds, took it to 82.1% and closed the gate.
+
+The other note is a measurement pitfall worth recording: `cargo llvm-cov` without
+`--ignore-run-fail` aborts on the repository's three pre-existing `trybuild` failures and writes
+a report from whatever profiles it managed to collect, which in one run showed several files at
+0.0%. `--ignore-run-fail` is what makes the coverage measurement deterministic here.

@@ -189,6 +189,9 @@ fn concrete_compact_qr_appends_and_reconstructs() {
     backend
         .with_backend_session(|session| {
             let state = a.householder_qr(session)?.append_columns(&b, session)?;
+            // A handle renders its own surface without walking the factors it holds.
+            let rendered = format!("{state:?}");
+            assert!(rendered.contains("HouseholderQr"), "{rendered}");
             let q = state.q_columns(0..4, QrOptions::default(), session)?;
             let r = state.r(QrOptions::default(), session)?;
             assert_close(
