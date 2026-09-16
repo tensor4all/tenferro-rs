@@ -204,23 +204,35 @@ impl LinalgBackend for CpuExecSession<'_> {
             CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
-                    self.with_linalg_pool_fresh(|_, buffers| match input {
-                        Tensor::F32(t) => {
+                    self.with_linalg_pool_fresh(|_, buffers| match input.dtype() {
+                        DType::F32 => {
+                            let t = input
+                                .as_typed::<f32>()
+                                .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
                                 vec![Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(parity)]
                             })
                         }
-                        Tensor::F64(t) => {
+                        DType::F64 => {
+                            let t = input
+                                .as_typed::<f64>()
+                                .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
                                 vec![Tensor::F64(lu), Tensor::I32(pivots), Tensor::F64(parity)]
                             })
                         }
-                        Tensor::C32(t) => {
+                        DType::C32 => {
+                            let t = input
+                                .as_typed::<Complex32>()
+                                .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
                                 vec![Tensor::C32(lu), Tensor::I32(pivots), Tensor::C32(parity)]
                             })
                         }
-                        Tensor::C64(t) => {
+                        DType::C64 => {
+                            let t = input
+                                .as_typed::<Complex64>()
+                                .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
                                 vec![Tensor::C64(lu), Tensor::I32(pivots), Tensor::C64(parity)]
                             })
