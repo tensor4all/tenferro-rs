@@ -1151,20 +1151,30 @@ fn linalg_provider_kind(
     }
 }
 
+/// The typed host tensor behind `input`, or this file's standard refusal.
+///
+/// Callers reach this from a match on `input.dtype()`, so `None` here means the tag
+/// table and the runtime dtype disagree rather than a caller mistake.
+fn typed_host<'a, T: TensorScalar>(
+    input: &'a Tensor,
+    op: &'static str,
+) -> tenferro_tensor::Result<&'a TypedTensor<T>> {
+    input
+        .as_typed::<T>()
+        .ok_or_else(|| unsupported_dtype(op, input.dtype()))
+}
+
 fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
-    match input {
+    match input.dtype() {
         // A caller-owned payload is not a linalg operand.
-        Tensor::External(payload, _) => Err(unsupported_dtype(
-            op,
-            DType::External(payload.element_type_id()),
-        )),
-        Tensor::F32(t) => ensure_host_typed_tensor(op, t),
-        Tensor::F64(t) => ensure_host_typed_tensor(op, t),
-        Tensor::I32(t) => ensure_host_typed_tensor(op, t),
-        Tensor::I64(t) => ensure_host_typed_tensor(op, t),
-        Tensor::Bool(t) => ensure_host_typed_tensor(op, t),
-        Tensor::C32(t) => ensure_host_typed_tensor(op, t),
-        Tensor::C64(t) => ensure_host_typed_tensor(op, t),
+        DType::External(type_id) => Err(unsupported_dtype(op, DType::External(type_id))),
+        DType::F32 => ensure_host_typed_tensor(op, typed_host::<f32>(input, op)?),
+        DType::F64 => ensure_host_typed_tensor(op, typed_host::<f64>(input, op)?),
+        DType::I32 => ensure_host_typed_tensor(op, typed_host::<i32>(input, op)?),
+        DType::I64 => ensure_host_typed_tensor(op, typed_host::<i64>(input, op)?),
+        DType::Bool => ensure_host_typed_tensor(op, typed_host::<bool>(input, op)?),
+        DType::C32 => ensure_host_typed_tensor(op, typed_host::<Complex32>(input, op)?),
+        DType::C64 => ensure_host_typed_tensor(op, typed_host::<Complex64>(input, op)?),
     }
 }
 
@@ -2108,116 +2118,115 @@ fn rank_revealing_qr_entered(
             })
         }};
     }
-    let mut outputs =
-        match provider {
-            CpuLinalgProvider::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    match input.dtype() {
-                        DType::F32 => map_result!(
+    let mut outputs = match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                match input.dtype() {
+                    DType::F32 => map_result!(
+                        linalg::faer::rank_revealing_qr(
+                            context,
+                            buffers,
+                            input.as_typed::<f32>().ok_or_else(|| unsupported_dtype(
+                                "rank_revealing_qr",
+                                input.dtype()
+                            ))?,
+                            options
+                        ),
+                        F32
+                    ),
+                    DType::F64 => map_result!(
+                        linalg::faer::rank_revealing_qr(
+                            context,
+                            buffers,
+                            input.as_typed::<f64>().ok_or_else(|| unsupported_dtype(
+                                "rank_revealing_qr",
+                                input.dtype()
+                            ))?,
+                            options
+                        ),
+                        F64
+                    ),
+                    DType::C32 => {
+                        map_result!(
                             linalg::faer::rank_revealing_qr(
                                 context,
                                 buffers,
-                                input.as_typed::<f32>().ok_or_else(|| unsupported_dtype(
-                                    "rank_revealing_qr",
-                                    input.dtype()
-                                ))?,
+                                input.as_typed::<Complex32>().ok_or_else(|| {
+                                    unsupported_dtype("rank_revealing_qr", input.dtype())
+                                })?,
                                 options
                             ),
-                            F32
-                        ),
-                        DType::F64 => map_result!(
+                            C32
+                        )
+                    }
+                    DType::C64 => {
+                        map_result!(
                             linalg::faer::rank_revealing_qr(
                                 context,
                                 buffers,
-                                input.as_typed::<f64>().ok_or_else(|| unsupported_dtype(
-                                    "rank_revealing_qr",
-                                    input.dtype()
-                                ))?,
+                                input.as_typed::<Complex64>().ok_or_else(|| {
+                                    unsupported_dtype("rank_revealing_qr", input.dtype())
+                                })?,
                                 options
                             ),
-                            F64
-                        ),
-                        DType::C32 => {
-                            map_result!(
-                                linalg::faer::rank_revealing_qr(
-                                    context,
-                                    buffers,
-                                    input.as_typed::<Complex32>().ok_or_else(|| {
-                                        unsupported_dtype("rank_revealing_qr", input.dtype())
-                                    })?,
-                                    options
-                                ),
-                                C32
-                            )
-                        }
-                        DType::C64 => {
-                            map_result!(
-                                linalg::faer::rank_revealing_qr(
-                                    context,
-                                    buffers,
-                                    input.as_typed::<Complex64>().ok_or_else(|| {
-                                        unsupported_dtype("rank_revealing_qr", input.dtype())
-                                    })?,
-                                    options
-                                ),
-                                C64
-                            )
-                        }
-                        _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
+                            C64
+                        )
                     }
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    let _ = (context, buffers, input, options);
-                    Err(unsupported_provider(
-                        "rank_revealing_qr",
-                        CpuBackendKind::Faer,
-                    ))
+                    _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
                 }
             }
-            CpuLinalgProvider::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    let _ = context;
-                    match input.dtype() {
-                        DType::F32 => {
-                            let t = input.as_typed::<f32>().ok_or_else(|| {
-                                unsupported_dtype("rank_revealing_qr", input.dtype())
-                            })?;
-                            map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), F32)
-                        }
-                        DType::F64 => {
-                            let t = input.as_typed::<f64>().ok_or_else(|| {
-                                unsupported_dtype("rank_revealing_qr", input.dtype())
-                            })?;
-                            map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), F64)
-                        }
-                        DType::C32 => {
-                            let t = input.as_typed::<Complex32>().ok_or_else(|| {
-                                unsupported_dtype("rank_revealing_qr", input.dtype())
-                            })?;
-                            map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), C32)
-                        }
-                        DType::C64 => {
-                            let t = input.as_typed::<Complex64>().ok_or_else(|| {
-                                unsupported_dtype("rank_revealing_qr", input.dtype())
-                            })?;
-                            map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), C64)
-                        }
-                        _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, input, options);
+                Err(unsupported_provider(
+                    "rank_revealing_qr",
+                    CpuBackendKind::Faer,
+                ))
+            }
+        }
+        CpuLinalgProvider::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                match input.dtype() {
+                    DType::F32 => {
+                        let t = input
+                            .as_typed::<f32>()
+                            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", input.dtype()))?;
+                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), F32)
                     }
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    let _ = (context, buffers, input, options);
-                    Err(unsupported_provider(
-                        "rank_revealing_qr",
-                        CpuBackendKind::Blas,
-                    ))
+                    DType::F64 => {
+                        let t = input
+                            .as_typed::<f64>()
+                            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", input.dtype()))?;
+                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), F64)
+                    }
+                    DType::C32 => {
+                        let t = input
+                            .as_typed::<Complex32>()
+                            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", input.dtype()))?;
+                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), C32)
+                    }
+                    DType::C64 => {
+                        let t = input
+                            .as_typed::<Complex64>()
+                            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", input.dtype()))?;
+                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), C64)
+                    }
+                    _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
                 }
             }
-        }?;
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, input, options);
+                Err(unsupported_provider(
+                    "rank_revealing_qr",
+                    CpuBackendKind::Blas,
+                ))
+            }
+        }
+    }?;
     apply_qr_gauge(options.gauge, &mut outputs[..2])?;
     Ok(outputs)
 }
@@ -3303,12 +3312,24 @@ fn apply_lu_pivots_cpu(
             pivots.dtype(),
         ));
     };
-    match input {
-        Tensor::F32(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::F32),
-        Tensor::F64(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::F64),
-        Tensor::C32(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::C32),
-        Tensor::C64(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::C64),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::External(..) => {
+    match input.dtype() {
+        DType::F32 => {
+            apply_lu_pivots_typed(typed_host(input, "lu_solve_prepared")?, pivots, inverse)
+                .map(Tensor::F32)
+        }
+        DType::F64 => {
+            apply_lu_pivots_typed(typed_host(input, "lu_solve_prepared")?, pivots, inverse)
+                .map(Tensor::F64)
+        }
+        DType::C32 => {
+            apply_lu_pivots_typed(typed_host(input, "lu_solve_prepared")?, pivots, inverse)
+                .map(Tensor::C32)
+        }
+        DType::C64 => {
+            apply_lu_pivots_typed(typed_host(input, "lu_solve_prepared")?, pivots, inverse)
+                .map(Tensor::C64)
+        }
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
             Err(unsupported_dtype("lu_solve_prepared", input.dtype()))
         }
     }
