@@ -8505,6 +8505,38 @@ impl Tensor {
         T::as_slice(self)
     }
 
+    /// Borrow the typed tensor when the requested scalar matches this tensor's dtype.
+    ///
+    /// This is the accessor tag-based dispatch needs: it recovers the typed tensor — and with it the
+    /// device buffer — from a value whose element type is only known at run time, so a caller can
+    /// dispatch on [`Tensor::dtype`] instead of matching every variant. An externally defined scalar
+    /// is not a typed tensor, so it returns `None` rather than guessing a representation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert!(tensor.as_typed::<f64>().is_some());
+    /// assert!(tensor.as_typed::<f32>().is_none());
+    /// assert_eq!(tensor.as_typed::<f64>().unwrap().shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn as_typed<T: TensorScalar>(&self) -> Option<&TypedTensor<T>> {
+        match self {
+            Tensor::F32(tensor) => (tensor as &dyn Any).downcast_ref::<TypedTensor<T>>(),
+            Tensor::F64(tensor) => (tensor as &dyn Any).downcast_ref::<TypedTensor<T>>(),
+            Tensor::I32(tensor) => (tensor as &dyn Any).downcast_ref::<TypedTensor<T>>(),
+            Tensor::I64(tensor) => (tensor as &dyn Any).downcast_ref::<TypedTensor<T>>(),
+            Tensor::Bool(tensor) => (tensor as &dyn Any).downcast_ref::<TypedTensor<T>>(),
+            Tensor::C32(tensor) => (tensor as &dyn Any).downcast_ref::<TypedTensor<T>>(),
+            Tensor::C64(tensor) => (tensor as &dyn Any).downcast_ref::<TypedTensor<T>>(),
+            Tensor::External(..) => None,
+        }
+    }
+
     /// Consume this tensor and return its owned column-major buffer when the
     /// dtype matches.
     ///

@@ -61,8 +61,9 @@ impl Bf16Einsum {
     ///
     /// # Errors
     ///
-    /// Returns an error when either operand carries no label, when a label repeats inside one
-    /// operand, or when an output label appears in neither operand.
+    /// Returns [`tenferro_tensor::Error::InvalidArgument`] when the pattern is not a pairwise contraction: an operand
+    /// carries no label, a label repeats inside one operand, the operands share no contracted
+    /// label, or an output label appears in no operand.
     ///
     /// # Examples
     ///

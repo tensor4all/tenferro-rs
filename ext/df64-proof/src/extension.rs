@@ -468,9 +468,10 @@ impl Df64Einsum {
     ///
     /// # Errors
     ///
-    /// Returns an error when either input is not rank two, when a label repeats within one
-    /// input, when the inputs do not share exactly one contracted label as the second and first
-    /// label respectively, or when the output is not the two free labels in that order.
+    /// Returns [`tenferro_tensor::Error::InvalidArgument`] when either input is not rank two, when
+    /// a label repeats within one input, when the inputs do not share exactly one contracted label
+    /// as the second and first label respectively, or when the output is not the two free labels in
+    /// that order.
     ///
     /// # Examples
     ///
@@ -721,7 +722,9 @@ impl Df64EinsumVjp {
     ///
     /// # Errors
     ///
-    /// Returns the same pattern errors as [`Df64Einsum::new`].
+    /// Returns [`tenferro_tensor::Error::InvalidArgument`] when the pattern is not a pairwise contraction: an operand
+    /// carries no label, a label repeats inside one operand, the operands share no contracted
+    /// label, or an output label appears in no operand.
     ///
     /// # Examples
     ///
@@ -874,8 +877,9 @@ impl Df64EinsumJvp {
     ///
     /// # Errors
     ///
-    /// Returns the same pattern errors as [`Df64Einsum::new`], and an error when neither operand
-    /// carries a tangent, because then there is nothing to differentiate.
+    /// Returns an error when the operand list is not a valid pattern (an operand carries no label, or
+    /// an output label appears in no operand), when the tangent mask does not have one entry per
+    /// operand, or when no operand carries a tangent, because then there is nothing to differentiate.
     ///
     /// # Examples
     ///
