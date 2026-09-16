@@ -194,24 +194,25 @@ impl SemanticPrimalVjpRule for Df64VjpRule {
                 else {
                     return Ok(inactive());
                 };
-                // The helpers are defined for the pairwise case, so a wider pattern is refused
-                // rather than differentiated as if it were pairwise.
-                let Some((lhs, rhs, out)) = contraction.labels() else {
-                    return Err(unsupported(op, role));
-                };
+                // The adjoint contracts the cotangent with the other operands in every operand's
+                // place, so it carries the whole operand list rather than a pair.
+                let operands: Vec<&[u32]> = contraction
+                    .input_labels()
+                    .iter()
+                    .map(|labels| labels.as_slice())
+                    .collect();
                 // The primal operation accepted this pattern, so the adjoint's validation is a
                 // rule-level invariant rather than a user error.
-                let Ok(adjoint) = Df64EinsumVjp::of(lhs, rhs, out) else {
+                let Ok(adjoint) = Df64EinsumVjp::of(&operands, contraction.out_labels()) else {
                     return Err(unsupported(op, role));
                 };
-                builder.add_extension(
-                    Arc::new(adjoint),
-                    &[
-                        request.primal_input_value(0)?,
-                        request.primal_input_value(1)?,
-                        cotangent,
-                    ],
-                )
+                // Every operand reaches the helper, followed by the cotangent.
+                let mut call_operands = Vec::with_capacity(contraction.input_labels().len() + 1);
+                for index in 0..contraction.input_labels().len() {
+                    call_operands.push(request.primal_input_value(index)?);
+                }
+                call_operands.push(cotangent);
+                builder.add_extension(Arc::new(adjoint), &call_operands)
             }
             Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp => {
                 return Err(unsupported(op, role));

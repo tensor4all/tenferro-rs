@@ -382,21 +382,36 @@ fn the_forward_tangent_and_the_adjoint_satisfy_duality() {
 }
 
 #[test]
-fn the_adjoint_refuses_a_contraction_wider_than_pairwise() {
-    // The helpers are defined for the pairwise case, so a three-operand pattern is refused with a
-    // typed error rather than differentiated as if it were pairwise.
+fn the_adjoint_of_a_three_operand_contraction_matches_the_hand_written_products() {
+    // "ij,jk,kl->il" with A = [[1, 2], [3, 4]], B = I and C = I. The output is A, so with an
+    // all-ones cotangent the cotangent of A is the ones matrix, and the cotangents of B and C are
+    // A^T times ones, which is [[3, 3], [7, 7]] in column-major order as [3, 7, 3, 7].
     let op = Df64Einsum::new_nary(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]).expect("a contraction");
     let a = leaf(numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]);
-    let b = leaf(numbers(&[5.0, 7.0, 6.0, 8.0]), vec![2, 2]);
+    let b = leaf(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
     let c = leaf(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
     let output = apply(Arc::new(op), &[&a, &b, &c]).expect("traced contraction");
-    let cotangent = leaf(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
+    let cotangent = leaf(numbers(&[1.0, 1.0, 1.0, 1.0]), vec![2, 2]);
 
-    let error = cotangent_context()
+    let gradient = cotangent_context()
         .vjp(&output[0], &a, &cotangent)
-        .expect_err("the adjoint is defined for the pairwise case");
-    assert!(
-        error.to_string().contains("support") || error.to_string().contains("rule"),
-        "the refusal must be typed and explicit: {error}"
+        .expect("the adjoint is defined for any operand count");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&gradient).expect("compiled adjoint");
+    let results = runtime_with_module()
+        .run_compiled(
+            &program,
+            &[
+                &external(numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]),
+                &external(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
+                &external(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
+                &external(numbers(&[1.0, 1.0, 1.0, 1.0]), vec![2, 2]),
+            ],
+        )
+        .expect("adjoint execution");
+    assert_eq!(
+        payload(&results[0]),
+        numbers(&[1.0, 1.0, 1.0, 1.0]),
+        "the cotangent of the first operand is the cotangent contracted with the other two"
     );
 }

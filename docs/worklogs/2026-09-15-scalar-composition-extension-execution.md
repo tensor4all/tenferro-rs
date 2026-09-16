@@ -1242,3 +1242,21 @@ spacing on [1, 2) is 2^-7 because it keeps eight significand bits including the 
 materialized inputs yields the tensor crate's error rather than the runtime's; and the module needs a
 planning config registered against its engine identity, which the runtime says out loud as
 `MissingPlanningConfig` rather than failing silently at execution.
+
+## The N-ary adjoint, which I had declined too early
+
+I recorded this as deliberately refused, on the grounds that generalising the helpers would put the
+verified pairwise path at risk. The tests are what makes that risk small: six of them, including the
+duality identity checked exactly, guard the refactor, so declining it was over-cautious rather than
+low-risk in the sense the iteration policy means.
+
+The fold the forward body already used is now a helper, and the adjoint carries the whole operand
+list: the cotangent of each operand is the output cotangent contracted with the others, with the
+cotangent taking that operand's place under the output's labels. The pairwise behaviour falls out of
+the same code, which is why the existing tests still pass unchanged, and a three-operand test checks
+the new capability against hand-written products.
+
+The tangent stays pairwise for now, and the difference is real rather than an oversight: its payload
+records a pair of availability flags, so an N-operand version needs a mask instead of a tuple. That is
+the next piece, and the inventory says so rather than implying both modes cover the whole pattern
+surface.

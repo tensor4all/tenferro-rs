@@ -712,8 +712,7 @@ impl ExtensionOp for Df64Einsum {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Df64EinsumVjp {
-    lhs: Vec<u32>,
-    rhs: Vec<u32>,
+    inputs: Vec<Vec<u32>>,
     out: Vec<u32>,
 }
 
@@ -732,11 +731,10 @@ impl Df64EinsumVjp {
     /// assert!(Df64EinsumVjp::of(&[0, 1], &[1, 2], &[0, 2]).is_ok());
     /// assert!(Df64EinsumVjp::of(&[], &[1, 2], &[0, 2]).is_err());
     /// ```
-    pub fn of(lhs: &[u32], rhs: &[u32], out: &[u32]) -> tenferro_runtime::Result<Self> {
-        Df64Einsum::new(lhs, rhs, out)?;
+    pub fn of(inputs: &[&[u32]], out: &[u32]) -> tenferro_runtime::Result<Self> {
+        Df64Einsum::new_nary(inputs, out)?;
         Ok(Self {
-            lhs: lhs.to_vec(),
-            rhs: rhs.to_vec(),
+            inputs: inputs.iter().map(|labels| labels.to_vec()).collect(),
             out: out.to_vec(),
         })
     }
@@ -752,9 +750,34 @@ impl Df64EinsumVjp {
     /// let (lhs, rhs, out) = adjoint.labels();
     /// assert_eq!((lhs, rhs, out), (&[0, 1][..], &[1, 2][..], &[0, 2][..]));
     /// ```
+    /// Every operand's labels, in operand order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64EinsumVjp;
+    ///
+    /// let adjoint = Df64EinsumVjp::of(&[&[0, 1], &[1, 2]], &[0, 2]).expect("a contraction");
+    /// assert_eq!(adjoint.input_labels(), &[vec![0, 1], vec![1, 2]]);
+    /// ```
     #[must_use]
-    pub fn labels(&self) -> (&[u32], &[u32], &[u32]) {
-        (&self.lhs, &self.rhs, &self.out)
+    pub fn input_labels(&self) -> &[Vec<u32>] {
+        &self.inputs
+    }
+
+    /// The output's labels, in the output's axis order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64EinsumVjp;
+    ///
+    /// let adjoint = Df64EinsumVjp::of(&[&[0, 1], &[1, 2]], &[0, 2]).expect("a contraction");
+    /// assert_eq!(adjoint.out_labels(), &[0, 2]);
+    /// ```
+    #[must_use]
+    pub fn out_labels(&self) -> &[u32] {
+        &self.out
     }
 }
 
@@ -764,7 +787,8 @@ impl ExtensionOp for Df64EinsumVjp {
     }
 
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
-        for labels in [&self.lhs, &self.rhs, &self.out] {
+        hasher.write_usize(self.inputs.len());
+        for labels in self.inputs.iter().chain(core::iter::once(&self.out)) {
             hasher.write_usize(labels.len());
             for label in labels {
                 hasher.write_u32(*label);
@@ -788,13 +812,13 @@ impl ExtensionOp for Df64EinsumVjp {
     }
 
     fn input_count(&self) -> usize {
-        // Both operands and the output cotangent.
-        3
+        // Every operand and the output cotangent.
+        self.inputs.len() + 1
     }
 
     fn output_count(&self) -> usize {
         // One cotangent per operand.
-        2
+        self.inputs.len()
     }
 
     fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
@@ -821,11 +845,11 @@ impl ExtensionOp for Df64EinsumVjp {
                 "df64_einsum_vjp takes an externally defined scalar",
             ));
         }
-        // Each cotangent has the shape of the operand it belongs to.
-        Ok(vec![
-            (dtype, ctx.input_shape(0)?.to_vec()),
-            (dtype, ctx.input_shape(1)?.to_vec()),
-        ])
+        let mut shapes = Vec::with_capacity(self.inputs.len());
+        for operand in 0..self.inputs.len() {
+            shapes.push((dtype, ctx.input_shape(operand)?.to_vec()));
+        }
+        Ok(shapes)
     }
 }
 
@@ -1826,6 +1850,61 @@ fn external_of(
 /// An intermediate keeps exactly the labels the remaining operands or the output still need, so a
 /// label that only the already-contracted operands name is summed by that step, which is what the
 /// notation means by a label the output omits.
+/// Fold a list of operands from the left, returning the contracted values and their shape.
+///
+/// An intermediate keeps exactly the labels the remaining operands or the output still need, so a
+/// label only the already-contracted operands name is summed by that step, which is what the notation
+/// means by a label the output omits.
+fn fold_in_scalar(
+    op: &'static str,
+    labels: &[Box<[u32]>],
+    out_labels: &[u32],
+    operands: &[(Vec<Df64>, Vec<usize>)],
+) -> tenferro_runtime::Result<(Vec<Df64>, Vec<usize>)> {
+    let mut accumulator = operands[0].0.clone();
+    let mut accumulator_shape = operands[0].1.clone();
+    let mut accumulator_labels: Vec<u32> = labels[0].to_vec();
+    for index in 1..labels.len() {
+        let next_labels: Vec<u32> = labels[index].to_vec();
+        let keep: Vec<u32> = if index + 1 == labels.len() {
+            out_labels.to_vec()
+        } else {
+            let mut keep: Vec<u32> = Vec::new();
+            for label in accumulator_labels.iter().chain(next_labels.iter()) {
+                let needed_later = out_labels.contains(label)
+                    || labels[index + 1..].iter().any(|rest| rest.contains(label));
+                if needed_later && !keep.contains(label) {
+                    keep.push(*label);
+                }
+            }
+            keep
+        };
+        let pair = [
+            accumulator_labels.clone().into_boxed_slice(),
+            next_labels.clone().into_boxed_slice(),
+        ];
+        let contracted = contract_in_scalar(
+            op,
+            &pair,
+            &keep,
+            &accumulator,
+            &accumulator_shape,
+            &operands[index].0,
+            &operands[index].1,
+        )?;
+        let contracted_shape = shape_of_labels(
+            &pair,
+            &[accumulator_shape.clone(), operands[index].1.clone()],
+            &keep,
+        );
+        accumulator = contracted;
+        accumulator_shape = contracted_shape;
+        accumulator_labels = keep;
+    }
+    Ok((accumulator, accumulator_shape))
+}
+
+/// Contract every operand, returning the result as an external tensor.
 fn einsum_of(
     labels: &[Box<[u32]>],
     out_labels: &[u32],
@@ -1843,54 +1922,15 @@ fn einsum_of(
             ),
         ));
     }
-    let mut values: Vec<Vec<Df64>> = Vec::with_capacity(resolved.len());
-    let mut shapes: Vec<Vec<usize>> = Vec::with_capacity(resolved.len());
+    let mut operands: Vec<(Vec<Df64>, Vec<usize>)> = Vec::with_capacity(resolved.len());
     for operand in &resolved {
-        values.push(payload_of::<Df64>(op, operand.tensor())?);
-        shapes.push(operand.tensor().shape().to_vec());
+        operands.push((
+            payload_of::<Df64>(op, operand.tensor())?,
+            operand.tensor().shape().to_vec(),
+        ));
     }
-
-    let mut accumulator = values[0].clone();
-    let mut accumulator_shape = shapes[0].clone();
-    let mut accumulator_labels: Vec<u32> = labels[0].to_vec();
-    for index in 1..labels.len() {
-        let next_labels: Vec<u32> = labels[index].to_vec();
-        let keep: Vec<u32> = if index + 1 == labels.len() {
-            out_labels.to_vec()
-        } else {
-            let mut keep: Vec<u32> = Vec::new();
-            for label in accumulator_labels.iter().chain(next_labels.iter()) {
-                let needed_later = out_labels.contains(label)
-                    || labels[index + 1..].iter().any(|rest| rest.contains(label));
-                if needed_later && !keep.contains(label) {
-                    keep.push(*label);
-                }
-            }
-            keep
-        };
-        let operands = [
-            accumulator_labels.clone().into_boxed_slice(),
-            next_labels.clone().into_boxed_slice(),
-        ];
-        let contracted = contract_in_scalar(
-            op,
-            &operands,
-            &keep,
-            &accumulator,
-            &accumulator_shape,
-            &values[index],
-            &shapes[index],
-        )?;
-        let contracted_shape = shape_of_labels(
-            &operands,
-            &[accumulator_shape.clone(), shapes[index].clone()],
-            &keep,
-        );
-        accumulator = contracted;
-        accumulator_shape = contracted_shape;
-        accumulator_labels = keep;
-    }
-    Ok(vec![external_of(op, accumulator, accumulator_shape)?])
+    let (values, shape) = fold_in_scalar(op, labels, out_labels, &operands)?;
+    Ok(vec![external_of(op, values, shape)?])
 }
 
 /// The adjoint of a contraction: the cotangent of each operand, in the extended scalar.
@@ -1905,46 +1945,43 @@ fn einsum_vjp_of(
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let op = "df64_einsum_vjp";
     let resolved = inputs_of(op, session, inputs)?;
-    if resolved.len() != 3 || labels.len() != 2 {
+    if resolved.len() != labels.len() + 1 || labels.len() < 2 {
         return Err(tenferro_runtime::Error::from(
             tenferro_tensor::Error::invalid_argument(
                 op,
                 "input",
-                "the adjoint takes both operands and the output cotangent",
+                "the adjoint takes one input per operand and the output cotangent",
             ),
         ));
     }
-    let lhs_values = payload_of::<Df64>(op, resolved[0].tensor())?;
-    let rhs_values = payload_of::<Df64>(op, resolved[1].tensor())?;
-    let cotangent = payload_of::<Df64>(op, resolved[2].tensor())?;
-    let lhs_shape = resolved[0].tensor().shape().to_vec();
-    let rhs_shape = resolved[1].tensor().shape().to_vec();
-    let cotangent_shape = resolved[2].tensor().shape().to_vec();
-    let out_operand = out_labels.to_vec().into_boxed_slice();
+    let mut operands: Vec<(Vec<Df64>, Vec<usize>)> = Vec::with_capacity(labels.len());
+    for operand in &resolved[..labels.len()] {
+        operands.push((
+            payload_of::<Df64>(op, operand.tensor())?,
+            operand.tensor().shape().to_vec(),
+        ));
+    }
+    let cotangent = payload_of::<Df64>(op, resolved[labels.len()].tensor())?;
+    let cotangent_shape = resolved[labels.len()].tensor().shape().to_vec();
 
-    // lhs_bar = einsum(out, rhs -> lhs), rhs_bar = einsum(lhs, out -> rhs).
-    let lhs_bar = contract_in_scalar(
-        op,
-        &[out_operand.clone(), labels[1].clone()],
-        &labels[0],
-        &cotangent,
-        &cotangent_shape,
-        &rhs_values,
-        &rhs_shape,
-    )?;
-    let rhs_bar = contract_in_scalar(
-        op,
-        &[labels[0].clone(), out_operand],
-        &labels[1],
-        &lhs_values,
-        &lhs_shape,
-        &cotangent,
-        &cotangent_shape,
-    )?;
-    Ok(vec![
-        external_of(op, lhs_bar, lhs_shape)?,
-        external_of(op, rhs_bar, rhs_shape)?,
-    ])
+    // The cotangent of each operand is the contraction of the output cotangent with every other
+    // operand, so the cotangent takes that operand's place and carries the output's labels.
+    let mut outputs = Vec::with_capacity(labels.len());
+    for position in 0..labels.len() {
+        let mut substituted: Vec<(Vec<Df64>, Vec<usize>)> = Vec::with_capacity(labels.len());
+        for (index, operand) in operands.iter().enumerate() {
+            if index == position {
+                substituted.push((cotangent.clone(), cotangent_shape.clone()));
+            } else {
+                substituted.push(operand.clone());
+            }
+        }
+        let mut step_labels: Vec<Box<[u32]>> = labels.to_vec();
+        step_labels[position] = out_labels.to_vec().into_boxed_slice();
+        let (values, shape) = fold_in_scalar(op, &step_labels, &labels[position], &substituted)?;
+        outputs.push(external_of(op, values, shape)?);
+    }
+    Ok(outputs)
 }
 
 /// The forward tangent of a contraction: each operand's tangent contracted with the other.
@@ -2284,14 +2321,13 @@ impl ExtensionEngine for Df64Engine {
                 tangents: present,
             }
         } else if let Some(adjoint) = operation.downcast_ref::<Df64EinsumVjp>() {
-            let (lhs, rhs, out) = adjoint.labels();
             Df64Body::EinsumVjp {
-                inputs: vec![
-                    lhs.to_vec().into_boxed_slice(),
-                    rhs.to_vec().into_boxed_slice(),
-                ]
-                .into_boxed_slice(),
-                out: out.to_vec().into_boxed_slice(),
+                inputs: adjoint
+                    .input_labels()
+                    .iter()
+                    .map(|labels| labels.clone().into_boxed_slice())
+                    .collect(),
+                out: adjoint.out_labels().to_vec().into_boxed_slice(),
             }
         } else if let Some(contraction) = operation.downcast_ref::<Df64Einsum>() {
             Df64Body::Einsum {
