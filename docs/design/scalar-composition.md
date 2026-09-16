@@ -1321,6 +1321,19 @@ occurrences that never came from a binding. The same pass also has to know which
 `scatter_indices` the binding shadows. The function therefore needs a per-arm rewrite that distinguishes
 bindings from parameters, which is what the earlier hand conversions did.
 
+**First file complete.** `crates/tenferro-gpu/src/cubecl/mod.rs` was the densest of the four named files.
+Every match in it now dispatches on the dtype tag, including the four conversions that each needed a
+different treatment: `scatter` (substitute the helper's argument list, because bound names collide with
+the function's parameters), `concatenate` (collapse a nested re-match to `Tensor::as_typed`, whose `None`
+is exactly the case the wildcard arm caught), `gather` and `dynamic_slice` (same argument-list
+substitution, mixed-variant pairs), and `cast` (the destination was already a tag, and the bound name
+shadows nothing). Two of those passes were rejected by the compiler first and rewritten: substituting a
+bound name before replacing the pattern leaves the pattern unmatched, and dropping the tail of an arm
+head deletes the brace that opens a block body. Remaining occurrences of the variants in that file are
+result constructions such as `.map(Tensor::F32)`, not patterns. `reshape` is the one exception, and it is
+the move-semantics case: it hands the typed tensor to the kernel-launch helper and reuses the device
+buffer, so it needs the erased representation rather than a borrow.
+
 **Where the incremental approach stops.** Converting `reshape` showed the limit. Its dispatch recovers
 each typed tensor and *moves* it into a metadata helper that reuses the buffer, but `Tensor::as_typed`
 borrows, so a tag-dispatched version would have to clone the device tensor and change the operation's
