@@ -307,6 +307,19 @@ contract for erasure, layout, and reinterpretation, which is #1785 design
 question 2 and #1789's resource boundary; it is recorded here as the decision
 stage 2 must make rather than left implicit in the notation.
 
+Two shapes can admit an external member, and the difference is where the cost
+lands. A tag plus one erased payload for every member removes the variant list but
+charges the measured erasure cost to the preset members as well. Keeping the seven
+variants and adding one erased variant charges it only to external members, and
+because the same-variant dispatch sites already end in a fallback arm, most of
+them would reject an external member through their existing error path without
+being rewritten. The catch is the same in both shapes and it is not in the tensor
+layer: a preset payload is pool-owned through `RootResourcePin::Host*` in
+`crates/tenferro-tensor/src/storage/root.rs`, and the pool is typed per preset
+through the sealed `PoolScalar`, so an external payload has to be caller-owned
+rather than pool-owned. That is #1789's ownership contract, and it is why this
+decision cannot be made from the tensor layer alone.
+
 Prototype landed: `ErasedHostTensor` carries a host tensor whose element type is
 recovered at run time. The payload keeps its own concrete type and the value
 stores its `TypeId` explicitly, so identity is the actual Rust type; recovery by
