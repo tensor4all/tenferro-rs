@@ -3767,6 +3767,29 @@ impl Tensor {
         Self::External(payload, Placement::default())
     }
 
+    /// Build a tensor from a typed one, without naming its variant.
+    ///
+    /// A call site that constructs a tensor from a typed tensor should use this rather than a variant, so
+    /// that changing how the erased representation is stored changes this function and not its 1290 call
+    /// sites. The variants remain until the removal's last step, so both forms currently produce the same
+    /// value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let typed = tensor.into_typed::<f64>()?;
+    /// let rebuilt = Tensor::from_typed(typed);
+    /// assert_eq!(rebuilt.as_typed::<f64>().unwrap().shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn from_typed<T: TensorScalar>(typed: TypedTensor<T>) -> Self {
+        T::typed_tensor_into_tensor(typed)
+    }
+
     /// Borrow the erased payload of an externally defined tensor.
     ///
     /// This is the counterpart of [`Tensor::external`] for dispatch: a table that matches on

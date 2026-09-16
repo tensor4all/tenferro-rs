@@ -1306,6 +1306,14 @@ The third row is not a work item. No typed accessor exists on those types — `a
 `external_payload`, and `into_typed` are all defined on `Tensor` alone — so converting their tables would add
 public API that no part of the objective asks for.
 
+The preparatory step has started and its mechanism is proven, but it is not scriptable: `Tensor::from_typed`
+now delegates to the sealed `TensorScalar` conversion that already existed, so a call site can build a tensor
+without naming a variant, and the first sites are migrated. A line-based rewrite of the remaining ones is
+unsafe, and two attempts showed why: variant patterns occur as macro rules whose matchers hold `$tensor`
+rather than an identifier, and as tuple patterns such as `(Tensor::Bool(_), Tensor::Bool(_)) =>`, neither of
+which a line-level check can tell from a construction. Both attempts were reverted, and the migration is a
+per-site edit with review, as the conversions were.
+
 The two `Tensor` rows are the removal, and they have a preparatory step that is mechanical and
 behaviour-preserving: introduce a constructor that builds a tensor from a typed one, and migrate the 1290
 construction sites to it. The variants stay until the end, so each migrated file keeps the whole suite green,
