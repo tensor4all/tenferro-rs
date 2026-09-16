@@ -53,21 +53,11 @@ pub enum DiagonalError {
 /// assert_eq!(promote_dtype(DType::I32, DType::F32), DType::F64);
 /// ```
 pub fn promote_dtype(lhs: DType, rhs: DType) -> DType {
-    use DType::*;
-    match (lhs, rhs) {
-        (Bool, Bool) => Bool,
-        (Bool, other) | (other, Bool) => other,
-        (I32, I32) => I32,
-        (I32, I64) | (I64, I32) | (I64, I64) => I64,
-        (I32 | I64, F32 | F64) | (F32 | F64, I32 | I64) => F64,
-        (I32 | I64, C32 | C64) | (C32 | C64, I32 | I64) => C64,
-        (F32, F32) => F32,
-        (F32, F64) | (F64, F32) | (F64, F64) => F64,
-        (F32, C32) | (C32, F32) | (C32, C32) => C32,
-        (F32, C64) | (C64, F32) => C64,
-        (F64, C32 | C64) | (C32 | C64, F64) => C64,
-        (C32, C64) | (C64, C32) | (C64, C64) => C64,
-    }
+    // The lattice belongs to the scalar set that declares the members, and is
+    // derived from each member's declared kind, rank, and width. A set that
+    // declares a different set of scalars promotes within that set instead of
+    // using this one.
+    <tenferro_tensor_core::DefaultScalars as tenferro_tensor_core::ScalarSet>::promote(lhs, rhs)
 }
 
 /// Return whether public `convert` may change `from` into `to`.

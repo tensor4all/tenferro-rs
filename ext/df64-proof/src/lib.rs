@@ -26,9 +26,9 @@ tenferro_tensor_core::define_scalar_set! {
     /// ```
     pub enum ExtendedTag {
         /// Standard double precision.
-        F64 => f64,
-        /// The external two-component scalar.
-        Df64 => Df64,
+        F64 => f64 : Float 0 64,
+        /// The external two-component scalar, ranked above double precision.
+        Df64 => Df64 : Float 1 64,
     }
     /// Value enum for the external extended-precision set.
     ///

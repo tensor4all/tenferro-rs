@@ -340,6 +340,20 @@ members with erasure only for externally defined ones. The measurement is
 host-only and single-threaded; the pool-backed runtime payload and its release to
 the originating owner (#1789) are not covered by it.
 
+The promotion lattice is generated too. Each member declares its arithmetic kind,
+its rank within that kind, and its component width, and `define_scalar_set!`
+derives `promote` from those facts: a boolean yields to anything, two members of
+one kind keep the higher rank, an integer yields to the widest member of the
+float or complex kind, and a float with a complex takes the narrowest complex that
+still holds both. The hand-written table in
+`crates/tenferro-tensor/src/validate/mod.rs` is deleted and `promote_dtype`
+delegates to the set, so the lattice belongs to whichever set declares the
+members.
+
+Measured: the derived lattice reproduces the recorded hand-written table for all
+49 pairs (`crates/tenferro-tensor/src/validate/tests.rs`), and the external set in
+`ext/df64-proof` promotes within its own lattice without touching tenferro's.
+
 Landed and measured: `DType` and `DefaultScalars` are now generated from one
 declaration in `tenferro-tensor-core`, `ScalarSet` is the open membership
 contract, and `ext/df64-proof` declares its own two-member set with the same

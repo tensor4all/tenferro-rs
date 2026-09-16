@@ -719,3 +719,58 @@ fn c64_tiny_nonzero_complex_diagonal_is_nonsingular() {
 
     assert!(check_singular_diagonal(&tensor).is_ok());
 }
+
+#[test]
+fn derived_promotion_matches_the_recorded_lattice() {
+    use crate::DType::*;
+    use tenferro_tensor_core::{DefaultScalars, ScalarSet};
+
+    // The lattice as the hand-written table defined it, recorded here so the
+    // derived version is checked against every pair rather than a sample.
+    let all = [Bool, I32, I64, F32, F64, C32, C64];
+    let expected = [
+        (Bool, Bool, Bool),
+        (Bool, I32, I32),
+        (Bool, I64, I64),
+        (Bool, F32, F32),
+        (Bool, F64, F64),
+        (Bool, C32, C32),
+        (Bool, C64, C64),
+        (I32, I32, I32),
+        (I32, I64, I64),
+        (I32, F32, F64),
+        (I32, F64, F64),
+        (I32, C32, C64),
+        (I32, C64, C64),
+        (I64, I64, I64),
+        (I64, F32, F64),
+        (I64, F64, F64),
+        (I64, C32, C64),
+        (I64, C64, C64),
+        (F32, F32, F32),
+        (F32, F64, F64),
+        (F32, C32, C32),
+        (F32, C64, C64),
+        (F64, F64, F64),
+        (F64, C32, C64),
+        (F64, C64, C64),
+        (C32, C32, C32),
+        (C32, C64, C64),
+        (C64, C64, C64),
+    ];
+
+    for lhs in all {
+        for rhs in all {
+            let want = expected
+                .iter()
+                .find(|(a, b, _)| (*a == lhs && *b == rhs) || (*a == rhs && *b == lhs))
+                .map(|(_, _, out)| *out)
+                .expect("every unordered pair is recorded");
+            assert_eq!(
+                <DefaultScalars as ScalarSet>::promote(lhs, rhs),
+                want,
+                "derived promotion disagreed for {lhs:?} and {rhs:?}"
+            );
+        }
+    }
+}

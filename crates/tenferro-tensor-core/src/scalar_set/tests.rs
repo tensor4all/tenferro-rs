@@ -58,9 +58,9 @@ fn a_locally_declared_set_reports_its_own_members() {
         /// Tag for the test set.
         pub enum TestTag {
             /// Double precision.
-            F64 => f64,
+            F64 => f64 : Float 1 64,
             /// Single precision.
-            F32 => f32,
+            F32 => f32 : Float 0 32,
         }
         /// Value enum for the test set.
         pub enum TestSet;

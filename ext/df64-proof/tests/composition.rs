@@ -240,3 +240,21 @@ fn two_sets_containing_the_same_scalar_share_one_numerical_instantiation() {
 
     assert_eq!(out.as_slice(), &[11.0, 22.0]);
 }
+
+#[test]
+fn an_external_set_promotes_within_its_own_lattice() {
+    use tenferro_df64_proof::{ExtendedSet, ExtendedTag};
+    use tenferro_tensor_core::ScalarSet;
+
+    // Double precision and the external scalar are both real floats, so the
+    // higher-ranked member represents both. tenferro's own lattice is untouched.
+    assert_eq!(
+        <ExtendedSet as ScalarSet>::promote(ExtendedTag::F64, ExtendedTag::Df64),
+        ExtendedTag::Df64
+    );
+    assert_eq!(
+        <ExtendedSet as ScalarSet>::promote(ExtendedTag::F64, ExtendedTag::F64),
+        ExtendedTag::F64
+    );
+    assert_eq!(ExtendedTag::Df64.spec().level, 1);
+}

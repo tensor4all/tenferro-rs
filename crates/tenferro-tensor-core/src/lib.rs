@@ -44,7 +44,7 @@ pub use error::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 pub use layout::TensorLayout;
 pub use rank::{DynRank, IntoRankShape, Rank, TensorRank};
 pub use scalar::{ad_admission, AdAdmissionError, Scalar, ScalarArithmetic, ScalarDomain};
-pub use scalar_set::ScalarSet;
+pub use scalar_set::{promote_specs, MemberKind, MemberSpec, ScalarSet};
 
 /// Small tensor shape vector with inline capacity for common dynamic ranks.
 ///
@@ -112,19 +112,19 @@ define_scalar_set! {
     /// ```
     pub enum DType {
         /// 32-bit floating point.
-        F32 => f32,
+        F32 => f32 : Float 0 32,
         /// 64-bit floating point.
-        F64 => f64,
+        F64 => f64 : Float 1 64,
         /// 32-bit signed integer.
-        I32 => i32,
+        I32 => i32 : Integer 0 32,
         /// 64-bit signed integer.
-        I64 => i64,
+        I64 => i64 : Integer 1 64,
         /// Boolean.
-        Bool => bool,
+        Bool => bool : Boolean 0 0,
         /// 32-bit complex floating point.
-        C32 => Complex32,
+        C32 => Complex32 : Complex 0 32,
         /// 64-bit complex floating point.
-        C64 => Complex64,
+        C64 => Complex64 : Complex 1 64,
     }
     /// Value enum of the scalar set tenferro ships.
     ///
