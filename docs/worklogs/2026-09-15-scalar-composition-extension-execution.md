@@ -661,3 +661,21 @@ python3 scripts/gen_dep_graph.py --format svg --output docs/assets/dependency-fo
 Everything else in the `docs` profile passes: the docs-site, doc-consistency, rules-review, and
 guide-snippet tests, `check-operation-categories.py --fail-on-findings`, and the boundary
 inventory.
+
+## The rest of the profile sweep
+
+With the four gates fixed, the remaining CI steps were run as CI runs them:
+
+- The `extensions` profile targets crates the workspace *excludes* (`ext/tropical`, `ext/sparse`,
+  `ext/tenferro-cpu-tblis`), so `cargo test --workspace` had never compiled them. All three
+  compile against this branch, which closes another blind spot in the earlier verification
+  rather than finding a defect.
+- The `ci-config` profile's steps pass: the publish-layout, release-publish, release-validation,
+  boundary-scope, and storage-ownership tests, the public-boundary inventory test, and the
+  workflow-contract unit tests.
+- The `docs` profile passes every step except the dependency-graph test, whose checked-in SVG
+  needs Graphviz.
+
+So the branch's verification now covers the default workspace, the GPU feature configurations,
+the excluded extension crates, the docs profile's checks, and the CI configuration profile, with
+one generated artifact blocked by a missing tool.
