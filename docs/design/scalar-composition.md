@@ -373,6 +373,30 @@ descending arm density, so the largest boilerplate is removed first:
 
 The seven `Tensor` variants are removed last.
 
+### 5.2.1 The conversion pattern, demonstrated
+
+The order in section 5.2 converts each module to tag-based dispatch. The pattern
+was demonstrated on the highest-density CPU file that can be verified locally,
+`crates/tenferro-linalg/src/cpu/backend.rs` (225 arm lines):
+
+- `same_variant_pair!` declares the four supported real and complex arms and the
+  unsupported-pair error once. A call site now supplies only the typed kernel it
+  calls, for example
+  `same_variant_pair!("full_piv_lu_solve", a, &rhs, |a, b| linalg::faer::full_piv_lu_solve(ctx, buffers, a, b, transpose_a))`.
+- Six call sites (the `full_piv_lu_solve`, `triangular_solve`, and `solve` paths
+  for the faer and blas providers) were converted: **102 lines deleted net**, with
+  `cargo test -p tenferro-linalg` passing (127 + 163 + 1 + 144 tests) and the
+  `cpu-blas` feature path still compiling.
+- What this buys is not only the deletion: a call site no longer names the
+  variants, so it does not change again when the value type stops being a closed
+  enum. That is why this happens before the representation change.
+
+What remains in the same file: 35 single-tensor sites. They are not uniform
+because their outputs differ (a single tensor, or a `Vec` mixing the element type
+with an `I32` pivots tensor), so each needs its own wrapper expression. The same
+pattern applies with the wrapper parameterized; the sites are enumerated by
+`unsupported_dtype(` in that file.
+
 ### 5.3 Boundary decisions, with the current state as evidence
 
 Audited on `origin/main` rather than assumed:
