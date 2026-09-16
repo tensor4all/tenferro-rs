@@ -818,3 +818,18 @@ sets for equality compares that suffix instead of the parameterization. What the
 asserts is what the issue states: every contribution instantiation is parameterized by the
 contribution's scalar and operation, and no set type name appears in the parameters at all.
 That program defines four contribution instantiations and none names a set.
+
+## #1789's cleanup and retention item, mapped to evidence
+
+Reading #1789's acceptance table rather than its prose showed that its fourth item, cleanup and
+retention controls, had only half its evidence. The standard path was covered (`cache_management`
+covers clear and statistics) and the framework covered unwind (`catch_unwind` in `fallible_api`,
+`placement_bound_eager`, and `runtime_error_tests`, which the contribution's operations use
+unchanged), but the *contribution's* own storage had statistics without a clear. A new test,
+`ext/df64-proof/tests/retention_controls.rs`, runs the adjoint twice so the accounted extension
+cache holds entries and retained bytes, keeps the second output live, calls
+`Runtime::clear_caches`, and asserts that the entries and retained bytes reach zero while the live
+value and a later execution are unchanged. #1785's requirement that the contribution add no
+`Df64`-specific branch in tenferro or strided is also now measured rather than asserted: `grep` for
+`Df64` or `df64` under `crates/` returns no match at all, because the contribution lives entirely
+in `ext/df64-proof`.

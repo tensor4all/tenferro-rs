@@ -1299,7 +1299,17 @@ surface stays unimplemented by design. The rejection of an externally defined in
 boundary is implemented and tested.
 
 **#1789's pool, handoff, and accounting contracts.** The first steps that issue prescribes are
-done and evidenced: the existing caller-output, caller-owned, and session mechanisms are used;
+done and evidenced. Its fourth acceptance item, cleanup and retention controls, maps to evidence
+as follows: normal and error paths are the typed-rejection tests; unwind cleanup is the
+framework's `catch_unwind` coverage in `tenferro-ad`'s `fallible_api` and
+`placement_bound_eager` tests and in `tenferro-cpu`'s `runtime_error_tests`, which the
+contribution's operations use unchanged; retention and clear for standard storage are the
+pre-existing `cache_management` tests; and retention, clear, and statistics for the
+contribution's own storage are `ext/df64-proof/tests/scratch_allocation.rs`, which asserts that
+the accounted extension cache holds entries and retained bytes, and
+`ext/df64-proof/tests/retention_controls.rs`, which fills that cache, keeps an output live across
+`Runtime::clear_caches`, and checks that the retained bytes are released while the live value and
+a later execution are unchanged. The following are the measured first steps: the existing caller-output, caller-owned, and session mechanisms are used;
 the storage gap is measured (189 allocations and 174857 bytes for a steady-state 64 by 64
 factorization, 258 and 724668 bytes for the adjoint); a proven acquisition and return path runs
 through the accounted extension cache (one entry, 524288 retained bytes, one hit after two
