@@ -1302,6 +1302,21 @@ the representation itself changes. The rest are patterns inside dispatch macros,
 the macros in `cubecl/dispatch.rs` received, and a small number of constructions in files whose feature
 combinations the pass has not covered yet.
 
+### 5.16a Why the removal is gated, with the code behind it
+
+The removal is not merely large; it needs a representation that does not exist, and that is what makes it a
+decision rather than a task. The seven `Tensor` variants hold `TypedTensor<T>`, whose first field is
+`OwnedTensorGroup<R>`, and that group owns an `AllocationGroup` — the provider root, the pooled or device
+storage a tensor lives in — beside a `Placement`. The only erased payload in the workspace,
+`ErasedHostTensor`, holds a host shape, element strides, an offset, and host element storage, and it mentions
+`AllocationGroup`, device buffers, and backend buffers nowhere: `grep` over its module finds none of the three.
+
+So an erased payload can stand for a host tensor, and there is no erased payload that can stand for a
+device-resident or pool-resident one. Removing the seven variants therefore means designing and building the
+second kind, which is exactly the sealed pool boundary the objective keeps in place: "keep the sealed pool as
+a resource boundary owned by #1789 until that issue's contract is agreed". The removal is consequently gated by
+the objective's own constraint and by #1789's contract, not by its size alone.
+
 ### 5.17a What the removal still needs, measured
 
 The three accessors tag-based dispatch was missing now exist — `Tensor::as_typed_mut`,
