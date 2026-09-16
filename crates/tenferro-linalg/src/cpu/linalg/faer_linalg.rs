@@ -9,7 +9,9 @@ use std::ops::Range;
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
-use tenferro_tensor::{Tensor, TensorScalar, TypedTensor, TypedTensorView, TypedTensorViewMut};
+use tenferro_tensor::{
+    DType, Tensor, TensorScalar, TypedTensor, TypedTensorView, TypedTensorViewMut,
+};
 
 pub(crate) trait FaerLinalg:
     Copy + Clone + Default + PartialEq + PoolScalar + std::ops::Mul<Output = Self>
@@ -4716,12 +4718,12 @@ pub(crate) fn eig(
         }
         let value_shape = vector_with_batch_shape(n, batch_shape);
         let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
-        return match input {
-            Tensor::F32(_) | Tensor::C32(_) => Ok(vec![
+        return match input.dtype() {
+            DType::F32 | DType::C32 => Ok(vec![
                 Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
                 Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
             ]),
-            Tensor::F64(_) | Tensor::C64(_) => Ok(vec![
+            DType::F64 | DType::C64 => Ok(vec![
                 Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
                 Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
             ]),
@@ -4729,47 +4731,55 @@ pub(crate) fn eig(
         };
     }
 
-    match input {
-        Tensor::F32(t) => {
-            Ok(
-                batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
-                    eig_real32_2d(ctx, buffers, batch)
-                })?
-                .into_iter()
-                .map(Tensor::C32)
-                .collect(),
-            )
-        }
-        Tensor::F64(t) => {
-            Ok(
-                batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
-                    eig_real64_2d(ctx, buffers, batch)
-                })?
-                .into_iter()
-                .map(Tensor::C64)
-                .collect(),
-            )
-        }
-        Tensor::C32(t) => {
-            Ok(
-                batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
-                    eig_complex32_2d(ctx, buffers, batch)
-                })?
-                .into_iter()
-                .map(Tensor::C32)
-                .collect(),
-            )
-        }
-        Tensor::C64(t) => {
-            Ok(
-                batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
-                    eig_complex64_2d(ctx, buffers, batch)
-                })?
-                .into_iter()
-                .map(Tensor::C64)
-                .collect(),
-            )
-        }
+    match input.dtype() {
+        DType::F32 => Ok(batched_multi_convert_result(
+            "eig",
+            buffers,
+            input
+                .as_typed::<f32>()
+                .ok_or_else(|| crate::error::unsupported_dtype("eig", input.dtype()))?,
+            2,
+            |buffers, batch| eig_real32_2d(ctx, buffers, batch),
+        )?
+        .into_iter()
+        .map(Tensor::C32)
+        .collect()),
+        DType::F64 => Ok(batched_multi_convert_result(
+            "eig",
+            buffers,
+            input
+                .as_typed::<f64>()
+                .ok_or_else(|| crate::error::unsupported_dtype("eig", input.dtype()))?,
+            2,
+            |buffers, batch| eig_real64_2d(ctx, buffers, batch),
+        )?
+        .into_iter()
+        .map(Tensor::C64)
+        .collect()),
+        DType::C32 => Ok(batched_multi_convert_result(
+            "eig",
+            buffers,
+            input
+                .as_typed::<Complex32>()
+                .ok_or_else(|| crate::error::unsupported_dtype("eig", input.dtype()))?,
+            2,
+            |buffers, batch| eig_complex32_2d(ctx, buffers, batch),
+        )?
+        .into_iter()
+        .map(Tensor::C32)
+        .collect()),
+        DType::C64 => Ok(batched_multi_convert_result(
+            "eig",
+            buffers,
+            input
+                .as_typed::<Complex64>()
+                .ok_or_else(|| crate::error::unsupported_dtype("eig", input.dtype()))?,
+            2,
+            |buffers, batch| eig_complex64_2d(ctx, buffers, batch),
+        )?
+        .into_iter()
+        .map(Tensor::C64)
+        .collect()),
         _ => Err(crate::error::unsupported_dtype("eig", input.dtype())),
     }
 }
@@ -4791,12 +4801,12 @@ pub(crate) fn eig_values(
             ));
         }
         let value_shape = vector_with_batch_shape(n, batch_shape);
-        return match input {
-            Tensor::F32(_) | Tensor::C32(_) => Ok(Tensor::C32(TypedTensor::from_vec_col_major(
+        return match input.dtype() {
+            DType::F32 | DType::C32 => Ok(Tensor::C32(TypedTensor::from_vec_col_major(
                 value_shape,
                 Vec::new(),
             )?)),
-            Tensor::F64(_) | Tensor::C64(_) => Ok(Tensor::C64(TypedTensor::from_vec_col_major(
+            DType::F64 | DType::C64 => Ok(Tensor::C64(TypedTensor::from_vec_col_major(
                 value_shape,
                 Vec::new(),
             )?)),
@@ -4804,33 +4814,61 @@ pub(crate) fn eig_values(
         };
     }
 
-    match input {
-        Tensor::F32(t) => {
-            let mut outputs =
-                batched_multi_convert_result("eig_values", buffers, t, 2, |buffers, batch| {
+    match input.dtype() {
+        DType::F32 => {
+            let mut outputs = batched_multi_convert_result(
+                "eig_values",
+                buffers,
+                input
+                    .as_typed::<f32>()
+                    .ok_or_else(|| crate::error::unsupported_dtype("eig_values", input.dtype()))?,
+                2,
+                |buffers, batch| {
                     eig_values_real32_2d(ctx, buffers, batch).map(|values| vec![values])
-                })?;
+                },
+            )?;
             Ok(Tensor::C32(outputs.remove(0)))
         }
-        Tensor::F64(t) => {
-            let mut outputs =
-                batched_multi_convert_result("eig_values", buffers, t, 2, |buffers, batch| {
+        DType::F64 => {
+            let mut outputs = batched_multi_convert_result(
+                "eig_values",
+                buffers,
+                input
+                    .as_typed::<f64>()
+                    .ok_or_else(|| crate::error::unsupported_dtype("eig_values", input.dtype()))?,
+                2,
+                |buffers, batch| {
                     eig_values_real64_2d(ctx, buffers, batch).map(|values| vec![values])
-                })?;
+                },
+            )?;
             Ok(Tensor::C64(outputs.remove(0)))
         }
-        Tensor::C32(t) => {
-            let mut outputs =
-                batched_multi_convert_result("eig_values", buffers, t, 2, |buffers, batch| {
+        DType::C32 => {
+            let mut outputs = batched_multi_convert_result(
+                "eig_values",
+                buffers,
+                input
+                    .as_typed::<Complex32>()
+                    .ok_or_else(|| crate::error::unsupported_dtype("eig_values", input.dtype()))?,
+                2,
+                |buffers, batch| {
                     eig_values_complex32_2d(ctx, buffers, batch).map(|values| vec![values])
-                })?;
+                },
+            )?;
             Ok(Tensor::C32(outputs.remove(0)))
         }
-        Tensor::C64(t) => {
-            let mut outputs =
-                batched_multi_convert_result("eig_values", buffers, t, 2, |buffers, batch| {
+        DType::C64 => {
+            let mut outputs = batched_multi_convert_result(
+                "eig_values",
+                buffers,
+                input
+                    .as_typed::<Complex64>()
+                    .ok_or_else(|| crate::error::unsupported_dtype("eig_values", input.dtype()))?,
+                2,
+                |buffers, batch| {
                     eig_values_complex64_2d(ctx, buffers, batch).map(|values| vec![values])
-                })?;
+                },
+            )?;
             Ok(Tensor::C64(outputs.remove(0)))
         }
         _ => Err(crate::error::unsupported_dtype("eig_values", input.dtype())),
