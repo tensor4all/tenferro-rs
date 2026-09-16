@@ -1,5 +1,6 @@
 use std::mem::size_of_val;
 
+use num_complex::{Complex32, Complex64};
 use num_traits::Float;
 use strided_kernel::{
     col_major_strides, reduce, reduce_axis, ErasedReducePlan, ExecContext, KernelDType, ReduceOp,
@@ -49,6 +50,22 @@ fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result
     }
     Ok(())
 }
+/// The typed host tensor behind `input`, or a typed refusal.
+///
+/// Callers reach this from a match on `input.dtype()`, so `None` means the tag table
+/// and the runtime dtype disagree rather than a caller mistake.
+fn typed_input<'a, T: TensorScalar>(
+    op: &'static str,
+    input: &'a Tensor,
+) -> crate::Result<&'a TypedTensor<T>> {
+    input.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported_dtype(
+            op,
+            input.dtype(),
+            "the CPU reduction requires a preset scalar",
+        )
+    })
+}
 
 fn ensure_host_tensor(op: &'static str, input: &Tensor) -> crate::Result<()> {
     macro_rules! ensure {
@@ -58,18 +75,18 @@ fn ensure_host_tensor(op: &'static str, input: &Tensor) -> crate::Result<()> {
         }};
     }
 
-    match input {
-        Tensor::F32(t) => ensure!(t),
-        Tensor::F64(t) => ensure!(t),
-        Tensor::I32(t) => ensure!(t),
-        Tensor::I64(t) => ensure!(t),
-        Tensor::Bool(t) => ensure!(t),
-        Tensor::C32(t) => ensure!(t),
-        Tensor::C64(t) => ensure!(t),
+    match input.dtype() {
+        DType::F32 => ensure!(typed_input::<f32>("ensure_host_tensor", input)?),
+        DType::F64 => ensure!(typed_input::<f64>("ensure_host_tensor", input)?),
+        DType::I32 => ensure!(typed_input::<i32>("ensure_host_tensor", input)?),
+        DType::I64 => ensure!(typed_input::<i64>("ensure_host_tensor", input)?),
+        DType::Bool => ensure!(typed_input::<bool>("ensure_host_tensor", input)?),
+        DType::C32 => ensure!(typed_input::<Complex32>("ensure_host_tensor", input)?),
+        DType::C64 => ensure!(typed_input::<Complex64>("ensure_host_tensor", input)?),
         // A caller-owned payload has no CPU implementation for this operation.
-        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
             "ensure_host_tensor",
-            tenferro_tensor::DType::External(payload.element_type_id()),
+            tenferro_tensor::DType::External(type_id),
             "an externally defined payload is not supported by this CPU operation",
         )),
     }
@@ -218,30 +235,46 @@ pub(crate) fn reduce_sum(
         return Ok(output);
     }
 
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_sum(t, axes, exec_context)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_sum(t, axes, exec_context)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_sum_wrapping(
-            t,
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_reduce_sum(
+            typed_input::<f32>("reduce_sum", input)?,
             axes,
             exec_context,
         )?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_sum_wrapping(
-            t,
+        DType::F64 => Ok(Tensor::F64(typed_reduce_sum(
+            typed_input::<f64>("reduce_sum", input)?,
             axes,
             exec_context,
         )?)),
-        Tensor::Bool(_) => Err(unsupported_dtype_with_supported(
+        DType::I32 => Ok(Tensor::I32(typed_reduce_sum_wrapping(
+            typed_input::<i32>("reduce_sum", input)?,
+            axes,
+            exec_context,
+        )?)),
+        DType::I64 => Ok(Tensor::I64(typed_reduce_sum_wrapping(
+            typed_input::<i64>("reduce_sum", input)?,
+            axes,
+            exec_context,
+        )?)),
+        DType::Bool => Err(unsupported_dtype_with_supported(
             "reduce_sum",
             DType::Bool,
             "F32/F64/I32/I64/C32/C64",
         )),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_sum(t, axes, exec_context)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_sum(t, axes, exec_context)?)),
+        DType::C32 => Ok(Tensor::C32(typed_reduce_sum(
+            typed_input::<Complex32>("reduce_sum", input)?,
+            axes,
+            exec_context,
+        )?)),
+        DType::C64 => Ok(Tensor::C64(typed_reduce_sum(
+            typed_input::<Complex64>("reduce_sum", input)?,
+            axes,
+            exec_context,
+        )?)),
         // A caller-owned payload has no CPU implementation for this operation.
-        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
             "reduce_sum",
-            tenferro_tensor::DType::External(payload.element_type_id()),
+            tenferro_tensor::DType::External(type_id),
             "an externally defined payload is not supported by this CPU operation",
         )),
     }
@@ -511,30 +544,46 @@ pub(crate) fn reduce_prod(
         return Ok(output);
     }
 
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_prod(t, axes, exec_context)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_prod(t, axes, exec_context)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_prod_wrapping(
-            t,
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_reduce_prod(
+            typed_input::<f32>("reduce_prod", input)?,
             axes,
             exec_context,
         )?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_prod_wrapping(
-            t,
+        DType::F64 => Ok(Tensor::F64(typed_reduce_prod(
+            typed_input::<f64>("reduce_prod", input)?,
             axes,
             exec_context,
         )?)),
-        Tensor::Bool(_) => Err(unsupported_dtype_with_supported(
+        DType::I32 => Ok(Tensor::I32(typed_reduce_prod_wrapping(
+            typed_input::<i32>("reduce_prod", input)?,
+            axes,
+            exec_context,
+        )?)),
+        DType::I64 => Ok(Tensor::I64(typed_reduce_prod_wrapping(
+            typed_input::<i64>("reduce_prod", input)?,
+            axes,
+            exec_context,
+        )?)),
+        DType::Bool => Err(unsupported_dtype_with_supported(
             "reduce_prod",
             DType::Bool,
             "F32/F64/I32/I64/C32/C64",
         )),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_prod(t, axes, exec_context)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_prod(t, axes, exec_context)?)),
+        DType::C32 => Ok(Tensor::C32(typed_reduce_prod(
+            typed_input::<Complex32>("reduce_prod", input)?,
+            axes,
+            exec_context,
+        )?)),
+        DType::C64 => Ok(Tensor::C64(typed_reduce_prod(
+            typed_input::<Complex64>("reduce_prod", input)?,
+            axes,
+            exec_context,
+        )?)),
         // A caller-owned payload has no CPU implementation for this operation.
-        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
             "reduce_prod",
-            tenferro_tensor::DType::External(payload.element_type_id()),
+            tenferro_tensor::DType::External(type_id),
             "an externally defined payload is not supported by this CPU operation",
         )),
     }
@@ -622,20 +671,32 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         return Ok(output);
     }
 
-    match input {
-        Tensor::F32(tensor) => Ok(Tensor::F32(typed_reduce_max(tensor, axes)?)),
-        Tensor::F64(tensor) => Ok(Tensor::F64(typed_reduce_max(tensor, axes)?)),
-        Tensor::I32(tensor) => Ok(Tensor::I32(typed_reduce_max_integer(tensor, axes)?)),
-        Tensor::I64(tensor) => Ok(Tensor::I64(typed_reduce_max_integer(tensor, axes)?)),
-        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(unsupported_dtype_with_supported(
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_reduce_max(
+            typed_input::<f32>("reduce_max", input)?,
+            axes,
+        )?)),
+        DType::F64 => Ok(Tensor::F64(typed_reduce_max(
+            typed_input::<f64>("reduce_max", input)?,
+            axes,
+        )?)),
+        DType::I32 => Ok(Tensor::I32(typed_reduce_max_integer(
+            typed_input::<i32>("reduce_max", input)?,
+            axes,
+        )?)),
+        DType::I64 => Ok(Tensor::I64(typed_reduce_max_integer(
+            typed_input::<i64>("reduce_max", input)?,
+            axes,
+        )?)),
+        DType::Bool | DType::C32 | DType::C64 => Err(unsupported_dtype_with_supported(
             "reduce_max",
             input.dtype(),
             "F32/F64/I32/I64",
         )),
         // A caller-owned payload has no CPU implementation for this operation.
-        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
             "reduce_max",
-            tenferro_tensor::DType::External(payload.element_type_id()),
+            tenferro_tensor::DType::External(type_id),
             "an externally defined payload is not supported by this CPU operation",
         )),
     }
@@ -718,20 +779,32 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         return Ok(output);
     }
 
-    match input {
-        Tensor::F32(tensor) => Ok(Tensor::F32(typed_reduce_min(tensor, axes)?)),
-        Tensor::F64(tensor) => Ok(Tensor::F64(typed_reduce_min(tensor, axes)?)),
-        Tensor::I32(tensor) => Ok(Tensor::I32(typed_reduce_min_integer(tensor, axes)?)),
-        Tensor::I64(tensor) => Ok(Tensor::I64(typed_reduce_min_integer(tensor, axes)?)),
-        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(unsupported_dtype_with_supported(
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_reduce_min(
+            typed_input::<f32>("reduce_min", input)?,
+            axes,
+        )?)),
+        DType::F64 => Ok(Tensor::F64(typed_reduce_min(
+            typed_input::<f64>("reduce_min", input)?,
+            axes,
+        )?)),
+        DType::I32 => Ok(Tensor::I32(typed_reduce_min_integer(
+            typed_input::<i32>("reduce_min", input)?,
+            axes,
+        )?)),
+        DType::I64 => Ok(Tensor::I64(typed_reduce_min_integer(
+            typed_input::<i64>("reduce_min", input)?,
+            axes,
+        )?)),
+        DType::Bool | DType::C32 | DType::C64 => Err(unsupported_dtype_with_supported(
             "reduce_min",
             input.dtype(),
             "F32/F64/I32/I64",
         )),
         // A caller-owned payload has no CPU implementation for this operation.
-        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
             "reduce_min",
-            tenferro_tensor::DType::External(payload.element_type_id()),
+            tenferro_tensor::DType::External(type_id),
             "an externally defined payload is not supported by this CPU operation",
         )),
     }
