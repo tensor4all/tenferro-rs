@@ -338,4 +338,3 @@ fn into_typed_result<T: TensorScalar>(op: &'static str, tensor: Tensor) -> Resul
         )
     })
 }
-

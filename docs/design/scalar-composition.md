@@ -63,6 +63,7 @@ that were previously argued from intuition.
 | Duplicate scalar machinery in one file | `tenferro-tensor/src/types.rs:3451-3746`, about 296 lines: second `DType`, second `TensorScalar`, second `private::Sealed`, second `impl_tensor_scalar!` |
 | Hand-written cross-layer tag maps | `core_dtype()` defined in 4 places (`tenferro-tensor/src/lib.rs:101`, `tenferro-runtime/src/error.rs:919`, `tenferro-runtime/src/typed_tensor.rs:343`, `tenferro-gpu/src/cubecl/tests/mod.rs:114`), 44 call sites |
 | Elementwise dispatch | already delegates to generic typed kernels such as `typed_add_view_with_pool<T, L, R>`; the erased side is a per-op macro invoked once per preset variant |
+| Numeric replay bounds | `replay_binary`, `replay_scalar_left`, and `replay_scalar_right` in `tenferro-internal-cpu-kernels/src/elementwise.rs` required the sealed `PoolScalar` on the element type even though the inner `strided-kernel` `zip_map2_into` / `map_into` calls they wrap are element-type agnostic and need only `Copy` |
 
 The duplication is the concrete form of the problem: the same seven scalars are
 enumerated twice, and every boundary between the two layers carries a
@@ -153,6 +154,26 @@ reduction, in `tenferro-internal-cpu-kernels` and `tenferro-cpu`. It is chosen
 because it already routes through generic typed kernels, its shapes are the
 simplest, it reaches the unbounded public `HostTensor<T>` layer, and it is the
 cheapest place to demonstrate that the preset path is not special.
+
+The concrete seam found during implementation: the reusable numerical step is
+the pair of destination-writing helpers `replay_binary`, `replay_scalar_left`,
+and `replay_scalar_right`, which wrap `strided-kernel`'s `zip_map2_into` and
+`map_into`. Those wrapped calls are element-type agnostic, but their callers
+required the sealed `PoolScalar` bound on the element type, which restricted the
+whole numerical body to the seven presets. Removing that bound leaves the
+allocation step (`PooledUninitOutput`, which genuinely needs the sealed typed
+pool) as the only pool-coupled part, so the numerical body becomes shared
+between a pooled preset destination and a caller-provided external destination.
+That is the mechanism the external proof crate exercises; the sealed pool stays
+at the resource boundary and is not opened, which remains #1789 work.
+
+Stage 1 is delivered in two parts so that the mechanical simplification is not
+blocked by the external proof:
+
+| Part | Content | Evidence |
+| --- | --- | --- |
+| 1a | Unify the dtype tag across `tenferro-tensor-core` and `tenferro-tensor`, delete the duplicate tag and the four `core_dtype()` copies, and drop the unnecessary `PoolScalar` bound from the elementwise replay helpers | Workspace `check --all-targets` clean, existing tests unchanged, measured net line reduction |
+| 1b | The open scalar contract, the single preset table, the shared erased dispatch, and the external proof crate | The external type constructs, borrows, mutates, adds, reduces, and converts through public APIs, with the low-order retention case |
 
 The slice must exercise: typed construction, shared and mutable borrowing, one
 binary operation, one reduction, and one explicit precision-reducing conversion.
@@ -271,10 +292,18 @@ and #1790 (external application consumer) are met.
 - The `xprec` crate used by the external proof is version 0.2.2, MIT licensed.
   Its MSRV, `Copy` behavior, and rounding API are confirmed during
   implementation.
-- Stage 1's net reduction is a measured outcome, not a guarantee. If the
-  deletions do not exceed the additions in the changed files, the slice is
-  widened before the pull request is opened, and the measured numbers are
-  reported either way.
+- Stage 1's net reduction is a measured outcome, not a guarantee. Part 1a
+  measured a net reduction of 68 lines across the changed Rust sources (45 added,
+  113 deleted) before the scalar contract is introduced; the 100-line target for
+  the whole of stage 1 remains unproven and part 1b still adds the open contract
+  and its tests. If the total does not reach the target, the slice is widened
+  within the same operation boundary before the pull request is opened, and the
+  measured numbers are reported either way.
+- The `trybuild` storage UI fixtures (`crates/tenferro-tensor/tests/ui/storage`)
+  report 10 of 14 mismatches in this worktree both with and without these
+  changes, because the expected `.stderr` files were generated elsewhere than the
+  `/kache/...` worktree prefix. That is a pre-existing environment artifact, not
+  a consequence of this change.
 
 ## 7. What this plan does not claim
 
