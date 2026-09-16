@@ -662,6 +662,24 @@ Everything else in the `docs` profile passes: the docs-site, doc-consistency, ru
 guide-snippet tests, `check-operation-categories.py --fail-on-findings`, and the boundary
 inventory.
 
+The artifact itself is now regenerated as well, without hand-editing it. The host has no
+Graphviz, but the repository's generator accepts `--dot-command`, and Graphviz is available
+compiled to WebAssembly (`@viz-js/viz`, which reports Graphviz 14.1.5 against the checked-in
+file's 14.1.2). A three-line shim that renders DOT from stdin to SVG on stdout therefore lets
+the repository's *own* generator produce the artifact, including its accessibility
+post-processing:
+
+```bash
+node -e "..." > /tmp/viz/dot   # the shim, or the same one-liner inline
+python3 scripts/gen_dep_graph.py --format svg \
+    --output docs/assets/dependency-footprint.svg --dot-command /tmp/viz/dot
+```
+
+`scripts/test-gen-dep-graph.py` passes against the regenerated file, the three new crates are
+labelled in it, and `scripts/ci/run_profile.py docs` now exits zero. The diff is a graph
+re-layout (134 insertions, 95 deletions) rather than a hand-written patch, and the version stamp
+in the file moves from 14.1.2 to 14.1.5 as a consequence of which Graphviz build was available.
+
 ## The rest of the profile sweep
 
 With the four gates fixed, the remaining CI steps were run as CI runs them:
