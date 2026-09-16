@@ -802,20 +802,50 @@ fn f64_index_to_i64(value: f64) -> crate::Result<i64> {
     Ok(value as i64)
 }
 
+/// The refusal this module produces for a dtype it cannot read as an index tensor.
+///
+/// The accessor returns it when the tag table and the runtime dtype disagree, which
+/// is unreachable in practice; the tags that are genuinely rejected keep their own
+/// arms and the same expression.
+fn unsupported_index_dtype(complex: bool) -> crate::Error {
+    crate::Error::invalid_argument(
+        "index_tensor",
+        "configuration",
+        if complex {
+            "complex index tensors are not supported; supported index dtypes: I32/I64/F32/F64"
+        } else {
+            "bool index tensors are not supported; supported index dtypes: I32/I64/F32/F64"
+        },
+    )
+}
+
 fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
-    match tensor {
-        Tensor::I32(t) => Ok(IndexTensor {
-            shape: t.shape().to_vec(),
-            values: typed_host_data("index_tensor", t)?
-                .iter()
-                .map(|&value| value as i64)
-                .collect(),
-        }),
-        Tensor::I64(t) => Ok(IndexTensor {
-            shape: t.shape().to_vec(),
-            values: typed_host_data("index_tensor", t)?.to_vec(),
-        }),
-        Tensor::F32(t) => {
+    match tensor.dtype() {
+        DType::I32 => {
+            let t = tensor
+                .as_typed::<i32>()
+                .ok_or_else(|| unsupported_index_dtype(false))?;
+            Ok(IndexTensor {
+                shape: t.shape().to_vec(),
+                values: typed_host_data("index_tensor", t)?
+                    .iter()
+                    .map(|&value| value as i64)
+                    .collect(),
+            })
+        }
+        DType::I64 => {
+            let t = tensor
+                .as_typed::<i64>()
+                .ok_or_else(|| unsupported_index_dtype(false))?;
+            Ok(IndexTensor {
+                shape: t.shape().to_vec(),
+                values: typed_host_data("index_tensor", t)?.to_vec(),
+            })
+        }
+        DType::F32 => {
+            let t = tensor
+                .as_typed::<f32>()
+                .ok_or_else(|| unsupported_index_dtype(false))?;
             let values: crate::Result<Vec<i64>> = typed_host_data("index_tensor", t)?
                 .iter()
                 .map(|&value| f32_index_to_i64(value))
@@ -825,7 +855,10 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 values: values?,
             })
         }
-        Tensor::F64(t) => {
+        DType::F64 => {
+            let t = tensor
+                .as_typed::<f64>()
+                .ok_or_else(|| unsupported_index_dtype(false))?;
             let values: crate::Result<Vec<i64>> = typed_host_data("index_tensor", t)?
                 .iter()
                 .map(|&value| f64_index_to_i64(value))
@@ -835,18 +868,8 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 values: values?,
             })
         }
-        Tensor::Bool(_) => Err(crate::Error::invalid_argument(
-            "index_tensor",
-            "configuration",
-            "bool index tensors are not supported; supported index dtypes: I32/I64/F32/F64",
-        )),
-        Tensor::C32(_) | Tensor::C64(_) | Tensor::External(..) => {
-            Err(crate::Error::invalid_argument(
-                "index_tensor",
-                "configuration",
-                "complex index tensors are not supported; supported index dtypes: I32/I64/F32/F64",
-            ))
-        }
+        DType::Bool => Err(unsupported_index_dtype(false)),
+        DType::C32 | DType::C64 | DType::External(_) => Err(unsupported_index_dtype(true)),
     }
 }
 

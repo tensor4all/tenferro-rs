@@ -3,6 +3,7 @@
 //! This module owns the private execution bridge used by
 //! `Runtime::run_compiled*`.
 
+use num_complex::{Complex32, Complex64};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt;
@@ -2540,16 +2541,22 @@ fn checked_transfer_element_count(
 }
 
 fn tensor_buffer_len(tensor: &Tensor) -> usize {
-    match tensor {
-        Tensor::F32(tensor) => tensor.buffer().len(),
-        Tensor::F64(tensor) => tensor.buffer().len(),
-        Tensor::I32(tensor) => tensor.buffer().len(),
-        Tensor::I64(tensor) => tensor.buffer().len(),
-        Tensor::Bool(tensor) => tensor.buffer().len(),
-        Tensor::C32(tensor) => tensor.buffer().len(),
-        Tensor::C64(tensor) => tensor.buffer().len(),
-        // A caller-owned payload has no runtime buffer length to report.
-        Tensor::External(..) => 0,
+    match tensor.dtype() {
+        DType::F32 => tensor.as_typed::<f32>().map_or(0, |t| t.buffer().len()),
+        DType::F64 => tensor.as_typed::<f64>().map_or(0, |t| t.buffer().len()),
+        DType::I32 => tensor.as_typed::<i32>().map_or(0, |t| t.buffer().len()),
+        DType::I64 => tensor.as_typed::<i64>().map_or(0, |t| t.buffer().len()),
+        DType::Bool => tensor.as_typed::<bool>().map_or(0, |t| t.buffer().len()),
+        DType::C32 => tensor
+            .as_typed::<Complex32>()
+            .map_or(0, |t| t.buffer().len()),
+        DType::C64 => tensor
+            .as_typed::<Complex64>()
+            .map_or(0, |t| t.buffer().len()),
+        // A caller-owned payload has no runtime buffer length to report, which is
+        // also what the accessor falls back to when the tag table and the runtime
+        // dtype disagree.
+        DType::External(_) => 0,
     }
 }
 
