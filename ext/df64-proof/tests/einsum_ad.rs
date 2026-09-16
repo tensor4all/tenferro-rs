@@ -380,3 +380,23 @@ fn the_forward_tangent_and_the_adjoint_satisfy_duality() {
         "the tangent and the adjoint disagree: {forward_side:?} against {backward_side:?}"
     );
 }
+
+#[test]
+fn the_adjoint_refuses_a_contraction_wider_than_pairwise() {
+    // The helpers are defined for the pairwise case, so a three-operand pattern is refused with a
+    // typed error rather than differentiated as if it were pairwise.
+    let op = Df64Einsum::new_nary(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]).expect("a contraction");
+    let a = leaf(numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]);
+    let b = leaf(numbers(&[5.0, 7.0, 6.0, 8.0]), vec![2, 2]);
+    let c = leaf(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
+    let output = apply(Arc::new(op), &[&a, &b, &c]).expect("traced contraction");
+    let cotangent = leaf(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
+
+    let error = cotangent_context()
+        .vjp(&output[0], &a, &cotangent)
+        .expect_err("the adjoint is defined for the pairwise case");
+    assert!(
+        error.to_string().contains("support") || error.to_string().contains("rule"),
+        "the refusal must be typed and explicit: {error}"
+    );
+}

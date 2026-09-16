@@ -197,9 +197,14 @@ A label may also repeat inside one input, which is a trace when the output omits
 extraction when the output names it: the body reads the repeated axes at the same index, and their
 extents must agree. Both cases have tests with hand-written values.
 
+Any number of operands is accepted: the body folds from the left and an intermediate keeps exactly the
+labels the remaining operands or the output still need, so a label only the already-contracted
+operands name is summed by that step. A three-operand pattern has a test with hand-written values, and
+another whose first operand repeats a label.
+
 What is refused is refused with a typed error rather than approximated: an output label that no input
-names, inputs that disagree on the extent of a shared label, and N-ary patterns, because the operation
-is the pairwise one. That is a wider capability than the reference consumer in `ext/tropical`, which
+names, inputs that disagree on the extent of a shared label, and the adjoint or tangent of a pattern
+wider than pairwise, because those helpers are defined for two operands. That is a wider capability than the reference consumer in `ext/tropical`, which
 refuses diagonal extraction and pre-reduction outright; #1787 calls this deliverable "#1793's
 einsum/tropical example", so it meets that bar and goes past it on repeated labels.
 

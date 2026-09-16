@@ -137,7 +137,12 @@ fn the_contraction_keeps_the_low_component_an_f64_accumulator_would_drop() {
 fn the_pattern_validator_accepts_any_two_input_contraction_and_reports_its_labels() {
     // The caller may write any labels; the validator checks structure, not the matrix case.
     let pattern = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
-    assert_eq!(pattern.labels(), (&[0, 1][..], &[1, 2][..], &[0, 2][..]));
+    assert_eq!(
+        pattern.labels(),
+        Some((&[0, 1][..], &[1, 2][..], &[0, 2][..]))
+    );
+    assert_eq!(pattern.input_labels(), &[vec![0, 1], vec![1, 2]]);
+    assert_eq!(pattern.out_labels(), &[0, 2]);
     assert!(Df64Einsum::new(&[7, 9], &[9, 4], &[7, 4]).is_ok());
     // An input with no labels is not a tensor.
     assert!(Df64Einsum::new(&[], &[0, 2], &[2]).is_err());
@@ -311,4 +316,70 @@ fn a_repeated_label_the_output_omits_is_a_trace() {
         (&[0, 0], &[1], &[1]),
     );
     assert_eq!(results, numbers(&[3.0]));
+}
+
+/// Contract any number of operands with an explicit pattern, returning the result's elements.
+fn contract_nary(
+    operands: Vec<(Vec<Df64>, Vec<usize>)>,
+    pattern: (&[&[u32]], &[u32]),
+) -> Vec<Df64> {
+    let op = Df64Einsum::new_nary(pattern.0, pattern.1).expect("a valid pattern");
+    let leaves: Vec<TracedTensor> = operands
+        .iter()
+        .map(|(values, shape)| leaf(values.clone(), shape.clone()))
+        .collect();
+    let refs: Vec<&TracedTensor> = leaves.iter().collect();
+    let output = apply(std::sync::Arc::new(op), &refs).expect("traced contraction");
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&output[0]).expect("compiled contraction");
+    let values: Vec<Tensor> = operands
+        .iter()
+        .map(|(values, shape)| external(values.clone(), shape.clone()))
+        .collect();
+    let borrowed: Vec<&Tensor> = values.iter().collect();
+    let results = runtime_with_module()
+        .run_compiled(&program, &borrowed)
+        .expect("contraction execution");
+    payload(&results[0])
+}
+
+#[test]
+fn a_three_operand_contraction_folds_from_the_left() {
+    // "ij,jk,kl->il" with A = [[1, 2], [3, 4]], B = [[5, 6], [7, 8]] and C = I is A times B. The
+    // intermediate keeps the contracted label `k` because the third operand still needs it, and
+    // sums `j` because nothing after the first step does.
+    let results = contract_nary(
+        vec![
+            (numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]),
+            (numbers(&[5.0, 7.0, 6.0, 8.0]), vec![2, 2]),
+            (numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
+        ],
+        (&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]),
+    );
+    assert_eq!(results, numbers(&[19.0, 43.0, 22.0, 50.0]));
+}
+
+#[test]
+fn a_three_operand_contraction_with_a_repeated_final_operand_runs() {
+    // "iij,jk,kl->il" repeats a label in the first operand, which is the diagonal, and the fold
+    // carries that through the remaining steps.
+    let results = contract_nary(
+        vec![
+            (numbers(&[1.0, 0.0, 0.0, 2.0]), vec![2, 2, 1]),
+            (numbers(&[3.0, 4.0]), vec![1, 2]),
+            (numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
+        ],
+        (&[&[0, 0, 1], &[1, 2], &[2, 3]], &[0, 3]),
+    );
+    // The diagonal [1, 2] times B = [[3, 4]] gives [[3, 4], [6, 8]].
+    assert_eq!(results, numbers(&[3.0, 6.0, 4.0, 8.0]));
+}
+
+#[test]
+fn the_validator_refuses_a_single_operand() {
+    assert!(
+        Df64Einsum::new_nary(&[&[0, 1]], &[0]).is_err(),
+        "a contraction takes at least two operands"
+    );
 }

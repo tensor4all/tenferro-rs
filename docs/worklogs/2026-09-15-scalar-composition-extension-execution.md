@@ -1158,3 +1158,19 @@ same file truncated them, so the suite passed with those tests absent while the 
 were there. They are restored and green now, and the trace tests join them. The lesson is the one this
 session keeps repeating: a report is a claim, and a claim about tests has to be checked against the
 file rather than against what I remember writing.
+
+## N-ary contractions, folded from the left
+
+The last refused case in #1793's reached-operation table was the N-ary contraction, which the reference
+consumer refuses as well. The payload now holds every operand's labels, `new_nary` builds them, and the
+body folds from the left: an intermediate keeps exactly the labels the remaining operands or the output
+still need, so the labels only the already-contracted operands name are summed by that step. The
+two-operand constructor delegates to the general one, so every existing call site kept working, and the
+first thing the existing tests confirmed was that the fold reproduces the pairwise results.
+
+`labels()` now returns an option, because the adjoint and tangent helpers are defined for the pairwise
+case; a wider pattern is refused with a typed error, which the fall-out of the signature change made
+explicit at both rule sites. Three tests cover the new capability: a three-operand fold whose
+intermediate must keep a label the third operand needs while summing one nothing later needs, a
+three-operand pattern whose first operand repeats a label, and the single-operand refusal. The AD
+refusal for a wide pattern has its own test rather than being assumed.

@@ -194,7 +194,11 @@ impl SemanticPrimalVjpRule for Df64VjpRule {
                 else {
                     return Ok(inactive());
                 };
-                let (lhs, rhs, out) = contraction.labels();
+                // The helpers are defined for the pairwise case, so a wider pattern is refused
+                // rather than differentiated as if it were pairwise.
+                let Some((lhs, rhs, out)) = contraction.labels() else {
+                    return Err(unsupported(op, role));
+                };
                 // The primal operation accepted this pattern, so the adjoint's validation is a
                 // rule-level invariant rather than a user error.
                 let Ok(adjoint) = Df64EinsumVjp::of(lhs, rhs, out) else {
@@ -332,7 +336,11 @@ impl SemanticLinearizeRule for Df64LinearizeRule {
                         .collect::<Vec<_>>();
                     return Ok(SemanticLinearizeResult::new(inactive, Vec::new()));
                 }
-                let (lhs, rhs, out) = contraction.labels();
+                // The helpers are defined for the pairwise case, so a wider pattern is refused
+                // rather than differentiated as if it were pairwise.
+                let Some((lhs, rhs, out)) = contraction.labels() else {
+                    return Err(unsupported(op, role));
+                };
                 let Ok(tangent) = Df64EinsumJvp::of(lhs, rhs, out, has_lhs, has_rhs) else {
                     return Err(unsupported(op, role));
                 };
