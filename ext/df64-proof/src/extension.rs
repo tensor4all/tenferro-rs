@@ -706,7 +706,7 @@ impl ExtensionOp for Df64Einsum {
 /// use tenferro_ad::extension::ExtensionOp;
 /// use tenferro_df64_proof::extension::Df64EinsumVjp;
 ///
-/// let adjoint = Df64EinsumVjp::of(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
+/// let adjoint = Df64EinsumVjp::of(&[&[0, 1], &[1, 2]], &[0, 2]).expect("a contraction");
 /// assert_eq!(<Df64EinsumVjp as ExtensionOp>::input_count(&adjoint), 3);
 /// assert_eq!(<Df64EinsumVjp as ExtensionOp>::output_count(&adjoint), 2);
 /// ```
@@ -728,8 +728,8 @@ impl Df64EinsumVjp {
     /// ```rust
     /// use tenferro_df64_proof::extension::Df64EinsumVjp;
     ///
-    /// assert!(Df64EinsumVjp::of(&[0, 1], &[1, 2], &[0, 2]).is_ok());
-    /// assert!(Df64EinsumVjp::of(&[], &[1, 2], &[0, 2]).is_err());
+    /// assert!(Df64EinsumVjp::of(&[&[0, 1], &[1, 2]], &[0, 2]).is_ok());
+    /// assert!(Df64EinsumVjp::of(&[&[], &[1, 2]], &[0, 2]).is_err());
     /// ```
     pub fn of(inputs: &[&[u32]], out: &[u32]) -> tenferro_runtime::Result<Self> {
         Df64Einsum::new_nary(inputs, out)?;
@@ -741,15 +741,6 @@ impl Df64EinsumVjp {
 
     /// The primal pattern's label lists.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_df64_proof::extension::Df64EinsumVjp;
-    ///
-    /// let adjoint = Df64EinsumVjp::of(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
-    /// let (lhs, rhs, out) = adjoint.labels();
-    /// assert_eq!((lhs, rhs, out), (&[0, 1][..], &[1, 2][..], &[0, 2][..]));
-    /// ```
     /// Every operand's labels, in operand order.
     ///
     /// # Examples
