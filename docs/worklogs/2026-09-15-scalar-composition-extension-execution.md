@@ -1190,3 +1190,16 @@ workspace-excluded crates (`ext/tropical` with autodiff, `ext/sparse`, `tenferro
 samples, and `blas-inject`, which exercises the injected BLAS provider. Both touch the tag and value
 changes this branch made, so both were worth re-running rather than listing as CI's business. The
 `extensions` profile passes: the excluded crates and both samples build and test green on this head.
+
+## The BLAS lane, and what its failures are
+
+`workspace-blas` was the last CI profile this branch had not run. Its nextest step fails on six
+`full_svd_lstsq` tests and the trybuild fixture, and the first of those failures says why in the
+provider's own words: `CPU LAPACK provider does not implement full-matrices SVD; use the faer provider
+for full SVD`. That is a property of the lane rather than of this branch, which does not touch SVD, and
+the same tests pass in the default faer configuration.
+
+The profile's next step, the workspace doctests under `--no-default-features --features cpu-blas`, did
+need the flags the repository uses for BLAS linkage: without them every failing doctest was a linker
+error rather than a test failure. With `RUSTFLAGS='-l dylib=openblas -l dylib=lapack'` the step passes
+with 1883 doctests and no failures, so this branch's examples run under that feature combination too.
