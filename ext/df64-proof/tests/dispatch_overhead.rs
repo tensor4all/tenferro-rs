@@ -91,6 +91,26 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
     let (runtime, threads) = runtime();
     let mut compiler = GraphCompiler::new();
 
+    // The protocol asks for the build profile, the features, the compiler version, and the
+    // target to be recorded with the numbers, so the report carries all four.
+    let rustc = std::process::Command::new("rustc")
+        .arg("-Vv")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|text| text.lines().next().map(str::to_owned))
+        .unwrap_or_else(|| "rustc unavailable".to_owned());
+    println!(
+        "configuration: profile={} features=autodiff:{} host={} {rustc}",
+        if cfg!(debug_assertions) {
+            "test"
+        } else {
+            "release"
+        },
+        cfg!(feature = "autodiff"),
+        std::env::consts::OS,
+    );
+
     // (a) A preset program through the runtime's prepared hot path.
     let ordinary = TracedTensor::input_concrete_shape(DType::F64, &[2]).expect("traced input");
     let doubled = (&ordinary + &ordinary).expect("traced add");
@@ -122,6 +142,43 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
     // (c) The contribution's body, with neither session nor dispatch in the way.
     let stored = HostTensor::from_vec_col_major(vec![2], values).expect("shape matches data");
 
+    // Preparation is one-shot per program, so it is measured once rather than averaged.
+    let ordinary_prepare = {
+        let start = Instant::now();
+        drop(
+            runtime
+                .prepare_compiled(&ordinary_program, &[&ordinary_value])
+                .expect("prepared preset program"),
+        );
+        start.elapsed().as_secs_f64() * 1e9
+    };
+    let contribution_prepare = {
+        let start = Instant::now();
+        drop(
+            runtime
+                .prepare_compiled(&contribution_program, &[&contribution_value])
+                .expect("prepared contribution program"),
+        );
+        start.elapsed().as_secs_f64() * 1e9
+    };
+
+    // A cold run is the first execution against an unwarmed plan and cache; the loop below is
+    // the warm condition. The protocol requires both to be recorded.
+    let cold_start = Instant::now();
+    drop(
+        runtime
+            .run_prepared(&prepared_ordinary, &[&ordinary_value])
+            .expect("cold preset execution"),
+    );
+    let ordinary_cold_ns = cold_start.elapsed().as_secs_f64() * 1e9;
+    let cold_start = Instant::now();
+    drop(
+        runtime
+            .run_prepared(&prepared_contribution, &[&contribution_value])
+            .expect("cold contribution execution"),
+    );
+    let contribution_cold_ns = cold_start.elapsed().as_secs_f64() * 1e9;
+
     let (ordinary_allocations, ordinary_ns) = measure(iterations, || {
         drop(
             runtime
@@ -143,10 +200,14 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
     });
 
     println!(
-        "session and dispatch overhead ({iterations} iterations, {threads} worker thread):\n\
-         \x20 preset program, runtime path:       {ordinary_ns:>9.1} ns/op, {ordinary_allocations:>5} allocations\n\
-         \x20 contribution, runtime path:         {contribution_ns:>9.1} ns/op, {contribution_allocations:>5} allocations\n\
-         \x20 contribution body, called directly: {direct_ns:>9.1} ns/op, {direct_allocations:>5} allocations\n\
+        "session and dispatch overhead ({iterations} warm iterations, {threads} worker thread):\n\
+         \x20 preparation, preset program:          {ordinary_prepare:>10.1} ns, once\n\
+         \x20 preparation, contribution:            {contribution_prepare:>10.1} ns, once\n\
+         \x20 cold, preset program:                 {ordinary_cold_ns:>10.1} ns, first execution\n\
+         \x20 cold, contribution:                   {contribution_cold_ns:>10.1} ns, first execution\n\
+         \x20 warm, preset program:                 {ordinary_ns:>10.1} ns/op, {ordinary_allocations:>5} allocations\n\
+         \x20 warm, contribution, runtime path:     {contribution_ns:>10.1} ns/op, {contribution_allocations:>5} allocations\n\
+         \x20 warm, contribution body, direct call: {direct_ns:>10.1} ns/op, {direct_allocations:>5} allocations\n\
          \x20 session and dispatch for the contribution: {:.1} ns/op over its body",
         contribution_ns - direct_ns
     );

@@ -895,3 +895,25 @@ checked-in `docs/assets/dependency-footprint.svg` no longer matched the workspac
 docs profile failed in `test-gen-dep-graph.py`. The graph was regenerated through the repository's
 own generator, with a Graphviz-webassembly shim standing in for the `dot` binary this machine does
 not have, and the profile passes again.
+
+## The measurement protocol of the parent issue, read rather than assumed
+
+All three measurement items cite #1787's "exact-baseline, cache-condition, and verified 1-thread
+protocol", and I had never read #1787. Reading it found the protocol in one acceptance line:
+record dispatch, preparation, session, and allocation evidence against an exact baseline, verify
+the effective one-thread settings for runtime comparisons, and record build profiles, features,
+compiler versions, and cold and warm cache conditions, without claiming unmeasured speedups or
+absence of regressions.
+
+The dispatch measurement recorded the profile and the thread count but not the features, the
+compiler, the preparation cost, or the cold and warm split, so it recorded four of the eight
+things the protocol names. It now reports all of them: the configuration line carries profile,
+features, host, and the compiler version read at run time rather than asserted, preparation is
+measured as a one-shot per program, and the first execution is timed separately from the warm
+steady state. The object-level record gained the assembly size of each inspected target as the
+code-size evidence.
+
+Once the numbers were in front of me, the honest statement of them changed. Two release runs give
+12404 and 14455 ns/op for the contribution's warm path, a spread near fifteen percent, so the
+record presents them as a report with the variation visible rather than as a threshold, which is
+also what the protocol's warning about unmeasured regressions is for.

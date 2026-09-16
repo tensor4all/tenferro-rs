@@ -1299,30 +1299,34 @@ surface stays unimplemented by design. The rejection of an externally defined in
 boundary is implemented and tested.
 
 **#1789's pool, handoff, and accounting contracts.** The first steps that issue prescribes are
-done and evidenced. Its fifth item asks for allocation counts and session/dispatch overhead under
-the one-thread protocol, so `ext/df64-proof/tests/dispatch_overhead.rs` measures the layer around
-the numerical bodies: the same tiny operation runs as a preset `f64` program through the runtime's
-prepared path, as the contribution's program through that path, and as a direct call to the
-contribution's body. With one worker thread the release profile reports 25721 ns and 26
-allocations per operation for the preset program, 12404 ns and 22 allocations for the contribution,
-and 91 ns and 3 allocations for the body alone, so the session and dispatch layer costs about
-12.3 µs and 19 allocations per call for a two-element operation. The test profile, which the other
-measurements in this branch also use, reports 138282, 86340, and 953 ns respectively with the same
-allocation counts, so the profile is recorded with every number. The finding belongs to the
-runtime rather than to this branch: the preset path pays more than the contribution's does, which
-is what a session and dispatch cost of this size means for an operation whose arithmetic is 91 ns,
-and it is recorded here because #1789 asks for it rather than because the external scalar
-introduced it. Its fourth acceptance item, cleanup and retention controls, maps to evidence
-as follows: normal and error paths are the typed-rejection tests; unwind cleanup is the
-framework's `catch_unwind` coverage in `tenferro-ad`'s `fallible_api` and
-`placement_bound_eager` tests and in `tenferro-cpu`'s `runtime_error_tests`, which the
-contribution's operations use unchanged; retention and clear for standard storage are the
-pre-existing `cache_management` tests; and retention, clear, and statistics for the
-contribution's own storage are `ext/df64-proof/tests/scratch_allocation.rs`, which asserts that
-the accounted extension cache holds entries and retained bytes, and
-`ext/df64-proof/tests/retention_controls.rs`, which fills that cache, keeps an output live across
-`Runtime::clear_caches`, and checks that the retained bytes are released while the live value and
-a later execution are unchanged. The following are the measured first steps: the existing caller-output, caller-owned, and session mechanisms are used;
+done and evidenced. Its fifth item asks for allocation counts, session and dispatch overhead, preparation, and
+build and code-size evidence against an exact baseline, with the profile, features, compiler,
+target, and cold and warm conditions recorded and no unmeasured speedup or absence of regression
+claimed. `ext/df64-proof/tests/dispatch_overhead.rs` measures the layer around the numerical
+bodies: the same tiny operation runs as a preset `f64` program through the runtime's prepared
+path, as the contribution's program through that path, and as a direct call to the contribution's
+body, on one worker thread that the test asserts and prints. The report names the configuration it
+was taken under (`profile=release features=autodiff:false host=linux rustc 1.97.1
+(8bab26f4f 2026-07-14)`) and records preparation, the cold first execution, and the warm steady
+state separately:
+
+| Condition | Preset program | Contribution | Contribution body |
+| --- | --- | --- | --- |
+| preparation, one-shot | 23160 ns | 14201 ns | not applicable |
+| cold, first execution | 206046 ns | 43082 ns | not applicable |
+| warm, steady | 27653 ns/op, 26 allocations | 14455 ns/op, 22 allocations | 92 ns/op, 3 allocations |
+
+The session and dispatch layer therefore costs about 14.4 µs and 19 allocations per call for a
+two-element operation, against 92 ns for the body alone. Two release runs put the contribution's
+warm path at 12404 and 14455 ns/op, so the spread is around fifteen percent and every number is
+recorded as a report rather than as a threshold, which is what the protocol's warning about
+unmeasured regressions asks for. The constant belongs to the runtime rather than to this branch:
+the preset path pays more for the same layer than the contribution's does, and nothing here
+suggests otherwise for the standard path. Build and code-size evidence is the object-level record
+below, which now also carries the assembly size of each inspected target (2729686 bytes for the
+proof crate's target, 769685 for the two-set target) beside the instantiation counts.
+
+The following are the measured first steps: the existing caller-output, caller-owned, and session mechanisms are used;
 the storage gap is measured (189 allocations and 174857 bytes for a steady-state 64 by 64
 factorization, 258 and 724668 bytes for the adjoint); a proven acquisition and return path runs
 through the accounted extension cache (one entry, 524288 retained bytes, one hit after two
