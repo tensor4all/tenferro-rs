@@ -381,11 +381,14 @@ class RunProfileTests(unittest.TestCase):
                 dry_run=False,
                 output=io.StringIO(),
             )
-        for call in calls[:2]:
+        # The boundary is the size of the unoptimized profile rather than a literal, so that
+        # adding a step to workspace-faer does not silently move the BLAS assertions onto it.
+        plain_commands = len(commands_for("workspace-faer"))
+        for call in calls[:plain_commands]:
             self.assertNotIn("RUSTFLAGS", call)
             self.assertNotIn("TENFERRO_TRYBUILD_RUSTFLAGS", call)
             self.assertNotIn("CARGO", call)
-        for call in calls[2:]:
+        for call in calls[plain_commands:]:
             self.assertEqual(
                 call["RUSTFLAGS"], "-l dylib=openblas -l dylib=lapack"
             )

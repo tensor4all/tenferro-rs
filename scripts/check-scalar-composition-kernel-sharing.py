@@ -69,6 +69,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="inspect the debug profile, which is what a test lane has already built",
+    )
+    parser.add_argument(
         "--package",
         default=PACKAGE,
         help="package holding the test target to inspect",
@@ -128,7 +133,7 @@ def main() -> int:
         package,
         "--test",
         test_target,
-        "--release",
+        *([] if args.debug else ["--release"]),
         "--",
         "--emit=asm",
     ]
@@ -141,6 +146,7 @@ def main() -> int:
         "command": " ".join(command),
         "rustc": run("rustc", "-Vv").splitlines()[0],
         "target": run("rustc", "-Vv").split("host: ", 1)[-1].splitlines()[0],
+        "profile": "debug" if args.debug else "release",
         "status": "inconclusive",
         "observations": [],
     }
@@ -151,8 +157,9 @@ def main() -> int:
         write_report(args.report, record)
         return 1
 
+    profile_dir = "debug" if args.debug else "release"
     assemblies = sorted(
-        (ROOT / "target" / "release" / "deps").glob(f"{test_target}-*.s"),
+        (ROOT / "target" / profile_dir / "deps").glob(f"{test_target}-*.s"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -270,7 +277,7 @@ def compare_with(
         args.against_package,
         "--test",
         args.against_target,
-        "--release",
+        *([] if args.debug else ["--release"]),
         "--",
         "--emit=asm",
     ]
@@ -290,8 +297,9 @@ def compare_with(
         comparison["status"] = "inconclusive"
         return comparison
 
+    profile_dir = "debug" if args.debug else "release"
     assemblies = sorted(
-        (ROOT / "target" / "release" / "deps").glob(f"{args.against_target}-*.s"),
+        (ROOT / "target" / profile_dir / "deps").glob(f"{args.against_target}-*.s"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )

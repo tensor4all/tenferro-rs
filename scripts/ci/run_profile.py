@@ -44,6 +44,16 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     "workspace-faer": (
         f"cargo nextest run --workspace {_NEXTEST_PROFILE} --no-fail-fast",
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE}",
+        # Issue #1790 asks for proportionate CI for the external scalar work. The object-level
+        # evidence behind #1785's compilation boundary is otherwise only ever produced by hand,
+        # and the claim it makes is checked nowhere else: no ScalarSet type may appear in the
+        # parameters of a contribution kernel instantiation. The debug profile is used because
+        # this lane has already built it.
+        "python3 scripts/check-scalar-composition-kernel-sharing.py "
+        "--report target/scalar-composition-kernel-sharing.md --debug "
+        "--against-package tenferro-scalar-consumer-application "
+        "--against-target contribution_reuse --against-sets 2 "
+        "--set-type-names ExtendedSet,ExtendedTag,ApplicationSet,ApplicationTag",
     ),
     "workspace-blas": (
         # Direct invocation preserves our CARGO wrapper in nextest test processes.

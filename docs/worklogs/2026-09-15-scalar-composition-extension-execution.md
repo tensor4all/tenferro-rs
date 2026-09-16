@@ -971,3 +971,19 @@ on the extended scalar and the re-orthogonalization pass, and rank-deficient inp
 the supported domain. The tests assert reconstruction and orthogonality below `1e-30`, so the
 tolerances are the scalar's own. The guide now states all of this, and the boundary test names
 cover a rank-1 input, a wide matrix, a zero column, and a singular factor for the derivatives.
+
+## Proportionate CI for the boundary evidence, and a count that belongs to the profile
+
+#1790 asks for proportionate CI, and the object-level script behind #1785's compilation boundary
+was only ever run by hand. The claim it checks — that no ScalarSet type appears in the parameters
+of a contribution kernel instantiation — is asserted nowhere else, because a unit test cannot read
+symbol names. The `workspace-faer` profile, which both CI lanes already run, now invokes it with a
+new `--debug` option, so the lane reuses the build it already has instead of paying for a release
+build. Measured here, the added step takes 63 seconds.
+
+Running it in the debug profile exposed something worth recording rather than hiding: that program
+defines 366 contribution instantiations in debug and four in release, because the optimizer inlines
+the rest. The count is therefore a property of the profile, while the claim is not, since neither
+profile names a set. The committed record now carries its profile explicitly, the design doc says
+which number belongs to which profile, and the check stays a parameterization check rather than a
+count — the same conclusion the earlier refuted count hypothesis reached from the other direction.

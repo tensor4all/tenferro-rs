@@ -15,13 +15,14 @@ the set that contains it.
 ```json
 {
   "schema": "tenferro.scalar-composition-kernel-sharing.v1",
-  "candidate_commit": "06957d76345b363176869d5c1427f3ad6f99b109",
+  "candidate_commit": "12e950f4eaad43439d5e9a10b72446b69b61aa12",
   "package": "tenferro-df64-proof",
   "test_target": "composition",
   "containing_sets": 1,
   "command": "cargo rustc -j 16 -p tenferro-df64-proof --test composition --release -- --emit=asm",
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
   "target": "x86_64-unknown-linux-gnu",
+  "profile": "release",
   "status": "pass",
   "observations": [],
   "assembly": "target/release/deps/composition-0f14445045d8cb80.s",
