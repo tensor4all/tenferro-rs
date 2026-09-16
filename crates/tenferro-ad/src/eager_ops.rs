@@ -441,6 +441,17 @@ impl EagerTensor {
             DType::C32 => {
                 Tensor::from_vec_col_major(vec![], vec![Complex32::new(factor as f32, 0.0)])?
             }
+            // An externally defined scalar has no traced constant, so scaling
+            // rejects it instead of guessing one.
+            DType::External(_) => {
+                return Err(Error::TensorRuntime(
+                    tenferro_tensor::Error::invalid_argument(
+                        "scale_real",
+                        "dtype",
+                        "an externally defined scalar has no eager constant",
+                    ),
+                ));
+            }
         };
         let scalar = EagerTensor::from_tensor_in(scalar, Arc::clone(&self.ctx))?;
         self.mul(&scalar)

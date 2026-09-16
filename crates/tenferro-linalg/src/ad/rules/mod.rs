@@ -573,6 +573,15 @@ pub(crate) fn linearize_eig(
         )[0],
         DType::C64 | DType::C32 => da,
         DType::I32 | DType::I64 | DType::Bool => return Ok(vec![None, None]),
+        // An externally defined scalar must fail explicitly here rather than
+        // silently reporting that it has no derivative.
+        DType::External(_) => {
+            return Err(ADRuleError::invalid_input(
+                "tenferro-linalg",
+                ADRuleKind::Jvp,
+                "an externally defined scalar has no linalg derivative",
+            ));
+        }
     };
 
     let dav = matmul_linear(
@@ -632,6 +641,15 @@ pub(crate) fn linearize_eig_values(
         )[0],
         DType::C64 | DType::C32 => da,
         DType::I32 | DType::I64 | DType::Bool => return Ok(vec![None]),
+        // An externally defined scalar must fail explicitly here rather than
+        // silently reporting that it has no derivative.
+        DType::External(_) => {
+            return Err(ADRuleError::invalid_input(
+                "tenferro-linalg",
+                ADRuleKind::Jvp,
+                "an externally defined scalar has no linalg derivative",
+            ));
+        }
     };
 
     let dav = matmul_linear(

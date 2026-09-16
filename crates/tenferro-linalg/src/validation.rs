@@ -24,7 +24,7 @@ pub(crate) fn validate_lstsq(
 pub(crate) fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {
     match dtype {
         DType::F32 | DType::F64 | DType::C32 | DType::C64 => Ok(()),
-        DType::I32 | DType::I64 | DType::Bool => Err(Error::TensorRuntime(
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => Err(Error::TensorRuntime(
             crate::error::unsupported_dtype(op, dtype),
         )),
     }

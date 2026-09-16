@@ -606,6 +606,14 @@ pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
         }
         DType::C32 => Ok(Tensor::C32(TypedTensor::ones(shape)?)),
         DType::C64 => Ok(Tensor::C64(TypedTensor::ones(shape)?)),
+        // An externally defined scalar is caller-owned and has no core identity
+        // tensor, so the runtime cannot build one for it.
+        DType::External(_) => Err(Error::invalid_argument(
+            "ones_tensor",
+            ErrorPhase::GraphBuild,
+            "dtype",
+            "an externally defined scalar has no core runtime tensor",
+        )),
     }
 }
 

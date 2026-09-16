@@ -412,7 +412,9 @@ pub fn capability_output_dtype(op: PrimitiveOpKind, dtype: DType) -> Option<DTyp
             DType::I64 => Some(DType::I64),
             DType::C32 => Some(DType::F32),
             DType::C64 => Some(DType::F64),
-            DType::Bool => None,
+            // An externally defined scalar is not in tenferro's operation
+            // catalog, so no core operation claims an output dtype for it.
+            DType::Bool | DType::External(_) => None,
         },
         DTypePolicy::SameFloatOrComplex => float_or_complex_dtype(dtype).then_some(dtype),
         DTypePolicy::CompareToBool => comparable_dtype(dtype).then_some(DType::Bool),

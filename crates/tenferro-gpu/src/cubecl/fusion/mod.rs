@@ -14,6 +14,9 @@ pub(crate) fn execute_elementwise_fusion(
     plan: &ElementwiseFusionPlan,
 ) -> crate::Result<Option<Vec<Tensor>>> {
     match plan.dtype() {
+        // An externally defined scalar has no fused kernel, so the fused path
+        // reports that it cannot handle the plan rather than guessing.
+        crate::DType::External(_) => Ok(None),
         crate::DType::F32 => {
             let Some(classified) = classify::<f32>(inputs, plan)? else {
                 return Ok(None);

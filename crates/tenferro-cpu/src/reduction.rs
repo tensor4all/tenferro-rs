@@ -137,6 +137,10 @@ fn kernel_dtype(dtype: DType) -> KernelDType {
         DType::Bool => KernelDType::Bool,
         DType::C32 => KernelDType::C32,
         DType::C64 => KernelDType::C64,
+        // INVARIANT: `KernelDType` is the fixed compiled-kernel vocabulary, and
+        // callers reach this after rejecting unsupported dtypes. An externally
+        // defined scalar has no entry in it.
+        DType::External(_) => unreachable!("KernelDType covers the preset scalars"),
     }
 }
 

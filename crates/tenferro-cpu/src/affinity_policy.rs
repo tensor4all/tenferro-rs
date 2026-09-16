@@ -138,6 +138,10 @@ const fn dtype_byte_width(dtype: DType) -> usize {
         DType::Bool => std::mem::size_of::<bool>(),
         DType::C32 => std::mem::size_of::<num_complex::Complex32>(),
         DType::C64 => std::mem::size_of::<num_complex::Complex64>(),
+        // INVARIANT: CPU affinity is derived for admitted preset tensors, whose
+        // element width is fixed. An externally defined scalar is caller-owned and
+        // has no fixed width here.
+        DType::External(_) => 0,
     }
 }
 

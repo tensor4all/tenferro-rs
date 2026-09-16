@@ -5031,6 +5031,12 @@ impl TensorStructural for CudaBackend {
 
     fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
         match (input, to) {
+            // An externally defined destination has no CUDA conversion, so the
+            // backend rejects it instead of guessing a representation.
+            (_, crate::DType::External(_)) => Err(crate::Error::unsupported(
+                "cast",
+                "an externally defined scalar has no CUDA conversion",
+            )),
             (Tensor::F32(t), crate::DType::F32) => self.duplicate_typed(t).map(Tensor::F32),
             (Tensor::F64(t), crate::DType::F64) => self.duplicate_typed(t).map(Tensor::F64),
             (Tensor::I32(t), crate::DType::I32) => self.duplicate_typed(t).map(Tensor::I32),

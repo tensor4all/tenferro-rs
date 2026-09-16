@@ -287,7 +287,7 @@ impl ContractionScalar {
             DType::F64 => Ok(Self::F64(1.0)),
             DType::C32 => Ok(Self::C32(Complex32::new(1.0, 0.0))),
             DType::C64 => Ok(Self::C64(Complex64::new(1.0, 0.0))),
-            DType::I32 | DType::I64 | DType::Bool => Err(validation(
+            DType::I32 | DType::I64 | DType::Bool | DType::External(_) => Err(validation(
                 "ContractionScalar::one",
                 ValidationError::DTypeMismatch {
                     expected: dtype,
@@ -317,7 +317,7 @@ impl ContractionScalar {
             DType::F64 => Ok(Self::F64(0.0)),
             DType::C32 => Ok(Self::C32(Complex32::new(0.0, 0.0))),
             DType::C64 => Ok(Self::C64(Complex64::new(0.0, 0.0))),
-            DType::I32 | DType::I64 | DType::Bool => Err(validation(
+            DType::I32 | DType::I64 | DType::Bool | DType::External(_) => Err(validation(
                 "ContractionScalar::zero",
                 ValidationError::DTypeMismatch {
                     expected: dtype,

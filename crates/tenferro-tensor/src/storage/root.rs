@@ -590,6 +590,9 @@ fn dtype_size(dtype: DType) -> usize {
         DType::Bool => size_of::<bool>(),
         DType::C32 => size_of::<num_complex::Complex32>(),
         DType::C64 => size_of::<num_complex::Complex64>(),
+        // INVARIANT: callers pass the dtype of a sealed preset scalar, whose size
+        // is fixed. An externally defined scalar has no fixed element size here.
+        DType::External(_) => unreachable!("external scalars have no fixed element size"),
     }
 }
 
@@ -644,6 +647,10 @@ impl<T: TensorScalar> HostRoot for T {
                 extent,
                 data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
+            // INVARIANT: `TensorScalar` is sealed to the preset scalars, so a type
+            // parameter can never report an externally defined dtype. External
+            // payloads are caller-owned and have their own root.
+            DType::External(_) => unreachable!("TensorScalar is sealed to the presets"),
         }
     }
 }

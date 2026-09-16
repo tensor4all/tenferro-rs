@@ -657,6 +657,9 @@ pub(crate) fn cast_with_pool(
             converted!(C32, t, |z| Complex32::new(z.re as f32, z.im as f32))
         }
         (Tensor::C64(t), DType::C64) => Ok(Tensor::C64(t.duplicate()?)),
+        // An externally defined destination has no conversion table here, so the
+        // conversion rejects it explicitly rather than guessing a representation.
+        (_, DType::External(_)) => Err(crate::Error::dtype_mismatch("convert", input.dtype(), to)),
     }
 }
 

@@ -1473,6 +1473,15 @@ impl TracedTensor {
             DType::Bool => StdTensorOp::constant(bool_from_real_for_op("scale_real", factor)?),
             DType::C64 => StdTensorOp::constant(Complex64::new(factor, 0.0)),
             DType::C32 => StdTensorOp::constant(Complex32::new(factor as f32, 0.0)),
+            // An externally defined scalar has no traced constant, so the closure
+            // rejects it instead of guessing one.
+            DType::External(_) => {
+                return Err(graph_invalid_argument(
+                    "scale_real",
+                    "dtype",
+                    format!("requires a preset tensor dtype, got {:?}", self.dtype),
+                ));
+            }
         };
         scale_with_constant(self, op)
     }
@@ -1507,13 +1516,16 @@ impl TracedTensor {
                 self,
                 StdTensorOp::constant(Complex32::new(factor.re as f32, factor.im as f32)),
             ),
-            DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
-                Err(graph_invalid_argument(
-                    "scale_complex",
-                    "dtype",
-                    format!("requires complex tensor dtype, got {:?}", self.dtype),
-                ))
-            }
+            DType::F32
+            | DType::F64
+            | DType::I32
+            | DType::I64
+            | DType::Bool
+            | DType::External(_) => Err(graph_invalid_argument(
+                "scale_complex",
+                "dtype",
+                format!("requires complex tensor dtype, got {:?}", self.dtype),
+            )),
         }
     }
 

@@ -206,6 +206,9 @@ fn provider_dtype_size(dtype: DType) -> usize {
         DType::Bool => core::mem::size_of::<bool>(),
         DType::C32 => core::mem::size_of::<num_complex::Complex32>(),
         DType::C64 => core::mem::size_of::<num_complex::Complex64>(),
+        // INVARIANT: WebGPU provider buffers are sized for the preset scalars the
+        // provider supports. An externally defined scalar has no fixed width.
+        DType::External(_) => 0,
     }
 }
 
@@ -568,6 +571,12 @@ pub(super) fn alloc_tensor_in_runtime(
     shape: &[usize],
 ) -> crate::Result<Tensor> {
     match dtype {
+        // An externally defined scalar has no WebGPU buffer mapping, so the
+        // provider rejects it instead of guessing a representation.
+        DType::External(_) => Err(Error::unsupported(
+            "apple_alloc",
+            "an externally defined scalar has no WebGPU buffer",
+        )),
         DType::F32 => alloc_output::<f32>(rt, shape, "apple_alloc").map(Tensor::F32),
         DType::F64 => alloc_output::<f64>(rt, shape, "apple_alloc").map(Tensor::F64),
         DType::I32 => alloc_output::<i32>(rt, shape, "apple_alloc").map(Tensor::I32),

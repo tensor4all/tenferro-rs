@@ -143,6 +143,9 @@ fn emit_scalar_constant(
             bytes.extend_from_slice(&0.0_f64.to_le_bytes());
             bytes
         }
+        // INVARIANT: the semantic AD catalog is closed to the preset scalars, so
+        // an externally defined dtype cannot reach a constant emission.
+        DType::External(_) => unreachable!("the AD catalog is closed to the presets"),
     };
     builder.add_operation(
         StdTensorOp::Constant { dtype, bytes },

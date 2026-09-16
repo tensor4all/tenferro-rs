@@ -2539,7 +2539,9 @@ fn ensure_supported_linalg_dtypes(
 fn ensure_supported_linalg_dtype(op: &'static str, dtype: DType) -> tenferro_tensor::Result<()> {
     match dtype {
         DType::F32 | DType::F64 | DType::C32 | DType::C64 => Ok(()),
-        DType::I32 | DType::I64 | DType::Bool => Err(unsupported_dtype(op, dtype)),
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
+            Err(unsupported_dtype(op, dtype))
+        }
     }
 }
 

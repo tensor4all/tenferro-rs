@@ -1657,6 +1657,14 @@ fn scalar_real(dtype: DType, value: f64) -> Result<TracedTensor> {
         DType::C32 => {
             TracedTensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])
         }
+        // An externally defined scalar has no traced scalar literal.
+        DType::External(_) => Err(Error::TensorRuntime(
+            tenferro_tensor::Error::invalid_argument(
+                "scalar_real",
+                "dtype",
+                "an externally defined scalar has no traced scalar literal",
+            ),
+        )),
     }
 }
 
@@ -1674,6 +1682,14 @@ fn filled_real(dtype: DType, shape: Vec<usize>, value: f64) -> Result<TracedTens
         DType::C32 => {
             TracedTensor::from_vec_col_major(shape, vec![Complex32::new(value as f32, 0.0); len])
         }
+        // An externally defined scalar has no traced filled literal.
+        DType::External(_) => Err(Error::TensorRuntime(
+            tenferro_tensor::Error::invalid_argument(
+                "filled_real",
+                "dtype",
+                "an externally defined scalar has no traced filled literal",
+            ),
+        )),
     }
 }
 
@@ -1892,6 +1908,9 @@ fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
         DType::F32 | DType::C32 => f32::EPSILON as f64,
         DType::F64 | DType::C64 => f64::EPSILON,
         DType::I32 | DType::I64 | DType::Bool => 0.0,
+        // INVARIANT: the decomposition rejects an externally defined scalar before
+        // it asks for a tolerance, so this value is never used.
+        DType::External(_) => unreachable!("the decomposition validates its dtype first"),
     };
     eps * max_dim as f64
 }

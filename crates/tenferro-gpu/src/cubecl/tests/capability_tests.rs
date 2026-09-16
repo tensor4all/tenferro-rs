@@ -487,6 +487,9 @@ fn sample_tensor(dtype: DType) -> Tensor {
                 Complex64::new(3.0, 0.75),
             ],
         ),
+        // Test fixtures cover the preset dtypes; an externally defined scalar has no
+        // fixture and would change what these tests assert.
+        DType::External(_) => unreachable!("test fixtures cover the preset dtypes"),
     }
 }
 
@@ -513,6 +516,9 @@ fn sample_rhs_tensor(dtype: DType) -> Tensor {
                 Complex64::new(4.0, -0.75),
             ],
         ),
+        // Test fixtures cover the preset dtypes; an externally defined scalar has no
+        // fixture and would change what these tests assert.
+        DType::External(_) => unreachable!("test fixtures cover the preset dtypes"),
     }
 }
 
@@ -545,6 +551,9 @@ fn reduction_sample_tensor(dtype: DType) -> Tensor {
                 Complex64::new(6.0, -0.75),
             ],
         ),
+        // Test fixtures cover the preset dtypes; an externally defined scalar has no
+        // fixture and would change what these tests assert.
+        DType::External(_) => unreachable!("test fixtures cover the preset dtypes"),
     }
 }
 
@@ -623,5 +632,8 @@ fn tolerance(dtype: DType) -> f64 {
         DType::F32 | DType::C32 => 1e-4,
         DType::F64 | DType::C64 => 1e-9,
         DType::I32 | DType::I64 | DType::Bool => 0.0,
+        // Test fixtures cover the preset dtypes; an externally defined scalar has no
+        // fixture and would change what these tests assert.
+        DType::External(_) => unreachable!("test fixtures cover the preset dtypes"),
     }
 }

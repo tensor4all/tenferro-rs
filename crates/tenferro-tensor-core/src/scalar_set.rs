@@ -78,6 +78,8 @@ pub enum MemberKind {
     Float,
     /// Complex floating point.
     Complex,
+    /// A scalar tenferro does not declare, so its facts are unknown.
+    External,
 }
 
 /// Promotion-relevant facts about one set member.
@@ -144,10 +146,12 @@ impl MemberSpec {
 /// ```
 #[must_use]
 pub const fn promote_specs(lhs: MemberSpec, rhs: MemberSpec) -> MemberSpec {
-    use MemberKind::{Boolean, Complex, Float, Integer};
+    use MemberKind::{Boolean, Complex, External, Float, Integer};
     match (lhs.kind, rhs.kind) {
         (Boolean, _) => rhs,
         (_, Boolean) => lhs,
+        (External, _) => lhs,
+        (_, External) => rhs,
         (Integer, Float) | (Float, Integer) => MemberSpec::new(Float, u32::MAX, u32::MAX),
         (Integer, Complex) | (Complex, Integer) => MemberSpec::new(Complex, u32::MAX, u32::MAX),
         (Integer, Integer) | (Float, Float) | (Complex, Complex) => {
@@ -210,6 +214,7 @@ macro_rules! define_scalar_set {
         }
         $(#[$set_meta:meta])*
         $set_vis:vis enum $set:ident;
+        $( external $ext_variant:ident($ext_ty:ty); )?
     ) => {
         $(#[$tag_meta])*
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -218,6 +223,7 @@ macro_rules! define_scalar_set {
                 $(#[$variant_meta])*
                 $variant,
             )+
+            $( $ext_variant($ext_ty), )?
         }
 
         $(#[$set_meta])*
@@ -249,6 +255,9 @@ macro_rules! define_scalar_set {
                             $width,
                         ),
                     )+
+                    $( $tag::$ext_variant(_) => {
+                        $crate::MemberSpec::new($crate::MemberKind::External, 0, 0)
+                    } )?
                 }
             }
 
@@ -285,6 +294,14 @@ macro_rules! define_scalar_set {
             }
 
             fn promote(lhs: Self::Tag, rhs: Self::Tag) -> Self::Tag {
+                $(
+                    if matches!(lhs, $tag::$ext_variant(_)) {
+                        return lhs;
+                    }
+                    if matches!(rhs, $tag::$ext_variant(_)) {
+                        return rhs;
+                    }
+                )?
                 let target = $crate::promote_specs(lhs.spec(), rhs.spec());
                 for (index, spec) in <$tag>::SPECS.iter().enumerate() {
                     if *spec == target {

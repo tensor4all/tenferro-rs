@@ -1145,6 +1145,9 @@ fn external_engine_resolution(
     }
 }
 
+// The error type carries a `DType`, which grew when the tag gained an
+// externally defined variant; boxing it per call would cost more than it saves.
+#[allow(clippy::result_large_err)]
 fn external_domain_backend_kind(
     op: &'static str,
     domains: &[ExternalCpuDomain],
@@ -1411,6 +1414,9 @@ impl CpuBackend {
     /// provider cannot satisfy an external domain contract. Applications that
     /// supply controlled providers can use
     /// [`CpuBackend::from_external_managed_domains_with_provider_bundle`].
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     pub fn from_external_managed_domains(
         default_domain: CpuDomainId,
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
@@ -1484,6 +1490,9 @@ impl CpuBackend {
     /// [`std::error::Error::source`] on that value yields the typed
     /// [`CpuProviderBundleInstallError`], whose own source is the rejected
     /// [`crate::CpuProviderDomainError`].
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     pub fn from_external_managed_domains_with_provider_bundle(
         default_domain: CpuDomainId,
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
@@ -1504,6 +1513,9 @@ impl CpuBackend {
         )
     }
 
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     fn from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
         default_domain: CpuDomainId,
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
@@ -1663,6 +1675,9 @@ impl CpuBackend {
     /// Returns [`CpuBackendError::Tensor`] when the provider is unavailable or
     /// its configuration is invalid, and [`CpuBackendError::Placement`] when
     /// CPU topology discovery or placement initialization fails.
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     pub fn with_kind(kind: CpuBackendKind) -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::with_kind";
         ensure_cpu_backend_kind_available(kind, op)
@@ -1694,6 +1709,9 @@ impl CpuBackend {
     /// malformed, or the compiled provider cannot be selected, and
     /// [`CpuBackendError::Placement`] when CPU topology or managed placement
     /// initialization is unavailable.
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     pub fn try_new() -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::try_new";
         let context =
@@ -1776,6 +1794,9 @@ impl CpuBackend {
     /// Returns [`CpuBackendError::Tensor`] with `ValidationError::InvalidArgument`
     /// when `num_threads` is zero or the context cannot be configured, and
     /// [`CpuBackendError::Placement`] when CPU topology or placement fails.
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     pub fn with_threads(num_threads: usize) -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::with_threads";
         let context = CpuContext::with_threads(num_threads)
@@ -1808,6 +1829,9 @@ impl CpuBackend {
     /// Returns [`CpuBackendError::Tensor`] with `ValidationError::InvalidArgument`
     /// when `num_threads` is zero or the provider is unavailable, and
     /// [`CpuBackendError::Placement`] when CPU topology or placement fails.
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     pub fn with_threads_and_kind(
         num_threads: usize,
         kind: CpuBackendKind,

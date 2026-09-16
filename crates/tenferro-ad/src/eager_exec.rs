@@ -1017,6 +1017,17 @@ fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
                 vec![Complex32::new(re, im)],
             )?)
         }
+        // An externally defined scalar has no runtime constant representation, so
+        // the eager constant path rejects it rather than decoding a guessed layout.
+        DType::External(_) => {
+            return Err(Error::TensorRuntime(
+                tenferro_tensor::Error::invalid_argument(
+                    "constant_tensor",
+                    "dtype",
+                    "an externally defined scalar has no runtime constant",
+                ),
+            ));
+        }
     })
 }
 

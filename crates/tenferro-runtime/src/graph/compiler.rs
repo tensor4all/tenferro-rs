@@ -1570,6 +1570,9 @@ fn default_tensors_equivalent(lhs: &Arc<RetainedValue>, rhs: &Arc<RetainedValue>
         DType::Bool => default_slices_equivalent::<bool>(lhs, rhs),
         DType::C32 => default_slices_equivalent::<Complex32>(lhs, rhs),
         DType::C64 => default_slices_equivalent::<Complex64>(lhs, rhs),
+        // An externally defined payload is opaque here, so two distinct values of
+        // that kind are reported as not equivalent rather than compared by bytes.
+        DType::External(_) => false,
     }
 }
 

@@ -1094,7 +1094,7 @@ fn concrete_fft_operation(op: &'static str, dtype: DType) -> tenferro_tensor::Re
     match dtype {
         DType::C32 | DType::C64 => Ok(FftOperation::C2cForward),
         DType::F32 | DType::F64 => Ok(FftOperation::R2cFull),
-        DType::I32 | DType::I64 | DType::Bool => {
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
             Err(tensor_unsupported_dtype(op, dtype, "F32, F64, C32, or C64"))
         }
     }
@@ -1106,7 +1106,7 @@ fn concrete_ifft_operation(
 ) -> tenferro_tensor::Result<FftOperation> {
     match dtype {
         DType::C32 | DType::C64 => Ok(FftOperation::C2cInverse),
-        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
             Err(tensor_unsupported_dtype(op, dtype, "C32 or C64"))
         }
     }
@@ -1118,7 +1118,7 @@ fn concrete_rfft_operation(
 ) -> tenferro_tensor::Result<FftOperation> {
     match dtype {
         DType::F32 | DType::F64 => Ok(FftOperation::R2cOnesided),
-        DType::C32 | DType::C64 | DType::I32 | DType::I64 | DType::Bool => {
+        DType::C32 | DType::C64 | DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
             Err(tensor_unsupported_dtype(op, dtype, "F32 or F64"))
         }
     }
@@ -1130,7 +1130,7 @@ fn concrete_irfft_operation(
 ) -> tenferro_tensor::Result<FftOperation> {
     match dtype {
         DType::C32 | DType::C64 => Ok(FftOperation::C2r),
-        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
             Err(tensor_unsupported_dtype(op, dtype, "C32 or C64"))
         }
     }
@@ -1832,11 +1832,9 @@ fn runtime_forward_fft_operation(dtype: DType) -> Result<FftOperation> {
     match dtype {
         DType::C32 | DType::C64 => Ok(FftOperation::C2cForward),
         DType::F32 | DType::F64 => Ok(FftOperation::R2cFull),
-        DType::I32 | DType::I64 | DType::Bool => Err(runtime_unsupported_dtype(
-            "fft",
-            dtype,
-            "F32, F64, C32, or C64",
-        )),
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => Err(
+            runtime_unsupported_dtype("fft", dtype, "F32, F64, C32, or C64"),
+        ),
     }
 }
 

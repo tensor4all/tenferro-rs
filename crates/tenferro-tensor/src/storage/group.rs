@@ -596,6 +596,9 @@ impl AllocationGroup {
             DType::C64 => {
                 tensor_view_from_group(self.view::<num_complex::Complex64, DynRank>(slot)?)
             }
+            // INVARIANT: descriptors are created from a sealed preset scalar, so
+            // a descriptor never describes an externally defined dtype.
+            DType::External(_) => unreachable!("descriptors are preset-typed"),
         }
         .map_err(|error| GroupError::InvalidDescriptor {
             message: error.to_string(),
@@ -941,6 +944,9 @@ impl AllocationGroup {
                 .reinterpret_descriptor::<num_complex::Complex64, num_complex::Complex64>(
                     slot, shape, strides, offset,
                 ),
+            // INVARIANT: see the note on the surrounding dispatch; descriptors are
+            // preset-typed.
+            DType::External(_) => unreachable!("descriptors are preset-typed"),
         }
     }
 

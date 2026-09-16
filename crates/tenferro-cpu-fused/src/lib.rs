@@ -146,6 +146,10 @@ fn kernel_dtype(dtype: DType) -> KernelDType {
         DType::Bool => KernelDType::Bool,
         DType::C32 => KernelDType::C32,
         DType::C64 => KernelDType::C64,
+        // INVARIANT: `KernelDType` is the fixed compiled-kernel vocabulary used by
+        // the fused path; an externally defined scalar has no entry in it and is
+        // rejected by `dtype_supports_erased_fusion` before this point.
+        DType::External(_) => unreachable!("KernelDType covers the preset scalars"),
     }
 }
 
@@ -323,6 +327,9 @@ fn dtype_supports_erased_fusion(dtype: DType, plan: &ElementwiseFusionPlan) -> b
             .ops()
             .iter()
             .all(|inst| inst.op() == ElementwiseFusionOp::Conj),
+        // An externally defined scalar has no fused kernel, so the fixed-dtype
+        // fused path rejects it rather than guessing a representation.
+        DType::External(_) => false,
     }
 }
 

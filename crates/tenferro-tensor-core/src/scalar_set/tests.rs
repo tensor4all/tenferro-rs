@@ -73,3 +73,41 @@ fn a_locally_declared_set_reports_its_own_members() {
     assert_eq!(narrow.tag(), TestTag::F32);
     assert_eq!(<TestSet as ScalarSet>::TAGS, &[TestTag::F64, TestTag::F32]);
 }
+
+#[test]
+fn the_tag_carries_an_externally_defined_member_without_listing_it() {
+    use crate::{promote_specs, DType, MemberKind};
+
+    let external = DType::External(core::any::TypeId::of::<u128>());
+    let other = DType::External(core::any::TypeId::of::<u64>());
+
+    assert_ne!(external, other);
+    assert_eq!(external.spec().kind, MemberKind::External);
+    // The member tables list the declared members only, so the external tag is not
+    // a member of the set even though it is part of the tag.
+    assert!(!DType::TAGS.contains(&external));
+    assert_eq!(DType::SPECS.len(), DType::TAGS.len());
+    // An externally defined scalar promotes to itself, because tenferro declares
+    // no facts that could relate it to one of its own members.
+    assert_eq!(
+        promote_specs(external.spec(), DType::F64.spec()).kind,
+        MemberKind::External
+    );
+    assert_eq!(
+        <DefaultScalars as ScalarSet>::promote(external, DType::F64),
+        external
+    );
+    assert_eq!(
+        <DefaultScalars as ScalarSet>::promote(DType::F64, external),
+        external
+    );
+}
+
+#[test]
+fn the_tag_stays_within_its_measured_size() {
+    // The tag was one byte before it gained the externally defined variant, and
+    // the variant carries a `TypeId`. 24 bytes is the measured cost; a change here
+    // should be a deliberate decision because the tag is embedded in metadata,
+    // cache keys, and error types.
+    assert!(core::mem::size_of::<crate::DType>() <= 24);
+}

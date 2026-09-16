@@ -521,6 +521,11 @@ fn encode_dtype(encoder: &mut CanonicalEncoder, dtype: DType) {
         DType::Bool => 4,
         DType::C32 => 5,
         DType::C64 => 6,
+        // INVARIANT: an externally defined scalar has no canonical encoding yet,
+        // and no value type carries one, so it cannot reach a program identity.
+        // Adding such a value requires giving its tag an encoding here, because a
+        // bare code would make two different external scalars share an identity.
+        DType::External(_) => unreachable!("external scalars have no canonical encoding yet"),
     });
 }
 

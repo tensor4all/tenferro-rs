@@ -138,6 +138,7 @@ define_scalar_set! {
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub enum DefaultScalars;
+    external External(core::any::TypeId);
 }
 
 /// Sealed trait for scalar types supported by the core tensor data model.

@@ -4672,6 +4672,10 @@ pub(crate) fn tensor_from_group(
         DType::Bool => Tensor::Bool(typed(group, slot, allocation_index, layout, placement)),
         DType::C32 => Tensor::C32(typed(group, slot, allocation_index, layout, placement)),
         DType::C64 => Tensor::C64(typed(group, slot, allocation_index, layout, placement)),
+        // INVARIANT: an allocation group is created from a sealed preset scalar,
+        // so it can never carry an externally defined one. External payloads are
+        // caller-owned and do not enter a group.
+        DType::External(_) => unreachable!("allocation groups are preset-typed"),
     }
 }
 

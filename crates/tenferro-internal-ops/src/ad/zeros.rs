@@ -119,6 +119,9 @@ fn zero_bytes(dtype: DType) -> Vec<u8> {
             bytes.extend_from_slice(&0.0_f64.to_le_bytes());
             bytes
         }
+        // INVARIANT: the semantic AD catalog is closed to the preset scalars, so
+        // an externally defined dtype cannot reach a constant seed.
+        DType::External(_) => unreachable!("the AD catalog is closed to the presets"),
     }
 }
 
@@ -141,5 +144,7 @@ fn one_bytes(dtype: DType) -> Vec<u8> {
             bytes.extend_from_slice(&0.0_f64.to_le_bytes());
             bytes
         }
+        // INVARIANT: see the note on the zero seed above.
+        DType::External(_) => unreachable!("the AD catalog is closed to the presets"),
     }
 }

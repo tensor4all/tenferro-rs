@@ -35,6 +35,9 @@ fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
             TypedTensor::from_vec_col_major(shape, vec![Complex64::new(1.0, 0.5); n_elements])
                 .unwrap(),
         ),
+        // Test fixtures cover the preset dtypes; an externally defined scalar has
+        // no fixture and would change what these tests assert.
+        DType::External(_) => unreachable!("test fixtures cover the preset dtypes"),
     };
     TracedTensor::from_tensor_concrete_shape(tensor).unwrap()
 }

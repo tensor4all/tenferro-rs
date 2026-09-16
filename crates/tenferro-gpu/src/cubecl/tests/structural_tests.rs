@@ -622,6 +622,9 @@ fn assert_cast_tensor_equal(actual: &Tensor, expected: &Tensor) {
             (a.re == e.re || (a.re.is_nan() && e.re.is_nan()))
                 && (a.im == e.im || (a.im.is_nan() && e.im.is_nan()))
         }),
+        // Test fixtures cover the preset dtypes; an externally defined scalar has no
+        // fixture and would change what this test asserts.
+        DType::External(_) => unreachable!("test fixtures cover the preset dtypes"),
     }
 }
 

@@ -440,6 +440,9 @@ impl SharedTensorAllocationDomain for TestAllocationDomain {
             DType::Bool => allocate!(bool, Bool),
             DType::C32 => allocate!(num_complex::Complex32, C32),
             DType::C64 => allocate!(num_complex::Complex64, C64),
+            // Test fixtures cover the preset dtypes; an externally defined scalar has no
+            // fixture and would change what this test asserts.
+            DType::External(_) => unreachable!("test fixtures cover the preset dtypes"),
         }
     }
 }

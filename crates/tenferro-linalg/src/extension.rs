@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
@@ -1769,6 +1769,9 @@ fn eig_output_dtype(dtype: DType) -> DType {
         DType::F64 | DType::C64 => DType::C64,
         DType::F32 | DType::C32 => DType::C32,
         DType::I32 | DType::I64 | DType::Bool => DType::C64,
+        // INVARIANT: linalg validates its input dtype before mapping outputs, so
+        // an externally defined scalar never reaches this mapping.
+        DType::External(_) => unreachable!("linalg validates its input dtype first"),
     }
 }
 
@@ -1776,6 +1779,11 @@ fn singular_values_dtype(dtype: DType) -> DType {
     match dtype {
         DType::C64 => DType::F64,
         DType::C32 => DType::F32,
+        DType::External(id) => {
+            // Singular values of an externally defined scalar have no declared
+            // dtype, so the mapping keeps the identity rather than guessing one.
+            DType::External(id)
+        }
         other => other,
     }
 }
@@ -1797,6 +1805,18 @@ fn hash_dtype(hasher: &mut dyn Hasher, dtype: DType) {
         DType::C32 => 4,
         DType::I32 => 5,
         DType::Bool => 6,
+        DType::External(id) => {
+            // The cache key must distinguish two externally defined scalars, so it
+            // carries the scalar's own identity rather than one shared code.
+            // `Hash` needs a sized hasher, so the identity is folded into a
+            // concrete one first. It is stable within a process, which is the
+            // scope of this cache.
+            let mut identity = std::collections::hash_map::DefaultHasher::new();
+            Hash::hash(&id, &mut identity);
+            hasher.write_u8(7);
+            hasher.write_u64(identity.finish());
+            return;
+        }
     };
     hasher.write_u8(tag);
 }

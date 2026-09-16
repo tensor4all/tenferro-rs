@@ -326,7 +326,27 @@ rather than a sweep.
 
 Both variants are public type changes: `DType` gains a variant and `Tensor` gains
 one, which is a semver break and, under this repository's rules, a change that
-needs maintainer acceptance before a feature pull request can carry it. That is an
+needs maintainer acceptance before a feature pull request can carry it.
+
+The tag half is now implemented and measured. `DType` carries
+`External(TypeId)`, 56 sites gained an explicit arm, and the workspace compiles
+and tests exactly as before. The measured price is that `DType` grew from **1 byte
+to 24 bytes**, because the variant carries a `TypeId`; the tag is embedded in
+runtime metadata, cache keys, and error types, so that growth tripped
+`clippy::result_large_err` in nine `tenferro-cpu` functions and enlarged those
+error types. Three consequences follow and they are the reason this stays a
+decision rather than a detail:
+
+- A unit `External` variant would keep the tag at one byte but would drop the
+  identity that distinguishes two external scalars, so a `DType`-keyed cache would
+  collide. The linalg cache key now hashes the carried identity for exactly that
+  reason.
+- A small registered id (`External(u32)` plus a process-local map) would keep the
+  tag at eight bytes at the price of runtime registration, which the original
+  proposal rejected.
+- Both alternatives trade identity or an id registry against the 23 bytes, and the
+  choice should be made against the tag's real footprint in the runtime, which has
+  not been measured. That is an
 order of magnitude below the 2267 production pattern sites that removing the
 seven variants rewrites, which is the opposite of what was assumed before the
 measurement: the hybrid shape is not the expensive one.

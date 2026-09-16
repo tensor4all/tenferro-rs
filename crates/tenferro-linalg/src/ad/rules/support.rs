@@ -192,7 +192,7 @@ fn broadcast_scalar_constant_with_dtype(
         DType::F32 => StdTensorOp::constant(factor as f32),
         DType::C64 => StdTensorOp::constant(Complex64::new(factor, 0.0)),
         DType::C32 => StdTensorOp::constant(Complex32::new(factor as f32, 0.0)),
-        DType::I32 | DType::I64 | DType::Bool => {
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
             return Err(ADRuleError::invalid_input(
                 format!("tenferro-linalg.{op}"),
                 ADRuleKind::Jvp,

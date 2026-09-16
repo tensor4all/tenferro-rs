@@ -27,7 +27,12 @@ impl TensorType {
         match self.dtype {
             DType::F32 => "f32",
             DType::F64 => "f64",
-            DType::I32 | DType::I64 | DType::Bool | DType::C32 | DType::C64 => {
+            DType::I32
+            | DType::I64
+            | DType::Bool
+            | DType::C32
+            | DType::C64
+            | DType::External(_) => {
                 debug_assert!(false, "TensorType validates dtype at construction");
                 "!tenferro.unsupported_dtype"
             }
@@ -65,6 +70,10 @@ fn stablehlo_dtype(dtype: DType) -> Option<&'static str> {
     match dtype {
         DType::F32 => Some("f32"),
         DType::F64 => Some("f64"),
-        DType::I32 | DType::I64 | DType::Bool | DType::C32 | DType::C64 => None,
+        // An externally defined scalar has no StableHLO element type, so lowering
+        // rejects it instead of mapping it to a guessed one.
+        DType::I32 | DType::I64 | DType::Bool | DType::C32 | DType::C64 | DType::External(_) => {
+            None
+        }
     }
 }

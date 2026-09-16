@@ -1436,6 +1436,9 @@ fn caller_managed_domain(
     .unwrap()
 }
 
+// The error type carries a `DType`, which grew when the tag gained an
+// externally defined variant; boxing it per call would cost more than it saves.
+#[allow(clippy::result_large_err)]
 fn external_backend(
     default_domain: CpuDomainId,
     domains: impl IntoIterator<Item = ExternalCpuDomain>,

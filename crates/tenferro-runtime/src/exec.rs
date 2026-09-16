@@ -1195,6 +1195,14 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
                 vec![Complex32::new(re, im)],
             )?))
         }
+        // An externally defined scalar has no runtime constant representation, so
+        // the compiled program rejects it rather than decoding a guessed layout.
+        DType::External(_) => Err(Error::invalid_argument(
+            "constant_tensor",
+            ErrorPhase::GraphBuild,
+            "dtype",
+            "an externally defined scalar has no runtime constant",
+        )),
     }
 }
 
