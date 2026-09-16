@@ -29,6 +29,18 @@ pub trait ScalarSet: Clone + core::fmt::Debug + 'static {
     const TAGS: &'static [Self::Tag];
 
     /// Tag of the member this value currently holds.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{DType, HostTensor, ScalarSet};
+    ///
+    /// let value = tenferro_tensor_core::DefaultScalars::F64(
+    ///     HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?,
+    /// );
+    /// assert_eq!(value.tag(), DType::F64);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
     fn tag(&self) -> Self::Tag;
 }
 

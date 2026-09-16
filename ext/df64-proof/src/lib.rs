@@ -16,6 +16,14 @@
 
 tenferro_tensor_core::define_scalar_set! {
     /// Tag for the external extended-precision set.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::ExtendedTag;
+    ///
+    /// assert_ne!(ExtendedTag::F64, ExtendedTag::Df64);
+    /// ```
     pub enum ExtendedTag {
         /// Standard double precision.
         F64 => f64,
@@ -23,6 +31,19 @@ tenferro_tensor_core::define_scalar_set! {
         Df64 => Df64,
     }
     /// Value enum for the external extended-precision set.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::{Df64, ExtendedSet, ExtendedTag};
+    /// use tenferro_tensor_core::{HostTensor, ScalarSet};
+    ///
+    /// let value = ExtendedSet::Df64(
+    ///     HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)])?,
+    /// );
+    /// assert_eq!(value.tag(), ExtendedTag::Df64);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
     pub enum ExtendedSet;
 }
 
@@ -30,6 +51,16 @@ tenferro_tensor_core::define_scalar_set! {
 ///
 /// `hi` holds the rounded value and `lo` the exact residual, so
 /// `hi + lo` is the represented real number.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::Df64;
+///
+/// let carried = Df64 { hi: 1.0, lo: 2f64.powi(-80) };
+/// assert_eq!(carried.narrow_to_f64(), 1.0);
+/// assert_ne!(carried, Df64::from_f64(1.0));
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Df64 {
     /// Rounded component.
@@ -49,6 +80,14 @@ fn two_sum(a: f64, b: f64) -> (f64, f64) {
 
 impl Df64 {
     /// Build a scalar with no low component.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::Df64;
+    ///
+    /// assert_eq!(Df64::from_f64(1.5), Df64 { hi: 1.5, lo: 0.0 });
+    /// ```
     #[inline]
     #[must_use]
     pub fn from_f64(value: f64) -> Self {
@@ -56,6 +95,14 @@ impl Df64 {
     }
 
     /// Additive identity.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::Df64;
+    ///
+    /// assert_eq!(Df64::zero(), Df64 { hi: 0.0, lo: 0.0 });
+    /// ```
     #[inline]
     #[must_use]
     pub fn zero() -> Self {
@@ -66,6 +113,15 @@ impl Df64 {
     ///
     /// This is a numerical conversion, not a reinterpretation: it allocates
     /// nothing and reads only the rounded component.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::Df64;
+    ///
+    /// // The low component is deliberately dropped, and is not recovered.
+    /// assert_eq!(Df64 { hi: 1.0, lo: 2f64.powi(-80) }.narrow_to_f64(), 1.0);
+    /// ```
     #[inline]
     #[must_use]
     pub fn narrow_to_f64(self) -> f64 {
