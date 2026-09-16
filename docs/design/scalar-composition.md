@@ -578,6 +578,17 @@ The pieces that step needs are landed: the payload answers its element identity,
 shape, and element count, `ScalarSet::promote` accepts an external tag, and the
 cache-key identity carries the actual scalar rather than a shared code.
 
+Session composition is demonstrated without that engine path, and the limit is
+stated where it matters. `ext/df64-proof/tests/session_composition.rs` carries an
+external payload as a runtime `Tensor`, enters `with_backend_session`, runs an
+ordinary addition on `f64` tensors in that session, then runs the extension's own
+Df64 kernel on the carried payloads through the public caller-destination entry
+point, and checks after the session that the low-order component survived. So an
+external scalar coexists with ordinary tensor work inside one admitted session and
+inherits its admission and thread budget. What it does not yet do is reach the
+extension through a registered `ExtensionModule` and prepared execution, which is
+the remaining #1785/#1790 step.
+
 **Promotion between two distinct external scalars is not checked.**
 `promote(lhs, rhs)` returns the left operand when both are external, even when the
 two tags name different Rust types. Tenferro cannot relate an external scalar to
