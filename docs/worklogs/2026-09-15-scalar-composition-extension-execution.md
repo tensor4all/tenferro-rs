@@ -549,3 +549,21 @@ where the operator implementation would have panicked.
 
 Workspace after this: 5303 passed, 3 failed (the same pre-existing `trybuild` failures),
 clippy clean under `-D warnings` and the strict doc lints.
+
+## Why the objective's first-named GPU module is not converted
+
+The Stage 2 list names `crates/tenferro-gpu/src/cubecl/mod.rs` first, by arm density, and it is
+still unconverted. I checked the two obvious explanations rather than assuming them.
+
+A GPU build works here: `cargo check -p tenferro-gpu --features cuda` finishes in 25 seconds
+with the vendored CubeCL crates, so the conversion would be verifiable and tooling is not the
+reason.
+
+The arms are the reason, and the numbers are specific: of its 66 concrete `Tensor::`/`DType::`
+matches, 16 carry an extra shape guard that routes to a fallback, 69 places pass a
+`crate::DType` into the launched kernel, one arm groups three variants into a single rejection,
+and the launches use distinct helpers (`launch_checked_integer_binary`,
+`launch_broadcast_multiply_int_typed`, `launch_bool_tensor_into`, and others). A same-variant
+macro would erase those differences, so these sites need the accessor and kernel-parameter work
+the design doc identifies rather than a macro swap. The design doc now records this with the
+measurements.

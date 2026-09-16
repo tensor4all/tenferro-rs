@@ -531,6 +531,18 @@ definitions cost more than the sites they removed. That is the opposite of the
 simplification this work is for, so the unary conversion was reverted and the
 measured outcome is recorded here instead of being carried.
 
+One question this leaves is why the objective's *first*-named target,
+`crates/tenferro-gpu/src/cubecl/mod.rs`, is among the remaining sites, since a GPU feature
+builds in this checkout (`cargo check -p tenferro-gpu --features cuda` succeeds in 25 seconds
+with the vendored CubeCL crates, so verification is not what stops it). The answer is measured:
+its 66 concrete `Tensor::`/`DType::` matches are not a uniform same-variant dispatch. 16 arms
+carry an extra shape guard that routes to a fallback, 69 places pass a `crate::DType` into the
+kernel they launch, one arm groups three variants into a single rejection, and the launches go
+through distinct helpers such as `launch_checked_integer_binary`,
+`launch_broadcast_multiply_int_typed`, and `launch_bool_tensor_into`. Rewriting those with a
+same-variant macro would change behavior, so they need the accessor and kernel-parameter work
+this section identifies as the stopping point, not a macro swap.
+
 The reason is structural, not cosmetic: the remaining sites are not uniform. Their
 real and complex arms use *different* conversions, for example
 `.map(|outputs| outputs.into_iter().map(Tensor::F32).collect())` for the real arm
