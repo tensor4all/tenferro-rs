@@ -935,3 +935,25 @@ implements, which is the distinction this branch actually rests on.
 The shipped usage skills were checked rather than assumed: the only dtype mention in
 `.agents/skills/tenferro-compute` is a `DType::F64` in a usage example, which this branch does not
 change, so no skill needed updating.
+
+## The independent references #1788 demands, and the wrong derivative they found
+
+#1788 and #1790 both require the factor derivatives to be checked with finite differences and
+JVP/VJP duality, and neither reference existed: there was no finite-difference test and no duality
+test anywhere in the external work. They were the last acceptance lines I had assumed rather than
+verified.
+
+Writing them found a real defect. The forward rule computed `R_dot = triu(Q^T A_dot) R` instead of
+solving `W = S R + R_dot`, so it returned the correct tangent multiplied by `R`. My hand
+computation of the duality identity for `A = [[3], [4]]` gave exactly the reverse-mode side, which
+is what showed the forward side was the wrong one rather than the reverse side. The rule, the
+assertion in `connected_qr_ad.rs`, and the design doc all carried the wrong value, and the test's
+comment rationalised it as `(Q^T A_dot) R = (3/5)(5) = 3`. A test that recomputes what the code
+computes cannot catch that, which is the whole reason the owning issues insist on independent
+references.
+
+The rule now solves for the skew part and subtracts it, the connected test asserts `3/5`, the
+design doc states the identity, and both new references pass: duality agrees to a relative
+`5.7e-33`, and a central difference at a step of `1e-16` matches the adjoint's directional
+derivative, which no `f64` intermediate could resolve. Removing the forward rule's old body left
+`dense::upper_triangle` unused, so the dead helper is gone as well.

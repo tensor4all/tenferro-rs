@@ -917,7 +917,11 @@ the gradient flowing back into the external scalar. It runs.
 
 The reverse rule needs the adjoint of `A = Q R`, which is
 `A_bar = (Q_bar + Q copyltu(R R_bar^T - Q_bar^T Q)) R^{-T}`, and the forward rule needs
-`R_dot = triu(Q^T A_dot) R` with `Q_dot = (A_dot - Q R_dot) R^{-1}`. Both need a
+the tangent of the same identity. Writing `W = Q^T A_dot`, the differential relation is
+`W = S R + R_dot` with `S = Q^T Q_dot` skew and `R_dot` upper triangular, so the strictly
+lower part of `W` determines `S` by forward substitution and `R_dot = W - S R` follows,
+with `Q_dot = (A_dot - Q R_dot) R^{-1}`. Taking the upper triangle of `W` directly is wrong
+whenever there is more than one column, because it drops the `S R` term. Both need a
 triangular solve in the external scalar, so both are operations in the contribution's
 family (`Df64QrVjp`, `Df64QrJvp`) rather than graphs of preset operations, which could
 not execute for a scalar tenferro does not declare. The adjoint's payload records which
@@ -931,8 +935,9 @@ program end to end:
 - `A -> QR -> R -> f64 -> R^2` with `A = [[3], [4]]` differentiates back into the
   external scalar as `[[6], [8]]`, which is #1790's orientation case
   (`R = [[5]]`, `L = 25`, `dL/dA = 2 R A / |A|`).
-- The forward tangent of the same graph is `3` for the first unit direction, which is
-  `(Q^T A_dot) R = (3/5)(5)`, and it leaves the graph as an ordinary `f64` value.
+- The forward tangent of the same graph is `Q^T A_dot = 3/5` for the first unit direction,
+  and it leaves the graph as an ordinary `f64` value. This line previously recorded `3.0`,
+  which is that tangent multiplied by `R`, and it was wrong in the same way the rule was.
 - The second connected graph, `f64 input -> widen -> QR -> narrow -> loss`, also
   differentiates: the gradient crosses the widening and lands in the input's own dtype as
   `[6, 8]`.
@@ -1355,6 +1360,29 @@ reached only when the runtime plans two programs whose payloads differ), the der
 less common arms (`ad.rs`, 29), the eager retention guard (`eager.rs`, 16), and the private
 `Debug` rendering plus a defensive fallback in `checkpoint.rs` (11) that no public path reaches
 because `RetainedValue` is not a public item.
+
+### 5.20b The independent references caught a wrong derivative
+
+#1788 requires the factor derivatives to be checked with finite differences and JVP/VJP
+duality, and #1790 repeats it, with the explicit warning that re-running the same kernel or
+checking a standalone derivative is not that evidence. The references were missing, and adding
+them found a real defect.
+
+The forward rule computed `R_dot = triu(Q^T A_dot) R`, which is the correct tangent multiplied by
+`R`. For the orientation input the tangent of `R` along the first unit direction is `Q^T A_dot =
+3/5`, and the rule returned `3`. The error was not merely unimplemented: it was encoded in three
+places at once, because the rule, the assertion in `connected_qr_ad.rs`, and this document all
+recorded `3` and the comment explaining it rationalised the multiplication by `R`. A test that
+recomputes what the code computes cannot find that, which is exactly why the owning issues demand
+independent references.
+
+The rule now solves `W = S R + R_dot` for the skew `S` and takes `R_dot = W - S R`, the assertion
+in the connected test reads `3/5`, and the two new references in
+`ext/df64-proof/tests/qr_derivative_references.rs` pass: the duality identity agrees to a
+relative `5.7e-33`, and a central difference at a step of `1e-16` reproduces the adjoint's
+directional derivative, which no `f64` intermediate could resolve. The duality comparison also
+reproduces the orientation gradient `[[6], [8]]`, which guards that the two programs' inputs were
+bound in the order they expect.
 
 ### 5.21 What an external scalar reaches, and what supporting it would cost
 

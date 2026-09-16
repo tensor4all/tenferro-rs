@@ -35,6 +35,12 @@ impl<'a> Matrix<'a> {
         }
     }
 
+    /// Write one entry. Only used on a matrix this crate owns.
+    pub(crate) fn set(&mut self, row: usize, column: usize, value: Df64) {
+        let index = row + column * self.rows;
+        self.data.to_mut()[index] = value;
+    }
+
     pub(crate) fn columns(&self) -> usize {
         self.data.len().checked_div(self.rows).unwrap_or(0)
     }
@@ -84,22 +90,6 @@ pub(crate) fn subtract(a: &Matrix<'_>, b: &Matrix<'_>) -> Matrix<'static> {
 }
 
 /// Upper triangle including the diagonal, with zeros elsewhere.
-pub(crate) fn upper_triangle(a: &Matrix<'_>) -> Matrix<'static> {
-    let columns = a.columns();
-    let mut data = vec![Df64::zero(); a.data.len()];
-    for column in 0..columns {
-        for row in 0..=column.min(a.rows.saturating_sub(1)) {
-            data[row + column * a.rows] = a.at(row, column);
-        }
-    }
-    Matrix::new(a.rows, data)
-}
-
-/// Solve `x r = b` for `x`, where `r` is upper triangular and square.
-///
-/// # Errors
-///
-/// Returns `None` under the same conditions as [`solve_upper`].
 pub(crate) fn solve_upper_from_the_right(
     r: &Matrix<'_>,
     b: &Matrix<'_>,

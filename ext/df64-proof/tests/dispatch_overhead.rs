@@ -101,13 +101,12 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
         .and_then(|text| text.lines().next().map(str::to_owned))
         .unwrap_or_else(|| "rustc unavailable".to_owned());
     println!(
-        "configuration: profile={} features=autodiff:{} host={} {rustc}",
+        "configuration: profile={} features=none-declared-by-this-crate host={} {rustc}",
         if cfg!(debug_assertions) {
             "test"
         } else {
             "release"
         },
-        cfg!(feature = "autodiff"),
         std::env::consts::OS,
     );
 

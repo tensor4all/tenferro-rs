@@ -162,12 +162,14 @@ fn the_connected_qr_program_forward_tangent_matches_an_independent_derivative() 
         .run_compiled(&program, &[])
         .expect("executed forward program");
 
-    // R = |A|, so the tangent of R is (Q^T A_dot) R = (3/5)(5) = 3 for the first unit
-    // direction; the graph narrows it to f64 on the way out.
+    // R = |A|, so the tangent of R is Q^T A_dot = 3/5 for the first unit direction; the graph
+    // narrows it to f64 on the way out. This assertion previously read 3.0, which was the
+    // tangent multiplied by R: the rule took the upper triangle of Q^T A_dot instead of solving
+    // the S R + R_dot identity, and the test recorded the wrong value as the expected one.
     assert_eq!(results[0].dtype(), DType::F64);
     let tangent = results[0].as_slice::<f64>().expect("f64 slice");
     assert!(
-        (tangent[0] - 3.0).abs() < 1e-15,
+        (tangent[0] - 0.6).abs() < 1e-15,
         "the forward tangent is {tangent:?}"
     );
 }

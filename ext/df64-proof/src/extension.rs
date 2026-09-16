@@ -1074,8 +1074,26 @@ fn qr_jvp_of(
     let r = matrix_of(op, resolved[1].tensor())?;
     let a_dot = matrix_of(op, resolved[2].tensor())?;
 
-    let m = crate::dense::multiply(&crate::dense::transpose(&q), &a_dot);
-    let r_dot = crate::dense::multiply(&crate::dense::upper_triangle(&m), &r);
+    // With A = Q R, the differential identity W = Q^T A_dot = S R + R_dot holds, where
+    // S = Q^T Q_dot is skew and R_dot is upper triangular. The strictly lower part of W
+    // therefore determines S by forward substitution, and R_dot = W - S R follows. Taking
+    // the upper triangle of W directly would drop the S R term, which is zero only for a
+    // single column.
+    let w = crate::dense::multiply(&crate::dense::transpose(&q), &a_dot);
+    let n = r.columns();
+    let mut s = crate::dense::zeros(n, n);
+    for column in 0..n {
+        for row in (column + 1)..n {
+            let mut value = w.at(row, column);
+            for earlier in 0..column {
+                value = value - s.at(row, earlier) * r.at(earlier, column);
+            }
+            let skew = value / r.at(column, column);
+            s.set(row, column, skew);
+            s.set(column, row, -skew);
+        }
+    }
+    let r_dot = crate::dense::subtract(&w, &crate::dense::multiply(&s, &r));
     let residual = crate::dense::subtract(&a_dot, &crate::dense::multiply(&q, &r_dot));
     let q_dot = crate::dense::solve_upper_from_the_right(&r, &residual).ok_or_else(|| {
         tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
