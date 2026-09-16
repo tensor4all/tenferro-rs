@@ -5531,20 +5531,37 @@ impl TensorReduction for CudaBackend {
                 "CUDA sum-of-squares requires a resident tensor",
             ));
         };
+        // Dispatch on the tag and recover the typed tensor, which is what `as_typed` exists for.
         if axes.is_empty() {
-            return match input {
-                Tensor::F32(_) | Tensor::F64(_) => self.mul(input, input),
-                _ => Err(unsupported_dtype(op, input.dtype())),
+            return match input.dtype() {
+                DType::F32 | DType::F64 => self.mul(input, input),
+                DType::I32 | DType::I64 | DType::Bool | DType::C32 | DType::C64 => {
+                    Err(unsupported_dtype(op, input.dtype()))
+                }
+                DType::External(_) => Err(crate::Error::unsupported(
+                    op,
+                    "an externally defined payload is not supported by this GPU operation",
+                )),
             };
         }
-        match input {
-            Tensor::F32(t) => self
-                .reduce_sum_squares_float_typed(t, axes)
-                .map(Tensor::F32),
-            Tensor::F64(t) => self
-                .reduce_sum_squares_float_typed(t, axes)
-                .map(Tensor::F64),
-            _ => Err(unsupported_dtype(op, input.dtype())),
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, op)?;
+                self.reduce_sum_squares_float_typed(t, axes)
+                    .map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, op)?;
+                self.reduce_sum_squares_float_typed(t, axes)
+                    .map(Tensor::F64)
+            }
+            DType::I32 | DType::I64 | DType::Bool | DType::C32 | DType::C64 => {
+                Err(unsupported_dtype(op, input.dtype()))
+            }
+            DType::External(_) => Err(crate::Error::unsupported(
+                op,
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
