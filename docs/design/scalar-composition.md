@@ -566,8 +566,9 @@ and #1790 (external application consumer) are met.
 
 ## 5.4 What is left, and why it needs its own step
 
-Two gaps remain between the landed foundation and the acceptance criteria of
-#1785, #1788, #1789, #1790, and #1793.
+The gaps between the landed foundation and the acceptance criteria of #1785,
+#1788, #1789, #1790, and #1793 are now in the numerical and view layers rather
+than in the boundary: the extension boundary exists and executes.
 
 **Executing an external scalar needs the extension boundary.** The tag and the
 value type can name and carry an external scalar, but every CPU kernel rejects one
@@ -605,17 +606,34 @@ shapes recorded earlier, now implemented:
 scratch, cross-owner handoffs, and the accounting a caller-owned payload
 participates in. The payload here is retained and returned, not pooled.
 
-Session composition is demonstrated without that engine path, and the limit is
-stated where it matters. `ext/df64-proof/tests/session_composition.rs` carries an
-external payload as a runtime `Tensor`, enters `with_backend_session`, runs an
-ordinary addition on `f64` tensors in that session, then runs the extension's own
-Df64 kernel on the carried payloads through the public caller-destination entry
-point, and checks after the session that the low-order component survived. So an
-external scalar coexists with ordinary tensor work inside one admitted session and
-inherits its admission and thread budget. The registered
-`ExtensionModule`/prepared-execution path is implemented and prepares the
-operation, so the only thing still missing from the #1785/#1790 step is the
-ownership slot described above.
+Session composition is also demonstrated on its own.
+`ext/df64-proof/tests/session_composition.rs` carries an external payload as a
+runtime `Tensor`, enters `with_backend_session`, runs an ordinary addition on `f64`
+tensors in that session, then runs the extension's own Df64 kernel on the carried
+payloads through the public caller-destination entry point, and checks after the
+session that the low-order component survived. So an external scalar coexists with
+ordinary tensor work inside one admitted session and inherits its admission and
+thread budget.
+
+**The required extended-precision example and directed conversions run.**
+`ext/df64-proof/tests/directed_conversion.rs` walks #1785's example through public
+boundaries: `Df64` tensors holding `1` and `2^-80` are added in `Df64`, `1` is
+subtracted in `Df64`, the result is exactly `2^-80`, and the same computation in
+`f64` yields `0`. `conversion::to_f64` and `conversion::to_df64` declare their
+rounding, range, and allocation behaviour: the low component participates in the
+sum and rounds to nearest with ties to even (a low component of `2^-52` reaches the
+destination, `2^-80` rounds away, and half an ulp rounds to even), the `f64` to
+`Df64` direction is exact with a zero low component, and neither direction coerces
+a source it does not declare.
+
+**What is still missing is a view contract for a caller-owned payload.** `Tensor`
+still needs a strided, mutable, metadata-only view over an external payload for
+#1785's permutation, mutable-view, and materialization requirements, and
+`TensorView`/`TensorViewMut` have no external variant. This is not mechanical: an
+erased payload must expose a layout contract (strides, offset, and mutable
+strided access) that the erased element type determines, which is a public
+contract decision for the adapter, so it belongs to the #1785/#1789 step rather
+than to the representation change.
 
 **Promotion between two distinct external scalars is not checked.**
 `promote(lhs, rhs)` returns the left operand when both are external, even when the

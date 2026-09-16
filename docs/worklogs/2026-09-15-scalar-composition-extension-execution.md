@@ -72,3 +72,32 @@ belongs at the executing entry points, not in the lattice.
 - `RetainedValue::from_tensor` still uses `expect` for a compact tensor's
   descriptor. Caller-owned payloads now return through the `Err` path instead, so
   the `expect` is reached only by a value that already validated one.
+
+## Follow-on: the required example and directed conversions
+
+With retention working, the parts of #1785 that do not need a view contract are
+landed and tested:
+
+- `ext/df64-proof/src/conversion.rs` adds the two directed conversions.
+  `to_f64` sums the two components and rounds to nearest with ties to even, so the
+  low component participates (`2^-52` reaches the destination, `2^-80` rounds
+  away, half an ulp rounds to even) instead of being truncated to the high
+  component. `to_df64` is exact and gives a zero low component. Both declare
+  range and destination allocation, and both reject a source they do not declare.
+- `ext/df64-proof/tests/directed_conversion.rs` walks #1785's required example
+  through public boundaries: two `Df64` tensors holding `1` and `2^-80` are added
+  in `Df64`, `1` is subtracted in `Df64`, the result is exactly `2^-80`, and the
+  same computation in `f64` yields `0`. It also pins the declared rounding of both
+  conversions and the typed rejection of an undeclared source.
+
+Workspace after this: 5215 passed, 3 failed (the same pre-existing `trybuild`
+failures), clippy `-D warnings` and the strict `missing_errors_doc` /
+`missing_panics_doc` pass clean, and all thirteen doctests in the proof crate run.
+
+## What the next step needs
+
+`Tensor` still has no strided or mutable view over a caller-owned payload, so
+#1785's metadata-only permutation and mutable-view requirements are not satisfied
+yet. That is a contract decision rather than a mechanical conversion: the erased
+payload would have to expose layout (strides, offset) and mutable strided access,
+which the erased element type owns.
