@@ -270,6 +270,20 @@ implementation. The set is represented by that value enum rather than by a
 wrapper struct, so tenferro's own set reads as `pub type Tensor = DefaultScalars;`
 and variant paths keep resolving through the alias.
 
+A fixed set of enum variants cannot host a member tenferro does not know. The
+runtime value type is `pub enum Tensor { F32(TypedTensor<f32>), ... }` with seven
+variants and `#[derive(Debug)]` only; adding a member would add a variant, which
+is what stage 2 exists to stop. Parameterizing the payload (`Tensor<Payload>` with
+a GAT mapping each member to its storage type) keeps the variants fixed, so it
+does not admit an external member either. The stage 2 end state is therefore a
+tag plus a single erased payload rather than a widened variant list: the value
+carries `S::Tag` and an erased payload whose concrete type the accessors
+recover, the seven variants disappear last, and a downstream set member is
+representable because it is never a variant. That shape needs its own soundness
+contract for erasure, layout, and reinterpretation, which is #1785 design
+question 2 and #1789's resource boundary; it is recorded here as the decision
+stage 2 must make rather than left implicit in the notation.
+
 Landed and measured: `DType` and `DefaultScalars` are now generated from one
 declaration in `tenferro-tensor-core`, `ScalarSet` is the open membership
 contract, and `ext/df64-proof` declares its own two-member set with the same
