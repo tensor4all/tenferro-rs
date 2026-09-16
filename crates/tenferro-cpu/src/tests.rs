@@ -715,6 +715,7 @@ mod basic_ops;
 mod blas1;
 #[path = "tests/cpu_tests/capability.rs"]
 mod capability;
+mod cast_matrix_coverage_tests;
 #[path = "tests/cpu_tests/context.rs"]
 mod context;
 #[path = "tests/cpu_tests/dot_structural_analytic.rs"]

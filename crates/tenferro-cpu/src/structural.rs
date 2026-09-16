@@ -577,666 +577,159 @@ pub(crate) fn cast_with_pool(
 
     match (input.dtype(), to) {
         (DType::F32, DType::F32) => Ok(Tensor::from_typed::<f32>(
-            input
-                .as_typed::<f32>()
-                .ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?
-                .duplicate()?,
+            cast_operand::<f32>(input)?.duplicate()?,
         )),
-        (DType::F32, DType::F64) => converted!(
-            F64,
-            input
-                .as_typed::<f32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x as f64
-        ),
+        (DType::F32, DType::F64) => converted!(F64, cast_operand::<f32>(input)?, |x| x as f64),
         (DType::F32, DType::I32) => {
-            validate_real_values_cast_to_i32(
-                input.as_typed::<f32>().ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?,
-                |x| x as f64,
-            )?;
-            converted!(
-                I32,
-                input
-                    .as_typed::<f32>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| x as i32
-            )
+            validate_real_values_cast_to_i32(cast_operand::<f32>(input)?, |x| x as f64)?;
+            converted!(I32, cast_operand::<f32>(input)?, |x| x as i32)
         }
         (DType::F32, DType::I64) => {
-            validate_real_values_cast_to_i64(
-                input.as_typed::<f32>().ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?,
-                |x| x as f64,
-            )?;
-            converted!(
-                I64,
-                input
-                    .as_typed::<f32>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| x as i64
-            )
+            validate_real_values_cast_to_i64(cast_operand::<f32>(input)?, |x| x as f64)?;
+            converted!(I64, cast_operand::<f32>(input)?, |x| x as i64)
         }
-        (DType::F32, DType::Bool) => converted!(
-            Bool,
-            input
-                .as_typed::<f32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x != 0.0
-        ),
-        (DType::F32, DType::C32) => converted!(
-            C32,
-            input
-                .as_typed::<f32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| Complex32::new(x, 0.0)
-        ),
+        (DType::F32, DType::Bool) => converted!(Bool, cast_operand::<f32>(input)?, |x| x != 0.0),
+        (DType::F32, DType::C32) => {
+            converted!(C32, cast_operand::<f32>(input)?, |x| Complex32::new(x, 0.0))
+        }
         (DType::F32, DType::C64) => {
-            converted!(
-                C64,
-                input
-                    .as_typed::<f32>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| Complex64::new(x as f64, 0.0)
-            )
+            converted!(C64, cast_operand::<f32>(input)?, |x| Complex64::new(
+                x as f64, 0.0
+            ))
         }
-        (DType::F64, DType::F32) => converted!(
-            F32,
-            input
-                .as_typed::<f64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x as f32
-        ),
+        (DType::F64, DType::F32) => converted!(F32, cast_operand::<f64>(input)?, |x| x as f32),
         (DType::F64, DType::F64) => Ok(Tensor::from_typed::<f64>(
-            input
-                .as_typed::<f64>()
-                .ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?
-                .duplicate()?,
+            cast_operand::<f64>(input)?.duplicate()?,
         )),
         (DType::F64, DType::I32) => {
-            validate_real_values_cast_to_i32(
-                input.as_typed::<f64>().ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?,
-                |x| x,
-            )?;
-            converted!(
-                I32,
-                input
-                    .as_typed::<f64>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| x as i32
-            )
+            validate_real_values_cast_to_i32(cast_operand::<f64>(input)?, |x| x)?;
+            converted!(I32, cast_operand::<f64>(input)?, |x| x as i32)
         }
         (DType::F64, DType::I64) => {
-            validate_real_values_cast_to_i64(
-                input.as_typed::<f64>().ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?,
-                |x| x,
-            )?;
-            converted!(
-                I64,
-                input
-                    .as_typed::<f64>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| x as i64
-            )
+            validate_real_values_cast_to_i64(cast_operand::<f64>(input)?, |x| x)?;
+            converted!(I64, cast_operand::<f64>(input)?, |x| x as i64)
         }
-        (DType::F64, DType::Bool) => converted!(
-            Bool,
-            input
-                .as_typed::<f64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x != 0.0
-        ),
+        (DType::F64, DType::Bool) => converted!(Bool, cast_operand::<f64>(input)?, |x| x != 0.0),
         (DType::F64, DType::C32) => {
-            converted!(
-                C32,
-                input
-                    .as_typed::<f64>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| Complex32::new(x as f32, 0.0)
-            )
+            converted!(C32, cast_operand::<f64>(input)?, |x| Complex32::new(
+                x as f32, 0.0
+            ))
         }
-        (DType::F64, DType::C64) => converted!(
-            C64,
-            input
-                .as_typed::<f64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| Complex64::new(x, 0.0)
-        ),
-        (DType::I32, DType::F32) => converted!(
-            F32,
-            input
-                .as_typed::<i32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x as f32
-        ),
-        (DType::I32, DType::F64) => converted!(
-            F64,
-            input
-                .as_typed::<i32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x as f64
-        ),
+        (DType::F64, DType::C64) => {
+            converted!(C64, cast_operand::<f64>(input)?, |x| Complex64::new(x, 0.0))
+        }
+        (DType::I32, DType::F32) => converted!(F32, cast_operand::<i32>(input)?, |x| x as f32),
+        (DType::I32, DType::F64) => converted!(F64, cast_operand::<i32>(input)?, |x| x as f64),
         (DType::I32, DType::I32) => Ok(Tensor::from_typed::<i32>(
-            input
-                .as_typed::<i32>()
-                .ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?
-                .duplicate()?,
+            cast_operand::<i32>(input)?.duplicate()?,
         )),
-        (DType::I32, DType::I64) => converted!(
-            I64,
-            input
-                .as_typed::<i32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x as i64
-        ),
-        (DType::I32, DType::Bool) => converted!(
-            Bool,
-            input
-                .as_typed::<i32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x != 0
-        ),
+        (DType::I32, DType::I64) => converted!(I64, cast_operand::<i32>(input)?, |x| x as i64),
+        (DType::I32, DType::Bool) => converted!(Bool, cast_operand::<i32>(input)?, |x| x != 0),
         (DType::I32, DType::C32) => {
-            converted!(
-                C32,
-                input
-                    .as_typed::<i32>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| Complex32::new(x as f32, 0.0)
-            )
+            converted!(C32, cast_operand::<i32>(input)?, |x| Complex32::new(
+                x as f32, 0.0
+            ))
         }
         (DType::I32, DType::C64) => {
-            converted!(
-                C64,
-                input
-                    .as_typed::<i32>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| Complex64::new(x as f64, 0.0)
-            )
+            converted!(C64, cast_operand::<i32>(input)?, |x| Complex64::new(
+                x as f64, 0.0
+            ))
         }
-        (DType::I64, DType::F32) => converted!(
-            F32,
-            input
-                .as_typed::<i64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x as f32
-        ),
-        (DType::I64, DType::F64) => converted!(
-            F64,
-            input
-                .as_typed::<i64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x as f64
-        ),
-        (DType::I64, DType::I32) => converted!(
-            I32,
-            input
-                .as_typed::<i64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x as i32
-        ),
+        (DType::I64, DType::F32) => converted!(F32, cast_operand::<i64>(input)?, |x| x as f32),
+        (DType::I64, DType::F64) => converted!(F64, cast_operand::<i64>(input)?, |x| x as f64),
+        (DType::I64, DType::I32) => converted!(I32, cast_operand::<i64>(input)?, |x| x as i32),
         (DType::I64, DType::I64) => Ok(Tensor::from_typed::<i64>(
-            input
-                .as_typed::<i64>()
-                .ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?
-                .duplicate()?,
+            cast_operand::<i64>(input)?.duplicate()?,
         )),
-        (DType::I64, DType::Bool) => converted!(
-            Bool,
-            input
-                .as_typed::<i64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| x != 0
-        ),
+        (DType::I64, DType::Bool) => converted!(Bool, cast_operand::<i64>(input)?, |x| x != 0),
         (DType::I64, DType::C32) => {
-            converted!(
-                C32,
-                input
-                    .as_typed::<i64>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| Complex32::new(x as f32, 0.0)
-            )
+            converted!(C32, cast_operand::<i64>(input)?, |x| Complex32::new(
+                x as f32, 0.0
+            ))
         }
         (DType::I64, DType::C64) => {
-            converted!(
-                C64,
-                input
-                    .as_typed::<i64>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| Complex64::new(x as f64, 0.0)
-            )
+            converted!(C64, cast_operand::<i64>(input)?, |x| Complex64::new(
+                x as f64, 0.0
+            ))
         }
-        (DType::Bool, DType::F32) => converted!(
-            F32,
-            input
-                .as_typed::<bool>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| if x { 1.0 } else { 0.0 }
-        ),
-        (DType::Bool, DType::F64) => converted!(
-            F64,
-            input
-                .as_typed::<bool>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| if x { 1.0 } else { 0.0 }
-        ),
-        (DType::Bool, DType::I32) => converted!(
-            I32,
-            input
-                .as_typed::<bool>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| if x { 1 } else { 0 }
-        ),
-        (DType::Bool, DType::I64) => converted!(
-            I64,
-            input
-                .as_typed::<bool>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |x| if x { 1 } else { 0 }
-        ),
+        (DType::Bool, DType::F32) => converted!(F32, cast_operand::<bool>(input)?, |x| if x {
+            1.0
+        } else {
+            0.0
+        }),
+        (DType::Bool, DType::F64) => converted!(F64, cast_operand::<bool>(input)?, |x| if x {
+            1.0
+        } else {
+            0.0
+        }),
+        (DType::Bool, DType::I32) => {
+            converted!(I32, cast_operand::<bool>(input)?, |x| if x { 1 } else { 0 })
+        }
+        (DType::Bool, DType::I64) => {
+            converted!(I64, cast_operand::<bool>(input)?, |x| if x { 1 } else { 0 })
+        }
         (DType::Bool, DType::Bool) => Ok(Tensor::from_typed::<bool>(
-            input
-                .as_typed::<bool>()
-                .ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?
-                .duplicate()?,
+            cast_operand::<bool>(input)?.duplicate()?,
         )),
         (DType::Bool, DType::C32) => {
-            converted!(
-                C32,
-                input
-                    .as_typed::<bool>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| Complex32::new(if x { 1.0 } else { 0.0 }, 0.0)
-            )
+            converted!(C32, cast_operand::<bool>(input)?, |x| Complex32::new(
+                if x { 1.0 } else { 0.0 },
+                0.0
+            ))
         }
         (DType::Bool, DType::C64) => {
-            converted!(
-                C64,
-                input
-                    .as_typed::<bool>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |x| Complex64::new(if x { 1.0 } else { 0.0 }, 0.0)
-            )
+            converted!(C64, cast_operand::<bool>(input)?, |x| Complex64::new(
+                if x { 1.0 } else { 0.0 },
+                0.0
+            ))
         }
-        (DType::C32, DType::F32) => converted!(
-            F32,
-            input
-                .as_typed::<Complex32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |z| z.re
-        ),
-        (DType::C32, DType::F64) => converted!(
-            F64,
-            input
-                .as_typed::<Complex32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |z| z.re as f64
-        ),
+        (DType::C32, DType::F32) => converted!(F32, cast_operand::<Complex32>(input)?, |z| z.re),
+        (DType::C32, DType::F64) => {
+            converted!(F64, cast_operand::<Complex32>(input)?, |z| z.re as f64)
+        }
         (DType::C32, DType::I32) => {
-            validate_real_values_cast_to_i32(
-                input.as_typed::<Complex32>().ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?,
-                |z| z.re as f64,
-            )?;
-            converted!(
-                I32,
-                input
-                    .as_typed::<Complex32>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |z| z.re as i32
-            )
+            validate_real_values_cast_to_i32(cast_operand::<Complex32>(input)?, |z| z.re as f64)?;
+            converted!(I32, cast_operand::<Complex32>(input)?, |z| z.re as i32)
         }
         (DType::C32, DType::I64) => {
-            validate_real_values_cast_to_i64(
-                input.as_typed::<Complex32>().ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?,
-                |z| z.re as f64,
-            )?;
-            converted!(
-                I64,
-                input
-                    .as_typed::<Complex32>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |z| z.re as i64
-            )
+            validate_real_values_cast_to_i64(cast_operand::<Complex32>(input)?, |z| z.re as f64)?;
+            converted!(I64, cast_operand::<Complex32>(input)?, |z| z.re as i64)
         }
-        (DType::C32, DType::Bool) => converted!(
-            Bool,
-            input
-                .as_typed::<Complex32>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |z| z.re != 0.0 || z.im != 0.0
-        ),
+        (DType::C32, DType::Bool) => converted!(Bool, cast_operand::<Complex32>(input)?, |z| z.re
+            != 0.0
+            || z.im != 0.0),
         (DType::C32, DType::C32) => Ok(Tensor::from_typed::<Complex32>(
-            input
-                .as_typed::<Complex32>()
-                .ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?
-                .duplicate()?,
+            cast_operand::<Complex32>(input)?.duplicate()?,
         )),
         (DType::C32, DType::C64) => {
-            converted!(
-                C64,
-                input
-                    .as_typed::<Complex32>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |z| Complex64::new(z.re as f64, z.im as f64)
-            )
+            converted!(C64, cast_operand::<Complex32>(input)?, |z| Complex64::new(
+                z.re as f64,
+                z.im as f64
+            ))
         }
-        (DType::C64, DType::F32) => converted!(
-            F32,
-            input
-                .as_typed::<Complex64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |z| z.re as f32
-        ),
-        (DType::C64, DType::F64) => converted!(
-            F64,
-            input
-                .as_typed::<Complex64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |z| z.re
-        ),
+        (DType::C64, DType::F32) => {
+            converted!(F32, cast_operand::<Complex64>(input)?, |z| z.re as f32)
+        }
+        (DType::C64, DType::F64) => converted!(F64, cast_operand::<Complex64>(input)?, |z| z.re),
         (DType::C64, DType::I32) => {
-            validate_real_values_cast_to_i32(
-                input.as_typed::<Complex64>().ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?,
-                |z| z.re,
-            )?;
-            converted!(
-                I32,
-                input
-                    .as_typed::<Complex64>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |z| z.re as i32
-            )
+            validate_real_values_cast_to_i32(cast_operand::<Complex64>(input)?, |z| z.re)?;
+            converted!(I32, cast_operand::<Complex64>(input)?, |z| z.re as i32)
         }
         (DType::C64, DType::I64) => {
-            validate_real_values_cast_to_i64(
-                input.as_typed::<Complex64>().ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?,
-                |z| z.re,
-            )?;
-            converted!(
-                I64,
-                input
-                    .as_typed::<Complex64>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |z| z.re as i64
-            )
+            validate_real_values_cast_to_i64(cast_operand::<Complex64>(input)?, |z| z.re)?;
+            converted!(I64, cast_operand::<Complex64>(input)?, |z| z.re as i64)
         }
-        (DType::C64, DType::Bool) => converted!(
-            Bool,
-            input
-                .as_typed::<Complex64>()
-                .ok_or_else(|| crate::Error::unsupported_dtype(
-                    "convert",
-                    input.dtype(),
-                    "the cast table does not cover this dtype"
-                ))?,
-            |z| z.re != 0.0 || z.im != 0.0
-        ),
+        (DType::C64, DType::Bool) => converted!(Bool, cast_operand::<Complex64>(input)?, |z| z.re
+            != 0.0
+            || z.im != 0.0),
         (DType::C64, DType::C32) => {
-            converted!(
-                C32,
-                input
-                    .as_typed::<Complex64>()
-                    .ok_or_else(|| crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype"
-                    ))?,
-                |z| Complex32::new(z.re as f32, z.im as f32)
-            )
+            converted!(C32, cast_operand::<Complex64>(input)?, |z| Complex32::new(
+                z.re as f32,
+                z.im as f32
+            ))
         }
         (DType::C64, DType::C64) => Ok(Tensor::from_typed::<Complex64>(
-            input
-                .as_typed::<Complex64>()
-                .ok_or_else(|| {
-                    crate::Error::unsupported_dtype(
-                        "convert",
-                        input.dtype(),
-                        "the cast table does not cover this dtype",
-                    )
-                })?
-                .duplicate()?,
+            cast_operand::<Complex64>(input)?.duplicate()?,
         )),
         // An externally defined destination has no conversion table here, so the
         // conversion rejects it explicitly rather than guessing a representation.
@@ -1245,6 +738,21 @@ pub(crate) fn cast_with_pool(
         // rejects it instead of guessing a representation.
         (DType::External(_), _) => Err(crate::Error::dtype_mismatch("convert", input.dtype(), to)),
     }
+}
+/// The typed tensor behind `input`, or the refusal a pair outside this table reports.
+///
+/// Callers reach this from a match on `input.dtype()`, so `None` means the tag and the runtime dtype
+/// disagree rather than a caller mistake.
+fn cast_operand<T: tenferro_tensor::TensorScalar>(
+    input: &Tensor,
+) -> crate::Result<&TypedTensor<T>> {
+    input.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported_dtype(
+            "convert",
+            input.dtype(),
+            "the cast table does not cover this dtype",
+        )
+    })
 }
 
 fn validate_real_values_cast_to_i32<S: Copy + TensorScalar>(
