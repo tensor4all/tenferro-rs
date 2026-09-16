@@ -338,12 +338,22 @@ descending arm density, so the largest boilerplate is removed first:
 
 The seven `Tensor` variants are removed last.
 
-### 5.3 Boundary work outside the tensor layer
+### 5.3 Boundary decisions, with the current state as evidence
 
-Storage and reinterpretation contracts, runtime metadata and IR, cache identity,
-typed errors, and the default-only C API / XLA / serialization boundaries each
-need an explicit conversion-or-rejection decision. Custom-dtype AD follows the
-stage 1 admission contract.
+Audited on `origin/main` rather than assumed:
+
+| Boundary | Current state | Decision |
+| --- | --- | --- |
+| XLA lowering | already explicit: `crates/tenferro-xla/src/lowering/types.rs:61` and `program.rs:658` return `Error::UnsupportedDType { dtype, context }`, mapped to `ErrorKind::Unsupported` in `src/error.rs:86` | Stays default-set-only. An unmapped member is rejected at lowering, never converted implicitly. Stage 2 must not widen this path. |
+| C API | no C API crate and no exported `#[no_mangle] extern "C"` surface exist in this workspace; the `extern "C"` uses are bindings to BLAS and system libraries | Nothing to change here. A binding layer outside this repository converts or rejects; tenferro's own types stay default-set-only. |
+| Serialization | no graph serialization surface exists: `serialize`, `to_bytes`, `from_bytes`, `encode`, and `decode` have no definition in `tenferro-runtime` or `tenferro-ad` | Default-set-only if one is added, and any other member must be rejected explicitly rather than written with a guessed tag. |
+| Runtime metadata and IR | dtype is carried concretely: `crates/tenferro-runtime/src/runtime/execution.rs:208` (`PreparedExecution` metadata), `runtime/signature.rs:37`, and `graph/compiler.rs:40` with binding validation at `:315` | Metadata keeps a concrete identity, but once a value type is set-parameterized the carried identity must be the actual Rust scalar, not only the default-set tag. |
+| Cache identity | dtype already participates: `crates/tenferro-linalg/src/extension.rs:1791` hashes a seven-arm `hash_dtype`, and runtime extension metadata carries `dtype` | This is a real gap for stage 2. A per-tag integer hash cannot distinguish two different scalars that share a tag, so two external members with the same tag would collide in the prepared-execution cache. The cache key must carry the actual scalar identity. |
+
+Storage and reinterpretation remain the open contract: the host prototype proves
+identity-based recovery with no byte reinterpretation, but the pool-backed
+runtime payload's erasure, release, and provider retirement are #1789's decision.
+Custom-dtype AD follows the stage 1 admission contract.
 
 ### 5.4 Exit criteria
 
