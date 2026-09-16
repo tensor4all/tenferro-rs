@@ -1312,6 +1312,14 @@ arm-dense hold about 1180 of them — 520 in `tenferro-gpu/src/cubecl/mod.rs`, 2
 choice into the public contract needs maintainer acceptance, which is why the design records it
 rather than the branch assuming it.
 
+**Where the incremental approach stops.** Converting `reshape` showed the limit. Its dispatch recovers
+each typed tensor and *moves* it into a metadata helper that reuses the buffer, but `Tensor::as_typed`
+borrows, so a tag-dispatched version would have to clone the device tensor and change the operation's
+cost. Sites that only read through the typed tensor convert with the seam; sites that move it need the
+erased representation itself, which is the change the objective's last sentence asks for. That is a
+precise boundary rather than a missing trick, and it is why the remaining matchers split into those the
+seam covers and those the representation change does.
+
 **The recipe the conversion follows, per arm shape.** Seventeen of the densest file's twenty-nine
 direct matchers are converted, and the work left there is hand work by shape: arms that bind one tensor
 and discard the other, arms carrying shape guards whose bodies differ, and three-slot arms. The reliable
