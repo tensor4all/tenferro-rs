@@ -1285,6 +1285,23 @@ nor its fixtures — `git diff --stat` over the branch reports nothing for eithe
 file is identical to the one on `origin/main`, so its outcome belongs to the toolchain rather than to
 this change.
 
+### 5.17b How far the construction migration got, and where it stops
+
+The migration now has a tool: rewrite every variant construction to `from_typed`, then let the compiler name
+the pattern positions, since rewriting a pattern to a call is `E0164` and its span carries the exact line. That
+works per file — it finished the cpu backend in four rounds and the gpu linalg module in three — and it
+produced the committed batches. It does not work crate-wide, and the reason is worth recording: a crate has
+several feature combinations, and a compile stops at the first error class it meets, so an earlier batch's
+unresolved type error hides the `E0164` reports the loop needs. Run that way the loop reported clean while
+sixty-seven errors remained, and the batch was reverted rather than half-migrated.
+
+The measured state of the removal on the committed head is 768 remaining `Tensor::` variant occurrences in 54
+files. One hundred and thirty-three of them are in `types.rs`, which is the enum's own definition and therefore
+cannot use a constructor for it, and forty-seven are in `dispatch.rs`, the dispatch seam; both change only when
+the representation itself changes. The rest are patterns inside dispatch macros, which need the hand conversion
+the macros in `cubecl/dispatch.rs` received, and a small number of constructions in files whose feature
+combinations the pass has not covered yet.
+
 ### 5.17a What the removal still needs, measured
 
 The three accessors tag-based dispatch was missing now exist — `Tensor::as_typed_mut`,
