@@ -858,17 +858,15 @@ impl ExtensionOp for Df64EinsumVjp {
 /// use tenferro_ad::extension::ExtensionOp;
 /// use tenferro_df64_proof::extension::Df64EinsumJvp;
 ///
-/// let tangent = Df64EinsumJvp::of(&[0, 1], &[1, 2], &[0, 2], true, false).expect("a contraction");
+/// let tangent = Df64EinsumJvp::of(&[&[0, 1], &[1, 2]], &[0, 2], &[true, false]).expect("a contraction");
 /// assert_eq!(<Df64EinsumJvp as ExtensionOp>::input_count(&tangent), 3);
 /// assert_eq!(<Df64EinsumJvp as ExtensionOp>::output_count(&tangent), 1);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Df64EinsumJvp {
-    lhs: Vec<u32>,
-    rhs: Vec<u32>,
+    inputs: Vec<Vec<u32>>,
     out: Vec<u32>,
-    has_lhs: bool,
-    has_rhs: bool,
+    tangents: Vec<bool>,
 }
 
 impl Df64EinsumJvp {
@@ -884,18 +882,21 @@ impl Df64EinsumJvp {
     /// ```rust
     /// use tenferro_df64_proof::extension::Df64EinsumJvp;
     ///
-    /// assert!(Df64EinsumJvp::of(&[0, 1], &[1, 2], &[0, 2], true, true).is_ok());
-    /// assert!(Df64EinsumJvp::of(&[0, 1], &[1, 2], &[0, 2], false, false).is_err());
+    /// assert!(Df64EinsumJvp::of(&[&[0, 1], &[1, 2]], &[0, 2], &[true, true]).is_ok());
+    /// assert!(Df64EinsumJvp::of(&[&[0, 1], &[1, 2]], &[0, 2], &[false, false]).is_err());
     /// ```
-    pub fn of(
-        lhs: &[u32],
-        rhs: &[u32],
-        out: &[u32],
-        has_lhs: bool,
-        has_rhs: bool,
-    ) -> tenferro_runtime::Result<Self> {
-        Df64Einsum::new(lhs, rhs, out)?;
-        if !has_lhs && !has_rhs {
+    pub fn of(inputs: &[&[u32]], out: &[u32], tangents: &[bool]) -> tenferro_runtime::Result<Self> {
+        Df64Einsum::new_nary(inputs, out)?;
+        if tangents.len() != inputs.len() {
+            return Err(tenferro_runtime::Error::from(
+                tenferro_tensor::Error::invalid_argument(
+                    "df64_einsum_jvp",
+                    "tangents",
+                    "the tangent mask needs one entry per operand",
+                ),
+            ));
+        }
+        if !tangents.iter().any(|present| *present) {
             return Err(tenferro_runtime::Error::from(
                 tenferro_tensor::Error::invalid_argument(
                     "df64_einsum_jvp",
@@ -905,11 +906,9 @@ impl Df64EinsumJvp {
             ));
         }
         Ok(Self {
-            lhs: lhs.to_vec(),
-            rhs: rhs.to_vec(),
+            inputs: inputs.iter().map(|labels| labels.to_vec()).collect(),
             out: out.to_vec(),
-            has_lhs,
-            has_rhs,
+            tangents: tangents.to_vec(),
         })
     }
 
@@ -920,13 +919,44 @@ impl Df64EinsumJvp {
     /// ```rust
     /// use tenferro_df64_proof::extension::Df64EinsumJvp;
     ///
-    /// let tangent = Df64EinsumJvp::of(&[0, 1], &[1, 2], &[0, 2], true, true).expect("a tangent");
-    /// let (lhs, rhs, present) = tangent.labels();
-    /// assert_eq!((lhs, rhs, present), (&[0, 1][..], &[1, 2][..], (true, true)));
+    /// let tangent = Df64EinsumJvp::of(&[&[0, 1], &[1, 2]], &[0, 2], &[true, true]).expect("a tangent");
+    /// assert_eq!(tangent.tangents(), &[true, true]);
     /// ```
     #[must_use]
-    pub fn labels(&self) -> (&[u32], &[u32], (bool, bool)) {
-        (&self.lhs, &self.rhs, (self.has_lhs, self.has_rhs))
+    pub fn input_labels(&self) -> &[Vec<u32>] {
+        &self.inputs
+    }
+
+    /// The output's labels, in the output's axis order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64EinsumJvp;
+    ///
+    /// let tangent = Df64EinsumJvp::of(&[&[0, 1], &[1, 2]], &[0, 2], &[true, false])
+    ///     .expect("a tangent");
+    /// assert_eq!(tangent.out_labels(), &[0, 2]);
+    /// ```
+    #[must_use]
+    pub fn out_labels(&self) -> &[u32] {
+        &self.out
+    }
+
+    /// Which operands carry a tangent, in operand order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64EinsumJvp;
+    ///
+    /// let tangent = Df64EinsumJvp::of(&[&[0, 1], &[1, 2]], &[0, 2], &[true, false])
+    ///     .expect("a tangent");
+    /// assert_eq!(tangent.tangents(), &[true, false]);
+    /// ```
+    #[must_use]
+    pub fn tangents(&self) -> &[bool] {
+        &self.tangents
     }
 }
 
@@ -936,13 +966,17 @@ impl ExtensionOp for Df64EinsumJvp {
     }
 
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
-        for labels in [&self.lhs, &self.rhs, &self.out] {
+        hasher.write_usize(self.inputs.len());
+        for labels in self.inputs.iter().chain(core::iter::once(&self.out)) {
             hasher.write_usize(labels.len());
             for label in labels {
                 hasher.write_u32(*label);
             }
         }
-        hasher.write_u8(u8::from(self.has_lhs) | (u8::from(self.has_rhs) << 1));
+        hasher.write_usize(self.tangents.len());
+        for present in &self.tangents {
+            hasher.write_u8(u8::from(*present));
+        }
     }
 
     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
@@ -961,8 +995,8 @@ impl ExtensionOp for Df64EinsumJvp {
     }
 
     fn input_count(&self) -> usize {
-        // Both operands, plus one tangent per operand that carries one.
-        2 + usize::from(self.has_lhs) + usize::from(self.has_rhs)
+        // Every operand, plus one tangent per operand that carries one.
+        self.inputs.len() + self.tangents.iter().filter(|present| **present).count()
     }
 
     fn output_count(&self) -> usize {
@@ -993,29 +1027,35 @@ impl ExtensionOp for Df64EinsumJvp {
                 "df64_einsum_jvp takes an externally defined scalar",
             ));
         }
-        let lhs = ctx.input_shape(0)?;
-        let rhs = ctx.input_shape(1)?;
+        let shapes: Vec<Vec<SymDim>> = (0..self.inputs.len())
+            .map(|operand| {
+                let shape = ctx.input_shape(operand)?;
+                if shape.len() != self.inputs[operand].len() {
+                    return Err(tenferro_tensor::Error::rank_mismatch(
+                        "df64_einsum_jvp",
+                        self.inputs[operand].len(),
+                        shape.len(),
+                    ));
+                }
+                Ok(shape.to_vec())
+            })
+            .collect::<tenferro_tensor::Result<Vec<_>>>()?;
         let mut out_shape = Vec::with_capacity(self.out.len());
         for label in &self.out {
-            let extent = self
-                .lhs
-                .iter()
-                .position(|candidate| candidate == label)
-                .map(|axis| lhs[axis].clone())
-                .or_else(|| {
-                    self.rhs
-                        .iter()
-                        .position(|candidate| candidate == label)
-                        .map(|axis| rhs[axis].clone())
-                })
-                .ok_or_else(|| {
-                    tenferro_tensor::Error::invalid_argument(
-                        "df64_einsum_jvp",
-                        "pattern",
-                        "an output label must appear in at least one input",
-                    )
-                })?;
-            out_shape.push(extent);
+            let mut extent = None;
+            for (operand, labels) in self.inputs.iter().enumerate() {
+                if let Some(axis) = labels.iter().position(|candidate| candidate == label) {
+                    extent = Some(shapes[operand][axis].clone());
+                    break;
+                }
+            }
+            out_shape.push(extent.ok_or_else(|| {
+                tenferro_tensor::Error::invalid_argument(
+                    "df64_einsum_jvp",
+                    "pattern",
+                    "an output label must appear in at least one operand",
+                )
+            })?);
         }
         Ok(vec![(dtype, out_shape)])
     }
@@ -1979,56 +2019,54 @@ fn einsum_vjp_of(
 fn einsum_jvp_of(
     labels: &[Box<[u32]>],
     out_labels: &[u32],
-    tangents: (bool, bool),
+    tangents: &[bool],
     session: Option<&mut dyn tenferro_tensor::BackendSession>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let op = "df64_einsum_jvp";
     let resolved = inputs_of(op, session, inputs)?;
-    let expected = 2 + usize::from(tangents.0) + usize::from(tangents.1);
-    if resolved.len() != expected || labels.len() != 2 {
+    let expected = labels.len() + tangents.iter().filter(|present| **present).count();
+    if resolved.len() != expected || labels.len() != tangents.len() || labels.len() < 2 {
         return Err(tenferro_runtime::Error::from(
             tenferro_tensor::Error::invalid_argument(
                 op,
                 "input",
-                "the tangent takes both operands and one tangent per available operand",
+                "the tangent takes one input per operand and one per tangent",
             ),
         ));
     }
-    let lhs_values = payload_of::<Df64>(op, resolved[0].tensor())?;
-    let rhs_values = payload_of::<Df64>(op, resolved[1].tensor())?;
-    let lhs_shape = resolved[0].tensor().shape().to_vec();
-    let rhs_shape = resolved[1].tensor().shape().to_vec();
-    let out_shape = shape_of_labels(labels, &[lhs_shape.clone(), rhs_shape.clone()], out_labels);
-
-    let mut slot = 2;
-    let mut total: Option<Vec<Df64>> = None;
-    if tangents.0 {
-        let dot = payload_of::<Df64>(op, resolved[slot].tensor())?;
-        let dot_shape = resolved[slot].tensor().shape().to_vec();
-        slot += 1;
-        total = Some(contract_in_scalar(
-            op,
-            labels,
-            out_labels,
-            &dot,
-            &dot_shape,
-            &rhs_values,
-            &rhs_shape,
-        )?);
+    let mut operands: Vec<(Vec<Df64>, Vec<usize>)> = Vec::with_capacity(labels.len());
+    let mut shapes: Vec<Vec<usize>> = Vec::with_capacity(labels.len());
+    for operand in &resolved[..labels.len()] {
+        operands.push((
+            payload_of::<Df64>(op, operand.tensor())?,
+            operand.tensor().shape().to_vec(),
+        ));
+        shapes.push(operand.tensor().shape().to_vec());
     }
-    if tangents.1 {
-        let dot = payload_of::<Df64>(op, resolved[slot].tensor())?;
-        let dot_shape = resolved[slot].tensor().shape().to_vec();
-        let part = contract_in_scalar(
-            op,
-            labels,
-            out_labels,
-            &lhs_values,
-            &lhs_shape,
-            &dot,
-            &dot_shape,
-        )?;
+    let mut dots: Vec<Option<(Vec<Df64>, Vec<usize>)>> = vec![None; labels.len()];
+    let mut slot = labels.len();
+    for (index, present) in tangents.iter().enumerate() {
+        if !present {
+            continue;
+        }
+        dots[index] = Some((
+            payload_of::<Df64>(op, resolved[slot].tensor())?,
+            resolved[slot].tensor().shape().to_vec(),
+        ));
+        slot += 1;
+    }
+    let out_shape = shape_of_labels(labels, &shapes, out_labels);
+
+    // Each tangent takes its operand's place, under that operand's own labels, and the parts sum.
+    let mut total: Option<Vec<Df64>> = None;
+    for (position, dot) in dots.iter().enumerate() {
+        let Some((values, shape)) = dot else {
+            continue;
+        };
+        let mut substituted = operands.clone();
+        substituted[position] = (values.clone(), shape.clone());
+        let (part, _) = fold_in_scalar(op, labels, out_labels, &substituted)?;
         total = Some(match total {
             Some(existing) => existing
                 .iter()
@@ -2167,7 +2205,7 @@ enum Df64Body {
         /// The labels of the contraction's output, in the output's axis order.
         out: Box<[u32]>,
         /// Which operands carry a tangent, in operand order.
-        tangents: (bool, bool),
+        tangents: Box<[bool]>,
     },
     /// The adjoint of a pairwise contraction.
     EinsumVjp {
@@ -2212,7 +2250,7 @@ impl Df64Body {
                 inputs: labels,
                 out,
                 tangents,
-            } => einsum_jvp_of(labels, out, *tangents, session, inputs),
+            } => einsum_jvp_of(labels, out, tangents, session, inputs),
         }
     }
 }
@@ -2301,15 +2339,14 @@ impl ExtensionEngine for Df64Engine {
         } else if operation.downcast_ref::<Df64QrJvp>().is_some() {
             Df64Body::QrJvp
         } else if let Some(tangent) = operation.downcast_ref::<Df64EinsumJvp>() {
-            let (lhs, rhs, present) = tangent.labels();
             Df64Body::EinsumJvp {
-                inputs: vec![
-                    lhs.to_vec().into_boxed_slice(),
-                    rhs.to_vec().into_boxed_slice(),
-                ]
-                .into_boxed_slice(),
-                out: tangent.out.clone().into_boxed_slice(),
-                tangents: present,
+                inputs: tangent
+                    .input_labels()
+                    .iter()
+                    .map(|labels| labels.clone().into_boxed_slice())
+                    .collect(),
+                out: tangent.out_labels().to_vec().into_boxed_slice(),
+                tangents: tangent.tangents().to_vec().into_boxed_slice(),
             }
         } else if let Some(adjoint) = operation.downcast_ref::<Df64EinsumVjp>() {
             Df64Body::EinsumVjp {

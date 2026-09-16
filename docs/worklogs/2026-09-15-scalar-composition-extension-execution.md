@@ -1260,3 +1260,21 @@ The tangent stays pairwise for now, and the difference is real rather than an ov
 records a pair of availability flags, so an N-operand version needs a mask instead of a tuple. That is
 the next piece, and the inventory says so rather than implying both modes cover the whole pattern
 surface.
+
+## The N-ary tangent, which completes the symmetry
+
+The adjoint generalised last turn and the tangent stayed pairwise, because its payload recorded a pair
+of availability flags. That was the only reason, and it is gone: the payload now carries one flag per
+operand, the input count follows the mask, and the body folds each active tangent in its operand's
+place under that operand's own labels and sums the parts. An inactive tangent is never materialised as
+a zero, which is the policy the extension contract states.
+
+The tests are the same two the adjoint earned: a three-operand tangent checked against hand-written
+products, and the duality identity for a three-operand pattern, where the two sides agree exactly.
+Both modes therefore cover the whole pattern surface the forward body evaluates, and the inventory no
+longer has a row saying otherwise.
+
+One habit earned its keep here rather than costing anything: after the API change I ran the crate's
+own suite, doctests included, instead of naming test targets. Generalising the adjoint had broken three
+of its doctests because my run had named targets, and the workspace run found them; this time the same
+check was the first one, and it passed.

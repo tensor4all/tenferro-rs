@@ -339,23 +339,26 @@ impl SemanticLinearizeRule for Df64LinearizeRule {
                 }
                 // The helpers are defined for the pairwise case, so a wider pattern is refused
                 // rather than differentiated as if it were pairwise.
-                let Some((lhs, rhs, out)) = contraction.labels() else {
+                // One tangent flag per operand, which is what the helper carries.
+                let mask: Vec<bool> = request
+                    .tangent_inputs()
+                    .iter()
+                    .map(|value| value.value().is_some())
+                    .collect();
+                let operand_labels: Vec<&[u32]> = contraction
+                    .input_labels()
+                    .iter()
+                    .map(|labels| labels.as_slice())
+                    .collect();
+                let Ok(tangent) =
+                    Df64EinsumJvp::of(&operand_labels, contraction.out_labels(), &mask)
+                else {
                     return Err(unsupported(op, role));
                 };
-                let Ok(tangent) = Df64EinsumJvp::of(lhs, rhs, out, has_lhs, has_rhs) else {
-                    return Err(unsupported(op, role));
-                };
-                let mut operands = vec![request.primal_inputs()[0], request.primal_inputs()[1]];
-                for (present, value) in [
-                    (has_lhs, request.tangent_inputs().first()),
-                    (has_rhs, request.tangent_inputs().get(1)),
-                ] {
-                    if !present {
-                        continue;
-                    }
-                    match value.and_then(|value| value.value()) {
-                        Some(value) => operands.push(value),
-                        None => return Err(unsupported(op, role)),
+                let mut operands: Vec<_> = request.primal_inputs().to_vec();
+                for value in request.tangent_inputs() {
+                    if let Some(value) = value.value() {
+                        operands.push(value);
                     }
                 }
                 (Arc::new(tangent) as Arc<dyn ExtensionOp>, operands)

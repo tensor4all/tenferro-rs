@@ -415,3 +415,109 @@ fn the_adjoint_of_a_three_operand_contraction_matches_the_hand_written_products(
         "the cotangent of the first operand is the cotangent contracted with the other two"
     );
 }
+
+/// The tangent of a three-operand contraction along one operand's tangent.
+fn nary_tangent(
+    operands: Vec<(Vec<Df64>, Vec<usize>)>,
+    tangent_at: usize,
+    tangent: Vec<Df64>,
+) -> Vec<Df64> {
+    let op = Df64Einsum::new_nary(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]).expect("a contraction");
+    let leaves: Vec<TracedTensor> = operands
+        .iter()
+        .map(|(values, shape)| leaf(values.clone(), shape.clone()))
+        .collect();
+    let refs: Vec<&TracedTensor> = leaves.iter().collect();
+    let output = apply(Arc::new(op), &refs).expect("traced contraction");
+
+    let tangent_leaf = leaf(tangent.clone(), operands[tangent_at].1.clone());
+    let forward = linearize_context()
+        .jvp(&output[0], &leaves[tangent_at], &tangent_leaf)
+        .expect("traced tangent");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&forward).expect("compiled tangent");
+
+    let mut values: Vec<Tensor> = operands
+        .iter()
+        .map(|(values, shape)| external(values.clone(), shape.clone()))
+        .collect();
+    values.push(external(tangent, operands[tangent_at].1.clone()));
+    let borrowed: Vec<&Tensor> = values.iter().collect();
+    let results = runtime_with_module()
+        .run_compiled(&program, &borrowed)
+        .expect("tangent execution");
+    payload(&results[0])
+}
+
+fn three_operands() -> Vec<(Vec<Df64>, Vec<usize>)> {
+    vec![
+        (numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]),
+        (numbers(&[2.0, 0.0, 0.0, 3.0]), vec![2, 2]),
+        (numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
+    ]
+}
+
+#[test]
+fn the_forward_tangent_of_a_three_operand_contraction_matches_the_hand_written_product() {
+    // With the tangent on the first operand and the third operand the identity, the tangent is
+    // A_dot times B: [[1, 1], [1, 1]] times [[2, 0], [0, 3]] is [[2, 3], [2, 3]] in column-major
+    // order as [2, 2, 3, 3].
+    let results = nary_tangent(three_operands(), 0, numbers(&[1.0, 1.0, 1.0, 1.0]));
+    assert_eq!(results, numbers(&[2.0, 2.0, 3.0, 3.0]));
+}
+
+#[test]
+fn the_three_operand_tangent_and_adjoint_satisfy_duality() {
+    // <JVP(v), w> == <v, VJP(w)> for the three-operand pattern, one operand at a time.
+    let operands = three_operands();
+    let tangent_values = numbers(&[1.0, 0.5, -0.5, 2.0]);
+    let cotangent = numbers(&[0.25, -1.0, 0.5, 1.5]);
+
+    let forward = nary_tangent(operands.clone(), 0, tangent_values.clone());
+    let forward_side = forward
+        .iter()
+        .zip(&cotangent)
+        .fold(Df64::zero(), |sum, (value, weight)| sum + *value * *weight);
+
+    // The adjoint of the same pattern, through the rule that now carries every operand.
+    let op = Df64Einsum::new_nary(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]).expect("a contraction");
+    let leaves: Vec<TracedTensor> = operands
+        .iter()
+        .map(|(values, shape)| leaf(values.clone(), shape.clone()))
+        .collect();
+    let refs: Vec<&TracedTensor> = leaves.iter().collect();
+    let output = apply(Arc::new(op), &refs).expect("traced contraction");
+    let cotangent_leaf = leaf(cotangent.clone(), vec![2, 2]);
+    let gradient = cotangent_context()
+        .vjp(&output[0], &leaves[0], &cotangent_leaf)
+        .expect("traced adjoint");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&gradient).expect("compiled adjoint");
+    let mut values: Vec<Tensor> = operands
+        .iter()
+        .map(|(values, shape)| external(values.clone(), shape.clone()))
+        .collect();
+    values.push(external(cotangent.clone(), vec![2, 2]));
+    let borrowed: Vec<&Tensor> = values.iter().collect();
+    let results = runtime_with_module()
+        .run_compiled(&program, &borrowed)
+        .expect("adjoint execution");
+    let backward = payload(&results[0]);
+    let backward_side = tangent_values
+        .iter()
+        .zip(&backward)
+        .fold(Df64::zero(), |sum, (value, gradient)| {
+            sum + *value * *gradient
+        });
+
+    let gap = (forward_side - backward_side).abs_hi()
+        / forward_side.abs_hi().max(backward_side.abs_hi()).max(1.0);
+    println!(
+        "three-operand duality: forward {forward_side:?}, backward {backward_side:?}, \
+         relative difference {gap:.3e}"
+    );
+    assert!(
+        gap < 1e-30,
+        "the tangent and the adjoint disagree: {forward_side:?} against {backward_side:?}"
+    );
+}
