@@ -697,3 +697,36 @@ With the four gates fixed, the remaining CI steps were run as CI runs them:
 So the branch's verification now covers the default workspace, the GPU feature configurations,
 the excluded extension crates, the docs profile's checks, and the CI configuration profile, with
 one generated artifact blocked by a missing tool.
+
+## Covering the boundaries the rejection arms added
+
+`scripts/ci/run_profile.py coverage` runs `cargo llvm-cov` over the workspace and then
+`scripts/check-coverage.py` against the repository's per-file thresholds. Running it locally
+showed five files below threshold, four of which carried uncovered lines this branch had added:
+
+| File | Uncovered lines added here |
+| --- | --- |
+| `ext/df64-proof/src/ad.rs` | the classifier and both derivative rules' out-of-domain arms |
+| `crates/tenferro-runtime/src/ad_support.rs` | the core-identity-tensor rejection |
+| `crates/tenferro-cpu/src/reduction.rs` | the CPU reductions' caller-owned-payload rejections |
+| `crates/tenferro-runtime/src/checkpoint.rs` | the caller-owned retention arms |
+
+Two new test files cover the reachable ones: `ext/df64-proof/tests/external_dtype_boundaries.rs`
+drives the public CPU and runtime entry points with a caller-owned payload and asserts the
+typed refusals (including the one case that is *not* a refusal, because reducing over no axes is
+the identity for every scalar), and `ext/df64-proof/tests/ad_rule_boundaries.rs` drives the
+public AD entry points to reach the rules' out-of-domain arms and the factor-only cotangent
+combination. Re-running the coverage check moved `ad.rs` and `ad_support.rs` above their
+thresholds, leaving three files:
+
+- `crates/tenferro-cpu/src/reduction.rs` (78.0% against 79%) — two of the rejection arms sit in
+  session-form entry points these tests do not reach.
+- `crates/tenferro-runtime/src/checkpoint.rs` (74.8% against 75%) — one line short, and its
+  remaining uncovered lines are a private `Debug` implementation and a defensive fallback that
+  no public path reaches, because `RetainedValue` is not a public item.
+- `crates/tenferro-linalg/src/householder.rs` (79.6% against 80%) — **not this branch's**: it has
+  no added lines here, which also shows that a local llvm-cov run does not attribute lines the
+  way CI's `--profile ci` run does.
+
+The goal's own bar for changed files is 90%, and the contribution's figure is 78.5% for `ad.rs`
+after this work; the remaining lines there are the arms no public path reaches.
