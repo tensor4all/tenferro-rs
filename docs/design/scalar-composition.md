@@ -274,8 +274,30 @@ type for its own scalar. Re-measured on the rebuilt proof test binary with
 
 So the heavy kernel body is keyed on the element type and the operation, and two
 sets that contain the same scalar reach one compiled body. This is a structural
-property of the signature rather than a linker effect. It is measured on a
-debug test binary in one crate and is not yet the full #1706/#1790 protocol.
+property of the signature rather than a linker effect.
+
+The measurement is reproducible and now recorded as an artifact:
+`scripts/check-scalar-composition-kernel-sharing.py` builds the proof crate's
+composition test with `--emit=asm`, counts the kernel entries the assembly file
+*defines*, and writes its JSON record to
+[`scalar-composition-kernel-sharing.md`](./scalar-composition-kernel-sharing.md).
+On `79092f7c` (release build, `rustc 1.97.1`, `x86_64-unknown-linux-gnu`) the
+counts are:
+
+| Path | `zip_map2_into` entries | `zip_map2_parts_into_validated` entries | Call sites |
+| --- | --- | --- | --- |
+| preset `f64` | 1 | 2 | 39 |
+| external `Df64` | 1 | 3 | 41 |
+
+Every entry on both paths names
+`tenferro_internal_cpu_kernels::scalar_ops::scalar_binary_into`, so the two paths
+are the same kernel function rather than two implementations, and every external
+entry is parameterized by the contribution's own `Df64Add` operation. The preset
+entries are reached from 39 places, so the body is shared between call sites
+rather than duplicated per call site.
+
+This is measured on one release test binary in one crate and is not yet the full
+#1706/#1790 protocol.
 
 ### 4.7 Honest limit
 

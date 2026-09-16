@@ -162,3 +162,29 @@ infallible inference paths, so it is recorded rather than guessed at.
 
 Workspace after this: 5235 passed, 3 failed (the same pre-existing `trybuild`
 failures).
+
+## Follow-on: object-level evidence for the shared kernel
+
+The goal's evidence list requires object or symbol evidence for shared compiled
+kernels, and the design doc's sharing claim was measured with a one-off `nm -C`
+run. It is now a reproducible probe:
+`scripts/check-scalar-composition-kernel-sharing.py` builds the proof crate's
+composition test with `--emit=asm`, counts the kernel entries the assembly file
+defines, and writes a JSON record to
+`docs/design/scalar-composition-kernel-sharing.md`.
+
+On `79092f7c` (release, `rustc 1.97.1`, `x86_64-unknown-linux-gnu`):
+
+| Path | `zip_map2_into` | `zip_map2_parts_into_validated` | Call sites |
+| --- | --- | --- | --- |
+| preset `f64` | 1 | 2 | 39 |
+| external `Df64` | 1 | 3 | 41 |
+
+Every entry on both paths names
+`tenferro_internal_cpu_kernels::scalar_ops::scalar_binary_into`, so the preset and
+external paths are the same kernel function rather than two implementations, and
+every external entry is parameterized by the contribution's `Df64Add`. The probe
+exits non-zero if a kernel function is missing on either path, if an instantiation
+does not come from the shared crate, if an external instantiation is not
+parameterized by the contribution's operation, or if the preset entries are not
+reached from more than one place.
