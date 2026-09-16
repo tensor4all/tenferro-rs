@@ -4371,28 +4371,28 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(
     input: &Tensor,
     backend: &mut B,
 ) -> Result<Tensor> {
-    let host = match input {
+    let host = match input.dtype() {
         // A caller-owned payload has no zero-like runtime tensor.
-        Tensor::External(payload, _) => {
+        DType::External(type_id) => {
             return Err(Error::unsupported(
                 "zero_like_tensor",
                 ErrorPhase::GraphBuild,
                 format!(
                     "an externally defined payload ({:?}) has no zero-like runtime tensor",
-                    DType::External(payload.element_type_id())
+                    DType::External(type_id)
                 ),
             ));
         }
-        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())?),
-        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())?),
-        Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())?),
-        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape().to_vec())?),
-        Tensor::Bool(tensor) => Tensor::Bool(TypedTensor::from_vec_col_major(
-            tensor.shape().to_vec(),
-            vec![false; tensor.n_elements()],
+        DType::F32 => Tensor::F32(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::F64 => Tensor::F64(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::I32 => Tensor::I32(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::I64 => Tensor::I64(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::Bool => Tensor::Bool(TypedTensor::from_vec_col_major(
+            input.shape().to_vec(),
+            vec![false; input.shape().iter().product()],
         )?),
-        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())?),
-        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())?),
+        DType::C32 => Tensor::C32(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::C64 => Tensor::C64(TypedTensor::zeros(input.shape().to_vec())?),
     };
     backend
         .upload_host_tensor(TensorRead::from_tensor(&host))
