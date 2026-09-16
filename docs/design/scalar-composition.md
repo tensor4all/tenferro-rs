@@ -543,7 +543,19 @@ measured outcome is recorded here instead of being carried.
 
 One question this leaves is why the objective's *first*-named target,
 `crates/tenferro-gpu/src/cubecl/mod.rs`, is among the remaining sites, since a GPU feature
-builds in this checkout (`cargo check -p tenferro-gpu --features cuda` succeeds in 25 seconds
+builds in this checkout
+What stops the GPU modules is narrower than "the macros cannot express them", which was my
+first guess and is wrong: `same_variant_unary!` takes a caller-supplied wrap closure, so the
+result's dtype derivation is expressible, and `same_variant_pair!` re-wraps the result itself.
+The actual limits are specific and checkable. Both macros cover only the four float and complex
+arms, so the integer and boolean arms stay outside them, which matters here because the GPU
+linalg file rejects integer input and the elementwise file launches a different
+`launch_checked_integer_binary` with a `crate::DType` argument for the integer pairs. The
+sixteen shape-guard arms must remain pre-checks ahead of any macro. And the conversions left in
+those files are structural deduplication in a backend whose kernels cannot run in this
+environment, so the change would ship as compile-only verification. That is why the sites are
+recorded as outstanding work with their reasons rather than converted here.
+ (`cargo check -p tenferro-gpu --features cuda` succeeds in 25 seconds
 with the vendored CubeCL crates, so verification is not what stops it). The answer is measured:
 its 66 concrete `Tensor::`/`DType::` matches are not a uniform same-variant dispatch. 16 arms
 carry an extra shape guard that routes to a fallback, 69 places pass a `crate::DType` into the
