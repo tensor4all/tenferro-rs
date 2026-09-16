@@ -1,0 +1,14 @@
+[package]
+name = "tenferro-df64-proof"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "External-scalar proof crate for tenferro scalar composition (not published)."
+
+[lib]
+name = "tenferro_df64_proof"
+
+[dependencies]
+tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }
+tenferro-cpu = { path = "../../crates/tenferro-cpu" }

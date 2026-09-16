@@ -1,0 +1,99 @@
+//! External-scalar proof crate: a scalar type that tenferro does not define.
+//!
+//! This crate exists to show that the ordinary CPU numerical path in
+//! `tenferro-cpu` does not require the preset scalar types. It defines its own
+//! real scalar as a two-`f64` expansion, stores it in
+//! [`tenferro_tensor_core::HostTensor`], and executes through
+//! [`tenferro_cpu::scalar_binary_into`] and [`tenferro_cpu::scalar_fold`] using
+//! the same traversal the preset scalars use.
+//!
+//! The type is deliberately small. It backs four arithmetic operations with an
+//! exact two-sum so that low-order information survives accumulation, which an
+//! `f64` round trip destroys. `xprec::Df64` is the production-shaped equivalent
+//! and can replace this type without changing the tenferro side.
+
+#![deny(missing_docs)]
+
+/// A real scalar carrying a high and a low `f64` component.
+///
+/// `hi` holds the rounded value and `lo` the exact residual, so
+/// `hi + lo` is the represented real number.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Df64 {
+    /// Rounded component.
+    pub hi: f64,
+    /// Exact residual component.
+    pub lo: f64,
+}
+
+/// Exact sum of two `f64` values as a high and low component (Knuth's two-sum).
+#[inline]
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let sum = a + b;
+    let b_virtual = sum - a;
+    let error = (a - (sum - b_virtual)) + (b - b_virtual);
+    (sum, error)
+}
+
+impl Df64 {
+    /// Build a scalar with no low component.
+    #[inline]
+    #[must_use]
+    pub fn from_f64(value: f64) -> Self {
+        Self { hi: value, lo: 0.0 }
+    }
+
+    /// Additive identity.
+    #[inline]
+    #[must_use]
+    pub fn zero() -> Self {
+        Self::from_f64(0.0)
+    }
+
+    /// Explicitly narrow to `f64`, discarding the low component.
+    ///
+    /// This is a numerical conversion, not a reinterpretation: it allocates
+    /// nothing and reads only the rounded component.
+    #[inline]
+    #[must_use]
+    pub fn narrow_to_f64(self) -> f64 {
+        self.hi
+    }
+}
+
+impl std::ops::Add for Df64 {
+    type Output = Self;
+
+    /// Exact addition of two expansions.
+    #[inline]
+    fn add(self, other: Self) -> Self {
+        let (s1, s2) = two_sum(self.hi, other.hi);
+        let (t1, t2) = two_sum(self.lo, other.lo);
+        let (s2, s3) = two_sum(s2, t1);
+        let lo = s3 + t2;
+        let (hi, lo) = two_sum(s1, s2 + lo);
+        Self { hi, lo }
+    }
+}
+
+impl std::ops::Neg for Df64 {
+    type Output = Self;
+
+    #[inline]
+    fn neg(self) -> Self {
+        Self {
+            hi: -self.hi,
+            lo: -self.lo,
+        }
+    }
+}
+
+impl std::ops::Sub for Df64 {
+    type Output = Self;
+
+    /// Exact subtraction.
+    #[inline]
+    fn sub(self, other: Self) -> Self {
+        std::ops::Add::add(self, std::ops::Neg::neg(other))
+    }
+}

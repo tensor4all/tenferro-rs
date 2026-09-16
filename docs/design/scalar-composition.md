@@ -175,6 +175,16 @@ blocked by the external proof:
 | 1a | Unify the dtype tag across `tenferro-tensor-core` and `tenferro-tensor`, delete the duplicate tag and the four `core_dtype()` copies, and drop the unnecessary `PoolScalar` bound from the elementwise replay helpers | Workspace `check --all-targets` clean, existing tests unchanged, measured net line reduction |
 | 1b | The open scalar contract, the single preset table, the shared erased dispatch, and the external proof crate | The external type constructs, borrows, mutates, adds, reduces, and converts through public APIs, with the low-order retention case |
 
+Part 1b lands incrementally on the same branch. Landed so far: the
+caller-provided-destination entry points `scalar_binary_into` and `scalar_fold`
+in `tenferro-internal-cpu-kernels` (re-exported from `tenferro-cpu`), which run
+the same `zip_map2_into` / `reduce` bodies the preset pool path uses, and the
+`ext/df64-proof` crate, whose own two-`f64` scalar exercises construction,
+borrowed and mutable access, an elementwise operation, a reduction, and an
+explicit `f64` narrowing through those public functions. Still outstanding in
+1b: the open scalar contract and single preset table, the shared erased
+dispatch, and `ad_admission`.
+
 The slice must exercise: typed construction, shared and mutable borrowing, one
 binary operation, one reduction, and one explicit precision-reducing conversion.
 A contraction is deliberately excluded: it reaches rank, layout, and provider

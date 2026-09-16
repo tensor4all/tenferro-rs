@@ -178,6 +178,9 @@ pub use runtime_adapter::{
     runtime_engine_id, runtime_engine_registration, runtime_engine_registration_with_id,
     runtime_hardware_class,
 };
+/// Ordinary CPU entry points that take a caller-provided destination and the
+/// caller's own arithmetic instead of the typed pool.
+pub use tenferro_internal_cpu_kernels::scalar_ops::{scalar_binary_into, scalar_fold};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,

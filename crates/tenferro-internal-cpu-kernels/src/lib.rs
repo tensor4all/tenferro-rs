@@ -14,6 +14,7 @@ pub use tenferro_tensor::{CacheStats, DType, Error, ErrorKind};
 
 pub mod elementwise;
 pub mod read_into;
+pub mod scalar_ops;
 pub use read_into::elementwise_read_into_with_context;
 
 #[cfg(test)]
