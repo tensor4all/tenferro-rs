@@ -6184,79 +6184,86 @@ impl TensorIndexing for CudaBackend {
                 "concatenate requires at least one input",
             )
         })?;
-        match first {
-            Tensor::F32(_) => {
+        match first.dtype() {
+            DType::F32 => {
                 let typed: crate::Result<Vec<&TypedTensor<f32>>> = inputs
                     .iter()
-                    .map(|tensor| match tensor {
-                        Tensor::F32(t) => Ok(t),
-                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    .map(|tensor| {
+                        tensor
+                            .as_typed::<f32>()
+                            .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::F32)
             }
-            Tensor::F64(_) => {
+            DType::F64 => {
                 let typed: crate::Result<Vec<&TypedTensor<f64>>> = inputs
                     .iter()
-                    .map(|tensor| match tensor {
-                        Tensor::F64(t) => Ok(t),
-                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    .map(|tensor| {
+                        tensor
+                            .as_typed::<f64>()
+                            .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::F64)
             }
-            Tensor::I32(_) => {
+            DType::I32 => {
                 let typed: crate::Result<Vec<&TypedTensor<i32>>> = inputs
                     .iter()
-                    .map(|tensor| match tensor {
-                        Tensor::I32(t) => Ok(t),
-                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    .map(|tensor| {
+                        tensor
+                            .as_typed::<i32>()
+                            .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::I32)
             }
-            Tensor::I64(_) => {
+            DType::I64 => {
                 let typed: crate::Result<Vec<&TypedTensor<i64>>> = inputs
                     .iter()
-                    .map(|tensor| match tensor {
-                        Tensor::I64(t) => Ok(t),
-                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    .map(|tensor| {
+                        tensor
+                            .as_typed::<i64>()
+                            .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::I64)
             }
-            Tensor::Bool(_) => {
+            DType::Bool => {
                 let typed: crate::Result<Vec<&TypedTensor<bool>>> = inputs
                     .iter()
-                    .map(|tensor| match tensor {
-                        Tensor::Bool(t) => Ok(t),
-                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    .map(|tensor| {
+                        tensor
+                            .as_typed::<bool>()
+                            .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
                 self.concatenate_bool(&typed?, axis).map(Tensor::Bool)
             }
-            Tensor::C32(_) => {
+            DType::C32 => {
                 let typed: crate::Result<Vec<&TypedTensor<Complex32>>> = inputs
                     .iter()
-                    .map(|tensor| match tensor {
-                        Tensor::C32(t) => Ok(t),
-                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    .map(|tensor| {
+                        tensor
+                            .as_typed::<Complex32>()
+                            .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::C32)
             }
-            Tensor::C64(_) => {
+            DType::C64 => {
                 let typed: crate::Result<Vec<&TypedTensor<Complex64>>> = inputs
                     .iter()
-                    .map(|tensor| match tensor {
-                        Tensor::C64(t) => Ok(t),
-                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    .map(|tensor| {
+                        tensor
+                            .as_typed::<Complex64>()
+                            .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::C64)
             }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "concatenate",
                 "an externally defined payload is not supported by this GPU operation",
             )),
