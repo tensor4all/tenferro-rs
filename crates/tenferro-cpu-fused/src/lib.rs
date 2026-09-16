@@ -14,6 +14,7 @@
 pub type Result<T> = tenferro_tensor::Result<T>;
 pub use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 
+use num_complex::{Complex32, Complex64};
 use std::mem::size_of_val;
 use strided_basic::{ErasedRawStridedPtr, ErasedRawStridedRef, ExecContext, KernelDType};
 use strided_fused::{ErasedFusedPlan, FusedInst, FusedOp, FusedPlan};
@@ -172,22 +173,38 @@ fn tensor_host_bytes<'a>(op: &'static str, input: &'a Tensor) -> crate::Result<&
         };
     }
 
-    match input {
-        Tensor::F32(tensor) => bytes!(tensor),
-        Tensor::F64(tensor) => bytes!(tensor),
-        Tensor::I32(tensor) => bytes!(tensor),
-        Tensor::I64(tensor) => bytes!(tensor),
-        Tensor::Bool(tensor) => bytes!(tensor),
-        Tensor::C32(tensor) => bytes!(tensor),
-        Tensor::C64(tensor) => bytes!(tensor),
+    match input.dtype() {
+        DType::F32 => bytes!(fused_host::<f32>(op, input)?),
+        DType::F64 => bytes!(fused_host::<f64>(op, input)?),
+        DType::I32 => bytes!(fused_host::<i32>(op, input)?),
+        DType::I64 => bytes!(fused_host::<i64>(op, input)?),
+        DType::Bool => bytes!(fused_host::<bool>(op, input)?),
+        DType::C32 => bytes!(fused_host::<Complex32>(op, input)?),
+        DType::C64 => bytes!(fused_host::<Complex64>(op, input)?),
         // A caller-owned payload is opaque here, so the fused path rejects it
         // instead of reading bytes it cannot interpret.
-        Tensor::External(..) => Err(crate::Error::unsupported_dtype(
+        DType::External(_) => Err(crate::Error::unsupported_dtype(
             op,
             input.dtype(),
             "an externally defined payload is not a fused input",
         )),
     }
+}
+/// The typed tensor behind `input`, or the refusal this path produces for one.
+///
+/// Callers reach this from a match on `input.dtype()`, so `None` means the tag table
+/// and the runtime dtype disagree rather than a caller mistake.
+fn fused_host<'a, T: tenferro_tensor::TensorScalar>(
+    op: &'static str,
+    input: &'a Tensor,
+) -> crate::Result<&'a TypedTensor<T>> {
+    input.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported_dtype(
+            op,
+            input.dtype(),
+            "an externally defined payload is not a fused input",
+        )
+    })
 }
 
 fn erased_fusion_input<'a>(
