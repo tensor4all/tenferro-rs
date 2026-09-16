@@ -5281,30 +5281,45 @@ impl TensorStructural for CudaBackend {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(t) => self
-                .extract_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::F32),
-            Tensor::F64(t) => self
-                .extract_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::F64),
-            Tensor::I32(t) => self
-                .extract_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::I32),
-            Tensor::I64(t) => self
-                .extract_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::I64),
-            Tensor::Bool(t) => self
-                .extract_diagonal_bool(t, axis_a, axis_b)
-                .map(Tensor::Bool),
-            Tensor::C32(t) => self
-                .extract_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::C32),
-            Tensor::C64(t) => self
-                .extract_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::C64),
+        // Dispatch on the tag and recover the typed tensor, which is what `as_typed` exists for.
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "extract_diagonal")?;
+                self.extract_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "extract_diagonal")?;
+                self.extract_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::F64)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "extract_diagonal")?;
+                self.extract_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::I32)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "extract_diagonal")?;
+                self.extract_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::I64)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "extract_diagonal")?;
+                self.extract_diagonal_bool(t, axis_a, axis_b)
+                    .map(Tensor::Bool)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "extract_diagonal")?;
+                self.extract_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::C32)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "extract_diagonal")?;
+                self.extract_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::C64)
+            }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "extract_diagonal",
                 "an externally defined payload is not supported by this GPU operation",
             )),
@@ -5317,30 +5332,45 @@ impl TensorStructural for CudaBackend {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(t) => self
-                .embed_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::F32),
-            Tensor::F64(t) => self
-                .embed_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::F64),
-            Tensor::I32(t) => self
-                .embed_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::I32),
-            Tensor::I64(t) => self
-                .embed_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::I64),
-            Tensor::Bool(t) => self
-                .embed_diagonal_bool(t, axis_a, axis_b)
-                .map(Tensor::Bool),
-            Tensor::C32(t) => self
-                .embed_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::C32),
-            Tensor::C64(t) => self
-                .embed_diagonal_typed(t, axis_a, axis_b)
-                .map(Tensor::C64),
+        // Dispatch on the tag and recover the typed tensor, which is what `as_typed` exists for.
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "embed_diagonal")?;
+                self.embed_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "embed_diagonal")?;
+                self.embed_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::F64)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "embed_diagonal")?;
+                self.embed_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::I32)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "embed_diagonal")?;
+                self.embed_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::I64)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "embed_diagonal")?;
+                self.embed_diagonal_bool(t, axis_a, axis_b)
+                    .map(Tensor::Bool)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "embed_diagonal")?;
+                self.embed_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::C32)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "embed_diagonal")?;
+                self.embed_diagonal_typed(t, axis_a, axis_b)
+                    .map(Tensor::C64)
+            }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "embed_diagonal",
                 "an externally defined payload is not supported by this GPU operation",
             )),
