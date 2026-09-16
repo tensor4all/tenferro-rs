@@ -37,6 +37,22 @@ For contributors, internal crate APIs are also available in the
 - [cubecl-kernel-sample](./cubecl_kernel_sample/index.html): sample CUDA
   CubeCL kernel exercising the public `raw`/`cubecl` session seams
 
+## Extension and Consumer Crates
+
+These crates are not published. They show how an application adds a scalar
+tenferro does not declare and how it composes that support with the canonical
+one, and their tests are the executable evidence for those boundaries.
+
+- [tenferro-df64-proof](./tenferro_df64_proof/index.html): an externally defined
+  scalar with its own arithmetic, QR factorisation, extension operations, and
+  first-order AD rules
+- [tenferro-scalar-consumer-algorithm](./tenferro_scalar_consumer_algorithm/index.html):
+  the algorithm role, which states the capabilities it needs and never names a
+  scalar, a provider, or a dtype
+- [tenferro-scalar-consumer-application](./tenferro_scalar_consumer_application/index.html):
+  the application role, which binds those capabilities to canonical support and
+  to the external scalar
+
 ## Internal Implementation Crates
 
 These crates are documented for contributors and crate-boundary review. They

@@ -55,8 +55,8 @@ fn require_same_shape(op: &'static str, lhs: &[usize], rhs: &[usize]) -> crate::
 ///
 /// # Errors
 ///
-/// Returns an error when the three shapes are not identical, or when the
-/// underlying strided traversal rejects the views.
+/// Returns [`Error::Validation`] when the destination shape does not match the operands',
+/// or [`Error::BackendSource`] when the underlying strided traversal rejects the views.
 pub fn scalar_binary_into<T, Op>(
     op: &'static str,
     destination: &mut HostTensor<T>,
@@ -107,7 +107,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the strided reduction rejects the view.
+/// Returns [`Error::BackendSource`] when the strided reduction rejects the view, which
+/// happens when the source's shape has an invalid stride layout.
 pub fn scalar_fold<T, Op>(op: &'static str, source: &HostTensor<T>, init: T) -> crate::Result<T>
 where
     T: Copy + Send + Sync,

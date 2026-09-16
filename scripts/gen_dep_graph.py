@@ -55,6 +55,12 @@ _MEMBER_CLASSES = {
     "crates/tenferro-einsum": "extension",
     "crates/tenferro-linalg": "extension",
     "crates/tenferro-fft": "extension",
+    # The external-scalar contribution and the two consumer roles are extensions of
+    # the documented surface rather than part of a layer: they add a scalar
+    # tenferro does not declare and show how an application composes it.
+    "ext/df64-proof": "extension",
+    "ext/scalar-consumer-algorithm": "extension",
+    "ext/scalar-consumer-application": "extension",
     "docs/tutorial-code": "tutorial",
 }
 

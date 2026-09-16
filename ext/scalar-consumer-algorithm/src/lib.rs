@@ -40,8 +40,8 @@ pub trait ScalarSupport {
     ///
     /// # Errors
     ///
-    /// Returns the binding's typed error when the input is not a full-column-rank matrix
-    /// the binding supports.
+    /// Returns the binding's error when the input's rank or shape is invalid, when the
+    /// input's dtype is unsupported, or when the matrix is not full column rank.
     ///
     /// # Examples
     ///
@@ -71,7 +71,8 @@ pub trait ScalarSupport {
     ///
     /// # Errors
     ///
-    /// Returns the binding's typed error when the value is not one it supports.
+    /// Returns the binding's error when the value's dtype is unsupported or its shape is
+    /// invalid for the presentation the binding defines.
     ///
     /// # Examples
     ///
@@ -127,7 +128,8 @@ pub trait ScalarSupport {
 ///
 /// # Errors
 ///
-/// Returns the binding's typed error when the factorization or the presentation fails.
+/// Returns the binding's error when the factorisation or the presentation fails: an
+/// unsupported dtype, an invalid shape, or a matrix that is not full column rank.
 pub fn squared_factor_norm<S: ScalarSupport + ?Sized>(
     input: &TracedTensor,
     support: &S,
@@ -166,8 +168,9 @@ pub fn squared_factor_norm<S: ScalarSupport + ?Sized>(
 ///
 /// # Errors
 ///
-/// Returns the binding's typed error when the program cannot be built, or the AD
-/// context's error when the reverse pass cannot be run.
+/// Returns the binding's error when the factorisation or the presentation fails with an
+/// unsupported dtype or an invalid shape, [`Error::RuntimeStateSource`] when the input does
+/// not reach the loss, or the reverse pass error when the program cannot be built.
 pub fn factor_norm_gradient<S: ScalarSupport + ?Sized>(
     ad: &AdContext,
     input: &TracedTensor,

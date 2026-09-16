@@ -1359,6 +1359,9 @@ impl CpuBackend {
         })
     }
 
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     /// Create one coordinator from caller-owned CPU domain executors.
     ///
     /// The descriptors are moved into prebuilt engines. `Auto` selects
@@ -1416,9 +1419,6 @@ impl CpuBackend {
     /// provider cannot satisfy an external domain contract. Applications that
     /// supply controlled providers can use
     /// [`CpuBackend::from_external_managed_domains_with_provider_bundle`].
-    // The error type carries a `DType`, which grew when the tag gained an
-    // externally defined variant; boxing it per call would cost more than it saves.
-    #[allow(clippy::result_large_err)]
     pub fn from_external_managed_domains(
         default_domain: CpuDomainId,
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
@@ -1438,6 +1438,9 @@ impl CpuBackend {
         )
     }
 
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     /// Create one coordinator from caller-owned CPU domain executors and an
     /// immutable provider bundle.
     ///
@@ -1492,9 +1495,6 @@ impl CpuBackend {
     /// [`std::error::Error::source`] on that value yields the typed
     /// [`CpuProviderBundleInstallError`], whose own source is the rejected
     /// [`crate::CpuProviderDomainError`].
-    // The error type carries a `DType`, which grew when the tag gained an
-    // externally defined variant; boxing it per call would cost more than it saves.
-    #[allow(clippy::result_large_err)]
     pub fn from_external_managed_domains_with_provider_bundle(
         default_domain: CpuDomainId,
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
@@ -1661,6 +1661,9 @@ impl CpuBackend {
         Ok(backend)
     }
 
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     /// Create a CPU backend using the selected compiled provider.
     ///
     /// # Examples
@@ -1677,9 +1680,6 @@ impl CpuBackend {
     /// Returns [`CpuBackendError::Tensor`] when the provider is unavailable or
     /// its configuration is invalid, and [`CpuBackendError::Placement`] when
     /// CPU topology discovery or placement initialization fails.
-    // The error type carries a `DType`, which grew when the tag gained an
-    // externally defined variant; boxing it per call would cost more than it saves.
-    #[allow(clippy::result_large_err)]
     pub fn with_kind(kind: CpuBackendKind) -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::with_kind";
         ensure_cpu_backend_kind_available(kind, op)
@@ -1693,6 +1693,9 @@ impl CpuBackend {
         .map_err(|error| CpuBackendError::placement(op, error))
     }
 
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     /// Try to create a CPU backend using `RAYON_NUM_THREADS`.
     ///
     /// # Examples
@@ -1711,9 +1714,6 @@ impl CpuBackend {
     /// malformed, or the compiled provider cannot be selected, and
     /// [`CpuBackendError::Placement`] when CPU topology or managed placement
     /// initialization is unavailable.
-    // The error type carries a `DType`, which grew when the tag gained an
-    // externally defined variant; boxing it per call would cost more than it saves.
-    #[allow(clippy::result_large_err)]
     pub fn try_new() -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::try_new";
         let context =
@@ -1780,6 +1780,9 @@ impl CpuBackend {
         Self::compatibility(ctx, max_retained_capacity_bytes, kind)
     }
 
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     /// Create a CPU backend with a custom thread count.
     ///
     /// # Examples
@@ -1796,9 +1799,6 @@ impl CpuBackend {
     /// Returns [`CpuBackendError::Tensor`] with `ValidationError::InvalidArgument`
     /// when `num_threads` is zero or the context cannot be configured, and
     /// [`CpuBackendError::Placement`] when CPU topology or placement fails.
-    // The error type carries a `DType`, which grew when the tag gained an
-    // externally defined variant; boxing it per call would cost more than it saves.
-    #[allow(clippy::result_large_err)]
     pub fn with_threads(num_threads: usize) -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::with_threads";
         let context = CpuContext::with_threads(num_threads)
@@ -1811,6 +1811,9 @@ impl CpuBackend {
         .map_err(|error| CpuBackendError::placement(op, error))
     }
 
+    // The error type carries a `DType`, which grew when the tag gained an
+    // externally defined variant; boxing it per call would cost more than it saves.
+    #[allow(clippy::result_large_err)]
     /// Create a CPU backend with a custom thread count and provider.
     ///
     /// # Examples
@@ -1831,9 +1834,6 @@ impl CpuBackend {
     /// Returns [`CpuBackendError::Tensor`] with `ValidationError::InvalidArgument`
     /// when `num_threads` is zero or the provider is unavailable, and
     /// [`CpuBackendError::Placement`] when CPU topology or placement fails.
-    // The error type carries a `DType`, which grew when the tag gained an
-    // externally defined variant; boxing it per call would cost more than it saves.
-    #[allow(clippy::result_large_err)]
     pub fn with_threads_and_kind(
         num_threads: usize,
         kind: CpuBackendKind,

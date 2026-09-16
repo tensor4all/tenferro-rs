@@ -1349,7 +1349,8 @@ pub fn module() -> Result<Arc<dyn ExtensionModule>, tenferro_runtime::RuntimeCon
 ///
 /// # Errors
 ///
-/// Returns an error when the module identifier is invalid.
+/// Returns [`tenferro_runtime::RuntimeConfigError`] when the module's configured
+/// identifier is invalid.
 ///
 /// # Examples
 ///
@@ -1374,8 +1375,9 @@ pub fn module_for_engine(
 ///
 /// # Errors
 ///
-/// Returns the runtime's typed error when the extension cannot be prepared or
-/// executed for this input.
+/// Returns [`tenferro_runtime::Error::RuntimeStateSource`] when the contribution's module
+/// cannot be registered, or when the operation cannot be prepared or executed for this
+/// input.
 ///
 /// # Examples
 ///
@@ -1386,9 +1388,6 @@ pub fn module_for_engine(
 /// assert_eq!(<Df64Total as ExtensionOp>::input_count(&Df64Total), 1);
 /// assert!(module().is_ok());
 /// ```
-///
-/// Executing the operation needs the caller-owned payload ownership contract from
-/// #1789, which `ext/df64-proof/tests/extension_execution.rs` records.
 pub fn apply_total(input: &EagerTensor) -> tenferro_runtime::Result<Vec<EagerTensor>> {
     let module = module().map_err(|source| {
         tenferro_runtime::Error::runtime_state_source(

@@ -1189,6 +1189,23 @@ implementations because their payload hashing and equality differ. The file lost
 and every test and doc test still passes, which is the "reduce source where possible" direction
 the repository asks changes to take.
 
+### 5.17 Running CI's profiles, not just the fast gate
+
+The fast local gate passes on this branch while four CI-enforced checks did not, which is worth
+recording because it is a property of the verification, not of the change:
+
+| Check | What it caught |
+| --- | --- |
+| `check-public-error-docs.py` | `# Errors` sections that name no concrete condition, and five `#[allow]` attributes inserted between doc blocks and signatures, which detached documented errors from functions that previously passed |
+| `check-public-boundary-inventory.py` | a generated snapshot whose overlay digest must match the current sources |
+| `check-docs-site.py` | the contribution and the two consumer crates missing from `docs/api/index.md` |
+| `gen_dep_graph.py` layer map | three crates falling back to a `core` cluster that the tests forbid |
+
+All four are fixed. One artifact remains outstanding and cannot be produced here:
+`docs/assets/dependency-footprint.svg` is generated with Graphviz, whose `dot` binary is absent
+and cannot be installed without root on this host, so the `docs` profile's dependency-graph test
+fails on the checked-in SVG. The regeneration command is recorded in the work log.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

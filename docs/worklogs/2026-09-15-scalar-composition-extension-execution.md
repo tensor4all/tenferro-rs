@@ -624,3 +624,37 @@ because their payload hashing and equality genuinely differ.
 
 `ext/df64-proof/src/extension.rs` lost 122 net lines (216 removed, 94 added) with every test and
 doc test still passing, and the macro carries its own runnable example.
+
+## Running CI's own profiles found four more gates this branch was failing
+
+Running the checks CI actually executes (rather than only the fast local gate) turned up four
+real problems in this branch, all now fixed:
+
+- `scripts/check-public-error-docs.py` requires every public `Result` API's `# Errors` section to
+  name a concrete variant or condition, and the sections this branch added did not. Worse, the
+  `#[allow(clippy::result_large_err)]` attributes added to `tenferro-cpu/src/backend.rs` sat
+  *between* those functions' doc blocks and their signatures, which detached the documented
+  errors from five functions that previously passed; the whole-repository run reported them, and
+  the base revision reports none.
+- `scripts/check-public-boundary-inventory.py` keeps a generated snapshot whose overlay digest
+  must match the current sources, so changing public code invalidates it. Regenerated.
+- `scripts/check-docs-site.py` requires every workspace crate to appear in `docs/api/index.md`;
+  the contribution and the two consumer crates were missing, so the docs site check had been red
+  since the proof crate was added.
+- `scripts/gen_dep_graph.py` classifies workspace members into documented layers and falls back to
+  a `core` cluster the tests forbid. The three new crates are now recorded in the extension layer.
+
+One gate cannot be finished in this environment: `docs/assets/dependency-footprint.svg` is a
+generated artifact that has to be regenerated when the crate set changes, and the check compares
+its node and edge inventory against the current graph. Regeneration needs Graphviz's `dot`,
+which is not installed; the runtime library (`libgvc.so.6`) is present but the binary is not, the
+package that ships it is not extractable into a usable binary without root, and this account has
+no root. The exact command, for a machine that has Graphviz, is
+
+```bash
+python3 scripts/gen_dep_graph.py --format svg --output docs/assets/dependency-footprint.svg
+```
+
+Everything else in the `docs` profile passes: the docs-site, doc-consistency, rules-review, and
+guide-snippet tests, `check-operation-categories.py --fail-on-findings`, and the boundary
+inventory.
