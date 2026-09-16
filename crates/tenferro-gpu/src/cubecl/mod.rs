@@ -5845,64 +5845,144 @@ impl TensorIndexing for CudaBackend {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor> {
-        match (operand, scatter_indices, updates) {
-            (Tensor::F32(operand), Tensor::F32(indices), Tensor::F32(updates)) => self
-                .scatter_float_typed(operand, indices, updates, config)
+        match (operand.dtype(), scatter_indices.dtype(), updates.dtype()) {
+            (DType::F32, DType::F32, DType::F32) => self
+                .scatter_float_typed(
+                    typed_or_unsupported::<f32>(operand, "scatter")?,
+                    typed_or_unsupported::<f32>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<f32>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::F32),
-            (Tensor::F64(operand), Tensor::F32(indices), Tensor::F64(updates)) => self
-                .scatter_float_typed(operand, indices, updates, config)
+            (DType::F64, DType::F32, DType::F64) => self
+                .scatter_float_typed(
+                    typed_or_unsupported::<f64>(operand, "scatter")?,
+                    typed_or_unsupported::<f32>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<f64>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::F64),
-            (Tensor::C32(operand), Tensor::F32(indices), Tensor::C32(updates)) => self
-                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
+            (DType::C32, DType::F32, DType::C32) => self
+                .scatter_complex_typed::<_, f32, _>(
+                    typed_or_unsupported::<Complex32>(operand, "scatter")?,
+                    typed_or_unsupported::<f32>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<Complex32>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::C32),
-            (Tensor::C64(operand), Tensor::F32(indices), Tensor::C64(updates)) => self
-                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
+            (DType::C64, DType::F32, DType::C64) => self
+                .scatter_complex_typed::<_, f64, _>(
+                    typed_or_unsupported::<Complex64>(operand, "scatter")?,
+                    typed_or_unsupported::<f32>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<Complex64>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::C64),
-            (Tensor::F32(operand), Tensor::F64(indices), Tensor::F32(updates)) => self
-                .scatter_float_typed(operand, indices, updates, config)
+            (DType::F32, DType::F64, DType::F32) => self
+                .scatter_float_typed(
+                    typed_or_unsupported::<f32>(operand, "scatter")?,
+                    typed_or_unsupported::<f64>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<f32>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::F32),
-            (Tensor::F64(operand), Tensor::F64(indices), Tensor::F64(updates)) => self
-                .scatter_float_typed(operand, indices, updates, config)
+            (DType::F64, DType::F64, DType::F64) => self
+                .scatter_float_typed(
+                    typed_or_unsupported::<f64>(operand, "scatter")?,
+                    typed_or_unsupported::<f64>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<f64>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::F64),
-            (Tensor::C32(operand), Tensor::F64(indices), Tensor::C32(updates)) => self
-                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
+            (DType::C32, DType::F64, DType::C32) => self
+                .scatter_complex_typed::<_, f32, _>(
+                    typed_or_unsupported::<Complex32>(operand, "scatter")?,
+                    typed_or_unsupported::<f64>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<Complex32>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::C32),
-            (Tensor::C64(operand), Tensor::F64(indices), Tensor::C64(updates)) => self
-                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
+            (DType::C64, DType::F64, DType::C64) => self
+                .scatter_complex_typed::<_, f64, _>(
+                    typed_or_unsupported::<Complex64>(operand, "scatter")?,
+                    typed_or_unsupported::<f64>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<Complex64>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::C64),
-            (Tensor::F32(operand), Tensor::I32(indices), Tensor::F32(updates)) => self
-                .scatter_float_typed(operand, indices, updates, config)
+            (DType::F32, DType::I32, DType::F32) => self
+                .scatter_float_typed(
+                    typed_or_unsupported::<f32>(operand, "scatter")?,
+                    typed_or_unsupported::<i32>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<f32>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::F32),
-            (Tensor::F64(operand), Tensor::I32(indices), Tensor::F64(updates)) => self
-                .scatter_float_typed(operand, indices, updates, config)
+            (DType::F64, DType::I32, DType::F64) => self
+                .scatter_float_typed(
+                    typed_or_unsupported::<f64>(operand, "scatter")?,
+                    typed_or_unsupported::<i32>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<f64>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::F64),
-            (Tensor::C32(operand), Tensor::I32(indices), Tensor::C32(updates)) => self
-                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
+            (DType::C32, DType::I32, DType::C32) => self
+                .scatter_complex_typed::<_, f32, _>(
+                    typed_or_unsupported::<Complex32>(operand, "scatter")?,
+                    typed_or_unsupported::<i32>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<Complex32>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::C32),
-            (Tensor::C64(operand), Tensor::I32(indices), Tensor::C64(updates)) => self
-                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
+            (DType::C64, DType::I32, DType::C64) => self
+                .scatter_complex_typed::<_, f64, _>(
+                    typed_or_unsupported::<Complex64>(operand, "scatter")?,
+                    typed_or_unsupported::<i32>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<Complex64>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::C64),
-            (Tensor::F32(operand), Tensor::I64(indices), Tensor::F32(updates)) => self
-                .scatter_float_typed(operand, indices, updates, config)
+            (DType::F32, DType::I64, DType::F32) => self
+                .scatter_float_typed(
+                    typed_or_unsupported::<f32>(operand, "scatter")?,
+                    typed_or_unsupported::<i64>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<f32>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::F32),
-            (Tensor::F64(operand), Tensor::I64(indices), Tensor::F64(updates)) => self
-                .scatter_float_typed(operand, indices, updates, config)
+            (DType::F64, DType::I64, DType::F64) => self
+                .scatter_float_typed(
+                    typed_or_unsupported::<f64>(operand, "scatter")?,
+                    typed_or_unsupported::<i64>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<f64>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::F64),
-            (Tensor::C32(operand), Tensor::I64(indices), Tensor::C32(updates)) => self
-                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
+            (DType::C32, DType::I64, DType::C32) => self
+                .scatter_complex_typed::<_, f32, _>(
+                    typed_or_unsupported::<Complex32>(operand, "scatter")?,
+                    typed_or_unsupported::<i64>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<Complex32>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::C32),
-            (Tensor::C64(operand), Tensor::I64(indices), Tensor::C64(updates)) => self
-                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
+            (DType::C64, DType::I64, DType::C64) => self
+                .scatter_complex_typed::<_, f64, _>(
+                    typed_or_unsupported::<Complex64>(operand, "scatter")?,
+                    typed_or_unsupported::<i64>(scatter_indices, "scatter")?,
+                    typed_or_unsupported::<Complex64>(updates, "scatter")?,
+                    config,
+                )
                 .map(Tensor::C64),
-            (_, Tensor::Bool(_), _) => Err(unsupported_dtype("scatter", scatter_indices.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_), _) => {
+            (_, DType::Bool, _) => Err(unsupported_dtype("scatter", scatter_indices.dtype())),
+            (_, DType::C32 | DType::C64, _) => {
                 Err(unsupported_dtype("scatter", scatter_indices.dtype()))
             }
-            (Tensor::Bool(_), _, _) => Err(unsupported_operation(
+            (DType::Bool, _, _) => Err(unsupported_operation(
                 "scatter",
                 "Bool data tensors are not supported by additive scatter",
             )),
-            (Tensor::I32(_), _, _) | (Tensor::I64(_), _, _) => {
+            (DType::I32, _, _) | (DType::I64, _, _) => {
                 Err(unsupported_dtype("scatter", operand.dtype()))
             }
             (_, _, _) => Err(ternary_dtype_mismatch(
