@@ -14,20 +14,22 @@
 use core::any::{Any, TypeId};
 use std::sync::Arc;
 
-use crate::{HostTensor, Scalar, ShapeVec, ValidationError};
+use crate::{HostTensor, Scalar, ShapeVec, StrideVec, ValidationError};
 
 /// Shape, element strides, and element offset of one erased view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Layout {
     shape: ShapeVec,
-    strides: Vec<isize>,
+    // Inline up to the same rank the shape is, so describing a payload of the usual rank
+    // allocates nothing: this runs on every value the contribution constructs.
+    strides: StrideVec,
     offset: isize,
 }
 
 impl Layout {
     /// The dense column-major layout of `shape`.
     fn dense(shape: &[usize]) -> Self {
-        let mut strides = Vec::with_capacity(shape.len());
+        let mut strides = StrideVec::with_capacity(shape.len());
         let mut running = 1isize;
         for extent in shape {
             strides.push(running);
@@ -46,8 +48,22 @@ impl Layout {
     }
 
     /// Whether this layout is the dense column-major layout of its own shape.
+    ///
+    /// The check walks the extents in place instead of building the dense layout to compare
+    /// against it: this runs on every erased access that wants the whole payload, so it must
+    /// not allocate.
     fn is_dense(&self) -> bool {
-        *self == Self::dense(&self.shape)
+        if self.offset != 0 {
+            return false;
+        }
+        let mut running: isize = 1;
+        for (extent, stride) in self.shape.iter().zip(self.strides.iter()) {
+            if *stride != running {
+                return false;
+            }
+            running = running.saturating_mul(*extent as isize);
+        }
+        true
     }
 
     /// The layout of the same elements under `axes`.
@@ -188,6 +204,11 @@ pub struct ErasedHostTensor {
     element: TypeId,
     layout: Layout,
     payload_elements: usize,
+    /// Whether `layout` is the dense column-major layout of its own shape.
+    ///
+    /// The contiguity check runs on every access that wants the whole payload, so it is
+    /// computed when the layout is set rather than walked per access.
+    dense: bool,
 }
 
 impl Clone for ErasedHostTensor {
@@ -215,6 +236,7 @@ impl Clone for ErasedHostTensor {
             element: self.element,
             layout: self.layout.clone(),
             payload_elements: self.payload_elements,
+            dense: self.dense,
         }
     }
 }
@@ -251,6 +273,7 @@ impl ErasedHostTensor {
             payload: Arc::new(value),
             type_id: TypeId::of::<HostTensor<T>>(),
             element: TypeId::of::<T>(),
+            dense: true,
             layout,
             payload_elements,
         }
@@ -351,7 +374,7 @@ impl ErasedHostTensor {
     /// ```
     #[must_use]
     pub fn is_contiguous(&self) -> bool {
-        self.layout.is_dense()
+        self.dense
     }
 
     /// Number of elements in the presented view.
@@ -414,6 +437,7 @@ impl ErasedHostTensor {
             element: self.element,
             layout: self.layout.clone(),
             payload_elements: self.payload_elements,
+            dense: self.dense,
         }
     }
 
@@ -442,8 +466,11 @@ impl ErasedHostTensor {
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn permuted(&self, axes: &[usize]) -> Result<Self, ValidationError> {
+        let layout = self.layout.permuted(axes)?;
+        let dense = layout.is_dense();
         Ok(Self {
-            layout: self.layout.permuted(axes)?,
+            layout,
+            dense,
             ..self.clone()
         })
     }
@@ -479,6 +506,7 @@ impl ErasedHostTensor {
             payload: Arc::from(payload),
             type_id: self.type_id,
             element: self.element,
+            dense: true,
             layout,
             payload_elements,
         })
@@ -565,7 +593,7 @@ impl ErasedHostTensor {
     /// ```
     #[must_use]
     pub fn into_typed<T: Scalar>(mut self) -> Option<HostTensor<T>> {
-        if !self.layout.is_dense() {
+        if !self.dense {
             return None;
         }
         // A shared payload cannot be taken out of its reference count, so taking

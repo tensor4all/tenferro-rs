@@ -2,8 +2,11 @@
 //!
 //! The stage 2 decision between a tag plus an erased payload for every member
 //! and a fast path for the preset members needs these numbers. The measurement
-//! is single-threaded and host-only, it reports the fastest of several rounds,
-//! and it reports what it measured rather than asserting a threshold.
+//! runs on one worker thread, which the repository's rules require for small-work
+//! overhead, is host-only, reports the fastest of several rounds, and reports what
+//! it measured rather than asserting a threshold. The access and construction
+//! loops below do not dispatch work to any other thread, so the 1-worker setting
+//! is the measurement's declared configuration rather than a variable.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -71,7 +74,7 @@ fn report_erasure_overhead() {
     });
 
     println!(
-        "single-threaded host payload, 9 rounds, fastest of each:\n\
+        "host payload on 1 worker thread, 9 rounds, fastest of each:\n\
          access   direct {access_direct:.1} ns  erased {access_erased:.1} ns  delta {:+.1} ns\n\
          build    direct {build_direct:.1} ns  erased {build_erased:.1} ns  delta {:+.1} ns",
         access_erased - access_direct,

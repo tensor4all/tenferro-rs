@@ -567,3 +567,26 @@ and the launches use distinct helpers (`launch_checked_integer_binary`,
 macro would erase those differences, so these sites need the accessor and kernel-parameter work
 the design doc identifies rather than a macro swap. The design doc now records this with the
 measurements.
+
+## Re-measuring the erasure cost found a hot-path regression
+
+The design doc recorded the erased access cost as +5.8 ns over a direct payload. Re-running the
+same measurement on the current head gave +306.7 ns, so I treated the record as the authority
+and looked for the regression rather than the other way round.
+
+It was mine. The contiguity check that guards the whole-payload borrow built the dense layout in
+order to compare against it, which allocated on every access. Walking the extents in place and
+then caching the verdict on the value - so the check is paid when a layout is set rather than
+when it is read - brought the access delta to +9.8 ns, within noise of the recorded figure.
+
+The construction delta is different: it grew from +58.5 ns to +493.5 ns and stays there. That is
+the trade the design makes rather than a defect, since an erased value now carries shape,
+strides, and an offset so that metadata-only permutation and contiguous materialization exist,
+and a debug build pays for the larger value and the `Arc` that makes sharing cheap. It is a
+per-value cost on the cold path.
+
+The measurement also now declares its configuration: one worker thread, the repository's
+required baseline for small-work overhead, printed in the report alongside the numbers.
+
+Workspace after this: 5303 passed, 3 failed (the same pre-existing `trybuild` failures), clippy
+clean under `-D warnings` and the strict doc lints.

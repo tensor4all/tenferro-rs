@@ -424,13 +424,23 @@ a pool-backed payload with the same identity-based recovery, and the concrete
 payload releases its storage when it is dropped. What remains is a cost and
 ownership choice, not a type-system blocker, and the cost is now measured.
 `ext/df64-proof/tests/erasure_cost.rs` compares the direct host payload with the
-erased one, single-threaded, host-only, fastest of nine rounds of 200,000
-iterations over a 64-element `f64` payload:
+erased one, on one worker thread, host-only, fastest of nine rounds of 200,000
+iterations over a 64-element `f64` payload. The numbers below are re-measured after
+the erased value gained a layout, and the earlier record is kept beside them:
 
-| Operation | Direct | Erased | Delta |
-| --- | --- | --- | --- |
-| Element-type recovery plus access | 12.0 ns | 17.8 ns | +5.8 ns |
-| Construction and drop | 602.7 ns | 661.2 ns | +58.5 ns |
+| Operation | Direct | Erased | Delta | Earlier delta |
+| --- | --- | --- | --- | --- |
+| Element-type recovery plus access | 11.7 ns | 21.5 ns | +9.8 ns | +5.8 ns |
+| Construction and drop | 571.2 ns | 1064.7 ns | +493.5 ns | +58.5 ns |
+
+Re-measuring paid for itself twice. The access cost had grown from +5.8 ns to +306.7 ns
+because the contiguity check that guards the whole-payload borrow built the dense layout to
+compare against it, which allocated on every access; walking the extents in place and then
+caching the verdict on the value brought the access delta back to +9.8 ns. The construction
+delta is a real trade rather than a defect: an erased value now carries shape, strides, and an
+offset so that a metadata-only permutation and a contiguous materialization exist, and a debug
+build pays for the larger value plus the `Arc` that makes sharing cheap. It is a per-value cost
+on the cold path, not a per-element one.
 
 Erasure therefore costs about 6 ns per access that recovers the element type and
 about 59 ns per tensor for the extra allocation, roughly a tenth of the host

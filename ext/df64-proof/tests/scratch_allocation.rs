@@ -5,6 +5,10 @@
 //! bytes one factorization and one adjoint cost, and how those numbers grow with repeated
 //! execution. A body that reused its scratch would show a much smaller second execution;
 //! these numbers are the evidence for what a reusable workspace would have to recover.
+//!
+//! The backend runs one worker thread, which the repository's rules require for measuring
+//! small-work overhead, and the report prints the effective thread count so the baseline is
+//! reproducible rather than implied.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -57,8 +61,11 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     ))
 }
 
-fn runtime() -> Runtime {
-    let backend = CpuBackend::new();
+fn runtime() -> (Runtime, usize) {
+    // One worker thread, so the numbers are a reproducible baseline rather than a function of
+    // this machine's core count.
+    let backend = CpuBackend::with_threads(1).expect("single-threaded CPU backend");
+    let threads = backend.num_threads();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -66,7 +73,7 @@ fn runtime() -> Runtime {
     builder
         .install_extension_module(module().expect("module"))
         .expect("install the Df64 module");
-    builder.build().expect("runtime with the module")
+    (builder.build().expect("runtime with the module"), threads)
 }
 
 fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
@@ -103,7 +110,7 @@ fn report_scratch_allocation_per_execution() {
     let r_value = external(vec![Df64::from_f64(2.0); order * order], vec![order, order]);
     let cotangent_value = external(vec![Df64::from_f64(1.0); order * order], vec![order, order]);
 
-    let runtime = runtime();
+    let (runtime, threads) = runtime();
     let mut compiler = GraphCompiler::new();
     let qr_program = compiler
         .compile_many(&[&outputs[0], &outputs[1]])
@@ -144,7 +151,7 @@ fn report_scratch_allocation_per_execution() {
 
     let elements = order * order;
     println!(
-        "df64 scratch per execution ({order}x{order}, {elements} elements):\n\
+        "df64 scratch per execution ({order}x{order}, {elements} elements, {threads} worker thread):\n\
          \x20 first QR:   {first_qr_allocations:>6} allocations, {first_qr_bytes:>9} bytes\n\
          \x20 steady QR:  {next_qr_allocations:>6} allocations, {next_qr_bytes:>9} bytes\n\
          \x20 adjoint:    {adjoint_allocations:>6} allocations, {adjoint_bytes:>9} bytes\n\
