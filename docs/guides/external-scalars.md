@@ -208,6 +208,28 @@ wider than pairwise, because those helpers are defined for two operands. That is
 refuses diagonal extraction and pre-reduction outright; #1787 calls this deliverable "#1793's
 einsum/tropical example", so it meets that bar and goes past it on repeated labels.
 
+## A bfloat16 contraction
+
+#1793's precision table asks for a bf16 CPU einsum whose internal calculation and accumulation are
+`f32` with a documented output rounding. `ext/bf16-proof::einsum` supplies it: the operands are
+widened, the contraction accumulates in `f32`, and the result is rounded to bfloat16 once.
+
+```rust,ignore
+use tenferro_bf16_proof::einsum::{module, Bf16Einsum};
+use tenferro_runtime::extension::apply;
+
+// Install `module()` in the runtime, then apply the operation to two traced operands.
+let op = Bf16Einsum::new(&[0, 1], &[1, 2], &[0, 2])?;   // "ik,kj->ij"
+```
+
+The test the row asks for is the comparison, not an assertion of closeness: three hundred stored ones
+contract to **300** through the promised accumulation, while the same sum with the storage type's own
+addition — which rounds at every step — stalls at **256**, where bfloat16 spacing above one becomes
+two. The output rounding is checked separately, against the rounded accumulation rather than an
+accumulation of rounded values. Traces and N-ary patterns are refused with typed errors, because this
+module's body is the accumulation contract rather than the wider pattern surface the DF64 contraction
+covers.
+
 ## Unsupported cases
 
 The AD contract admits first-order field arithmetic: an order other than one returns

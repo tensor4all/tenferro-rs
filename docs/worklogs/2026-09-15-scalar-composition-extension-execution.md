@@ -1222,3 +1222,23 @@ decision rather than an afternoon.
 I had assumed this row was the last bounded implementation item and it is not; measuring before
 starting is what showed that, and it is cheaper to record than to discover halfway through 1200 lines
 of duplication.
+
+## The bf16 einsum row, which turned out to be bounded after all
+
+I had recorded this row as needing a core API change, on the strength of `ext/sparse`'s extension
+module being 1202 lines. That measured the whole file rather than the minimum: the required surface is
+two methods on `ExtensionModule`, four on the engine, four on the prepared operation, and one planning
+config, with the runtime's own materialization helper for inputs. The module is about two hundred
+lines of that plus the body.
+
+`ext/bf16-proof/src/einsum.rs` now carries the operation, its engine, its prepared operation, and its
+module, and `tests/einsum.rs` is the comparison #1793 asks for: three hundred stored ones contract to
+300 through f32 accumulation where the storage type's own addition stalls at 256, and the output
+rounding is checked against the rounded accumulation rather than an accumulation of rounded values.
+
+Three of my own expectations were wrong on the way, all in the same direction as before: bfloat16's
+spacing on [1, 2) is 2^-7 because it keeps eight significand bits including the implicit one, so 1 +
+2^-8 stores as 1.0 and an expectation computed from the unrounded value is wrong; the collect over
+materialized inputs yields the tensor crate's error rather than the runtime's; and the module needs a
+planning config registered against its engine identity, which the runtime says out loud as
+`MissingPlanningConfig` rather than failing silently at execution.

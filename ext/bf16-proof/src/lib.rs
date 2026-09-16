@@ -25,6 +25,7 @@
 #![deny(missing_docs)]
 
 pub mod conversion;
+pub mod einsum;
 pub mod reduction;
 
 /// The standard bfloat16 representation this contribution stores.

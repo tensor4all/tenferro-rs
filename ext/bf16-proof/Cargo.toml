@@ -14,3 +14,5 @@ half = { workspace = true }
 tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }
 tenferro-cpu = { path = "../../crates/tenferro-cpu" }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
+tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops" }
