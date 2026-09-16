@@ -1106,3 +1106,27 @@ fn semantic_identity_ordinals_report_exact_retained_bytes() {
         Some(expected)
     );
 }
+
+#[test]
+fn only_an_external_tag_is_rejected_for_identity() {
+    let external = DType::External(core::any::TypeId::of::<f64>());
+    assert!(matches!(
+        super::builder::reject_external_scalar(external),
+        Err(ProgramBuildError::ExternalScalarWithoutIdentity { dtype }) if dtype == external
+    ));
+
+    for dtype in [
+        DType::F32,
+        DType::F64,
+        DType::I32,
+        DType::I64,
+        DType::Bool,
+        DType::C32,
+        DType::C64,
+    ] {
+        assert!(
+            super::builder::reject_external_scalar(dtype).is_ok(),
+            "{dtype:?}"
+        );
+    }
+}

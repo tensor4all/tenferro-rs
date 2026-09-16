@@ -531,7 +531,9 @@ fn core_output_uses_local_shape_coordinates(op: &CoreSemanticOp) -> bool {
 /// externally defined tag is a process-local `TypeId`. Until a contribution
 /// declares a stable identity for its scalar, carrying one through a traced
 /// program is rejected explicitly instead of being encoded as an unstable code.
-fn reject_external_scalar(dtype: tenferro_tensor::DType) -> Result<(), ProgramBuildError> {
+pub(super) fn reject_external_scalar(
+    dtype: tenferro_tensor::DType,
+) -> Result<(), ProgramBuildError> {
     match dtype {
         tenferro_tensor::DType::External(_) => {
             Err(ProgramBuildError::ExternalScalarWithoutIdentity { dtype })
@@ -1239,33 +1241,5 @@ fn resolve_dim_expr_from_input_shapes(
             resolve_dim_expr_from_input_shapes(a, bound_input_shapes),
             resolve_dim_expr_from_input_shapes(b, bound_input_shapes),
         ),
-    }
-}
-
-#[cfg(test)]
-mod rejection_tests {
-    use super::reject_external_scalar;
-    use crate::program::ProgramBuildError;
-    use tenferro_tensor::DType;
-
-    #[test]
-    fn only_an_external_tag_is_rejected_for_identity() {
-        let external = DType::External(core::any::TypeId::of::<f64>());
-        assert!(matches!(
-            reject_external_scalar(external),
-            Err(ProgramBuildError::ExternalScalarWithoutIdentity { dtype }) if dtype == external
-        ));
-
-        for dtype in [
-            DType::F32,
-            DType::F64,
-            DType::I32,
-            DType::I64,
-            DType::Bool,
-            DType::C32,
-            DType::C64,
-        ] {
-            assert!(reject_external_scalar(dtype).is_ok(), "{dtype:?}");
-        }
     }
 }
