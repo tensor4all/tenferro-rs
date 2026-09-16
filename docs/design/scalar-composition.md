@@ -968,6 +968,24 @@ about an operation outside its domain. Those are
 testing doctest bodies a second time or padding defensive arms, which the repository's
 coverage policy forbids.
 
+### 5.12 The survival half of #1790's "later backward"
+
+`ext/scalar-consumer-application/tests/later_backward.rs` covers the half of that
+checkpoint that does not need #1789's pool contract:
+
+- A forward factorization runs in its own runtime, which is then dropped, so nothing can
+  recompute the factors. The retained `Q` and `R` are written to and then consumed by a
+  *later* program in a *new* runtime, whose adjoint output is exactly the written values.
+  The result therefore comes from the retained factors rather than from a fresh
+  factorization, and the external scalar's caller-owned storage is what made that possible:
+  a pooled value could not outlive the runtime that owned its group.
+- The same holds on the eager path: a value computed inside an admitted backend session is
+  still usable after the session borrow ends, and an eager tensor's payload survives the
+  eager runtime handle being dropped.
+
+What is left of that checkpoint is #1789's own scope: surviving an *intervening scratch
+reuse* and releasing storage so it can be reused need the pool accounting that issue owns.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

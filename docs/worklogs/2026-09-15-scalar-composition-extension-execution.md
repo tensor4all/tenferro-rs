@@ -449,3 +449,24 @@ and several remaining branches are refusals that another guard makes unreachable
 and a zero column for the factorization, a preset input for the narrowing and an external
 one for the widening, a singular triangular factor for both derivative operations, and a
 derivative rule asked about an operation outside its domain.
+
+## The survival half of "later backward"
+
+`ext/scalar-consumer-application/tests/later_backward.rs` covers the part of #1790's
+"later backward" checkpoint that does not need #1789's pool contract: a forward
+factorization runs in its own runtime, the runtime is dropped, and the retained factors are
+then written to and consumed by a later program in a new runtime, whose adjoint output is
+exactly the written values. That is evidence of survival rather than of recomputation.
+
+My first version of the test asserted on the triangular factor, whose contribution cancels
+in the adjoint (`Q (R R_bar^T) R^{-T}` is `Q R_bar` for one column), so the probe could not
+distinguish anything. Moving the write to the factor `Q` made the observation meaningful;
+the test now fails if the later program recomputes instead of reading.
+
+The same test covers the eager path: a value computed inside an admitted session is usable
+after the session borrow ends, and an eager tensor's payload survives the eager runtime
+handle being dropped. What remains of the checkpoint, surviving an intervening scratch
+reuse and releasing storage for reuse, is #1789's pool accounting.
+
+Workspace after this: 5298 passed, 3 failed (the same pre-existing `trybuild` failures),
+clippy clean under `-D warnings` and the strict doc lints.
