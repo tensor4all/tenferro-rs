@@ -957,3 +957,17 @@ design doc states the identity, and both new references pass: duality agrees to 
 `5.7e-33`, and a central difference at a step of `1e-16` matches the adjoint's directional
 derivative, which no `f64` intermediate could resolve. Removing the forward rule's old body left
 `dense::upper_triangle` unused, so the dead helper is gone as well.
+
+## The numerical contract #1788 asks to be specified
+
+#1788 asks for the evaluation method, the sign normalization, the near-singular treatment,
+precision-appropriate tolerances, and the explicit failures to be specified, and the guide
+described the domain without saying any of it. Reading the body rather than assuming gave the
+actual answers: the factorization is modified Gram-Schmidt with one re-orthogonalization pass, the
+positive diagonal is maintained by flipping a column and its diagonal entry together when the
+computed norm is negative, and the near-singular treatment is exact rather than thresholded,
+because the only guard is `norm.hi == 0.0`. A nearly dependent column therefore proceeds and relies
+on the extended scalar and the re-orthogonalization pass, and rank-deficient input stays outside
+the supported domain. The tests assert reconstruction and orthogonality below `1e-30`, so the
+tolerances are the scalar's own. The guide now states all of this, and the boundary test names
+cover a rank-1 input, a wide matrix, a zero column, and a singular factor for the derivatives.

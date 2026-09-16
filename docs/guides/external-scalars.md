@@ -47,11 +47,27 @@ stack uses it. The design note records the version and licence of the production
 
 ## Numerical domain and contract
 
-Real, nonempty input with `m >= n` and full column rank. The factorization is non-pivoted and
-reduced, with a positive diagonal in `R`, and `tests/extension_qr.rs` checks reconstruction and
-orthogonality far below the working precision, the sign convention, the 3-4-5 case, and the
-adjoint against an analytic reference. `tests/connected_qr_ad.rs` checks the connected graph's
-orientation case, `dL/dA = [[6], [8]]` for `A = [[3], [4]]`.
+Real, nonempty input with `m >= n` and full column rank. The factorization is reduced and
+non-pivoted, and it is computed by modified Gram-Schmidt with one re-orthogonalization pass, which
+is what keeps a column that is close to dependent orthogonal to working precision. `R` carries a
+positive diagonal because the diagonal is the square root of a sum of squares, and a defensive
+flip keeps a column and its diagonal entry consistent should a norm ever come back negative.
+
+The near-singular treatment is exact rather than thresholded. A column whose computed norm is
+exactly zero has no unit vector and is refused with a typed error; there is no tolerance that
+declares a column near-singular, so a nearly dependent column proceeds and is handled by the
+extended scalar's precision together with the re-orthogonalization pass. Rank-deficient input is
+outside the supported domain rather than approximated.
+
+`tests/extension_qr.rs` checks reconstruction and orthogonality below `1e-30`, the sign
+convention, the 3-4-5 case, and the adjoint against an analytic reference, so the tolerances are
+the extended scalar's own rather than an `f64` threshold. `tests/connected_qr_ad.rs` checks the
+connected graph's orientation case, `dL/dA = [[6], [8]]` for `A = [[3], [4]]`.
+
+Everything outside the domain is a typed error rather than a wrong answer:
+`tests/extension_boundaries.rs` covers a rank-1 input, a wide matrix with more columns than rows,
+and a zero column, and `the_factorization_derivatives_refuse_a_singular_factor` covers the
+derivatives' own requirement that the triangular factor be invertible.
 
 Outside the domain the answer is a typed error, never a silently wrong one: complex scalars, wide
 or rank-deficient input, higher-order AD, and the backend operations the contribution does not
