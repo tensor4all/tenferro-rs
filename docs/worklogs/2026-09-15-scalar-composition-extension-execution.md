@@ -613,3 +613,14 @@ pre-existing lints in GPU files, none of them in the arms added here.
 
 The lesson for this branch's verification is that a change to `DType` or `Tensor` has to be
 swept across the GPU feature configurations, and that the sweep is now part of the gate.
+
+## Removing the contribution's duplicated trait plumbing
+
+The contribution declared the same ten `ExtensionOp` methods for every operation, byte for byte,
+with only the arity and the operation's own output-metadata body differing. Those five
+payload-free operations now share one `df64_operation!` macro that takes the arity and the
+inference body, and the two payload-carrying operations keep their explicit implementations
+because their payload hashing and equality genuinely differ.
+
+`ext/df64-proof/src/extension.rs` lost 122 net lines (216 removed, 94 added) with every test and
+doc test still passing, and the macro carries its own runnable example.

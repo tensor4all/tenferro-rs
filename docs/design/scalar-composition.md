@@ -1180,6 +1180,15 @@ files: `tenferro-internal-ops/src/tests/input_key_tests.rs` imports the input ke
 without that feature. The file is untouched here and the defect is recorded rather than bundled
 into this branch.
 
+### 5.16 The contribution's own duplication
+
+The contribution declared `ExtensionOp`'s ten methods for every operation with identical bodies,
+differing only in arity and in the operation's output metadata. Five payload-free operations now
+share one macro that takes those two things; the two payload-carrying operations keep explicit
+implementations because their payload hashing and equality differ. The file lost 122 net lines
+and every test and doc test still passes, which is the "reduce source where possible" direction
+the repository asks changes to take.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

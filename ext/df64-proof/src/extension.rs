@@ -39,6 +39,77 @@ pub const DF64_OPS_FAMILY: &str = "tenferro-df64-proof.df64_ops.v1";
 /// program carrying `Df64` values reports instead of a process-local `TypeId`.
 pub const DF64_SCALAR_IDENTITY: &str = "tenferro-df64-proof.df64.v1";
 
+/// Implement the parts of `ExtensionOp` that every payload-free operation shares.
+///
+/// The operation supplies its arity and its own output metadata; the family identity,
+/// the contribution's scalar identity, the empty payload, and the pure, fresh-output
+/// declarations are the same for all of them, so they are declared once here.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::extension::ExtensionOp;
+/// use tenferro_df64_proof::extension::{Df64Total, DF64_OPS_FAMILY, DF64_SCALAR_IDENTITY};
+///
+/// assert_eq!(<Df64Total as ExtensionOp>::family_id(&Df64Total), DF64_OPS_FAMILY);
+/// assert_eq!(<Df64Total as ExtensionOp>::input_count(&Df64Total), 1);
+/// assert_eq!(<Df64Total as ExtensionOp>::output_count(&Df64Total), 1);
+/// assert_eq!(
+///     <Df64Total as ExtensionOp>::scalar_identity(&Df64Total),
+///     Some(DF64_SCALAR_IDENTITY)
+/// );
+/// ```
+macro_rules! df64_operation {
+    ($operation:ty, inputs = $inputs:expr, outputs = $outputs:expr, infer = |$ctx:ident| $infer:block) => {
+        impl ExtensionOp for $operation {
+            fn family_id(&self) -> &'static str {
+                DF64_OPS_FAMILY
+            }
+
+            fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+            fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+                other.as_any().downcast_ref::<Self>().is_some()
+            }
+
+            fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+                Arc::new(self.clone())
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn input_count(&self) -> usize {
+                $inputs
+            }
+
+            fn output_count(&self) -> usize {
+                $outputs
+            }
+
+            fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+                tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+            }
+
+            fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+                tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+            }
+
+            fn scalar_identity(&self) -> Option<&'static str> {
+                Some(DF64_SCALAR_IDENTITY)
+            }
+
+            fn infer_output_meta(
+                &self,
+                $ctx: &mut ExtensionShapeContext<'_>,
+            ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+                $infer
+            }
+        }
+    };
+}
+
 /// Family identifier of the extension-owned scalar broadcast.
 /// Total sum of an externally defined scalar tensor.
 ///
@@ -55,53 +126,11 @@ pub const DF64_SCALAR_IDENTITY: &str = "tenferro-df64-proof.df64.v1";
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Df64Total;
 
-impl ExtensionOp for Df64Total {
-    fn family_id(&self) -> &'static str {
-        DF64_OPS_FAMILY
-    }
-
-    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other.as_any().downcast_ref::<Self>().is_some()
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(*self)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn input_count(&self) -> usize {
-        1
-    }
-
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    /// The body reads its input and writes only its own output.
-    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
-    }
-
-    /// The total is a new value rather than a view of the input.
-    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
-    }
-
-    /// The operation carries the contribution's externally defined scalar, so it
-    /// declares that scalar's canonical identity for the value metadata.
-    fn scalar_identity(&self) -> Option<&'static str> {
-        Some(DF64_SCALAR_IDENTITY)
-    }
-
-    fn infer_output_meta(
-        &self,
-        ctx: &mut ExtensionShapeContext<'_>,
-    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+df64_operation!(
+    Df64Total,
+    inputs = 1,
+    outputs = 1,
+    infer = |ctx| {
         let dtype = ctx.input_dtype(0)?;
         if !matches!(dtype, DType::External(_)) {
             // The body is only defined for the external scalar, so anything else
@@ -115,7 +144,7 @@ impl ExtensionOp for Df64Total {
         // A total sum has rank zero.
         Ok(vec![(dtype, Vec::new())])
     }
-}
+);
 
 /// Broadcast a scalar external value to a declared shape.
 ///
@@ -243,49 +272,11 @@ impl ExtensionOp for Df64Expand {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Df64FromF64;
 
-impl ExtensionOp for Df64FromF64 {
-    fn family_id(&self) -> &'static str {
-        DF64_OPS_FAMILY
-    }
-
-    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other.as_any().downcast_ref::<Self>().is_some()
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(*self)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn input_count(&self) -> usize {
-        1
-    }
-
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
-    }
-
-    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
-    }
-
-    fn scalar_identity(&self) -> Option<&'static str> {
-        Some(DF64_SCALAR_IDENTITY)
-    }
-
-    fn infer_output_meta(
-        &self,
-        ctx: &mut ExtensionShapeContext<'_>,
-    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+df64_operation!(
+    Df64FromF64,
+    inputs = 1,
+    outputs = 1,
+    infer = |ctx| {
         let dtype = ctx.input_dtype(0)?;
         if dtype != DType::F64 {
             return Err(tenferro_tensor::Error::unsupported_dtype(
@@ -299,7 +290,7 @@ impl ExtensionOp for Df64FromF64 {
             ctx.input_shape(0)?.to_vec(),
         )])
     }
-}
+);
 
 /// Narrow the externally defined scalar into a preset `f64` tensor.
 ///
@@ -318,45 +309,11 @@ impl ExtensionOp for Df64FromF64 {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Df64ToF64;
 
-impl ExtensionOp for Df64ToF64 {
-    fn family_id(&self) -> &'static str {
-        DF64_OPS_FAMILY
-    }
-
-    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other.as_any().downcast_ref::<Self>().is_some()
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(*self)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn input_count(&self) -> usize {
-        1
-    }
-
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
-    }
-
-    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
-    }
-
-    fn infer_output_meta(
-        &self,
-        ctx: &mut ExtensionShapeContext<'_>,
-    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+df64_operation!(
+    Df64ToF64,
+    inputs = 1,
+    outputs = 1,
+    infer = |ctx| {
         let dtype = ctx.input_dtype(0)?;
         if !matches!(dtype, DType::External(_)) {
             return Err(tenferro_tensor::Error::unsupported_dtype(
@@ -367,7 +324,7 @@ impl ExtensionOp for Df64ToF64 {
         }
         Ok(vec![(DType::F64, ctx.input_shape(0)?.to_vec())])
     }
-}
+);
 
 /// Reverse-mode adjoint of the reduced QR factorization.
 ///
@@ -492,49 +449,11 @@ impl ExtensionOp for Df64QrVjp {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Df64QrJvp;
 
-impl ExtensionOp for Df64QrJvp {
-    fn family_id(&self) -> &'static str {
-        DF64_OPS_FAMILY
-    }
-
-    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other.as_any().downcast_ref::<Self>().is_some()
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(*self)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn input_count(&self) -> usize {
-        3
-    }
-
-    fn output_count(&self) -> usize {
-        2
-    }
-
-    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
-    }
-
-    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
-    }
-
-    fn scalar_identity(&self) -> Option<&'static str> {
-        Some(DF64_SCALAR_IDENTITY)
-    }
-
-    fn infer_output_meta(
-        &self,
-        ctx: &mut ExtensionShapeContext<'_>,
-    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+df64_operation!(
+    Df64QrJvp,
+    inputs = 3,
+    outputs = 2,
+    infer = |ctx| {
         let dtype = ctx.input_dtype(0)?;
         if !matches!(dtype, DType::External(_)) {
             return Err(tenferro_tensor::Error::unsupported_dtype(
@@ -548,7 +467,7 @@ impl ExtensionOp for Df64QrJvp {
             (dtype, ctx.input_shape(1)?.to_vec()),
         ])
     }
-}
+);
 
 /// The externally defined element type of the contribution's scalar.
 ///
@@ -574,49 +493,11 @@ pub const DF64_SCALAR: std::any::TypeId = std::any::TypeId::of::<Df64>();
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Df64Qr;
 
-impl ExtensionOp for Df64Qr {
-    fn family_id(&self) -> &'static str {
-        DF64_OPS_FAMILY
-    }
-
-    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other.as_any().downcast_ref::<Self>().is_some()
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(*self)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn input_count(&self) -> usize {
-        1
-    }
-
-    fn output_count(&self) -> usize {
-        2
-    }
-
-    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
-    }
-
-    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
-        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
-    }
-
-    fn scalar_identity(&self) -> Option<&'static str> {
-        Some(DF64_SCALAR_IDENTITY)
-    }
-
-    fn infer_output_meta(
-        &self,
-        ctx: &mut ExtensionShapeContext<'_>,
-    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+df64_operation!(
+    Df64Qr,
+    inputs = 1,
+    outputs = 2,
+    infer = |ctx| {
         let dtype = ctx.input_dtype(0)?;
         if !matches!(dtype, DType::External(_)) {
             return Err(tenferro_tensor::Error::unsupported_dtype(
@@ -644,7 +525,7 @@ impl ExtensionOp for Df64Qr {
             (dtype, vec![columns.clone(), columns]),
         ])
     }
-}
+);
 
 /// Reduced QR factorization of a column-major dense matrix in the external scalar.
 ///
