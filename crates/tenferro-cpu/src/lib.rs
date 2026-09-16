@@ -444,12 +444,11 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Te
         Tensor::Bool(tensor) => clone_host!(Bool, tensor),
         Tensor::C32(tensor) => clone_host!(C32, tensor),
         Tensor::C64(tensor) => clone_host!(C64, tensor),
-        // A caller-owned payload must be duplicated by its owner.
-        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
-            op,
-            tenferro_tensor::DType::External(payload.element_type_id()),
-            "an externally defined payload must be duplicated by its owner",
-        )),
+        // A caller-owned payload is a compact host tensor, so a contiguous copy
+        // is the payload itself, duplicated through its own entry point.
+        Tensor::External(payload, placement) => {
+            Ok(Tensor::External(payload.clone(), placement.clone()))
+        }
     }
 }
 

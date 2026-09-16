@@ -578,6 +578,20 @@ The pieces that step needs are landed: the payload answers its element identity,
 shape, and element count, `ScalarSet::promote` accepts an external tag, and the
 cache-key identity carries the actual scalar rather than a shared code.
 
+The registered-extension path was attempted and reached its real boundary. The
+extension op family, its planning config, engine, prepared operation, executor,
+and module all compile and register in a downstream crate, and the family rejects a
+preset input explicitly. Executing one is blocked one layer deeper: the eager value
+record builds an `AllocationGroup` for every tensor
+(`crates/tenferro-ad/src/eager.rs`, `AdValueRecord::from_tensor`), and
+`AllocationGroup::from_tensors` reaches `Tensor::into_group_parts`, which a
+caller-owned payload has no answer for because it owns no pooled storage.
+`ext/df64-proof/tests/extension_execution.rs` keeps that test ignored with that
+reason rather than hiding it, and `cargo test -- --ignored` reproduces the exact
+panic site. Giving a caller-owned payload an ownership slot in the runtime's
+retention model is #1789's decision, so this step waits on it rather than growing a
+private pool.
+
 Session composition is demonstrated without that engine path, and the limit is
 stated where it matters. `ext/df64-proof/tests/session_composition.rs` carries an
 external payload as a runtime `Tensor`, enters `with_backend_session`, runs an

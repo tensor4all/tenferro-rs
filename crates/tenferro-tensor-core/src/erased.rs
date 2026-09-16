@@ -30,12 +30,82 @@ use crate::{HostTensor, Scalar, ShapeVec};
 /// assert!(erased.downcast_ref::<f32>().is_none());
 /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
+/// Object-safe clone for one erased payload.
+///
+/// `Box<dyn Any>` is not cloneable, so the payload carries its own duplication
+/// entry point. A payload is only ever duplicated through this, which keeps the
+/// concrete element type and therefore the representation intact.
+trait ClonePayload: Send + Sync {
+    fn clone_payload(&self) -> Box<dyn ClonePayload>;
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn into_payload(self: Box<Self>) -> Box<dyn Any + Send + Sync>;
+}
+
+impl<T: Clone + Send + Sync + 'static> ClonePayload for T {
+    fn clone_payload(&self) -> Box<dyn ClonePayload> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn into_payload(self: Box<Self>) -> Box<dyn Any + Send + Sync> {
+        self
+    }
+}
+
+/// A host tensor whose element type is recovered at run time.
+///
+/// The payload keeps its own concrete type and is recovered by identity, so no
+/// byte reinterpretation happens and a caller-owned payload is duplicated through
+/// its own entry point rather than by copying bytes.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+///
+/// let value = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
+/// assert_eq!(value.downcast_ref::<f64>().unwrap().as_slice(), &[1.0, 2.0]);
+/// assert_eq!(value.clone().element_count(), 2);
+/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+/// ```
 pub struct ErasedHostTensor {
-    payload: Box<dyn Any + Send + Sync>,
+    payload: Box<dyn ClonePayload>,
     type_id: TypeId,
     element: TypeId,
     shape: ShapeVec,
     elements: usize,
+}
+
+impl Clone for ErasedHostTensor {
+    /// Duplicate the payload while keeping its concrete element type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    ///
+    /// let value = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![7_i64])?);
+    /// let copy = value.clone();
+    /// assert_eq!(copy.downcast_ref::<i64>().unwrap().as_slice(), &[7]);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
+    fn clone(&self) -> Self {
+        Self {
+            payload: self.payload.clone_payload(),
+            type_id: self.type_id,
+            element: self.element,
+            shape: self.shape.clone(),
+            elements: self.elements,
+        }
+    }
 }
 
 impl core::fmt::Debug for ErasedHostTensor {
@@ -149,7 +219,7 @@ impl ErasedHostTensor {
     /// ```
     #[must_use]
     pub fn is<T: Scalar>(&self) -> bool {
-        self.payload.is::<HostTensor<T>>()
+        self.payload.as_any().is::<HostTensor<T>>()
     }
 
     /// Borrow the tensor if the stored element type is `T`.
@@ -165,7 +235,7 @@ impl ErasedHostTensor {
     /// ```
     #[must_use]
     pub fn downcast_ref<T: Scalar>(&self) -> Option<&HostTensor<T>> {
-        self.payload.downcast_ref::<HostTensor<T>>()
+        self.payload.as_any().downcast_ref::<HostTensor<T>>()
     }
 
     /// Mutably borrow the tensor if the stored element type is `T`.
@@ -181,7 +251,7 @@ impl ErasedHostTensor {
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn downcast_mut<T: Scalar>(&mut self) -> Option<&mut HostTensor<T>> {
-        self.payload.downcast_mut::<HostTensor<T>>()
+        self.payload.as_any_mut().downcast_mut::<HostTensor<T>>()
     }
 
     /// Take the tensor if the stored element type is `T`.
@@ -198,6 +268,7 @@ impl ErasedHostTensor {
     #[must_use]
     pub fn into_typed<T: Scalar>(self) -> Option<HostTensor<T>> {
         self.payload
+            .into_payload()
             .downcast::<HostTensor<T>>()
             .ok()
             .map(|boxed| *boxed)

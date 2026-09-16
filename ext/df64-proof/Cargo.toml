@@ -13,3 +13,6 @@ name = "tenferro_df64_proof"
 tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }
 tenferro-cpu = { path = "../../crates/tenferro-cpu" }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
+tenferro-ad = { path = "../../crates/tenferro-ad" }
+tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops" }

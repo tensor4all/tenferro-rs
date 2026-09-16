@@ -14,6 +14,8 @@
 
 #![deny(missing_docs)]
 
+pub mod extension;
+
 tenferro_tensor_core::define_scalar_set! {
     /// Tag for the external extended-precision set.
     ///
