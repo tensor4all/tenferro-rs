@@ -414,20 +414,6 @@ pub fn check_singular_diagonal<T: DiagSingularity + TensorScalar + std::fmt::Deb
 /// Returns [`crate::Error::Validation`] with the applicable typed shape, rank,
 /// axis, dtype, or argument source when validation fails. Singular or
 /// non-finite diagonal checks return [`crate::Error::BackendFailure`].
-/// The refusal this module produces for a dtype it cannot validate a diagonal in.
-///
-/// Returning it from an accessor is the same refusal the wildcard arm produced; a
-/// caller reaches that accessor from a match on `u.dtype()`, so it is unreachable in
-/// practice rather than a caller mistake.
-fn unsupported_diagonal_dtype(u: &Tensor) -> Error {
-    Error::extension(
-        "solve",
-        "tensor-validation",
-        ErrorKind::Unsupported,
-        DiagonalError::UnsupportedDType { dtype: u.dtype() },
-    )
-}
-
 pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
     match u.dtype() {
         DType::F64 => check_singular_diagonal(
@@ -450,6 +436,20 @@ pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
             Err(unsupported_diagonal_dtype(u))
         }
     }
+}
+
+/// The refusal this module produces for a dtype it cannot validate a diagonal in.
+///
+/// Returning it from an accessor is the same refusal the wildcard arm produced; a
+/// caller reaches that accessor from a match on `u.dtype()`, so it is unreachable in
+/// practice rather than a caller mistake.
+fn unsupported_diagonal_dtype(u: &Tensor) -> Error {
+    Error::extension(
+        "solve",
+        "tensor-validation",
+        ErrorKind::Unsupported,
+        DiagonalError::UnsupportedDType { dtype: u.dtype() },
+    )
 }
 
 #[cfg(test)]

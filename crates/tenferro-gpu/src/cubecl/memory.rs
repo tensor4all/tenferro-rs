@@ -29,19 +29,6 @@ use crate::types::{
 /// Returns [`crate::Error::RuntimeState`] when the source is backend-resident
 /// or belongs to another placement, [`crate::Error::Unsupported`] for a dtype
 /// unavailable in CubeCL, or [`crate::Error::BackendSource`] on allocation.
-/// The typed tensor behind `tensor`, or a typed refusal.
-///
-/// Callers reach this from a match on the tensor's dtype, so `None` means the tag
-/// table and the runtime dtype disagree rather than a caller mistake.
-fn gpu_typed<'a, T: TensorScalar>(
-    op: &'static str,
-    tensor: &'a Tensor,
-) -> crate::Result<&'a TypedTensor<T>> {
-    tensor.as_typed::<T>().ok_or_else(|| {
-        crate::Error::unsupported(op, "the GPU memory path requires a preset scalar")
-    })
-}
-
 pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     let client = rt.client();
     match tensor.dtype() {
@@ -70,6 +57,19 @@ pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor>
             "an externally defined payload is not supported by this GPU operation",
         )),
     }
+}
+
+/// The typed tensor behind `tensor`, or a typed refusal.
+///
+/// Callers reach this from a match on the tensor's dtype, so `None` means the tag
+/// table and the runtime dtype disagree rather than a caller mistake.
+fn gpu_typed<'a, T: TensorScalar>(
+    op: &'static str,
+    tensor: &'a Tensor,
+) -> crate::Result<&'a TypedTensor<T>> {
+    tensor.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported(op, "the GPU memory path requires a preset scalar")
+    })
 }
 
 /// Download a CubeCL-managed GPU tensor back to host memory.
