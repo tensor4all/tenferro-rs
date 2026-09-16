@@ -99,6 +99,18 @@ uncovered regions are the `map_err` closures that map a strided failure into
 than untested. Reaching the 90% soft target by padding them would add tests that
 assert nothing, so they are left as measured.
 
+### Workspace suite against the baseline
+
+`cargo test --workspace --no-fail-fast` on this branch: 5163 passed, 3 failed.
+The same command on a pristine `origin/main` worktree at `bca2d54a`: 5105 passed,
+the same 3 failed. The three are `trybuild` fixture renderings whose committed
+`.stderr` files were produced by a different compiler or path prefix
+(`eager_backend_capability_contract::eager_backend_capability_boundary`,
+`session_contract::execution_session_capability_cannot_project_or_escape_owner_borrow`,
+`storage_ui_compile_contracts`). The branch therefore adds 58 passing tests and
+introduces no new failure; the three are pre-existing environment artifacts, and
+`cargo test --workspace` stops at the first of them without `--no-fail-fast`.
+
 ## Residual risk and open decisions
 
 - The runtime representation choice is recorded but not made: one boxing
