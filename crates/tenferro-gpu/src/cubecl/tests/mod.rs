@@ -97,8 +97,6 @@ fn assert_validation_kind(error: &Error, op: &'static str, kind: ValidationKind)
 
 fn assert_dtype_mismatch(error: &Error, op: &'static str, expected: DType, actual: DType) {
     assert_validation_kind(error, op, ValidationKind::DTypeMismatch);
-    let expected = core_dtype(expected);
-    let actual = core_dtype(actual);
     assert!(matches!(
         error,
         Error::Validation {
@@ -109,18 +107,6 @@ fn assert_dtype_mismatch(error: &Error, op: &'static str, expected: DType, actua
             ..
         } if *source_expected == expected && *source_actual == actual
     ));
-}
-
-fn core_dtype(dtype: DType) -> tenferro_tensor::core::DType {
-    match dtype {
-        DType::F32 => tenferro_tensor::core::DType::F32,
-        DType::F64 => tenferro_tensor::core::DType::F64,
-        DType::I32 => tenferro_tensor::core::DType::I32,
-        DType::I64 => tenferro_tensor::core::DType::I64,
-        DType::Bool => tenferro_tensor::core::DType::Bool,
-        DType::C32 => tenferro_tensor::core::DType::C32,
-        DType::C64 => tenferro_tensor::core::DType::C64,
-    }
 }
 
 fn assert_shape_mismatch(error: &Error, op: &'static str, lhs: &[usize], rhs: &[usize]) {

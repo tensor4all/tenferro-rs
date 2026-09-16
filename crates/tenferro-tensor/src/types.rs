@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::SliceConfig;
 use crate::error::ReinterpretError;
-pub use tenferro_tensor_core::{DynRank, Rank, TensorLayout, TensorRank};
+pub use tenferro_tensor_core::{DType, DynRank, Rank, TensorLayout, TensorRank};
 use tenferro_tensor_core::{ShapeVec, StrideVec};
 use tenferro_tensor_core::{SliceSpec as CoreSliceSpec, ValidationError};
 
@@ -3438,26 +3438,6 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, f64, R> {
     }
 }
 
-/// Runtime scalar dtype tag.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_tensor::DType;
-///
-/// assert_eq!(DType::F64 as u8, DType::F64 as u8);
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum DType {
-    F32,
-    F64,
-    I32,
-    I64,
-    Bool,
-    C32,
-    C64,
-}
-
 /// Sealed trait for scalar types that can be stored in a [`Tensor`].
 ///
 /// This trait is implemented for `f64`, `f32`, `i32`, `i64`, `bool`,
@@ -3680,8 +3660,8 @@ macro_rules! impl_tensor_scalar {
                     _ => Err(crate::Error::validation(
                         "Tensor::as_slice",
                         ValidationError::DTypeMismatch {
-                            expected: crate::core_dtype(Self::dtype()),
-                            actual: crate::core_dtype(actual),
+                            expected: Self::dtype(),
+                            actual,
                         },
                     )),
                 }
@@ -3694,8 +3674,8 @@ macro_rules! impl_tensor_scalar {
                     _ => Err(crate::Error::validation(
                         "Tensor::as_slice_mut",
                         ValidationError::DTypeMismatch {
-                            expected: crate::core_dtype(Self::dtype()),
-                            actual: crate::core_dtype(actual),
+                            expected: Self::dtype(),
+                            actual,
                         },
                     )),
                 }
@@ -3708,8 +3688,8 @@ macro_rules! impl_tensor_scalar {
                     _ => Err(crate::Error::validation(
                         "TensorScalar::into_typed",
                         ValidationError::DTypeMismatch {
-                            expected: crate::core_dtype(Self::dtype()),
-                            actual: crate::core_dtype(actual),
+                            expected: Self::dtype(),
+                            actual,
                         },
                     )),
                 }
@@ -5031,8 +5011,8 @@ impl<'a> TensorView<'a> {
             return Err(crate::Error::validation(
                 "TensorView::as_slice",
                 ValidationError::DTypeMismatch {
-                    expected: crate::core_dtype(T::dtype()),
-                    actual: crate::core_dtype(self.dtype()),
+                    expected: T::dtype(),
+                    actual: self.dtype(),
                 },
             ));
         }

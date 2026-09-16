@@ -197,8 +197,8 @@ pub fn validate_dot_general_read_into(
         return Err(validation(
             op,
             ValidationError::DTypeMismatch {
-                expected: crate::core_dtype(lhs.dtype()),
-                actual: crate::core_dtype(rhs.dtype()),
+                expected: lhs.dtype(),
+                actual: rhs.dtype(),
             },
         ));
     }
@@ -206,8 +206,8 @@ pub fn validate_dot_general_read_into(
         return Err(validation(
             op,
             ValidationError::DTypeMismatch {
-                expected: crate::core_dtype(lhs.dtype()),
-                actual: crate::core_dtype(out.dtype()),
+                expected: lhs.dtype(),
+                actual: out.dtype(),
             },
         ));
     }
@@ -290,8 +290,8 @@ impl ContractionScalar {
             DType::I32 | DType::I64 | DType::Bool => Err(validation(
                 "ContractionScalar::one",
                 ValidationError::DTypeMismatch {
-                    expected: crate::core_dtype(dtype),
-                    actual: crate::core_dtype(DType::F32),
+                    expected: dtype,
+                    actual: DType::F32,
                 },
             )),
         }
@@ -320,8 +320,8 @@ impl ContractionScalar {
             DType::I32 | DType::I64 | DType::Bool => Err(validation(
                 "ContractionScalar::zero",
                 ValidationError::DTypeMismatch {
-                    expected: crate::core_dtype(dtype),
-                    actual: crate::core_dtype(DType::F32),
+                    expected: dtype,
+                    actual: DType::F32,
                 },
             )),
         }
@@ -538,8 +538,8 @@ impl DotGeneralAccumulation {
             return Err(validation(
                 "DotGeneralAccumulation::scaled",
                 ValidationError::DTypeMismatch {
-                    expected: crate::core_dtype(alpha.dtype()),
-                    actual: crate::core_dtype(beta.dtype()),
+                    expected: alpha.dtype(),
+                    actual: beta.dtype(),
                 },
             ));
         }
@@ -557,8 +557,8 @@ impl DotGeneralAccumulation {
                 return Err(validation(
                     "dot_general",
                     ValidationError::DTypeMismatch {
-                        expected: crate::core_dtype(scalar.dtype()),
-                        actual: crate::core_dtype(dtype),
+                        expected: scalar.dtype(),
+                        actual: dtype,
                     },
                 ));
             }
@@ -678,8 +678,8 @@ pub fn validate_grouped_gemm(
         return Err(validation(
             op,
             ValidationError::DTypeMismatch {
-                expected: crate::core_dtype(lhs.dtype()),
-                actual: crate::core_dtype(rhs.dtype()),
+                expected: lhs.dtype(),
+                actual: rhs.dtype(),
             },
         ));
     }
@@ -687,8 +687,8 @@ pub fn validate_grouped_gemm(
         return Err(validation(
             op,
             ValidationError::DTypeMismatch {
-                expected: crate::core_dtype(lhs.dtype()),
-                actual: crate::core_dtype(out.dtype()),
+                expected: lhs.dtype(),
+                actual: out.dtype(),
             },
         ));
     }
@@ -1050,8 +1050,8 @@ where
     Err(validation(
         "grouped_gemm",
         ValidationError::DTypeMismatch {
-            expected: crate::core_dtype(lhs.dtype()),
-            actual: crate::core_dtype(out.dtype()),
+            expected: lhs.dtype(),
+            actual: out.dtype(),
         },
     ))
 }
@@ -1107,8 +1107,8 @@ pub fn accumulate_dot_result_into(
     Err(validation(
         "dot_general",
         ValidationError::DTypeMismatch {
-            expected: crate::core_dtype(accumulation.alpha.dtype()),
-            actual: crate::core_dtype(dot.dtype()),
+            expected: accumulation.alpha.dtype(),
+            actual: dot.dtype(),
         },
     ))
 }

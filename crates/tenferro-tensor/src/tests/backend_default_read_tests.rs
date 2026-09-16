@@ -360,8 +360,8 @@ impl TensorStructural for DefaultReadBackend {
             return Err(crate::Error::validation(
                 "copy_read_into",
                 crate::ValidationError::DTypeMismatch {
-                    expected: crate::core_dtype(dst.dtype()),
-                    actual: crate::core_dtype(src.dtype()),
+                    expected: dst.dtype(),
+                    actual: src.dtype(),
                 },
             ));
         }
@@ -1056,8 +1056,8 @@ fn dot_general_read_into_dtype_error_reports_output_as_actual() {
             source: crate::ValidationError::DTypeMismatch { expected, actual },
             ..
         } => {
-            assert_eq!(expected, crate::core_dtype(DType::F32));
-            assert_eq!(actual, crate::core_dtype(DType::F64));
+            assert_eq!(expected, DType::F32);
+            assert_eq!(actual, DType::F64);
         }
         other => panic!("expected dtype mismatch, got {other:?}"),
     }

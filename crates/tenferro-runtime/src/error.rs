@@ -517,10 +517,7 @@ impl Error {
         Self::validation(
             op,
             phase,
-            ValidationError::DTypeMismatch {
-                expected: core_dtype(expected),
-                actual: core_dtype(actual),
-            },
+            ValidationError::DTypeMismatch { expected, actual },
         )
     }
 
@@ -914,18 +911,6 @@ fn prepare_reason<'a>(error: &'a (dyn StdError + 'static)) -> Option<RuntimeFail
         } => RuntimeFailureReasonRef::UnsupportedOperation { operation },
         _ => return None,
     })
-}
-
-fn core_dtype(dtype: DType) -> tenferro_tensor::core::DType {
-    match dtype {
-        DType::F32 => tenferro_tensor::core::DType::F32,
-        DType::F64 => tenferro_tensor::core::DType::F64,
-        DType::I32 => tenferro_tensor::core::DType::I32,
-        DType::I64 => tenferro_tensor::core::DType::I64,
-        DType::Bool => tenferro_tensor::core::DType::Bool,
-        DType::C32 => tenferro_tensor::core::DType::C32,
-        DType::C64 => tenferro_tensor::core::DType::C64,
-    }
 }
 
 /// Opaque identifier for an eager AD runtime, used in [`Error::ContextMismatch`].

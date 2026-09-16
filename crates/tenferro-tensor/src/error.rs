@@ -254,13 +254,7 @@ impl Error {
     /// assert!(matches!(error, Error::Validation { .. }));
     /// ```
     pub fn dtype_mismatch(op: &'static str, expected: crate::DType, actual: crate::DType) -> Self {
-        Self::validation(
-            op,
-            ValidationError::DTypeMismatch {
-                expected: crate::core_dtype(expected),
-                actual: crate::core_dtype(actual),
-            },
-        )
+        Self::validation(op, ValidationError::DTypeMismatch { expected, actual })
     }
 
     /// Wrap shared tensor validation with the operation that requested it.

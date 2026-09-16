@@ -8,8 +8,7 @@ use tenferro_ops::broadcast::{
 };
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, Error, Result, Tensor, TensorRead, TensorScalar,
-    ValidationError,
+    BackendSession, CompareDir, Error, Result, Tensor, TensorRead, TensorScalar, ValidationError,
 };
 
 use crate::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
@@ -333,21 +332,10 @@ fn into_typed_result<T: TensorScalar>(op: &'static str, tensor: Tensor) -> Resul
         Error::validation(
             op,
             ValidationError::DTypeMismatch {
-                expected: core_dtype(T::dtype()),
-                actual: core_dtype(actual),
+                expected: T::dtype(),
+                actual,
             },
         )
     })
 }
 
-fn core_dtype(dtype: DType) -> tenferro_tensor::core::DType {
-    match dtype {
-        DType::F32 => tenferro_tensor::core::DType::F32,
-        DType::F64 => tenferro_tensor::core::DType::F64,
-        DType::I32 => tenferro_tensor::core::DType::I32,
-        DType::I64 => tenferro_tensor::core::DType::I64,
-        DType::Bool => tenferro_tensor::core::DType::Bool,
-        DType::C32 => tenferro_tensor::core::DType::C32,
-        DType::C64 => tenferro_tensor::core::DType::C64,
-    }
-}
