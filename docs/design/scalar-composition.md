@@ -754,7 +754,20 @@ surface already exists — `SemanticExtensionRuleSet` with `register_linearize`,
 `register_linear_transpose`, and `register_primal_vjp`, exercised by
 `crates/tenferro-ad/tests/integration/multi_input_traced.rs` — so an external
 first-order rule needs no new mechanism; it needs the graph to be plannable, which
-this change provides.
+this change provides for programs built from a trace context.
+
+**What the AD layer still needs.** The `TracedTensor`/AD path reaches the program
+through the traced graph's own metadata (`TensorMeta`, defined in
+`tenferro-internal-ops/src/ad/context.rs`) rather than through
+`ProgramValueMetadata`, and the compiler builds program inputs from a descriptor
+that carries only a dtype and a semantic shape
+(`crates/tenferro-runtime/src/graph/compiler.rs`, the input-construction loop around
+line 940). The declared identity therefore has to exist in that layer too before an
+external scalar can be traced and differentiated end to end. The measured extent is
+47 `TensorMeta` references in `tenferro-runtime` plus its definition and AD users in
+`tenferro-internal-ops`; the natural shape is to carry the identity on the traced
+leaf and pass it through the descriptor into `ProgramInputSpec`, which reuses the
+declaration API this step added rather than inventing a second one.
 
 ## 6. Risks and open questions
 

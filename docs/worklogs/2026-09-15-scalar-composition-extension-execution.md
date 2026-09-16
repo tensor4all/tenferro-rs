@@ -257,3 +257,21 @@ wildcard working and extends the public payload contract only at construction.
 no crate mentions `bf16`, so #1785's "use `half::bf16` as a standard scalar
 representation" needs either that dependency or a locally defined standard
 representation, both of which are maintainer decisions.
+
+## Where the AD path stops, located precisely
+
+The traced and prepared path now works for programs built from a trace context, and
+the next acceptance item is an external first-order AD rule. Investigating it found
+the exact remaining site rather than a design gap: the `TracedTensor`/AD path reaches
+the program through the traced graph's own metadata (`TensorMeta` in
+`tenferro-internal-ops/src/ad/context.rs`), and
+`crates/tenferro-runtime/src/graph/compiler.rs` builds program inputs from a
+descriptor that carries only a dtype and a semantic shape. So the declared identity
+has to exist in that layer too. The measured extent is 47 `TensorMeta` references in
+`tenferro-runtime` plus its definition and AD users in `tenferro-internal-ops`, and
+the natural shape is to carry the identity on the traced leaf and pass it through the
+descriptor into `ProgramInputSpec`, reusing the declaration API this step added.
+
+The rule itself needs no new mechanism: `SemanticPrimalVjpRule` plus
+`SemanticExtensionRuleSet::with_primal_vjp` already exist, and
+`crates/tenferro-ad/tests/integration/multi_input_traced.rs` drives one end to end.
