@@ -434,6 +434,86 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     /// and the runtime stamps it onto that operation's external value metadata. The
     /// name belongs to the contribution that owns the scalar, and two scalars must
     /// not share one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::any::Any;
+    /// use std::hash::Hasher;
+    /// use tenferro_ops::ext_op::ExtensionOp;
+    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
+    /// use tenferro_tensor::DType;
+    ///
+    /// #[derive(Clone, Debug)]
+    /// struct Declared;
+    ///
+    /// impl ExtensionOp for Declared {
+    ///     fn family_id(&self) -> &'static str {
+    ///         "example.declared.v1"
+    ///     }
+    ///     fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+    ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+    ///         other.as_any().downcast_ref::<Self>().is_some()
+    ///     }
+    ///     fn clone_arc(&self) -> std::sync::Arc<dyn ExtensionOp> {
+    ///         std::sync::Arc::new(self.clone())
+    ///     }
+    ///     fn as_any(&self) -> &dyn Any {
+    ///         self
+    ///     }
+    ///     fn input_count(&self) -> usize {
+    ///         1
+    ///     }
+    ///     fn output_count(&self) -> usize {
+    ///         1
+    ///     }
+    ///     fn scalar_identity(&self) -> Option<&'static str> {
+    ///         Some("example.scalar.v1")
+    ///     }
+    ///     fn infer_output_meta(
+    ///         &self,
+    ///         _context: &mut ExtensionShapeContext<'_>,
+    ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    ///         Ok(vec![(DType::F64, Vec::new())])
+    ///     }
+    /// }
+    ///
+    /// #[derive(Clone, Debug)]
+    /// struct Undeclared;
+    ///
+    /// impl ExtensionOp for Undeclared {
+    ///     fn family_id(&self) -> &'static str {
+    ///         "example.undeclared.v1"
+    ///     }
+    ///     fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+    ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+    ///         other.as_any().downcast_ref::<Self>().is_some()
+    ///     }
+    ///     fn clone_arc(&self) -> std::sync::Arc<dyn ExtensionOp> {
+    ///         std::sync::Arc::new(self.clone())
+    ///     }
+    ///     fn as_any(&self) -> &dyn Any {
+    ///         self
+    ///     }
+    ///     fn input_count(&self) -> usize {
+    ///         1
+    ///     }
+    ///     fn output_count(&self) -> usize {
+    ///         1
+    ///     }
+    ///     fn infer_output_meta(
+    ///         &self,
+    ///         _context: &mut ExtensionShapeContext<'_>,
+    ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    ///         Ok(vec![(DType::F64, Vec::new())])
+    ///     }
+    /// }
+    ///
+    /// // A contribution declares the identity of its own scalar, and an operation
+    /// // that carries no external scalar keeps the default.
+    /// assert_eq!(Declared.scalar_identity(), Some("example.scalar.v1"));
+    /// assert_eq!(Undeclared.scalar_identity(), None);
+    /// ```
     fn scalar_identity(&self) -> Option<&'static str> {
         None
     }
