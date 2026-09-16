@@ -21,6 +21,14 @@
 /// ```
 pub trait BinaryScalarOp<T> {
     /// Apply the operation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_internal_cpu_kernels::scalar_ops::{BinaryScalarOp, MulOp};
+    ///
+    /// assert_eq!(<MulOp as BinaryScalarOp<i64>>::apply(3, 4), 12);
+    /// ```
     fn apply(lhs: T, rhs: T) -> T;
 }
 
