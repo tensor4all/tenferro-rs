@@ -8537,6 +8537,36 @@ impl Tensor {
         }
     }
 
+    /// Mutably borrow the typed tensor when the requested scalar matches this tensor's dtype.
+    ///
+    /// This is the mutable half of [`Tensor::as_typed`], for the tables whose arm calls a method that
+    /// needs `&mut`, such as marking a freshly allocated output with its placement. An externally
+    /// defined scalar is not a typed tensor, so it returns `None` for the same reason.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert!(tensor.as_typed_mut::<f64>().is_some());
+    /// assert!(tensor.as_typed_mut::<f32>().is_none());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn as_typed_mut<T: TensorScalar>(&mut self) -> Option<&mut TypedTensor<T>> {
+        match self {
+            Tensor::F32(tensor) => (tensor as &mut dyn Any).downcast_mut::<TypedTensor<T>>(),
+            Tensor::F64(tensor) => (tensor as &mut dyn Any).downcast_mut::<TypedTensor<T>>(),
+            Tensor::I32(tensor) => (tensor as &mut dyn Any).downcast_mut::<TypedTensor<T>>(),
+            Tensor::I64(tensor) => (tensor as &mut dyn Any).downcast_mut::<TypedTensor<T>>(),
+            Tensor::Bool(tensor) => (tensor as &mut dyn Any).downcast_mut::<TypedTensor<T>>(),
+            Tensor::C32(tensor) => (tensor as &mut dyn Any).downcast_mut::<TypedTensor<T>>(),
+            Tensor::C64(tensor) => (tensor as &mut dyn Any).downcast_mut::<TypedTensor<T>>(),
+            Tensor::External(..) => None,
+        }
+    }
+
     /// Consume this tensor and return its owned column-major buffer when the
     /// dtype matches.
     ///

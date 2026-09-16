@@ -1,3 +1,4 @@
+use num_complex::{Complex32, Complex64};
 use std::any::TypeId;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -7,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
+use tenferro_tensor::DType;
 
 use crate::arbiter::{with_execution_owner, ResourceArbiter, ResourceOwner, ResourcePermit};
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
@@ -50,21 +52,24 @@ use super::{
 };
 
 pub(crate) fn tag_fresh_output(output: &mut Tensor, domain: CpuDomainId) {
-    macro_rules! tag {
-        ($tensor:expr) => {{
-            $tensor.set_cpu_affinity(Some(domain));
-        }};
+    match output.dtype() {
+        DType::F32 => tag_fresh_typed::<f32>(output, domain),
+        DType::F64 => tag_fresh_typed::<f64>(output, domain),
+        DType::I32 => tag_fresh_typed::<i32>(output, domain),
+        DType::I64 => tag_fresh_typed::<i64>(output, domain),
+        DType::Bool => tag_fresh_typed::<bool>(output, domain),
+        DType::C32 => tag_fresh_typed::<Complex32>(output, domain),
+        DType::C64 => tag_fresh_typed::<Complex64>(output, domain),
+        // A caller-owned payload has no pooled storage to tag, and a tag the accessor
+        // cannot recover leaves the placement untouched, which is the same outcome.
+        DType::External(_) => {}
     }
-    match output {
-        Tensor::F32(tensor) => tag!(tensor),
-        Tensor::F64(tensor) => tag!(tensor),
-        Tensor::I32(tensor) => tag!(tensor),
-        Tensor::I64(tensor) => tag!(tensor),
-        Tensor::Bool(tensor) => tag!(tensor),
-        Tensor::C32(tensor) => tag!(tensor),
-        Tensor::C64(tensor) => tag!(tensor),
-        // A caller-owned payload has no pooled storage to tag.
-        Tensor::External(..) => {}
+}
+
+/// Mark a freshly allocated output with the CPU domain its pool belongs to.
+fn tag_fresh_typed<T: TensorScalar>(output: &mut Tensor, domain: CpuDomainId) {
+    if let Some(tensor) = output.as_typed_mut::<T>() {
+        tensor.set_cpu_affinity(Some(domain));
     }
 }
 
