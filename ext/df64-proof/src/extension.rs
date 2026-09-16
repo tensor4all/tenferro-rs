@@ -400,6 +400,17 @@ pub struct Df64QrVjp {
 
 impl Df64QrVjp {
     /// Construct the adjoint for one cotangent availability.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64QrVjp;
+    ///
+    /// // Only the triangular factor carries a cotangent here.
+    /// let adjoint = Df64QrVjp::of(false, true);
+    /// assert!(!adjoint.has_q);
+    /// assert!(adjoint.has_r);
+    /// ```
     #[must_use]
     pub const fn of(has_q: bool, has_r: bool) -> Self {
         Self { has_q, has_r }
