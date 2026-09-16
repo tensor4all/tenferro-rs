@@ -1031,6 +1031,11 @@ measured with `git diff --numstat <start>..<end>`:
 | 2.2 and the work built on it (views, AD, QR, consumers, bf16, einsum, CI) | 109 | 148 | 16293 | 534 |
 | **total** | **124** | **182** | **18142** | **1031** |
 
+The stages are separated by the commit that introduced each stage's defining artifact and each is
+measured with `git diff --numstat <start>..<end>`, as stated above, so the numbers belong to a
+commit rather than to a moving head: this table was measured at `0fbe671c` and is reproduced by
+re-running that command over the same four ranges.
+
 The file counts are summed per stage, so a file changed in two stages is counted twice; the
 branch touches 156 distinct files and 18023 insertions with 912 deletions
 (`git diff --shortstat origin/main..HEAD`). The last row carries
