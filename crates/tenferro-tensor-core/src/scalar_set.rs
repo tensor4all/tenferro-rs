@@ -93,8 +93,8 @@ pub enum MemberKind {
 /// use tenferro_tensor_core::{MemberKind, MemberSpec};
 ///
 /// let widened = tenferro_tensor_core::promote_specs(
-///     MemberSpec::new(MemberKind::Integer, 0, 32),
 ///     MemberSpec::new(MemberKind::Float, 0, 32),
+///     MemberSpec::new(MemberKind::Float, 1, 64),
 /// );
 /// assert_eq!(widened, MemberSpec::new(MemberKind::Float, 1, 64));
 /// ```
