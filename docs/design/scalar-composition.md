@@ -1285,6 +1285,33 @@ nor its fixtures — `git diff --stat` over the branch reports nothing for eithe
 file is identical to the one on `origin/main`, so its outcome belongs to the toolchain rather than to
 this change.
 
+### 5.17a What the removal still needs, measured
+
+The three accessors tag-based dispatch was missing now exist — `Tensor::as_typed_mut`,
+`Tensor::external_payload`, and `Tensor::into_typed`, each with a runnable doctest — and they retired every
+table that had been recorded as blocked on them, including all four that move the typed tensor (`reshape`,
+`reclaim_temporary`, `reclaim_buffer`, `reclaim_tensor`). The claim that the move sites needed the erased
+representation was wrong: the match reads the dtype, which is `Copy`, so each arm may move the tensor, and a
+consuming accessor is enough.
+
+What remains splits into three groups, measured on this head:
+
+| Group | Count | In the objective's end state? |
+| --- | --- | --- |
+| `Tensor` variant constructions | 1290, in 58 files | Yes — they must all produce the single payload |
+| `Tensor` variant pattern arms | 197, in 58 files | Yes — the two seams and one deliberate exception |
+| view, read, and write type arms | 236 | No: the end state names the seven `Tensor` variants, and these are different types |
+
+The third row is not a work item. No typed accessor exists on those types — `as_typed`, `as_typed_mut`,
+`external_payload`, and `into_typed` are all defined on `Tensor` alone — so converting their tables would add
+public API that no part of the objective asks for.
+
+The two `Tensor` rows are the removal, and they have a preparatory step that is mechanical and
+behaviour-preserving: introduce a constructor that builds a tensor from a typed one, and migrate the 1290
+construction sites to it. The variants stay until the end, so each migrated file keeps the whole suite green,
+and when the representation finally changes it is that one constructor that changes with it. `TensorScalar` is
+sealed, so the extra method it needs is not a breaking change to the public trait.
+
 ### 5.18 The remaining inputs, each with the evidence behind it
 
 Four requirements outside this branch's control, stated so they can be decided rather than
