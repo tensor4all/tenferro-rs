@@ -1171,6 +1171,14 @@ that are clean on this host are:
 | `-p tenferro-cpu --features cpu-faer` | clean |
 | `--all-features` on any of these | not applicable: it pulls `accelerate-src`, an Apple-only framework, on every platform this branch can reach |
 | the whole workspace with one crate's GPU feature (`--features tenferro-linalg/cuda`) | fails in `tenferro-einsum`, pre-existing and unrelated to this branch |
+| `--no-default-features` | intended failure: the crates that need a backend reject it with `compile_error!` ("enable at least one CPU backend"); `tenferro-tensor-core`, `tenferro-internal-cpu-kernels`, `tenferro-df64-proof`, and the consumer crates build clean |
+| `cargo doc --workspace --no-deps` | succeeds, with four pre-existing unresolved links in `runtime/snapshot.rs` and `fft/backend.rs`, files this branch did not touch |
+
+The `--no-default-features` sweep also found a pre-existing test-gate bug outside this branch's
+files: `tenferro-internal-ops/src/tests/input_key_tests.rs` imports the input key behind
+`autodiff` but leaves the test itself ungated, so the crate's test target does not compile
+without that feature. The file is untouched here and the defect is recorded rather than bundled
+into this branch.
 
 ## 6. Risks and open questions
 
