@@ -716,8 +716,20 @@ drives the public CPU and runtime entry points with a caller-owned payload and a
 typed refusals (including the one case that is *not* a refusal, because reducing over no axes is
 the identity for every scalar), and `ext/df64-proof/tests/ad_rule_boundaries.rs` drives the
 public AD entry points to reach the rules' out-of-domain arms and the factor-only cotangent
-combination. Re-running the coverage check moved `ad.rs` and `ad_support.rs` above their
-thresholds, leaving three files:
+combination. A second round closed the rest: `external_dtype_boundaries.rs` now also drives every
+reduction entry point — the whole-tensor forms, the borrowed-read forms, and every preset real
+scalar, asserting arithmetic rather than only that a call returns, with the two contract facts
+that came out of writing it (the sum of squares is float-only, and the boolean scalar has no
+ordered reduction) asserted as refusals — and the runtime's own `ad_support` test module retains a
+pooled value, reads it back as a borrowed descriptor view, and renders its handle. The repository's
+coverage check then reported **220 of 221 files passing**, with `ad.rs`, `ad_support.rs`,
+`reduction.rs`, and `checkpoint.rs` all above their thresholds.
+
+The one remaining file is `crates/tenferro-linalg/src/householder.rs` at 79.6% against 80%, and
+this branch adds **no lines to it at all**, so its figure is not this branch's; it also shows that
+a local llvm-cov run does not attribute lines the way CI's `--profile ci` run does.
+
+The first round had left three files:
 
 - `crates/tenferro-cpu/src/reduction.rs` (78.0% against 79%) — two of the rejection arms sit in
   session-form entry points these tests do not reach.
