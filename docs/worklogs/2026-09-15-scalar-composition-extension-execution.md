@@ -188,3 +188,28 @@ exits non-zero if a kernel function is missing on either path, if an instantiati
 does not come from the shared crate, if an external instantiation is not
 parameterized by the contribution's operation, or if the preset entries are not
 reached from more than one place.
+
+## Follow-on: the traced IR boundary, and a panic it hid
+
+Driving the registered module through a real runtime planning path found a live
+panic: `tenferro-runtime/src/program/identity.rs` encoded external scalars with an
+`unreachable!`, on the reasoning that no value type carried one. That premise was
+already stale, and the panic was reachable from the public trace API.
+
+The fix follows the design's explicit-rejection rule instead of inventing a stable
+identity. A semantic program's identity must be reproducible across processes,
+while an externally defined tag is a process-local `TypeId`, so the builder now
+rejects the tag when an input spec or an operation output carries one
+(`tenferro-runtime::program::ProgramBuildError::ExternalScalarWithoutIdentity`).
+The encoder's invariant is restored and the panic becomes a typed error. Enabling
+the traced and prepared path needs a contribution-declared stable scalar identity,
+which is a new payload contract and is recorded as such.
+
+Two tests pin this:
+`ext/df64-proof/tests/extension_execution.rs::the_module_installs_and_planning_rejects_the_scalar_without_a_stable_identity`
+installs the module into a runtime with the CPU engine and checks the typed
+rejection, and a unit test in the builder covers the rejection helper for every
+preset tag.
+
+Workspace after this: 5245 passed, 3 failed (the same pre-existing `trybuild`
+failures), clippy `-D warnings` clean.

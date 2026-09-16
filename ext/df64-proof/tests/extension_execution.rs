@@ -103,3 +103,39 @@ fn an_allocation_group_rejects_a_caller_owned_payload_with_a_typed_error() {
         .expect_err("a caller-owned payload has no allocation group");
     assert!(matches!(error, GroupError::InvalidDescriptor { .. }));
 }
+
+#[test]
+fn the_module_installs_and_planning_rejects_the_scalar_without_a_stable_identity() {
+    use tenferro_df64_proof::extension::module;
+    use tenferro_ops::dim_expr::DimExpr;
+    use tenferro_runtime::program::{ProgramBuildError, ProgramInputSpec};
+    use tenferro_runtime::{Runtime, TraceContext};
+    use tenferro_tensor::DType;
+
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
+        .expect("register the CPU engine");
+    // Installing the module registers its engine and planning config against the
+    // CPU runtime engine, which is what a downstream application does.
+    builder
+        .install_extension_module(module().expect("module"))
+        .expect("install the Df64 module");
+    let _runtime = builder.build().expect("runtime with the module");
+
+    // A traced program needs a canonical identity, and an external tag is a
+    // process-local `TypeId`, so planning rejects it explicitly instead of
+    // encoding an unstable code or panicking.
+    let mut context = TraceContext::new();
+    let error = context
+        .input(ProgramInputSpec::new(
+            DType::External(std::any::TypeId::of::<Df64>()),
+            [DimExpr::Const(2)],
+        ))
+        .expect_err("an external scalar has no canonical program identity");
+    assert!(matches!(
+        error,
+        ProgramBuildError::ExternalScalarWithoutIdentity { .. }
+    ));
+}

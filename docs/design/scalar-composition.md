@@ -705,6 +705,27 @@ and `tenferro-ad/src/eager_exec.rs`, which is a signature change rather than a
 missing check, so it stays recorded as a known imprecision with execution-time
 rejection instead of being guessed at.
 
+**The runtime's traced IR rejects an external scalar explicitly.** A semantic
+program's identity must be reproducible across processes, and an externally
+defined tag is a process-local `TypeId`, so
+`tenferro-runtime/src/program/identity.rs` had no encoding for one and reached an
+`unreachable!`. A traced program that carried an external scalar therefore
+panicked on a user-reachable path.
+
+Resolving it follows the design's "explicit conversion-or-rejection" rule rather
+than inventing a stable identity: the semantic-program builder now rejects the
+tag when an input spec or an operation output carries one
+(`ProgramBuildError::ExternalScalarWithoutIdentity`), which restores the identity
+encoder's invariant and turns the panic into a typed error. The eager path — the
+route the proof crate uses — is unaffected.
+
+What would enable the traced and prepared path is a contribution-declared stable
+scalar identity (a name that survives across processes and builds), which is a new
+payload contract rather than a mechanical encoding, so it is recorded here instead
+of being guessed at. `ext/df64-proof/tests/extension_execution.rs` pins the
+rejection, and installing the module into a runtime with the CPU engine is
+verified in the same test.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

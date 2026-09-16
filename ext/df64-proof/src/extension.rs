@@ -71,6 +71,16 @@ impl ExtensionOp for Df64Total {
         1
     }
 
+    /// The body reads its input and writes only its own output.
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    /// The total is a new value rather than a view of the input.
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
     fn infer_output_meta(
         &self,
         ctx: &mut ExtensionShapeContext<'_>,

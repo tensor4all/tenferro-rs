@@ -521,11 +521,12 @@ fn encode_dtype(encoder: &mut CanonicalEncoder, dtype: DType) {
         DType::Bool => 4,
         DType::C32 => 5,
         DType::C64 => 6,
-        // INVARIANT: an externally defined scalar has no canonical encoding yet,
-        // and no value type carries one, so it cannot reach a program identity.
-        // Adding such a value requires giving its tag an encoding here, because a
-        // bare code would make two different external scalars share an identity.
-        DType::External(_) => unreachable!("external scalars have no canonical encoding yet"),
+        // INVARIANT: the semantic-program builder rejects an externally defined
+        // scalar tag before it can reach an identity, because a process-local
+        // `TypeId` has no canonical encoding and a bare code would make two
+        // different external scalars share an identity. Giving the tag an encoding
+        // here is what a contribution-declared stable identity would enable.
+        DType::External(_) => unreachable!("the builder rejects an external tag before identity"),
     });
 }
 
