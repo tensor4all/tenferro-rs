@@ -431,3 +431,21 @@ treated it as proof.
 
 Workspace after this: 5287 passed, 3 failed (the same pre-existing `trybuild` failures),
 clippy clean under `-D warnings` and the strict doc lints.
+
+## Measured size and coverage
+
+`git diff --numstat origin/main..HEAD` on this head: 119 files, 10964 insertions, 807
+deletions, with `ext/df64-proof` at +4265 and the two consumer crates at +525 and +250.
+
+`cargo llvm-cov` over the contribution and the consumer crates reports `lib.rs` 95.2%,
+`dense.rs` 95.0%, `extension.rs` 84.2%, `conversion.rs` 82.6%, `ad.rs` 78.5%, and the
+algorithm crate 82.6%. The numbers below 90% are explained by two measurable facts rather
+than by untested behavior: llvm-cov does not instrument doctests, and this branch's public
+items carry runnable examples whose bodies account for whole line ranges in those files;
+and several remaining branches are refusals that another guard makes unreachable.
+
+`ext/df64-proof/tests/extension_boundaries.rs` raised `ad.rs` from 72.6% to 78.5% and
+`extension.rs` from 79.9% to 84.2% with real boundary assertions: a vector, a wide matrix
+and a zero column for the factorization, a preset input for the narrowing and an external
+one for the widening, a singular triangular factor for both derivative operations, and a
+derivative rule asked about an operation outside its domain.

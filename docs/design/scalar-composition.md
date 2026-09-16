@@ -920,6 +920,54 @@ The contribution needs one thing for this shape, and it has it:
 `extension::module_for_engine` binds the contribution's operations to a caller-selected
 engine, and each family is routed to the engine that registered it.
 
+### 5.11 Measured size and coverage of the branch
+
+The stage measurements asked for by the goal, taken on this head with
+`git diff --numstat origin/main..HEAD`: 119 files, 10964 insertions, 807 deletions, of
+which the largest areas are
+
+| Area | Added | Removed |
+| --- | --- | --- |
+| `ext/df64-proof` (the contribution) | 4265 | 0 |
+| `crates/tenferro-tensor-core` | 1827 | 38 |
+| `docs` | 1691 | 3 |
+| `crates/tenferro-internal-cpu-kernels` | 542 | 333 |
+| `ext/scalar-consumer-application` | 525 | 0 |
+| `crates/tenferro-runtime` | 448 | 72 |
+| `crates/tenferro-tensor` | 368 | 101 |
+| `ext/scalar-consumer-algorithm` | 250 | 0 |
+| `scripts` | 201 | 0 |
+| `crates/tenferro-linalg` | 179 | 193 |
+
+Coverage of the contribution and the consumer crates, measured with
+`cargo llvm-cov -p tenferro-df64-proof -p tenferro-scalar-consumer-algorithm -p
+tenferro-scalar-consumer-application --json`:
+
+| File | Line coverage |
+| --- | --- |
+| `ext/df64-proof/src/lib.rs` | 95.2% |
+| `ext/df64-proof/src/dense.rs` | 95.0% |
+| `ext/df64-proof/src/extension.rs` | 84.2% |
+| `ext/df64-proof/src/conversion.rs` | 82.6% |
+| `ext/df64-proof/src/ad.rs` | 78.5% |
+| `ext/scalar-consumer-algorithm/src/lib.rs` | 82.6% |
+
+Two facts explain why the smaller numbers are not untested behavior. First, llvm-cov does
+not instrument doctests, and this branch's public items carry runnable examples: whole
+line ranges of `ad.rs`, `extension.rs`, `lib.rs`, and the algorithm crate are example
+bodies that the doc tests execute. Second, several branches are deliberate refusals that
+another guard makes unreachable, such as the conversion bodies rejecting a payload the
+operation entry point already validated.
+
+Adding boundary tests raised `ad.rs` from 72.6% to 78.5% and `extension.rs` from 79.9% to
+84.2% by covering real refusals: a vector, a wide matrix and a zero column for the
+factorization; a preset input for the narrowing and an external one for the widening; a
+singular triangular factor for both derivative operations; and a derivative rule asked
+about an operation outside its domain. Those are
+`ext/df64-proof/tests/extension_boundaries.rs`. Raising the remaining lines would mean
+testing doctest bodies a second time or padding defensive arms, which the repository's
+coverage policy forbids.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing
