@@ -1330,9 +1330,36 @@ impl ExtensionModule for Df64TotalModule {
 /// assert!(module().is_ok());
 /// ```
 pub fn module() -> Result<Arc<dyn ExtensionModule>, tenferro_runtime::RuntimeConfigError> {
+    module_for_engine(tenferro_cpu::runtime_engine_id()?)
+}
+
+/// The module a downstream application installs when it composes more than one CPU
+/// backend in one runtime.
+///
+/// The module binds the contribution's operations to `engine_id`, so an application that
+/// keeps a standard backend and a contribution backend under distinct engine identities
+/// installs this module against the contribution's engine.
+///
+/// # Errors
+///
+/// Returns an error when the module identifier is invalid.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::extension::module_for_engine;
+/// use tenferro_runtime::EngineId;
+///
+/// let module = module_for_engine(EngineId::new("example.df64.engine.v1")?)?;
+/// assert_eq!(module.module_id().as_str(), "tenferro-df64-proof.module");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn module_for_engine(
+    engine_id: EngineId,
+) -> Result<Arc<dyn ExtensionModule>, tenferro_runtime::RuntimeConfigError> {
     Ok(Arc::new(Df64TotalModule {
         module_id: ExtensionModuleId::new("tenferro-df64-proof.module")?,
-        engine_id: tenferro_cpu::runtime_engine_id()?,
+        engine_id,
     }))
 }
 

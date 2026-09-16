@@ -409,3 +409,22 @@ is application composition rather than algorithm work.
 
 Workspace after this: 5282 passed, 3 failed (the same pre-existing `trybuild` failures),
 clippy clean under `-D warnings` and the strict doc lints.
+
+## The four configurations
+
+Three of #1790's four configurations now run from the application crate: standard from the
+linalg module alone, Df64-only with no linalg installed, and mixed with both modules on one
+engine. The fourth, two cooperating backends, is refused by the resource model:
+`RuntimeConfigError::DuplicateProviderDeviceTarget`, because the runtime identifies an
+engine's resources by provider and device target and the built-in CPU engine claims one
+host target. `runtime_engine_registration_with_id` exists for a second CPU engine, so the
+refusal is the owner/domain identity rather than a missing entry point, and it is #1789's
+decision.
+
+The wiring the fourth configuration would need is already there: the contribution's module
+can bind its operations to a caller-selected engine (`extension::module_for_engine`, added
+here), and each family is routed to the engine that registered it. The test asserts the
+typed refusal, so the boundary is verified rather than assumed.
+
+Workspace after this: 5287 passed, 3 failed (the same pre-existing `trybuild` failures),
+clippy clean under `-D warnings` and the strict doc lints.

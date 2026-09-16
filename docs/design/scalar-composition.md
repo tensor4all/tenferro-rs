@@ -896,6 +896,28 @@ convention: `cargo tree -p tenferro-scalar-consumer-algorithm --edges normal` co
 `df64` and no `tenferro-linalg` entry, so the algorithm cannot reach the contribution or
 the provider even by accident.
 
+### 5.10 The four configurations of #1790
+
+`ext/scalar-consumer-application/tests/configurations.rs` exercises them:
+
+| Configuration | Status | Evidence |
+| --- | --- | --- |
+| Standard, assembled from reusable support | runs | the linalg module alone, `[6, 8]` as `f64` |
+| Df64-only numerical support | runs | the contribution's module alone, no linalg installed, `[[6], [8]]` as `Df64` |
+| Mixed | runs | both modules on one engine, both gradients in one runtime |
+| Cooperating, distinct standard and Df64-only backends | refused today | `RuntimeConfigError::DuplicateProviderDeviceTarget` |
+
+The refusal is the resource model rather than a missing mechanism. The runtime identifies
+an engine's resources by provider and device target, and the built-in CPU engine claims
+one host target, so a second CPU engine under a caller-selected identity is rejected even
+though `runtime_engine_registration_with_id` exists for exactly that purpose. Serving each
+family from its own engine needs a distinct owner or domain identity, which is #1789's
+decision. Everything else the configuration needs is already in place: the contribution's
+module binds its operations to a caller-selected engine
+(`extension::module_for_engine`), and each family is routed to the engine that registered
+it, so the configuration follows from installing the two modules once the identities
+differ.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing
