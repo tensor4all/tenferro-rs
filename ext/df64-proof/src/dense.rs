@@ -83,47 +83,12 @@ pub(crate) fn subtract(a: &Matrix<'_>, b: &Matrix<'_>) -> Matrix<'static> {
     Matrix::new(a.rows, data)
 }
 
-/// Elementwise sum `a + b`.
-pub(crate) fn add(a: &Matrix<'_>, b: &Matrix<'_>) -> Matrix<'static> {
-    let data = a
-        .data
-        .iter()
-        .zip(b.data.iter())
-        .map(|(left, right)| *left + *right)
-        .collect();
-    Matrix::new(a.rows, data)
-}
-
 /// Upper triangle including the diagonal, with zeros elsewhere.
 pub(crate) fn upper_triangle(a: &Matrix<'_>) -> Matrix<'static> {
     let columns = a.columns();
     let mut data = vec![Df64::zero(); a.data.len()];
     for column in 0..columns {
         for row in 0..=column.min(a.rows.saturating_sub(1)) {
-            data[row + column * a.rows] = a.at(row, column);
-        }
-    }
-    Matrix::new(a.rows, data)
-}
-
-/// Lower triangle including the diagonal.
-pub(crate) fn lower_triangle(a: &Matrix<'_>) -> Matrix<'static> {
-    let columns = a.columns();
-    let mut data = vec![Df64::zero(); a.data.len()];
-    for column in 0..columns {
-        for row in column..a.rows {
-            data[row + column * a.rows] = a.at(row, column);
-        }
-    }
-    Matrix::new(a.rows, data)
-}
-
-/// Lower triangle strictly below the diagonal.
-pub(crate) fn strictly_lower_triangle(a: &Matrix<'_>) -> Matrix<'static> {
-    let columns = a.columns();
-    let mut data = vec![Df64::zero(); a.data.len()];
-    for column in 0..columns {
-        for row in (column + 1)..a.rows {
             data[row + column * a.rows] = a.at(row, column);
         }
     }
@@ -166,4 +131,62 @@ pub(crate) fn solve_upper_from_the_right(
 /// A zero matrix of the given shape.
 pub(crate) fn zeros(rows: usize, columns: usize) -> Matrix<'static> {
     Matrix::new(rows, vec![Df64::zero(); rows * columns])
+}
+
+/// Write `a b` into `out`, which must already have the product's length.
+pub(crate) fn multiply_into(out: &mut [Df64], a: &Matrix<'_>, b: &Matrix<'_>) {
+    let columns = b.columns();
+    debug_assert_eq!(out.len(), a.rows * columns);
+    for column in 0..columns {
+        for row in 0..a.rows {
+            let mut sum = Df64::zero();
+            for inner in 0..b.rows {
+                sum = sum + a.at(row, inner) * b.at(inner, column);
+            }
+            out[row + column * a.rows] = sum;
+        }
+    }
+}
+
+/// Write `a - b` into `out`.
+pub(crate) fn subtract_into(out: &mut [Df64], a: &Matrix<'_>, b: &Matrix<'_>) {
+    debug_assert_eq!(out.len(), a.data.len());
+    for (slot, (left, right)) in out.iter_mut().zip(a.data.iter().zip(b.data.iter())) {
+        *slot = *left - *right;
+    }
+}
+
+/// Write the transpose of `a` into `out`.
+pub(crate) fn transpose_into(out: &mut [Df64], a: &Matrix<'_>) {
+    let columns = a.columns();
+    debug_assert_eq!(out.len(), columns * a.rows);
+    for column in 0..columns {
+        for row in 0..a.rows {
+            out[column + row * columns] = a.at(row, column);
+        }
+    }
+}
+
+/// Write the lower triangle of `a`, including its diagonal, into `out`.
+pub(crate) fn lower_triangle_into(out: &mut [Df64], a: &Matrix<'_>) {
+    let columns = a.columns();
+    debug_assert_eq!(out.len(), a.data.len());
+    out.fill(Df64::zero());
+    for column in 0..columns {
+        for row in column..a.rows {
+            out[row + column * a.rows] = a.at(row, column);
+        }
+    }
+}
+
+/// Add the transpose of `a`'s strict lower triangle into `out`.
+pub(crate) fn add_strictly_lower_transposed_into(out: &mut [Df64], a: &Matrix<'_>) {
+    let columns = a.columns();
+    debug_assert_eq!(out.len(), a.data.len());
+    for column in 0..columns {
+        for row in (column + 1)..a.rows {
+            // `a[row, column]` moves to `[column, row]` in the transpose.
+            out[column + row * columns] = out[column + row * columns] + a.at(row, column);
+        }
+    }
 }

@@ -493,8 +493,14 @@ retained bytes, one hit and one miss after two executions, and the second adjoin
 
 My first attempt at it had a real defect that the suite caught: reading the accumulator by
 asking the scratch for the buffer a second time clears and zero-fills it, so the connected QR
-gradients silently became zero. The fix reads the buffer without touching it. Extending the
-same pattern to the remaining intermediates is mechanical.
+gradients silently became zero.
+
+Extending the pattern to every intermediate reproduced the same defect in a different place.
+The adjoint's second execution now costs 212 allocations and 192700 bytes instead of 254 and
+724668, with the cache reporting 524288 retained bytes across eight named buffers; but the
+`copyltu` symmetrization called the zeroing accessor for its second step, dropped the lower
+triangle it had just written, and the gradients went wrong. The suite caught that too. The
+scratch API now separates "a clean buffer" from "the buffer I just filled".
 
 ## Two owners on one node, and the cross-owner handoff
 

@@ -791,39 +791,58 @@ fn external_payload<'a, T: Scalar>(
 /// Reusable scratch the numerical bodies own between executions.
 ///
 /// The entry lives in the runtime's accounted extension cache, so its retained bytes are
-/// reported rather than hidden: this is the contribution's acquisition and return path for
-/// a buffer of its own element type, and the cache's statistics are the evidence for it.
+/// reported rather than hidden: this is the contribution's acquisition and return path for a
+/// buffer of its own element type, and the cache's statistics are the evidence for it. The
+/// buffers are named fields rather than a list so one can be written while another is read,
+/// which the adjoint's chain of products needs.
 #[derive(Debug, Default)]
 struct Scratch {
-    /// Column-major buffers, kept at the largest size they have been asked for.
-    buffers: Vec<Vec<Df64>>,
+    /// The transposed factor cotangent.
+    q_bar_t: Vec<Df64>,
+    /// The transposed triangular cotangent.
+    r_bar_t: Vec<Df64>,
+    /// The `Q_bar^T Q` product.
+    q_bar_t_q: Vec<Df64>,
+    /// The `R R_bar^T` product.
+    r_r_bar: Vec<Df64>,
+    /// The `R R_bar^T - Q_bar^T Q` difference.
+    m: Vec<Df64>,
+    /// `copyltu(M)`, built in place.
+    s: Vec<Df64>,
+    /// The `Q S` product.
+    product: Vec<Df64>,
+    /// The accumulator `Q_bar + Q S`.
+    b: Vec<Df64>,
 }
 
 impl Scratch {
     /// The cache namespace these buffers live under.
     const CACHE_NAME: &'static str = "scratch";
 
-    /// Borrow one buffer, resized to `length` and zero-filled.
-    fn buffer(&mut self, index: usize, length: usize) -> &mut [Df64] {
-        while self.buffers.len() <= index {
-            self.buffers.push(Vec::new());
-        }
-        let buffer = &mut self.buffers[index];
+    /// Every buffer this entry retains.
+    fn buffers(&self) -> [&Vec<Df64>; 8] {
+        [
+            &self.q_bar_t,
+            &self.r_bar_t,
+            &self.q_bar_t_q,
+            &self.r_r_bar,
+            &self.m,
+            &self.s,
+            &self.product,
+            &self.b,
+        ]
+    }
+
+    /// Resize one buffer and hand it back for writing, zero-filled.
+    fn slot(buffer: &mut Vec<Df64>, length: usize) -> &mut [Df64] {
         buffer.clear();
         buffer.resize(length, Df64::zero());
         buffer.as_mut_slice()
     }
 
-    /// Borrow one buffer without touching its contents or its length.
-    fn buffer_ref(&self, index: usize) -> &[Df64] {
-        self.buffers
-            .get(index)
-            .map_or(&[], |buffer| buffer.as_slice())
-    }
-
     /// Bytes this entry retains, which the cache reports.
     fn retained_bytes(&self) -> usize {
-        self.buffers
+        self.buffers()
             .iter()
             .map(|buffer| buffer.capacity() * std::mem::size_of::<Df64>())
             .sum()
@@ -831,18 +850,25 @@ impl Scratch {
 }
 
 /// Acquire the scratch for one operation shape, reusing what the cache already holds.
-fn acquire_scratch(caches: &mut ExtensionCacheStore, length: usize) -> Scratch {
-    let key = ExtensionCacheKey::new(DF64_OPS_FAMILY, Scratch::CACHE_NAME, length as u64);
+fn acquire_scratch(caches: &mut ExtensionCacheStore, shape: usize) -> Scratch {
+    let key = ExtensionCacheKey::new(DF64_OPS_FAMILY, Scratch::CACHE_NAME, shape as u64);
     caches
         .get_mut::<Scratch>(&key)
         .map_or_else(Scratch::default, |scratch| Scratch {
-            buffers: std::mem::take(&mut scratch.buffers),
+            q_bar_t: std::mem::take(&mut scratch.q_bar_t),
+            r_bar_t: std::mem::take(&mut scratch.r_bar_t),
+            q_bar_t_q: std::mem::take(&mut scratch.q_bar_t_q),
+            r_r_bar: std::mem::take(&mut scratch.r_r_bar),
+            m: std::mem::take(&mut scratch.m),
+            s: std::mem::take(&mut scratch.s),
+            product: std::mem::take(&mut scratch.product),
+            b: std::mem::take(&mut scratch.b),
         })
 }
 
 /// Return the scratch to the cache with its retained bytes reported.
-fn release_scratch(caches: &mut ExtensionCacheStore, length: usize, scratch: Scratch) {
-    let key = ExtensionCacheKey::new(DF64_OPS_FAMILY, Scratch::CACHE_NAME, length as u64);
+fn release_scratch(caches: &mut ExtensionCacheStore, shape: usize, scratch: Scratch) {
+    let key = ExtensionCacheKey::new(DF64_OPS_FAMILY, Scratch::CACHE_NAME, shape as u64);
     let retained = scratch.retained_bytes();
     caches.put(key, scratch, retained);
 }
@@ -1090,31 +1116,48 @@ fn qr_vjp_of(
         crate::dense::zeros(r.rows, r.columns())
     };
 
-    let q_bar_transposed = crate::dense::transpose(&q_bar);
-    let m = crate::dense::subtract(
-        &crate::dense::multiply(&r, &crate::dense::transpose(&r_bar)),
-        &crate::dense::multiply(&q_bar_transposed, &q),
-    );
-    // copyltu(M) is the lower triangle plus the strict lower triangle transposed.
-    let s = crate::dense::add(
-        &crate::dense::lower_triangle(&m),
-        &crate::dense::transpose(&crate::dense::strictly_lower_triangle(&m)),
-    );
-    // The accumulator is the body's largest intermediate, so it comes from the accounted
-    // scratch rather than from a fresh allocation on every execution.
+    // Every intermediate comes from the accounted scratch, so an execution after the first
+    // allocates only the factors it returns. The buffers are named fields, so one can be
+    // written while another is read.
     let rows = q.rows;
-    let length = rows * q.columns();
-    let mut scratch = acquire_scratch(caches, length);
+    let columns = q.columns();
+    let length = rows * columns;
+    let square = r.rows * r.columns();
+    let mut scratch = acquire_scratch(caches, square);
+
+    crate::dense::transpose_into(Scratch::slot(&mut scratch.q_bar_t, length), &q_bar);
+    let q_bar_t = crate::dense::Matrix::borrowed(columns, scratch.q_bar_t.as_slice());
+    crate::dense::transpose_into(Scratch::slot(&mut scratch.r_bar_t, square), &r_bar);
     {
-        let product = crate::dense::multiply(&q, &s);
-        let accumulated = scratch.buffer(0, length);
+        let r_bar_t = crate::dense::Matrix::borrowed(r.columns(), scratch.r_bar_t.as_slice());
+        crate::dense::multiply_into(Scratch::slot(&mut scratch.r_r_bar, square), &r, &r_bar_t);
+    }
+    {
+        let r = crate::dense::Matrix::borrowed(r.rows, scratch.r_r_bar.as_slice());
+        crate::dense::multiply_into(Scratch::slot(&mut scratch.q_bar_t_q, square), &q_bar_t, &q);
+        let q_bar_t_q = crate::dense::Matrix::borrowed(columns, scratch.q_bar_t_q.as_slice());
+        // `M = R R_bar^T - Q_bar^T Q`.
+        crate::dense::subtract_into(Scratch::slot(&mut scratch.m, square), &r, &q_bar_t_q);
+    }
+    {
+        let m = crate::dense::Matrix::borrowed(r.rows, scratch.m.as_slice());
+        // `copyltu(M)` is the lower triangle plus the strict lower triangle transposed.
+        crate::dense::lower_triangle_into(Scratch::slot(&mut scratch.s, square), &m);
+        // The second step adds to what the first wrote, so it must not clear the buffer.
+        // Asking `slot` for it again would zero it and silently drop the lower triangle.
+        crate::dense::add_strictly_lower_transposed_into(scratch.s.as_mut_slice(), &m);
+    }
+    {
+        let s = crate::dense::Matrix::borrowed(r.rows, scratch.s.as_slice());
+        crate::dense::multiply_into(Scratch::slot(&mut scratch.product, length), &q, &s);
+        let product = crate::dense::Matrix::borrowed(rows, scratch.product.as_slice());
+        let accumulated = Scratch::slot(&mut scratch.b, length);
         for (index, slot) in accumulated.iter_mut().enumerate() {
             let cotangent = q_bar.data.get(index).copied().unwrap_or_else(Df64::zero);
             *slot = cotangent + product.data[index];
         }
     }
-    // The accumulator is read back as it stands; asking for the buffer again would clear it.
-    let b = crate::dense::Matrix::borrowed(rows, scratch.buffer_ref(0));
+    let b = crate::dense::Matrix::borrowed(rows, scratch.b.as_slice());
     let a_bar = crate::dense::solve_upper_from_the_right(&r, &b).ok_or_else(|| {
         tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
             op,
@@ -1122,7 +1165,7 @@ fn qr_vjp_of(
             "the adjoint needs an invertible triangular factor",
         ))
     })?;
-    release_scratch(caches, length, scratch);
+    release_scratch(caches, square, scratch);
     Ok(vec![tensor_of(op, a_bar)?])
 }
 

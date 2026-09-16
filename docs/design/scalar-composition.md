@@ -1045,10 +1045,25 @@ extension-private cache. Extending the same path to the remaining intermediates 
 mechanical: each one needs a slot in the scratch and a `retained_bytes` figure the cache
 already collects.
 
-That work also found a real defect in my own first attempt: the body asked the scratch for
-the accumulator a second time to read it, which clears and zero-fills the buffer, and the
-connected QR gradients silently became zero. The workspace suite caught it, and the fix is
-to read the buffer without touching it (`Scratch::buffer_ref`).
+**Every intermediate of the adjoint now comes from that entry**, which the same measurement
+shows:
+
+| Execution | Allocations | Bytes |
+| --- | --- | --- |
+| adjoint, first | 254 | 724668 |
+| adjoint, second (all intermediates reused) | 212 | 192700 |
+
+The runtime reports the entry as 524288 retained bytes across the eight buffers, which is why
+the second execution allocates almost nothing: what remains is the two factors it returns.
+
+That work also found the same defect twice, and the second time is the more instructive. The
+first version asked the scratch for the accumulator a second time in order to read it, which
+clears and zero-fills the buffer, and the connected QR gradients silently became zero; the fix
+was to read it without touching it. Extending the reuse then reproduced the bug in `copyltu`:
+the second step of the symmetrization called the zeroing accessor again, dropped the lower
+triangle it had just written, and the gradients went wrong again. The suite caught both. The
+lesson is that a scratch API should make "give me a clean buffer" and "let me extend the buffer
+I just filled" different operations rather than one accessor with a clearing side effect.
 
 ## 6. Risks and open questions
 
