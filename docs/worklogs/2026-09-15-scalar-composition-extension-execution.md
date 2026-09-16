@@ -1308,3 +1308,20 @@ So the first step is a public typed accessor, not an arm edit, and the conversio
 dispatch surface rather than a rename. That is a smaller thing than 2832 mechanical edits and a larger
 thing than starting anywhere: it is the seam that makes the rest mechanical, and the objective's
 ordering means the seam comes first because the densest file needs it.
+
+## The conversion's cost model, measured by trying to batch it
+
+Seven of the densest file's twenty-nine direct matchers are converted. The four reductions went in one
+step, thirty-two sites, because they share a single shape whose arm bodies are one line each; the tag
+rewrite is then mechanical and the compiler is the check. The unary and permutation family —
+transpose, tril, triu, reverse, pad, slice, extract_diagonal, embed_diagonal — does not fit that shape:
+its arms are either multi-line without braces (`Tensor::F32(t) => self\n    .foo_typed(t, ...)`) or hold
+nested matches of their own, so a line-oriented rewrite either truncates the arm or leaves a variant
+pattern behind. The batch attempt skipped all eight and left the file untouched, which is the right
+outcome for a transform that does not fit: the guard refused rather than writing something broken.
+
+So the remaining work has two speeds. Where a family shares one arm shape the conversion is mechanical
+and cheap; where it does not, each function is a hand rewrite of its dispatch with the compiler as the
+check, which is what conj, the promoted scalar helper, and abs were. Measured state on this head: seven
+of twenty-nine direct matchers converted, 494 variant-match sites left in the file (from 520), and both
+gated features plus the default workspace build clean.
