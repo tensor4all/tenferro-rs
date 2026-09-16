@@ -307,6 +307,21 @@ contract for erasure, layout, and reinterpretation, which is #1785 design
 question 2 and #1789's resource boundary; it is recorded here as the decision
 stage 2 must make rather than left implicit in the notation.
 
+The cost of each shape was measured rather than assumed, by adding the variant in
+a disposable worktree and compiling the workspace:
+
+| Change | Exhaustive matches that need an arm |
+| --- | --- |
+| Add an erased variant to `Tensor` | 18, all inside `tenferro-tensor` |
+| Add an external variant to `DType` | 59, across about thirty files |
+| Make `dtype()` return `Option<DType>` instead | 605 call sites |
+
+So the cheap way to open the tag is a `DType` variant, not a fallible accessor, and
+admitting an external member costs roughly 77 explicit arms in total. That is an
+order of magnitude below the 2267 production pattern sites that removing the
+seven variants rewrites, which is the opposite of what was assumed before the
+measurement: the hybrid shape is not the expensive one.
+
 Two shapes can admit an external member, and the difference is where the cost
 lands. A tag plus one erased payload for every member removes the variant list but
 charges the measured erasure cost to the preset members as well. Keeping the seven
