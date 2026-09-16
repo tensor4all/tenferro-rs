@@ -1010,3 +1010,20 @@ the midpoint rather than a representable value; `f32::MAX` narrows to infinity b
 all-ones significand carries past the largest bfloat16, so "every finite f32 stays finite" was
 false; and a duplicate copies the payload while a clone shares it, with a shared payload refusing a
 mutable borrow. All three are now asserted as the contract, and the guide records them.
+
+## What #1793 would cost, measured rather than assumed
+
+The last unmet acceptance item is ordinary einsum routing an external scalar, and my own record had
+it as "needs a decision" without a number. Measuring the surface changed the shape of the question.
+`tenferro-einsum` has 44 source files, and the preset assumption inside it is 28 `TensorView`
+variant matches and 37 `DType` uses. The lowering itself is not the obstacle: `tenferro_einsum::lowering`
+is public and `GemmPlan` with it, which is exactly how `ext/tropical` reuses tenferro's contraction
+planning and layout work for its own scalar. So the missing piece is a scalar-generic contraction
+slot behind the ordinary surface, which #1793 explicitly wants to reuse rather than replace ("Reuse
+existing construction-time GEMM/layout slots and immutable implementation identities. No mutable
+per-call replacement or new provider registry is required.").
+
+That is a public-contract change to the einsum crate, and #1793's own text says the issue alone does
+not authorize a feature implementation PR, so it stays a decision with a measured cost in the
+inventory rather than something this branch invents. The typed rejection at the boundary, the
+tropical precedent, and this count are what a decision needs.
