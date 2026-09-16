@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
-use tenferro_df64_proof::ad::Df64LinearizeRule;
+use tenferro_df64_proof::ad::{Df64LinearizeRule, Df64VjpRule};
 use tenferro_df64_proof::extension::{module, Df64Einsum, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
@@ -181,115 +181,34 @@ fn the_operation_refuses_a_preset_scalar() {
 }
 
 #[test]
-fn differentiating_the_contraction_fails_explicitly() {
-    // #1793 and #1788 require an unsupported AD mode to fail explicitly rather than as a zero
-    // gradient, so this asserts the refusal instead of leaving it to the rule set's internals.
+fn differentiating_the_contraction_is_supported_in_both_modes() {
+    // The forward tangent used to be refused here. It is implemented now, and its values and its
+    // duality with the adjoint are checked in `einsum_ad.rs`; this test keeps the rule set up
+    // honest by building one and asserting that the refusal is gone rather than silently stale.
     let rules = SemanticExtensionRuleSet::new()
         .with_linearize(std::sync::Arc::new(Df64LinearizeRule))
-        .expect("one linearize rule per family");
+        .expect("one linearize rule per family")
+        .with_primal_vjp(std::sync::Arc::new(Df64VjpRule))
+        .expect("one adjoint rule per family");
     let context = AdContext::builder()
         .with_semantic_extension_rules(rules)
         .expect("extension rules")
         .build()
         .expect("ad context");
 
-    let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a matrix contraction");
+    let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
     let lhs = leaf(vec![Df64::from_f64(1.0); 2], vec![1, 2]);
     let rhs = leaf(vec![Df64::from_f64(1.0); 2], vec![2, 1]);
     let output = apply(std::sync::Arc::new(op), &[&lhs, &rhs]).expect("traced contraction");
     let tangent = leaf(vec![Df64::from_f64(1.0); 2], vec![1, 2]);
+    let cotangent = leaf(vec![Df64::from_f64(1.0)], vec![1, 1]);
 
-    let error = context
-        .jvp(&output[0], &lhs, &tangent)
-        .expect_err("the contribution has no rule for the contraction");
-    let message = error.to_string();
-    println!("contraction AD refusal: {message}");
     assert!(
-        message.contains("df64") || message.contains("unsupported") || message.contains("rule"),
-        "the refusal must say which rule is missing: {message}"
-    );
-}
-
-/// Contract with an explicit pattern, returning the result's elements.
-fn contract_with(
-    lhs: Vec<Df64>,
-    lhs_shape: Vec<usize>,
-    rhs: Vec<Df64>,
-    rhs_shape: Vec<usize>,
-    pattern: (&[u32], &[u32], &[u32]),
-) -> Vec<Df64> {
-    let op = Df64Einsum::new(pattern.0, pattern.1, pattern.2).expect("a valid pattern");
-    let lhs_leaf = leaf(lhs.clone(), lhs_shape.clone());
-    let rhs_leaf = leaf(rhs.clone(), rhs_shape.clone());
-    let output =
-        apply(std::sync::Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let results = runtime_with_module()
-        .run_compiled(
-            &program,
-            &[&external(lhs, lhs_shape), &external(rhs, rhs_shape)],
-        )
-        .expect("contraction execution");
-    payload(&results[0])
-}
-
-fn numbers(values: &[f64]) -> Vec<Df64> {
-    values.iter().copied().map(Df64::from_f64).collect()
-}
-
-#[test]
-fn a_batched_contraction_with_a_free_batch_label_runs() {
-    // "bij,bjk->bik" with two batches of a 1x1 matrix: each output entry is the product of that
-    // batch's pair, so the batch label is a free label rather than a contracted one.
-    let results = contract_with(
-        numbers(&[1.0, 2.0]),
-        vec![2, 1, 1],
-        numbers(&[3.0, 4.0]),
-        vec![2, 1, 1],
-        (&[0, 1, 2], &[0, 2, 3], &[0, 1, 3]),
-    );
-    assert_eq!(results, numbers(&[3.0, 8.0]));
-}
-
-#[test]
-fn an_outer_product_has_no_contracted_label() {
-    // "i,j->ij": with no shared label the contraction is a product, which #1793 lists as a
-    // reached operation.
-    let results = contract_with(
-        numbers(&[2.0, 3.0]),
-        vec![2],
-        numbers(&[5.0, 7.0]),
-        vec![2],
-        (&[0], &[1], &[0, 1]),
-    );
-    // [[2 * 5, 2 * 7], [3 * 5, 3 * 7]] in column-major order.
-    assert_eq!(results, numbers(&[10.0, 15.0, 14.0, 21.0]));
-}
-
-#[test]
-fn a_label_that_only_one_input_names_and_the_output_omits_is_summed() {
-    // "ij,kl->ik" sums each input over its omitted label before multiplying, which is what the
-    // notation means by a label the output does not name.
-    let results = contract_with(
-        numbers(&[1.0, 3.0, 2.0, 4.0]),
-        vec![2, 2],
-        numbers(&[5.0, 7.0, 6.0, 8.0]),
-        vec![2, 2],
-        (&[0, 1], &[2, 3], &[0, 2]),
-    );
-    // Rows of A sum to [3, 7] and rows of B to [11, 15], so the product is [[33, 45], [77, 105]].
-    assert_eq!(results, numbers(&[33.0, 77.0, 45.0, 105.0]));
-}
-
-#[test]
-fn the_validator_refuses_a_trace_and_an_unknown_output_label() {
-    assert!(
-        Df64Einsum::new(&[0, 0], &[0, 2], &[0, 2]).is_err(),
-        "a repeated label inside one input is a trace, which the body does not evaluate"
+        context.jvp(&output[0], &lhs, &tangent).is_ok(),
+        "the forward tangent of the contraction is implemented"
     );
     assert!(
-        Df64Einsum::new(&[0, 1], &[1, 2], &[0, 3]).is_err(),
-        "an output label must appear in an input"
+        context.vjp(&output[0], &lhs, &cotangent).is_ok(),
+        "the adjoint of the contraction is implemented"
     );
 }

@@ -186,8 +186,12 @@ cotangent of each operand is computed with the extended scalar's own accumulatio
 matrix case, against a scalar loss's central difference at a step of `1e-12` (where the two agree
 exactly, and where an `f64` loss could not agree at all), and against a configuration whose
 cotangent is `1 + 2^-80` and has to keep the low component, with the `f64` control losing it. The
-forward tangent is not implemented, so requesting it fails with the family's own message that it has
-no Linearize rule for the operation, and the test asserts that rather than assuming it.
+Forward mode is implemented too: the tangent is `einsum(lhs_dot, rhs) + einsum(lhs, rhs_dot)`, so the
+helper contracts each tangent with the other operand and adds the results in the extended scalar, and
+its payload records which operands carry a tangent so that an absent one is never materialised as a
+zero. The same file checks the tangent against hand-written products and, for the first time, checks
+**duality** between the two modes: `sum(JVP(v) * w)` equals `sum(v * VJP(w))` one operand at a time,
+with the two sides agreeing exactly.
 
 What is refused is refused with a typed error rather than approximated: a label that repeats inside
 one input, because that is a trace; an output label that no input names; and inputs that disagree on

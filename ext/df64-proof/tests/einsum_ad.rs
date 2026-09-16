@@ -63,6 +63,60 @@ fn cotangent_context() -> AdContext {
         .expect("ad context")
 }
 
+fn linearize_context() -> AdContext {
+    let rules = SemanticExtensionRuleSet::new()
+        .with_linearize(Arc::new(Df64LinearizeRule))
+        .expect("one linearize rule per family");
+    AdContext::builder()
+        .with_semantic_extension_rules(rules)
+        .expect("extension rules")
+        .build()
+        .expect("ad context")
+}
+
+/// The forward tangent of the contraction along one operand's tangent.
+fn tangent(
+    lhs: Vec<Df64>,
+    lhs_shape: [usize; 2],
+    rhs: Vec<Df64>,
+    rhs_shape: [usize; 2],
+    lhs_dot: Option<Vec<Df64>>,
+    rhs_dot: Option<Vec<Df64>>,
+) -> Vec<Df64> {
+    let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
+    let lhs_leaf = leaf(lhs.clone(), lhs_shape.to_vec());
+    let rhs_leaf = leaf(rhs.clone(), rhs_shape.to_vec());
+    let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
+
+    let (wrt, tangent_leaf) = match (&lhs_dot, &rhs_dot) {
+        (Some(values), _) => (&lhs_leaf, leaf(values.clone(), lhs_shape.to_vec())),
+        (None, Some(values)) => (&rhs_leaf, leaf(values.clone(), rhs_shape.to_vec())),
+        (None, None) => panic!("a tangent needs one operand's tangent"),
+    };
+    let forward = linearize_context()
+        .jvp(&output[0], wrt, &tangent_leaf)
+        .expect("traced tangent");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&forward).expect("compiled tangent");
+
+    // Only the tangent the transform was asked about is an input of the emitted operation, so the
+    // execution must supply exactly that one.
+    let mut inputs = vec![
+        external(lhs, lhs_shape.to_vec()),
+        external(rhs, rhs_shape.to_vec()),
+    ];
+    match (&lhs_dot, &rhs_dot) {
+        (Some(values), _) => inputs.push(external(values.clone(), lhs_shape.to_vec())),
+        (None, Some(values)) => inputs.push(external(values.clone(), rhs_shape.to_vec())),
+        (None, None) => panic!("a tangent needs one operand's tangent"),
+    }
+    let borrowed: Vec<&Tensor> = inputs.iter().collect();
+    let results = runtime_with_module()
+        .run_compiled(&program, &borrowed)
+        .expect("tangent execution");
+    payload(&results[0])
+}
+
 fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
     TracedTensor::from_tensor_concrete_shape_declaring_scalar(
         external(values, shape),
@@ -256,27 +310,73 @@ fn the_adjoint_matches_a_central_difference_of_the_loss() {
 }
 
 #[test]
-fn the_forward_tangent_is_still_refused() {
-    let rules = SemanticExtensionRuleSet::new()
-        .with_linearize(Arc::new(Df64LinearizeRule))
-        .expect("one linearize rule per family");
-    let context = AdContext::builder()
-        .with_semantic_extension_rules(rules)
-        .expect("extension rules")
-        .build()
-        .expect("ad context");
+fn the_forward_tangent_matches_the_hand_written_products() {
+    // A = [[1, 2], [3, 4]] and B = [[5, 6], [7, 8]] in column-major order.
+    let a = numbers(&[1.0, 3.0, 2.0, 4.0]);
+    let b = numbers(&[5.0, 7.0, 6.0, 8.0]);
+    let identity = numbers(&[1.0, 0.0, 0.0, 1.0]);
 
-    let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
-    let lhs = leaf(numbers(&[1.0, 1.0]), vec![1, 2]);
-    let rhs = leaf(numbers(&[1.0, 1.0]), vec![2, 1]);
-    let output = apply(Arc::new(op), &[&lhs, &rhs]).expect("traced contraction");
-    let tangent = leaf(numbers(&[1.0, 1.0]), vec![1, 2]);
+    // With A_dot = I the tangent is B.
+    assert_eq!(
+        tangent(a.clone(), [2, 2], b.clone(), [2, 2], Some(identity), None),
+        b,
+        "the tangent of the first operand is its tangent contracted with the second"
+    );
+    // With B_dot = ones the tangent is A times the ones matrix, whose rows are the row sums of A:
+    // [[3, 3], [7, 7]] in column-major order. The API differentiates one operand at a time, which is
+    // why each case supplies exactly one tangent.
+    let ones = numbers(&[1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(
+        tangent(a.clone(), [2, 2], b.clone(), [2, 2], None, Some(ones)),
+        numbers(&[3.0, 7.0, 3.0, 7.0]),
+        "the tangent of the second operand is the first operand contracted with its tangent"
+    );
+}
 
-    let error = context
-        .jvp(&output[0], &lhs, &tangent)
-        .expect_err("the forward tangent of the contraction is not implemented");
+#[test]
+fn the_forward_tangent_and_the_adjoint_satisfy_duality() {
+    // <JVP(v), w> == <v, VJP(w)> for one operand at a time, which is the check #1788 asks for.
+    let a = numbers(&[0.5, -0.25, 0.75, 0.125]);
+    let b = numbers(&[2.0, 0.5, -1.0, 1.5]);
+    let tangent_values = numbers(&[1.0, 0.5, -0.5, 2.0]);
+    let cotangent = numbers(&[0.25, -1.0, 0.5, 1.5]);
+
+    let forward = tangent(
+        a.clone(),
+        [2, 2],
+        b.clone(),
+        [2, 2],
+        Some(tangent_values.clone()),
+        None,
+    );
+    let forward_side = forward
+        .iter()
+        .zip(&cotangent)
+        .fold(Df64::zero(), |sum, (value, weight)| sum + *value * *weight);
+
+    let backward = adjoint(
+        a.clone(),
+        [2, 2],
+        b.clone(),
+        [2, 2],
+        cotangent.clone(),
+        [2, 2],
+        true,
+    );
+    let backward_side = tangent_values
+        .iter()
+        .zip(&backward)
+        .fold(Df64::zero(), |sum, (value, gradient)| {
+            sum + *value * *gradient
+        });
+
+    let gap = (forward_side - backward_side).abs_hi()
+        / forward_side.abs_hi().max(backward_side.abs_hi()).max(1.0);
+    println!(
+        "contraction duality: forward {forward_side:?}, backward {backward_side:?},          relative difference {gap:.3e}"
+    );
     assert!(
-        error.to_string().contains("Linearize") || error.to_string().contains("unsupported"),
-        "the refusal must name the missing rule: {error}"
+        gap < 1e-30,
+        "the tangent and the adjoint disagree: {forward_side:?} against {backward_side:?}"
     );
 }

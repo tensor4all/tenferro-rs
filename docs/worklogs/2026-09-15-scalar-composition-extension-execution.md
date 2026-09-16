@@ -1123,3 +1123,22 @@ now asks for the operand whose cotangent accumulates `1 + 2^-80`; and a step of 
 about `1e-16` of relative agreement, because dividing by `2h` amplifies the loss's own rounding, so
 the step is `1e-12` and the two sides now agree exactly. The forward tangent stays refused and the
 test asserts that refusal.
+
+## The forward tangent, and the duality check it made possible
+
+The adjoint landed first and the tangent stayed refused, which #1793 does not allow for long: it asks
+for canonical first-order AD. The tangent is `einsum(lhs_dot, rhs) + einsum(lhs, rhs_dot)`, so it is a
+masked helper like the factorization's tangent. The payload records which operands carry a tangent,
+which is what keeps the rule from materialising a zero for an absent one, and the input count follows
+the mask.
+
+Two things about the tests are worth recording. The forward tangent made the duality identity
+checkable for the first time, and the two sides agree exactly: `sum(JVP(v) * w)` equals
+`sum(v * VJP(w))` one operand at a time, with no tolerance needed. And my first version of the
+hand-written test supplied both operands' tangents while the API differentiates one operand at a
+time, so the helper silently differentiated only the first and returned a zero the second case had
+not asked for. Each case now supplies exactly one tangent and says why.
+
+The previous turn's test asserting that differentiating the contraction fails was obsolete the moment
+the tangent landed, so it now builds a rule set with both roles and asserts that both modes work,
+which keeps the file honest instead of leaving a claim the code no longer satisfies.

@@ -17,8 +17,8 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_runtime::program::SemanticProgramBuilder;
 
 use crate::extension::{
-    Df64Einsum, Df64EinsumVjp, Df64Expand, Df64FromF64, Df64Qr, Df64QrJvp, Df64QrVjp, Df64ToF64,
-    Df64Total, DF64_OPS_FAMILY,
+    Df64Einsum, Df64EinsumJvp, Df64EinsumVjp, Df64Expand, Df64FromF64, Df64Qr, Df64QrJvp,
+    Df64QrVjp, Df64ToF64, Df64Total, DF64_OPS_FAMILY,
 };
 
 /// One operation of the contribution's family.
@@ -310,7 +310,48 @@ impl SemanticLinearizeRule for Df64LinearizeRule {
                     ],
                 )
             }
-            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp | Df64Op::Einsum => {
+            Df64Op::Einsum => {
+                // The tangent of a contraction contracts each tangent with the other operand, so
+                // the rule emits one helper carrying both operands and whichever tangents exist.
+                let Some(contraction) = request.op().as_any().downcast_ref::<Df64Einsum>() else {
+                    return Err(unsupported(op, role));
+                };
+                let has_lhs = request
+                    .tangent_inputs()
+                    .first()
+                    .and_then(|value| value.value())
+                    .is_some();
+                let has_rhs = request
+                    .tangent_inputs()
+                    .get(1)
+                    .and_then(|value| value.value())
+                    .is_some();
+                if !has_lhs && !has_rhs {
+                    let inactive = (0..request.primal_inputs().len())
+                        .map(|_| AdValue::Absent)
+                        .collect::<Vec<_>>();
+                    return Ok(SemanticLinearizeResult::new(inactive, Vec::new()));
+                }
+                let (lhs, rhs, out) = contraction.labels();
+                let Ok(tangent) = Df64EinsumJvp::of(lhs, rhs, out, has_lhs, has_rhs) else {
+                    return Err(unsupported(op, role));
+                };
+                let mut operands = vec![request.primal_inputs()[0], request.primal_inputs()[1]];
+                for (present, value) in [
+                    (has_lhs, request.tangent_inputs().first()),
+                    (has_rhs, request.tangent_inputs().get(1)),
+                ] {
+                    if !present {
+                        continue;
+                    }
+                    match value.and_then(|value| value.value()) {
+                        Some(value) => operands.push(value),
+                        None => return Err(unsupported(op, role)),
+                    }
+                }
+                (Arc::new(tangent) as Arc<dyn ExtensionOp>, operands)
+            }
+            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp => {
                 return Err(unsupported(op, role));
             }
         };
