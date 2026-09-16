@@ -294,11 +294,17 @@ it in place through the erased value, and confirms that a mismatched recovery
 returns nothing. That establishes the shape: an externally defined member needs
 no variant.
 
-Open prototype question: the runtime payload is pool-owned (`TypedTensor`, not a
-`Box<dyn Any>`), so the remaining contract is how pool-backed storage is erased,
-who releases it, and how alignment, drop, and provider retirement survive
-erasure. That is the next stage 2 step and it is a resource-ownership question
-(#1789), not a numerical one.
+The pool-backed payload is measured rather than assumed: `TypedTensor<T>`,
+`Tensor`, and `TensorView` are `Send + Sync + 'static`, asserted in
+`crates/tenferro-tensor/src/tests/types_tests.rs`, so an erased container can hold
+a pool-backed payload with the same identity-based recovery, and the concrete
+payload releases its storage when it is dropped. What remains is a cost and
+ownership choice, not a type-system blocker: an erased value adds one boxing
+allocation per tensor, so stage 2 must decide between a tag plus a boxed payload
+for every member and a fast path for the preset members with erasure only for
+externally defined ones, and must state where a released payload returns to its
+originating owner (#1789). The measured 1-thread allocation and dispatch cost of
+each option is the input that decision needs, and it has not been measured yet.
 
 Landed and measured: `DType` and `DefaultScalars` are now generated from one
 declaration in `tenferro-tensor-core`, `ScalarSet` is the open membership

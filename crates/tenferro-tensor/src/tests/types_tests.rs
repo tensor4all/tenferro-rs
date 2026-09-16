@@ -2239,3 +2239,16 @@ fn as_view_paths_do_not_allocate_or_clone_storage() {
     let view_mut = tensor.as_view_mut();
     assert_eq!(view_mut.shape(), &[2, 2]);
 }
+
+#[test]
+fn value_types_are_send_and_sync() {
+    // Stage 2 carries an externally defined scalar by erasing its payload. That
+    // contract needs the runtime value types to move between threads and to be
+    // shared behind a reference, so the property is asserted rather than assumed.
+    fn assert_send_sync<T: Send + Sync + 'static>() {}
+
+    assert_send_sync::<TypedTensor<f64>>();
+    assert_send_sync::<TypedTensor<Complex64>>();
+    assert_send_sync::<Tensor>();
+    assert_send_sync::<TensorView<'_>>();
+}
