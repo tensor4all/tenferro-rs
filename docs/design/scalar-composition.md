@@ -328,6 +328,20 @@ Both variants are public type changes: `DType` gains a variant and `Tensor` gain
 one, which is a semver break and, under this repository's rules, a change that
 needs maintainer acceptance before a feature pull request can carry it.
 
+The value half was attempted twice and is not landed. Adding
+`Tensor::External(payload, placement)` compiles inside `tenferro-tensor`, the CPU
+kernel crate, `tenferro-cpu-fused`, and the runtime, but the remaining sites are
+not uniform: `tenferro-cpu` alone has 32, in `analytic`, `structural`, `indexing`,
+`reduction`, `dot_runtime`, `exec_session`, `backend`, `provider`, and `lib`, and
+some of them sit inside shared dispatch macros that serve many call sites. Each
+site needs a decision rather than a mechanical arm: a typed rejection where the
+function already returns a result, or validation at the crate's public entry
+points with a documented invariant inside. Inserting `unreachable!` everywhere
+would put a panic on a path a caller can reach, which the constraints forbid, so
+the attempt was reverted rather than landed half-checked. The compiler reproduces
+the site list, and the accessors the variant needs are landed:
+`ErasedHostTensor` reports its element identity, shape, and element count.
+
 The tag half is now implemented and measured. `DType` carries
 `External(TypeId)`, 56 sites gained an explicit arm, and the workspace compiles
 and tests exactly as before. The measured price is that `DType` grew from **1 byte
