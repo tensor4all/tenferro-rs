@@ -2849,20 +2849,28 @@ fn eig_entered(
 #[cfg(feature = "cpu-faer")]
 fn faer_strided_read_ok(input: &TensorRead<'_>) -> bool {
     match input {
-        TensorRead::Tensor(Tensor::F32(tensor)) => linalg::faer::faer_strided_ok(&tensor.as_view()),
-        TensorRead::Tensor(Tensor::F64(tensor)) => linalg::faer::faer_strided_ok(&tensor.as_view()),
-        TensorRead::Tensor(Tensor::C32(tensor)) => linalg::faer::faer_strided_ok(&tensor.as_view()),
-        TensorRead::Tensor(Tensor::C64(tensor)) => linalg::faer::faer_strided_ok(&tensor.as_view()),
+        TensorRead::Tensor(tensor) => match tensor.dtype() {
+            DType::F32 => tensor
+                .as_typed::<f32>()
+                .is_some_and(|t| linalg::faer::faer_strided_ok(&t.as_view())),
+            DType::F64 => tensor
+                .as_typed::<f64>()
+                .is_some_and(|t| linalg::faer::faer_strided_ok(&t.as_view())),
+            DType::C32 => tensor
+                .as_typed::<Complex32>()
+                .is_some_and(|t| linalg::faer::faer_strided_ok(&t.as_view())),
+            DType::C64 => tensor
+                .as_typed::<Complex64>()
+                .is_some_and(|t| linalg::faer::faer_strided_ok(&t.as_view())),
+            // A caller-owned payload is not a faer operand, and neither are the
+            // integer and boolean tags, which faer does not compute on here.
+            _ => false,
+        },
         TensorRead::View(TensorView::F32(view)) => linalg::faer::faer_strided_ok(view),
         TensorRead::View(TensorView::F64(view)) => linalg::faer::faer_strided_ok(view),
         TensorRead::View(TensorView::C32(view)) => linalg::faer::faer_strided_ok(view),
         TensorRead::View(TensorView::C64(view)) => linalg::faer::faer_strided_ok(view),
-        // A caller-owned payload is not a faer operand.
-        TensorRead::Tensor(Tensor::External(..)) => false,
-        TensorRead::Tensor(Tensor::I32(_))
-        | TensorRead::Tensor(Tensor::I64(_))
-        | TensorRead::Tensor(Tensor::Bool(_))
-        | TensorRead::View(TensorView::I32(_))
+        TensorRead::View(TensorView::I32(_))
         | TensorRead::View(TensorView::I64(_))
         | TensorRead::View(TensorView::Bool(_)) => false,
     }
@@ -3123,24 +3131,27 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
 }
 
 fn zeros_like_tensor(input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-    Ok(match input {
+    Ok(match input.dtype() {
         // A caller-owned payload has no zero-like runtime tensor.
-        Tensor::External(payload, _) => {
+        DType::External(type_id) => {
             return Err(unsupported_dtype(
                 "zeros_like_tensor",
-                DType::External(payload.element_type_id()),
+                DType::External(type_id),
             ));
         }
-        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape().to_vec())?),
-        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape().to_vec())?),
-        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape().to_vec())?),
-        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape().to_vec())?),
-        Tensor::Bool(t) => Tensor::Bool(TypedTensor::from_vec_col_major(
-            t.shape().to_vec(),
-            vec![false; t.n_elements()],
-        )?),
-        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())?),
-        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())?),
+        DType::F32 => Tensor::F32(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::F64 => Tensor::F64(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::I32 => Tensor::I32(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::I64 => Tensor::I64(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::Bool => {
+            let t = typed_host::<bool>(input, "zeros_like_tensor")?;
+            Tensor::Bool(TypedTensor::from_vec_col_major(
+                t.shape().to_vec(),
+                vec![false; t.n_elements()],
+            )?)
+        }
+        DType::C32 => Tensor::C32(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::C64 => Tensor::C64(TypedTensor::zeros(input.shape().to_vec())?),
     })
 }
 
