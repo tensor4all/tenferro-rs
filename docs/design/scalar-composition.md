@@ -870,6 +870,32 @@ instead of `Q_bar^T Q`, which scales the gradient by an amount that depends on t
 data. The isolated adjoint test measured that factor (`0.98`) before the connected test
 was touched, which is why the two tests exist separately.
 
+### 5.9 The two consumer roles
+
+#1790 asks for two compilation roles rather than one proof crate: an algorithm crate
+that states the scalar properties and operation capabilities it needs, and a final
+application that composes a canonical support with an optional scalar contribution. Both
+exist and both tests pass:
+
+- `ext/scalar-consumer-algorithm` declares
+  `ScalarSupport { fn qr(&self, &TracedTensor) -> (Q, R); fn to_f64(&self, &TracedTensor) -> f64 }`
+  and builds the connected program from it, using only public traced operations and never
+  naming a scalar, a provider, or a dtype. `factor_norm_gradient` is the whole algorithm:
+  factor, present the factor as ordinary `f64`, form the squared norm, and take the
+  reverse pass.
+- `ext/scalar-consumer-application` supplies two bindings for that one algorithm:
+  canonical standard support (`tenferro_linalg`'s factorization and the identity
+  presentation) and standard support plus the external scalar contribution
+  (`Df64Qr` and `Df64ToF64`). The application is the only role that names a scalar, an
+  identity, or a provider, and it installs both modules into the same runtime.
+
+Both cases return the same number in their own dtype: `[6, 8]` as `f64` for the standard
+binding and `[[6], [8]]` as `Df64` for the contribution, for the same input
+`A = [[3], [4]]` and the same algorithm source. The boundary is mechanical, not a
+convention: `cargo tree -p tenferro-scalar-consumer-algorithm --edges normal` contains no
+`df64` and no `tenferro-linalg` entry, so the algorithm cannot reach the contribution or
+the provider even by accident.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

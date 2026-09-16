@@ -386,3 +386,26 @@ the external scalar, and `f64 input -> widen -> QR -> narrow -> loss` returns `[
 
 Workspace after this: 5278 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy clean under `-D warnings` and the strict doc lints.
+
+## The two consumer roles
+
+#1790 asks for two compilation roles rather than one proof crate, and both now exist.
+`ext/scalar-consumer-algorithm` declares the capabilities it needs
+(`ScalarSupport::qr` and `ScalarSupport::to_f64`) and builds the connected program from
+them, using only public traced operations and never naming a scalar, a provider, or a
+dtype. `ext/scalar-consumer-application` supplies two bindings for that one algorithm:
+canonical standard support from `tenferro-linalg`, and standard support plus the external
+scalar contribution.
+
+Both return the same number in their own dtype for `A = [[3], [4]]`: `[6, 8]` as `f64`
+and `[[6], [8]]` as `Df64`, with no change to the algorithm source and no dtype or
+provider forwarding table. The boundary is mechanical: `cargo tree -p
+tenferro-scalar-consumer-algorithm --edges normal` contains no `df64` and no
+`tenferro-linalg` entry.
+
+The standard binding also showed what the application is for: the linalg module has to be
+installed into the runtime alongside the engine, and the Df64 module alongside it, which
+is application composition rather than algorithm work.
+
+Workspace after this: 5282 passed, 3 failed (the same pre-existing `trybuild` failures),
+clippy clean under `-D warnings` and the strict doc lints.

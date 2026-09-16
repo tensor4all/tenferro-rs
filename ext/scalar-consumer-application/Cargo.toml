@@ -1,0 +1,22 @@
+[package]
+name = "tenferro-scalar-consumer-application"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Final application role of the external-scalar consumer (not published)."
+
+[lib]
+name = "tenferro_scalar_consumer_application"
+
+[dependencies]
+
+[dev-dependencies]
+tenferro-scalar-consumer-algorithm = { path = "../scalar-consumer-algorithm" }
+tenferro-df64-proof = { path = "../df64-proof" }
+tenferro-cpu = { path = "../../crates/tenferro-cpu" }
+tenferro-ad = { path = "../../crates/tenferro-ad" }
+tenferro-linalg = { path = "../../crates/tenferro-linalg", features = ["autodiff"] }
+tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+tenferro-tensor = { path = "../../crates/tenferro-tensor" }
+tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }

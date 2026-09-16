@@ -1,0 +1,16 @@
+[package]
+name = "tenferro-scalar-consumer-algorithm"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Algorithm role of the external-scalar consumer (not published)."
+
+[lib]
+name = "tenferro_scalar_consumer_algorithm"
+
+[dependencies]
+tenferro-ad = { path = "../../crates/tenferro-ad" }
+tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+[dev-dependencies]
+tenferro-tensor = { path = "../../crates/tenferro-tensor" }
