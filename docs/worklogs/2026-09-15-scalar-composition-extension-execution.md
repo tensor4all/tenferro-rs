@@ -798,3 +798,23 @@ doctests. Both were run here with CI's own flags:
 
 Both are now part of the verification record alongside the `cargo test` runs, which report the
 same trybuild failure split across three targets.
+
+## Two containing sets and the contribution's kernel
+
+#1785 requires reuse of the external Df64 kernel by *two* sets containing that contribution,
+and only one set declared the external scalar. `ext/scalar-consumer-application` now declares
+its own set pairing `f32` and `f64` with `Df64`, with `tests/contribution_reuse.rs` driving the
+same arithmetic through both sets and `tests/contribution_only.rs` as the one-set control. The
+crate therefore depends on the contribution and on `tenferro-tensor-core` as normal
+dependencies rather than development dependencies, which is the role the application is meant
+to play: the algorithm crate still names no scalar.
+
+The object-level check became a parameterization check rather than a count, because the
+measurement refuted the count. Asserting one instantiation per kernel entry point per
+containing set fails on the existing target: `zip_map2_parts_into_validated` is generic over
+the layout too, so it appears twice on the preset path and three times on the external path.
+Symbol names also embed the emitting crate's hash, so comparing two binaries' instantiation
+sets for equality compares that suffix instead of the parameterization. What the check now
+asserts is what the issue states: every contribution instantiation is parameterized by the
+contribution's scalar and operation, and no set type name appears in the parameters at all.
+That program defines four contribution instantiations and none names a set.
