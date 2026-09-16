@@ -780,6 +780,11 @@ guessing an encoding, in 228 added lines across seven files:
   name an external scalar at all, because tenferro owns no kernel for it. Carrying
   one through a program is what an extension operation is for.
 
+CI's own test and doctest commands were run as well: `cargo test --doc --workspace --profile ci`
+passes 1927 doctests with none failing, and `cargo nextest run --workspace --cargo-profile ci`
+reports 3348 passed against a single `trybuild` fixture failure that the pristine `origin/main`
+worktree reports identically.
+
 `ext/df64-proof/tests/extension_execution.rs` verifies both halves: the undeclared
 case is a typed error, and the declared case runs the registered operation through
 trace, compilation, and prepared execution

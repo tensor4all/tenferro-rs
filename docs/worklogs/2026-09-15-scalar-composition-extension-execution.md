@@ -781,3 +781,20 @@ runtime plans two programs whose payloads differ), the derivative rules' less co
 (`ad.rs`, 29), the eager retention guard (`eager.rs`, 16), and the private `Debug` rendering plus a
 defensive fallback in `checkpoint.rs` (11) that no public path reaches because `RetainedValue` is
 not a public item.
+
+## CI's own test and doctest commands
+
+The `workspace-faer` profile runs the workspace under `cargo nextest` and then the workspace
+doctests. Both were run here with CI's own flags:
+
+- `cargo test --doc --workspace --profile ci` — **1927 doctests passed, none failed**, exit 0. That
+  is the strongest evidence for "runnable doctests on every new public item": every example this
+  branch added runs, not merely that a source-level check found it.
+- `cargo nextest run --workspace --cargo-profile ci --no-fail-fast` — **3348 passed, 1 failed,
+  134 skipped**, where the one failure is `tenferro-tensor::storage_compile_contract
+  storage_ui_compile_contracts`, the `trybuild` fixture whose committed `.stderr` does not match
+  this compiler. The same command on the pristine `origin/main` worktree reports the same single
+  failure (311 run, 310 passed, 1 failed), so it is the environment rather than this branch.
+
+Both are now part of the verification record alongside the `cargo test` runs, which report the
+same trybuild failure split across three targets.
