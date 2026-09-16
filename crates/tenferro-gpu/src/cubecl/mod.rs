@@ -6347,38 +6347,63 @@ impl TensorFusion for CudaBackend {
         let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (lhs, rhs) else {
             return Ok(None);
         };
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_broadcast_multiply_typed(
-                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-            )
-            .map(Tensor::F32)
-            .map(Some),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_broadcast_multiply_typed(
-                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-            )
-            .map(Tensor::F64)
-            .map(Some),
-            (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_broadcast_multiply_int_typed(
-                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-            )
-            .map(Tensor::I32)
-            .map(Some),
-            (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_broadcast_multiply_int_typed(
-                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-            )
-            .map(Tensor::I64)
-            .map(Some),
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_broadcast_multiply_complex_typed(
-                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-            )
-            .map(Tensor::C32)
-            .map(Some),
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_broadcast_multiply_complex_typed(
-                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-            )
-            .map(Tensor::C64)
-            .map(Some),
-            (Tensor::Bool(_), Tensor::Bool(_)) => Ok(None),
+        // Dispatch on the tags and recover the typed tensors, which is what `as_typed` exists for.
+        match (lhs.dtype(), rhs.dtype()) {
+            (DType::F32, DType::F32) => {
+                let lhs = typed_or_unsupported::<f32>(lhs, "broadcast_multiply")?;
+                let rhs = typed_or_unsupported::<f32>(rhs, "broadcast_multiply")?;
+                launch_broadcast_multiply_typed(
+                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+                )
+                .map(Tensor::F32)
+                .map(Some)
+            }
+            (DType::F64, DType::F64) => {
+                let lhs = typed_or_unsupported::<f64>(lhs, "broadcast_multiply")?;
+                let rhs = typed_or_unsupported::<f64>(rhs, "broadcast_multiply")?;
+                launch_broadcast_multiply_typed(
+                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+                )
+                .map(Tensor::F64)
+                .map(Some)
+            }
+            (DType::I32, DType::I32) => {
+                let lhs = typed_or_unsupported::<i32>(lhs, "broadcast_multiply")?;
+                let rhs = typed_or_unsupported::<i32>(rhs, "broadcast_multiply")?;
+                launch_broadcast_multiply_int_typed(
+                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+                )
+                .map(Tensor::I32)
+                .map(Some)
+            }
+            (DType::I64, DType::I64) => {
+                let lhs = typed_or_unsupported::<i64>(lhs, "broadcast_multiply")?;
+                let rhs = typed_or_unsupported::<i64>(rhs, "broadcast_multiply")?;
+                launch_broadcast_multiply_int_typed(
+                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+                )
+                .map(Tensor::I64)
+                .map(Some)
+            }
+            (DType::C32, DType::C32) => {
+                let lhs = typed_or_unsupported::<Complex32>(lhs, "broadcast_multiply")?;
+                let rhs = typed_or_unsupported::<Complex32>(rhs, "broadcast_multiply")?;
+                launch_broadcast_multiply_complex_typed(
+                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+                )
+                .map(Tensor::C32)
+                .map(Some)
+            }
+            (DType::C64, DType::C64) => {
+                let lhs = typed_or_unsupported::<Complex64>(lhs, "broadcast_multiply")?;
+                let rhs = typed_or_unsupported::<Complex64>(rhs, "broadcast_multiply")?;
+                launch_broadcast_multiply_complex_typed(
+                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+                )
+                .map(Tensor::C64)
+                .map(Some)
+            }
+            (DType::Bool, DType::Bool) => Ok(None),
             _ => Err(dtype_mismatch("broadcast_multiply", lhs, rhs)),
         }
     }
