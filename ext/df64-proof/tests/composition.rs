@@ -3,6 +3,7 @@ use std::ops::Add;
 use tenferro_cpu::{scalar_binary_into, scalar_fold};
 use tenferro_df64_proof::Df64;
 use tenferro_tensor_core::HostTensor;
+use tenferro_tensor_core::{ad_admission, AdAdmissionError, ScalarArithmetic, ScalarDomain};
 
 fn df64(values: &[f64]) -> HostTensor<Df64> {
     HostTensor::from_vec_col_major(
@@ -111,4 +112,45 @@ fn empty_input_folds_to_the_initial_value() {
     let empty: HostTensor<Df64> = HostTensor::from_vec_col_major(vec![0], Vec::new()).unwrap();
     let total = scalar_fold("sum", &empty, Df64::zero(), Df64::add).unwrap();
     assert_eq!(total, Df64::zero());
+}
+
+#[test]
+fn external_scalar_implements_the_public_contract() {
+    assert_eq!(
+        <Df64 as tenferro_tensor_core::Scalar>::DOMAIN,
+        ScalarDomain::Field
+    );
+    assert_eq!(
+        Df64::scalar_add(Df64::from_f64(1.0), Df64::from_f64(2.0)),
+        Df64::from_f64(3.0)
+    );
+    assert_eq!(
+        Df64::scalar_mul(Df64::from_f64(3.0), Df64::from_f64(4.0)),
+        Df64::from_f64(12.0)
+    );
+    assert_eq!(
+        Df64::scalar_sub(Df64::from_f64(3.0), Df64::from_f64(4.0)),
+        Df64::from_f64(-1.0)
+    );
+    assert_eq!(Df64::scalar_one(), Df64::from_f64(1.0));
+    assert_eq!(Df64::scalar_zero(), Df64::zero());
+}
+
+#[test]
+fn external_scalar_reaches_the_shared_admission_query() {
+    // First order is admissible in principle but has no rules yet: the shared
+    // query rejects it explicitly instead of producing a zero gradient.
+    assert_eq!(
+        ad_admission::<Df64>(1),
+        Err(AdAdmissionError::AdRuleUnavailable)
+    );
+    assert_eq!(
+        ad_admission::<Df64>(2),
+        Err(AdAdmissionError::UnsupportedAdOrder { order: 2 })
+    );
+    // A non-field preset scalar is rejected on the same query.
+    assert_eq!(
+        ad_admission::<bool>(1),
+        Err(AdAdmissionError::NonFieldScalar)
+    );
 }

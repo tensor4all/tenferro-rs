@@ -61,6 +61,56 @@ impl Df64 {
     }
 }
 
+/// Exact product of two `f64` values as a high and low component (Dekker's
+/// two-product), used by the expansion product.
+#[inline]
+fn split(a: f64) -> (f64, f64) {
+    let factor = 134_217_729.0_f64;
+    let c = factor * a;
+    let hi = c - (c - a);
+    (hi, a - hi)
+}
+
+#[inline]
+fn two_product(a: f64, b: f64) -> (f64, f64) {
+    let product = a * b;
+    let (a_hi, a_lo) = split(a);
+    let (b_hi, b_lo) = split(b);
+    let error = ((a_hi * b_hi - product) + a_hi * b_lo + a_lo * b_hi) + a_lo * b_lo;
+    (product, error)
+}
+
+impl tenferro_tensor_core::Scalar for Df64 {
+    const DOMAIN: tenferro_tensor_core::ScalarDomain = tenferro_tensor_core::ScalarDomain::Field;
+}
+
+impl tenferro_tensor_core::ScalarArithmetic for Df64 {
+    fn scalar_zero() -> Self {
+        Self::zero()
+    }
+
+    fn scalar_one() -> Self {
+        Self::from_f64(1.0)
+    }
+
+    fn scalar_add(self, rhs: Self) -> Self {
+        std::ops::Add::add(self, rhs)
+    }
+
+    fn scalar_sub(self, rhs: Self) -> Self {
+        std::ops::Sub::sub(self, rhs)
+    }
+
+    /// First-order expansion product: the exact leading product plus the
+    /// first-order correction terms.
+    fn scalar_mul(self, rhs: Self) -> Self {
+        let (leading, trailing) = two_product(self.hi, rhs.hi);
+        let correction = trailing + self.hi * rhs.lo + self.lo * rhs.hi;
+        let (hi, lo) = two_sum(leading, correction);
+        Self { hi, lo }
+    }
+}
+
 impl std::ops::Add for Df64 {
     type Output = Self;
 
