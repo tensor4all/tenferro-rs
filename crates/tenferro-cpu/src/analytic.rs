@@ -530,16 +530,24 @@ pub(crate) fn pow_with_pool(
     rhs: &Tensor,
 ) -> crate::Result<Tensor> {
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_pow_with_pool(buffers, a, b)?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_pow_with_pool(buffers, a, b)?)),
-        (Tensor::I32(a), Tensor::I32(b)) => {
-            Ok(Tensor::I32(typed_integer_pow_with_pool(buffers, a, b)?))
-        }
-        (Tensor::I64(a), Tensor::I64(b)) => {
-            Ok(Tensor::I64(typed_integer_pow_with_pool(buffers, a, b)?))
-        }
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_pow_with_pool(buffers, a, b)?)),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_pow_with_pool(buffers, a, b)?)),
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::from_typed::<f32>(typed_pow_with_pool(
+            buffers, a, b,
+        )?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::from_typed::<f64>(typed_pow_with_pool(
+            buffers, a, b,
+        )?)),
+        (Tensor::I32(a), Tensor::I32(b)) => Ok(Tensor::from_typed::<i32>(
+            typed_integer_pow_with_pool(buffers, a, b)?,
+        )),
+        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::from_typed::<i64>(
+            typed_integer_pow_with_pool(buffers, a, b)?,
+        )),
+        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::from_typed::<Complex32>(
+            typed_pow_with_pool(buffers, a, b)?,
+        )),
+        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::from_typed::<Complex64>(
+            typed_pow_with_pool(buffers, a, b)?,
+        )),
         _ => Err(crate::Error::dtype_mismatch(
             "pow",
             lhs.dtype(),
@@ -557,24 +565,24 @@ pub(crate) fn pow_read_with_pool(
     let rhs_dtype = rhs.dtype();
     let (lhs_view, rhs_view) = (read_as_analytic_view(lhs)?, read_as_analytic_view(rhs)?);
     match (lhs_view, rhs_view) {
-        (AnalyticReadView::F32(a), AnalyticReadView::F32(b)) => Ok(Tensor::F32(
+        (AnalyticReadView::F32(a), AnalyticReadView::F32(b)) => Ok(Tensor::from_typed::<f32>(
             typed_pow_view_with_pool("pow", buffers, &a, &b)?,
         )),
-        (AnalyticReadView::F64(a), AnalyticReadView::F64(b)) => Ok(Tensor::F64(
+        (AnalyticReadView::F64(a), AnalyticReadView::F64(b)) => Ok(Tensor::from_typed::<f64>(
             typed_pow_view_with_pool("pow", buffers, &a, &b)?,
         )),
-        (AnalyticReadView::I32(a), AnalyticReadView::I32(b)) => Ok(Tensor::I32(
+        (AnalyticReadView::I32(a), AnalyticReadView::I32(b)) => Ok(Tensor::from_typed::<i32>(
             typed_integer_pow_view_with_pool(buffers, &a, &b)?,
         )),
-        (AnalyticReadView::I64(a), AnalyticReadView::I64(b)) => Ok(Tensor::I64(
+        (AnalyticReadView::I64(a), AnalyticReadView::I64(b)) => Ok(Tensor::from_typed::<i64>(
             typed_integer_pow_view_with_pool(buffers, &a, &b)?,
         )),
-        (AnalyticReadView::C32(a), AnalyticReadView::C32(b)) => Ok(Tensor::C32(
-            typed_pow_view_with_pool("pow", buffers, &a, &b)?,
-        )),
-        (AnalyticReadView::C64(a), AnalyticReadView::C64(b)) => Ok(Tensor::C64(
-            typed_pow_view_with_pool("pow", buffers, &a, &b)?,
-        )),
+        (AnalyticReadView::C32(a), AnalyticReadView::C32(b)) => Ok(
+            Tensor::from_typed::<Complex32>(typed_pow_view_with_pool("pow", buffers, &a, &b)?),
+        ),
+        (AnalyticReadView::C64(a), AnalyticReadView::C64(b)) => Ok(
+            Tensor::from_typed::<Complex64>(typed_pow_view_with_pool("pow", buffers, &a, &b)?),
+        ),
         _ => Err(crate::Error::dtype_mismatch("pow", lhs_dtype, rhs_dtype)),
     }
 }

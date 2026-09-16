@@ -236,22 +236,22 @@ pub(crate) fn reduce_sum(
     }
 
     match input.dtype() {
-        DType::F32 => Ok(Tensor::F32(typed_reduce_sum(
+        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_sum(
             typed_input::<f32>("reduce_sum", input)?,
             axes,
             exec_context,
         )?)),
-        DType::F64 => Ok(Tensor::F64(typed_reduce_sum(
+        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_sum(
             typed_input::<f64>("reduce_sum", input)?,
             axes,
             exec_context,
         )?)),
-        DType::I32 => Ok(Tensor::I32(typed_reduce_sum_wrapping(
+        DType::I32 => Ok(Tensor::from_typed::<i32>(typed_reduce_sum_wrapping(
             typed_input::<i32>("reduce_sum", input)?,
             axes,
             exec_context,
         )?)),
-        DType::I64 => Ok(Tensor::I64(typed_reduce_sum_wrapping(
+        DType::I64 => Ok(Tensor::from_typed::<i64>(typed_reduce_sum_wrapping(
             typed_input::<i64>("reduce_sum", input)?,
             axes,
             exec_context,
@@ -261,12 +261,12 @@ pub(crate) fn reduce_sum(
             DType::Bool,
             "F32/F64/I32/I64/C32/C64",
         )),
-        DType::C32 => Ok(Tensor::C32(typed_reduce_sum(
+        DType::C32 => Ok(Tensor::from_typed::<Complex32>(typed_reduce_sum(
             typed_input::<Complex32>("reduce_sum", input)?,
             axes,
             exec_context,
         )?)),
-        DType::C64 => Ok(Tensor::C64(typed_reduce_sum(
+        DType::C64 => Ok(Tensor::from_typed::<Complex64>(typed_reduce_sum(
             typed_input::<Complex64>("reduce_sum", input)?,
             axes,
             exec_context,
@@ -295,59 +295,29 @@ pub(crate) fn reduce_sum_read(
             ensure_host_tensor("reduce_sum", input)?;
             reduce_sum(input, axes, exec_context)
         }
-        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Sum,
-            "reduce_sum",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Sum,
-            "reduce_sum",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::I32(t)) => Ok(Tensor::I32(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Sum,
-            "reduce_sum",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::I64(t)) => Ok(Tensor::I64(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Sum,
-            "reduce_sum",
-            exec_context,
-        )?)),
+        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::from_typed::<f32>(
+            typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Sum, "reduce_sum", exec_context)?,
+        )),
+        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::from_typed::<f64>(
+            typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Sum, "reduce_sum", exec_context)?,
+        )),
+        TensorRead::View(TensorView::I32(t)) => Ok(Tensor::from_typed::<i32>(
+            typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Sum, "reduce_sum", exec_context)?,
+        )),
+        TensorRead::View(TensorView::I64(t)) => Ok(Tensor::from_typed::<i64>(
+            typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Sum, "reduce_sum", exec_context)?,
+        )),
         TensorRead::View(TensorView::Bool(_)) => Err(unsupported_dtype_with_supported(
             "reduce_sum",
             DType::Bool,
             "F32/F64/I32/I64/C32/C64",
         )),
-        TensorRead::View(TensorView::C32(t)) => Ok(Tensor::C32(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Sum,
-            "reduce_sum",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::C64(t)) => Ok(Tensor::C64(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Sum,
-            "reduce_sum",
-            exec_context,
-        )?)),
+        TensorRead::View(TensorView::C32(t)) => Ok(Tensor::from_typed::<Complex32>(
+            typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Sum, "reduce_sum", exec_context)?,
+        )),
+        TensorRead::View(TensorView::C64(t)) => Ok(Tensor::from_typed::<Complex64>(
+            typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Sum, "reduce_sum", exec_context)?,
+        )),
     }
 }
 
@@ -374,7 +344,7 @@ pub(crate) fn reduce_sum_squares(
     }
 
     match input.dtype() {
-        DType::F32 => Ok(Tensor::F32(typed_reduce_erased(
+        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_erased(
             input.as_typed::<f32>().ok_or_else(|| {
                 unsupported_sum_squares_dtype("reduce_sum_squares", input.dtype())
             })?,
@@ -383,7 +353,7 @@ pub(crate) fn reduce_sum_squares(
             "reduce_sum_squares",
             exec_context,
         )?)),
-        DType::F64 => Ok(Tensor::F64(typed_reduce_erased(
+        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_erased(
             input.as_typed::<f64>().ok_or_else(|| {
                 unsupported_sum_squares_dtype("reduce_sum_squares", input.dtype())
             })?,
@@ -510,22 +480,26 @@ pub(crate) fn reduce_sum_squares_read(
             ensure_host_tensor("reduce_sum_squares", input)?;
             reduce_sum_squares(buffers, input, axes, exec_context)
         }
-        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::SumSquares,
-            "reduce_sum_squares",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::SumSquares,
-            "reduce_sum_squares",
-            exec_context,
-        )?)),
+        TensorRead::View(TensorView::F32(t)) => {
+            Ok(Tensor::from_typed::<f32>(typed_reduce_view_erased(
+                buffers,
+                &t,
+                axes,
+                ReduceOp::SumSquares,
+                "reduce_sum_squares",
+                exec_context,
+            )?))
+        }
+        TensorRead::View(TensorView::F64(t)) => {
+            Ok(Tensor::from_typed::<f64>(typed_reduce_view_erased(
+                buffers,
+                &t,
+                axes,
+                ReduceOp::SumSquares,
+                "reduce_sum_squares",
+                exec_context,
+            )?))
+        }
         _ => Err(unsupported_sum_squares_dtype(
             "reduce_sum_squares",
             input.dtype(),
@@ -549,22 +523,22 @@ pub(crate) fn reduce_prod(
     }
 
     match input.dtype() {
-        DType::F32 => Ok(Tensor::F32(typed_reduce_prod(
+        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_prod(
             typed_input::<f32>("reduce_prod", input)?,
             axes,
             exec_context,
         )?)),
-        DType::F64 => Ok(Tensor::F64(typed_reduce_prod(
+        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_prod(
             typed_input::<f64>("reduce_prod", input)?,
             axes,
             exec_context,
         )?)),
-        DType::I32 => Ok(Tensor::I32(typed_reduce_prod_wrapping(
+        DType::I32 => Ok(Tensor::from_typed::<i32>(typed_reduce_prod_wrapping(
             typed_input::<i32>("reduce_prod", input)?,
             axes,
             exec_context,
         )?)),
-        DType::I64 => Ok(Tensor::I64(typed_reduce_prod_wrapping(
+        DType::I64 => Ok(Tensor::from_typed::<i64>(typed_reduce_prod_wrapping(
             typed_input::<i64>("reduce_prod", input)?,
             axes,
             exec_context,
@@ -574,12 +548,12 @@ pub(crate) fn reduce_prod(
             DType::Bool,
             "F32/F64/I32/I64/C32/C64",
         )),
-        DType::C32 => Ok(Tensor::C32(typed_reduce_prod(
+        DType::C32 => Ok(Tensor::from_typed::<Complex32>(typed_reduce_prod(
             typed_input::<Complex32>("reduce_prod", input)?,
             axes,
             exec_context,
         )?)),
-        DType::C64 => Ok(Tensor::C64(typed_reduce_prod(
+        DType::C64 => Ok(Tensor::from_typed::<Complex64>(typed_reduce_prod(
             typed_input::<Complex64>("reduce_prod", input)?,
             axes,
             exec_context,
@@ -608,59 +582,71 @@ pub(crate) fn reduce_prod_read(
             ensure_host_tensor("reduce_prod", input)?;
             reduce_prod(input, axes, exec_context)
         }
-        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Product,
-            "reduce_prod",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Product,
-            "reduce_prod",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::I32(t)) => Ok(Tensor::I32(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Product,
-            "reduce_prod",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::I64(t)) => Ok(Tensor::I64(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Product,
-            "reduce_prod",
-            exec_context,
-        )?)),
+        TensorRead::View(TensorView::F32(t)) => {
+            Ok(Tensor::from_typed::<f32>(typed_reduce_view_erased(
+                buffers,
+                &t,
+                axes,
+                ReduceOp::Product,
+                "reduce_prod",
+                exec_context,
+            )?))
+        }
+        TensorRead::View(TensorView::F64(t)) => {
+            Ok(Tensor::from_typed::<f64>(typed_reduce_view_erased(
+                buffers,
+                &t,
+                axes,
+                ReduceOp::Product,
+                "reduce_prod",
+                exec_context,
+            )?))
+        }
+        TensorRead::View(TensorView::I32(t)) => {
+            Ok(Tensor::from_typed::<i32>(typed_reduce_view_erased(
+                buffers,
+                &t,
+                axes,
+                ReduceOp::Product,
+                "reduce_prod",
+                exec_context,
+            )?))
+        }
+        TensorRead::View(TensorView::I64(t)) => {
+            Ok(Tensor::from_typed::<i64>(typed_reduce_view_erased(
+                buffers,
+                &t,
+                axes,
+                ReduceOp::Product,
+                "reduce_prod",
+                exec_context,
+            )?))
+        }
         TensorRead::View(TensorView::Bool(_)) => Err(unsupported_dtype_with_supported(
             "reduce_prod",
             DType::Bool,
             "F32/F64/I32/I64/C32/C64",
         )),
-        TensorRead::View(TensorView::C32(t)) => Ok(Tensor::C32(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Product,
-            "reduce_prod",
-            exec_context,
-        )?)),
-        TensorRead::View(TensorView::C64(t)) => Ok(Tensor::C64(typed_reduce_view_erased(
-            buffers,
-            &t,
-            axes,
-            ReduceOp::Product,
-            "reduce_prod",
-            exec_context,
-        )?)),
+        TensorRead::View(TensorView::C32(t)) => {
+            Ok(Tensor::from_typed::<Complex32>(typed_reduce_view_erased(
+                buffers,
+                &t,
+                axes,
+                ReduceOp::Product,
+                "reduce_prod",
+                exec_context,
+            )?))
+        }
+        TensorRead::View(TensorView::C64(t)) => {
+            Ok(Tensor::from_typed::<Complex64>(typed_reduce_view_erased(
+                buffers,
+                &t,
+                axes,
+                ReduceOp::Product,
+                "reduce_prod",
+                exec_context,
+            )?))
+        }
     }
 }
 
@@ -676,19 +662,19 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     }
 
     match input.dtype() {
-        DType::F32 => Ok(Tensor::F32(typed_reduce_max(
+        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_max(
             typed_input::<f32>("reduce_max", input)?,
             axes,
         )?)),
-        DType::F64 => Ok(Tensor::F64(typed_reduce_max(
+        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_max(
             typed_input::<f64>("reduce_max", input)?,
             axes,
         )?)),
-        DType::I32 => Ok(Tensor::I32(typed_reduce_max_integer(
+        DType::I32 => Ok(Tensor::from_typed::<i32>(typed_reduce_max_integer(
             typed_input::<i32>("reduce_max", input)?,
             axes,
         )?)),
-        DType::I64 => Ok(Tensor::I64(typed_reduce_max_integer(
+        DType::I64 => Ok(Tensor::from_typed::<i64>(typed_reduce_max_integer(
             typed_input::<i64>("reduce_max", input)?,
             axes,
         )?)),
@@ -722,7 +708,7 @@ pub(crate) fn reduce_max_read(
         }
         TensorRead::View(TensorView::F32(t)) => {
             validate_reduced_axes_nonempty("reduce_max", t.shape(), axes)?;
-            Ok(Tensor::F32(typed_reduce_view(
+            Ok(Tensor::from_typed::<f32>(typed_reduce_view(
                 &t,
                 axes,
                 |x| x,
@@ -733,7 +719,7 @@ pub(crate) fn reduce_max_read(
         }
         TensorRead::View(TensorView::F64(t)) => {
             validate_reduced_axes_nonempty("reduce_max", t.shape(), axes)?;
-            Ok(Tensor::F64(typed_reduce_view(
+            Ok(Tensor::from_typed::<f64>(typed_reduce_view(
                 &t,
                 axes,
                 |x| x,
@@ -744,7 +730,7 @@ pub(crate) fn reduce_max_read(
         }
         TensorRead::View(TensorView::I32(t)) => {
             validate_reduced_axes_nonempty("reduce_max", t.shape(), axes)?;
-            Ok(Tensor::I32(typed_reduce_view(
+            Ok(Tensor::from_typed::<i32>(typed_reduce_view(
                 &t,
                 axes,
                 |x| x,
@@ -755,7 +741,7 @@ pub(crate) fn reduce_max_read(
         }
         TensorRead::View(TensorView::I64(t)) => {
             validate_reduced_axes_nonempty("reduce_max", t.shape(), axes)?;
-            Ok(Tensor::I64(typed_reduce_view(
+            Ok(Tensor::from_typed::<i64>(typed_reduce_view(
                 &t,
                 axes,
                 |x| x,
@@ -784,19 +770,19 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     }
 
     match input.dtype() {
-        DType::F32 => Ok(Tensor::F32(typed_reduce_min(
+        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_min(
             typed_input::<f32>("reduce_min", input)?,
             axes,
         )?)),
-        DType::F64 => Ok(Tensor::F64(typed_reduce_min(
+        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_min(
             typed_input::<f64>("reduce_min", input)?,
             axes,
         )?)),
-        DType::I32 => Ok(Tensor::I32(typed_reduce_min_integer(
+        DType::I32 => Ok(Tensor::from_typed::<i32>(typed_reduce_min_integer(
             typed_input::<i32>("reduce_min", input)?,
             axes,
         )?)),
-        DType::I64 => Ok(Tensor::I64(typed_reduce_min_integer(
+        DType::I64 => Ok(Tensor::from_typed::<i64>(typed_reduce_min_integer(
             typed_input::<i64>("reduce_min", input)?,
             axes,
         )?)),
@@ -830,7 +816,7 @@ pub(crate) fn reduce_min_read(
         }
         TensorRead::View(TensorView::F32(t)) => {
             validate_reduced_axes_nonempty("reduce_min", t.shape(), axes)?;
-            Ok(Tensor::F32(typed_reduce_view(
+            Ok(Tensor::from_typed::<f32>(typed_reduce_view(
                 &t,
                 axes,
                 |x| x,
@@ -841,7 +827,7 @@ pub(crate) fn reduce_min_read(
         }
         TensorRead::View(TensorView::F64(t)) => {
             validate_reduced_axes_nonempty("reduce_min", t.shape(), axes)?;
-            Ok(Tensor::F64(typed_reduce_view(
+            Ok(Tensor::from_typed::<f64>(typed_reduce_view(
                 &t,
                 axes,
                 |x| x,
@@ -852,7 +838,7 @@ pub(crate) fn reduce_min_read(
         }
         TensorRead::View(TensorView::I32(t)) => {
             validate_reduced_axes_nonempty("reduce_min", t.shape(), axes)?;
-            Ok(Tensor::I32(typed_reduce_view(
+            Ok(Tensor::from_typed::<i32>(typed_reduce_view(
                 &t,
                 axes,
                 |x| x,
@@ -863,7 +849,7 @@ pub(crate) fn reduce_min_read(
         }
         TensorRead::View(TensorView::I64(t)) => {
             validate_reduced_axes_nonempty("reduce_min", t.shape(), axes)?;
-            Ok(Tensor::I64(typed_reduce_view(
+            Ok(Tensor::from_typed::<i64>(typed_reduce_view(
                 &t,
                 axes,
                 |x| x,
