@@ -183,6 +183,7 @@ pub use runtime_adapter::{
 pub use tenferro_internal_cpu_kernels::scalar_ops::{
     scalar_binary_into, scalar_fold, AddOp, BinaryScalarOp, MulOp, SubOp,
 };
+pub use tenferro_internal_cpu_kernels::{same_variant_pair, same_variant_unary};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,

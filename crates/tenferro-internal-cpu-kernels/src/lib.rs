@@ -12,6 +12,7 @@ pub use tenferro_cpu_basic::{
 };
 pub use tenferro_tensor::{CacheStats, DType, Error, ErrorKind};
 
+pub mod dispatch;
 pub mod elementwise;
 pub mod read_into;
 pub mod scalar_ops;

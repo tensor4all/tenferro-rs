@@ -3,6 +3,7 @@ use crate::extension::apply_qr_gauge;
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
 
 use super::linalg;
+use tenferro_cpu::same_variant_pair;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::BufferPool;
@@ -15,23 +16,6 @@ use tenferro_tensor::{
 
 trait FreshLinalgOutput {
     fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId);
-}
-
-/// Dispatch a same-variant pair of tensors to a typed kernel.
-///
-/// The four supported real and complex variants are matched once here instead of
-/// at every call site, so an operation supplies only the typed kernel and the
-/// unsupported-pair error is reported the same way everywhere.
-macro_rules! same_variant_pair {
-    ($op:literal, $lhs:expr, $rhs:expr, |$a:ident, $b:ident| $call:expr) => {
-        match ($lhs, $rhs) {
-            (Tensor::F32($a), Tensor::F32($b)) => $call.map(Tensor::F32),
-            (Tensor::F64($a), Tensor::F64($b)) => $call.map(Tensor::F64),
-            (Tensor::C32($a), Tensor::C32($b)) => $call.map(Tensor::C32),
-            (Tensor::C64($a), Tensor::C64($b)) => $call.map(Tensor::C64),
-            ($a, $b) => unsupported_pair($op, $a, $b),
-        }
-    };
 }
 
 impl FreshLinalgOutput for Tensor {
@@ -274,9 +258,14 @@ impl LinalgBackend for CpuExecSession<'_> {
                 #[cfg(feature = "cpu-faer")]
                 {
                     self.with_linalg_pool_fresh(|ctx, buffers| {
-                        same_variant_pair!("full_piv_lu_solve", a, &rhs, |a, b| {
-                            linalg::faer::full_piv_lu_solve(ctx, buffers, a, b, transpose_a)
-                        })
+                        same_variant_pair!(
+                            a,
+                            &rhs,
+                            |a, b| {
+                                linalg::faer::full_piv_lu_solve(ctx, buffers, a, b, transpose_a)
+                            },
+                            unsupported_pair("full_piv_lu_solve", a, &rhs)
+                        )
                     })
                 }
                 #[cfg(not(feature = "cpu-faer"))]
@@ -288,9 +277,12 @@ impl LinalgBackend for CpuExecSession<'_> {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool_fresh(|_, buffers| {
-                        same_variant_pair!("full_piv_lu_solve", a, &rhs, |a, b| {
-                            linalg::blas::full_piv_lu_solve(buffers, a, b, transpose_a)
-                        })
+                        same_variant_pair!(
+                            a,
+                            &rhs,
+                            |a, b| { linalg::blas::full_piv_lu_solve(buffers, a, b, transpose_a) },
+                            unsupported_pair("full_piv_lu_solve", a, &rhs)
+                        )
                     })
                 }
                 #[cfg(not(feature = "cpu-blas"))]
@@ -1141,18 +1133,23 @@ fn triangular_solve_entered(
         CpuLinalgProvider::Faer => {
             #[cfg(feature = "cpu-faer")]
             {
-                same_variant_pair!("triangular_solve", a, b, |a, b| {
-                    linalg::faer::triangular_solve(
-                        context,
-                        buffers,
-                        a,
-                        b,
-                        options.left_side,
-                        options.lower,
-                        options.transpose_a,
-                        options.unit_diagonal,
-                    )
-                })
+                same_variant_pair!(
+                    a,
+                    b,
+                    |a, b| {
+                        linalg::faer::triangular_solve(
+                            context,
+                            buffers,
+                            a,
+                            b,
+                            options.left_side,
+                            options.lower,
+                            options.transpose_a,
+                            options.unit_diagonal,
+                        )
+                    },
+                    unsupported_pair("triangular_solve", a, b)
+                )
             }
             #[cfg(not(feature = "cpu-faer"))]
             {
@@ -1167,17 +1164,22 @@ fn triangular_solve_entered(
             #[cfg(feature = "cpu-blas")]
             {
                 let _ = context;
-                same_variant_pair!("triangular_solve", a, b, |a, b| {
-                    linalg::blas::triangular_solve(
-                        buffers,
-                        a,
-                        b,
-                        options.left_side,
-                        options.lower,
-                        options.transpose_a,
-                        options.unit_diagonal,
-                    )
-                })
+                same_variant_pair!(
+                    a,
+                    b,
+                    |a, b| {
+                        linalg::blas::triangular_solve(
+                            buffers,
+                            a,
+                            b,
+                            options.left_side,
+                            options.lower,
+                            options.transpose_a,
+                            options.unit_diagonal,
+                        )
+                    },
+                    unsupported_pair("triangular_solve", a, b)
+                )
             }
             #[cfg(not(feature = "cpu-blas"))]
             {
@@ -1215,9 +1217,12 @@ fn solve_entered(
         CpuLinalgProvider::Faer => {
             #[cfg(feature = "cpu-faer")]
             {
-                same_variant_pair!("solve", a, &rhs, |a, b| {
-                    linalg::faer::solve(context, buffers, a, b, false)
-                })
+                same_variant_pair!(
+                    a,
+                    &rhs,
+                    |a, b| { linalg::faer::solve(context, buffers, a, b, false) },
+                    unsupported_pair("solve", a, &rhs)
+                )
             }
             #[cfg(not(feature = "cpu-faer"))]
             {
@@ -1229,9 +1234,12 @@ fn solve_entered(
             #[cfg(feature = "cpu-blas")]
             {
                 let _ = context;
-                same_variant_pair!("solve", a, &rhs, |a, b| {
-                    linalg::blas::solve(buffers, a, b, false)
-                })
+                same_variant_pair!(
+                    a,
+                    &rhs,
+                    |a, b| { linalg::blas::solve(buffers, a, b, false) },
+                    unsupported_pair("solve", a, &rhs)
+                )
             }
             #[cfg(not(feature = "cpu-blas"))]
             {
@@ -2031,25 +2039,16 @@ fn householder_qr_r_entered(
     let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
     if provider == CpuLinalgProvider::Faer {
         #[cfg(feature = "cpu-faer")]
-        return match (packed, coeff) {
-            (Tensor::F32(p), Tensor::F32(c)) => {
-                linalg::faer::raw_r_2d(p, c, positive).map(Tensor::F32)
-            }
-            (Tensor::F64(p), Tensor::F64(c)) => {
-                linalg::faer::raw_r_2d(p, c, positive).map(Tensor::F64)
-            }
-            (Tensor::C32(p), Tensor::C32(c)) => {
-                linalg::faer::raw_r_2d(p, c, positive).map(Tensor::C32)
-            }
-            (Tensor::C64(p), Tensor::C64(c)) => {
-                linalg::faer::raw_r_2d(p, c, positive).map(Tensor::C64)
-            }
-            _ => Err(Error::dtype_mismatch(
+        return same_variant_pair!(
+            packed,
+            coeff,
+            |p, c| linalg::faer::raw_r_2d(p, c, positive),
+            Err(Error::dtype_mismatch(
                 "householder_qr_r",
                 packed.dtype(),
                 coeff.dtype(),
-            )),
-        };
+            ))
+        );
         #[cfg(not(feature = "cpu-faer"))]
         return Err(unsupported_provider(
             "householder_qr_r",
@@ -2058,25 +2057,16 @@ fn householder_qr_r_entered(
     }
     #[cfg(feature = "cpu-blas")]
     {
-        match (packed, coeff) {
-            (Tensor::F32(p), Tensor::F32(c)) => {
-                linalg::blas::householder_qr_r(p, c, positive).map(Tensor::F32)
-            }
-            (Tensor::F64(p), Tensor::F64(c)) => {
-                linalg::blas::householder_qr_r(p, c, positive).map(Tensor::F64)
-            }
-            (Tensor::C32(p), Tensor::C32(c)) => {
-                linalg::blas::householder_qr_r(p, c, positive).map(Tensor::C32)
-            }
-            (Tensor::C64(p), Tensor::C64(c)) => {
-                linalg::blas::householder_qr_r(p, c, positive).map(Tensor::C64)
-            }
-            _ => Err(Error::dtype_mismatch(
+        same_variant_pair!(
+            packed,
+            coeff,
+            |p, c| linalg::blas::householder_qr_r(p, c, positive),
+            Err(Error::dtype_mismatch(
                 "householder_qr_r",
                 packed.dtype(),
                 coeff.dtype(),
-            )),
-        }
+            ))
+        )
     }
     #[cfg(not(feature = "cpu-blas"))]
     {
