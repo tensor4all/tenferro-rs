@@ -1028,11 +1028,12 @@ measured with `git diff --numstat <start>..<end>`:
 | 1a unified tag, sealed adapter, shared dispatch | 6 | 19 | 795 | 121 |
 | 1b entry points, admission, the contribution | 5 | 7 | 716 | 373 |
 | 2.1 the scalar set generated from one declaration | 4 | 8 | 338 | 3 |
-| 2.2 tag and erased payload, views, AD, QR, and the consumers | 81 | 126 | 11329 | 529 |
-| **total** | **96** | **160** | **13178** | **1026** |
+| 2.2 tag and erased payload, views, AD, QR, the consumers, bf16, and CI | 99 | 146 | 14116 | 534 |
+| **total** | **114** | **180** | **15965** | **1031** |
 
 The file counts are summed per stage, so a file changed in two stages is counted twice; the
-branch touches 119 distinct files (`git diff --shortstat origin/main..HEAD`). The last row carries
+branch touches 154 distinct files and 15846 insertions with 912 deletions
+(`git diff --shortstat origin/main..HEAD`). The last row carries
 the feature work built on Stage 2.2's representation change, not the representation change alone.
 
 Taken together with the per-area measurements on this head (`git diff --numstat origin/main..HEAD`:
