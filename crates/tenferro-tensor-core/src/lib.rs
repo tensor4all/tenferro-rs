@@ -34,10 +34,12 @@ use smallvec::SmallVec;
 mod error;
 mod layout;
 mod rank;
+mod scalar;
 
 pub use error::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 pub use layout::TensorLayout;
 pub use rank::{DynRank, IntoRankShape, Rank, TensorRank};
+pub use scalar::{ad_admission, AdAdmissionError, Scalar, ScalarArithmetic, ScalarDomain};
 
 /// Small tensor shape vector with inline capacity for common dynamic ranks.
 ///
@@ -123,7 +125,7 @@ pub enum DType {
 /// assert_eq!(f64::dtype(), DType::F64);
 /// assert_eq!(num_complex::Complex64::dtype(), DType::C64);
 /// ```
-pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
+pub trait TensorScalar: Scalar + Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Real-valued counterpart of this scalar type.
     type Real: TensorScalar;
 
@@ -173,8 +175,102 @@ mod private {
     impl Sealed for num_complex::Complex64 {}
 }
 
+macro_rules! scalar_domain {
+    (float) => {
+        ScalarDomain::Field
+    };
+    (complex) => {
+        ScalarDomain::Field
+    };
+    (integer) => {
+        ScalarDomain::Field
+    };
+    (boolean) => {
+        ScalarDomain::NonField
+    };
+}
+
+macro_rules! impl_scalar_arithmetic {
+    ($ty:ty, float) => {
+        impl ScalarArithmetic for $ty {
+            fn scalar_zero() -> Self {
+                0.0
+            }
+
+            fn scalar_one() -> Self {
+                1.0
+            }
+
+            fn scalar_add(self, rhs: Self) -> Self {
+                std::ops::Add::add(self, rhs)
+            }
+
+            fn scalar_sub(self, rhs: Self) -> Self {
+                std::ops::Sub::sub(self, rhs)
+            }
+
+            fn scalar_mul(self, rhs: Self) -> Self {
+                std::ops::Mul::mul(self, rhs)
+            }
+        }
+    };
+    ($ty:ty, complex) => {
+        impl ScalarArithmetic for $ty {
+            fn scalar_zero() -> Self {
+                <$ty>::new(0.0, 0.0)
+            }
+
+            fn scalar_one() -> Self {
+                <$ty>::new(1.0, 0.0)
+            }
+
+            fn scalar_add(self, rhs: Self) -> Self {
+                std::ops::Add::add(self, rhs)
+            }
+
+            fn scalar_sub(self, rhs: Self) -> Self {
+                std::ops::Sub::sub(self, rhs)
+            }
+
+            fn scalar_mul(self, rhs: Self) -> Self {
+                std::ops::Mul::mul(self, rhs)
+            }
+        }
+    };
+    ($ty:ty, integer) => {
+        impl ScalarArithmetic for $ty {
+            fn scalar_zero() -> Self {
+                0
+            }
+
+            fn scalar_one() -> Self {
+                1
+            }
+
+            fn scalar_add(self, rhs: Self) -> Self {
+                self.wrapping_add(rhs)
+            }
+
+            fn scalar_sub(self, rhs: Self) -> Self {
+                self.wrapping_sub(rhs)
+            }
+
+            fn scalar_mul(self, rhs: Self) -> Self {
+                self.wrapping_mul(rhs)
+            }
+        }
+    };
+    ($ty:ty, boolean) => {};
+}
+
 macro_rules! impl_scalar {
-    ($ty:ty, $real:ty, $dtype:expr, $variant:ident) => {
+    ($ty:ty, $real:ty, $dtype:expr, $variant:ident, $kind:ident) => {
+        impl Scalar for $ty {
+            const DOMAIN: ScalarDomain = scalar_domain!($kind);
+        }
+
+        impl_scalar_arithmetic!($ty, $kind);
+
         impl TensorScalar for $ty {
             type Real = $real;
 
@@ -210,13 +306,16 @@ macro_rules! impl_scalar {
     };
 }
 
-impl_scalar!(f32, f32, DType::F32, F32);
-impl_scalar!(f64, f64, DType::F64, F64);
-impl_scalar!(i32, i32, DType::I32, I32);
-impl_scalar!(i64, i64, DType::I64, I64);
-impl_scalar!(bool, bool, DType::Bool, Bool);
-impl_scalar!(Complex32, f32, DType::C32, C32);
-impl_scalar!(Complex64, f64, DType::C64, C64);
+// The single preset table: tag, real counterpart, erased variant, and algebra
+// kind are declared once here and expanded into every contract the preset
+// scalars implement.
+impl_scalar!(f32, f32, DType::F32, F32, float);
+impl_scalar!(f64, f64, DType::F64, F64, float);
+impl_scalar!(i32, i32, DType::I32, I32, integer);
+impl_scalar!(i64, i64, DType::I64, I64, integer);
+impl_scalar!(bool, bool, DType::Bool, Bool, boolean);
+impl_scalar!(Complex32, f32, DType::C32, C32, complex);
+impl_scalar!(Complex64, f64, DType::C64, C64, complex);
 
 /// Explicit slice descriptor.
 ///

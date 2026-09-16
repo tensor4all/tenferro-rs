@@ -181,9 +181,14 @@ in `tenferro-internal-cpu-kernels` (re-exported from `tenferro-cpu`), which run
 the same `zip_map2_into` / `reduce` bodies the preset pool path uses, and the
 `ext/df64-proof` crate, whose own two-`f64` scalar exercises construction,
 borrowed and mutable access, an elementwise operation, a reduction, and an
-explicit `f64` narrowing through those public functions. Still outstanding in
-1b: the open scalar contract and single preset table, the shared erased
-dispatch, and `ad_admission`.
+explicit `f64` narrowing through those public functions. Landed next: the open scalar contract (`Scalar`, `ScalarArithmetic`,
+`ScalarDomain`) and `ad_admission` in `tenferro-tensor-core`, with the seven
+presets declared once in a single table that expands into every contract they
+implement, and the proof crate's scalar implementing `Scalar` and
+`ScalarArithmetic` for itself so the contract has an external consumer. The
+external scalar reaches `ad_admission` and is rejected explicitly
+(`AdRuleUnavailable` at first order, `UnsupportedAdOrder` above it) rather than
+receiving a zero gradient. Still outstanding in 1b: the shared erased dispatch.
 
 The slice must exercise: typed construction, shared and mutable borrowing, one
 binary operation, one reduction, and one explicit precision-reducing conversion.
