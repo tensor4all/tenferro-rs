@@ -962,7 +962,7 @@ fn replay_clamp<T: OrderedElem + PoolScalar>(
     .map_err(|err| crate::Error::backend_source("clamp", err))
 }
 
-fn replay_binary<T: Copy + Send + Sync, O: Copy + PoolScalar>(
+fn replay_binary<T: Copy + Send + Sync, O: Copy + Send + Sync>(
     op: &'static str,
     out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<O>>,
     lhs: &StridedView<'_, T>,
@@ -973,7 +973,7 @@ fn replay_binary<T: Copy + Send + Sync, O: Copy + PoolScalar>(
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
-fn replay_scalar_left<T: Copy + PoolScalar>(
+fn replay_scalar_left<T: Copy + Send + Sync>(
     op: &'static str,
     out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
     input: &StridedView<'_, T>,
@@ -984,7 +984,7 @@ fn replay_scalar_left<T: Copy + PoolScalar>(
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
-fn replay_scalar_right<T: Copy + PoolScalar>(
+fn replay_scalar_right<T: Copy + Send + Sync>(
     op: &'static str,
     out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
     input: &StridedView<'_, T>,
