@@ -578,30 +578,32 @@ The pieces that step needs are landed: the payload answers its element identity,
 shape, and element count, `ScalarSet::promote` accepts an external tag, and the
 cache-key identity carries the actual scalar rather than a shared code.
 
-The registered-extension path was attempted and reached its real boundary. The
-extension op family, its planning config, engine, prepared operation, executor,
-and module all compile and register in a downstream crate, and the family rejects a
-preset input explicitly. Executing one is blocked one layer deeper: the eager value
-record builds an `AllocationGroup` for every tensor
-(`crates/tenferro-ad/src/eager.rs`, `AdValueRecord::from_tensor`), and
-`AllocationGroup::from_tensors` reaches `Tensor::into_group_parts`, which a
-caller-owned payload has no answer for because it owns no pooled storage.
-`ext/df64-proof/tests/extension_execution.rs` keeps that test ignored with that
-reason rather than hiding it, and `cargo test -- --ignored` reproduces the exact
-panic site. Giving a caller-owned payload an ownership slot in the runtime's
-retention model is #1789's decision, so this step waits on it rather than growing a
-private pool. Two candidate shapes were identified and neither is a mechanical
-edit, which is why the choice belongs to a reviewed step:
+The registered-extension path now executes end to end. The extension op family,
+its planning config, engine, prepared operation, executor, and module all live in
+the downstream crate, the family rejects a preset input explicitly, and
+`ext/df64-proof/tests/extension_execution.rs` runs the operation on a
+caller-owned payload through the registered module and checks that the low-order
+component survives.
 
-| Shape | Change | Cost |
-| --- | --- | --- |
-| Retention record | `RetentionContainer` becomes pooled-or-caller-owned, and `AdValueRecord` retains the value directly for the second case | `tensor_read`, `value`, `into_tensor`, and `duplicate_host_tensor` each need a branch; `value` cannot serve a caller-owned payload because there is no `TensorView::External` |
-| Storage root | `RootResourcePin` gains an erased host variant so a group can own the payload | the group's descriptor, read-view, and `into_tensor` paths are typed per preset and would each need the erased case, which spreads the change into `tenferro-tensor` storage rather than `tenferro-ad` retention |
+What that required is the ownership path, and it is the first of the two candidate
+shapes recorded earlier, now implemented:
 
-The first shape keeps the ownership boundary where the design puts it - the runtime
-retains a caller-owned value without taking pool ownership, and the value returns
-to its owner when the record drops - so it is the smaller of the two even though it
-is not mechanical.
+- `AdValueRecord` in `tenferro-ad` and `RetainedValue` in `tenferro-runtime` each
+  hold a pooled-or-caller-owned container. A caller-owned payload is retained
+  directly, so it needs no allocation group and nothing returns to a pool when the
+  record drops.
+- A caller-owned payload has no typed descriptor view, so a path that needs one
+  (`value()`) fails with a typed runtime error rather than borrowing the payload as
+  bytes; the read, duplicate, and consume paths serve it instead.
+- `TensorValue::try_into_group_parts` returns a caller-owned value unchanged rather
+  than forcing it into a group, which is what lets the runtime's retention model
+  accept it.
+- `to_contiguous_read` and duplication clone a caller-owned payload through its own
+  entry point, which keeps its element type and reinterprets no bytes.
+
+#1789 still owns what this deliberately does not decide: pool reuse for external
+scratch, cross-owner handoffs, and the accounting a caller-owned payload
+participates in. The payload here is retained and returned, not pooled.
 
 Session composition is demonstrated without that engine path, and the limit is
 stated where it matters. `ext/df64-proof/tests/session_composition.rs` carries an

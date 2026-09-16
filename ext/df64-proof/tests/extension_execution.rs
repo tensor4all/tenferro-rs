@@ -8,7 +8,7 @@ use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
 use tenferro_df64_proof::extension::{apply_total, Df64Total};
 use tenferro_df64_proof::Df64;
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_tensor::{AllocationGroup, BackendSessionHost, GroupError, Tensor};
 use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
 
 fn external(values: Vec<Df64>) -> Tensor {
@@ -28,13 +28,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
     }
 }
 
-// The registered operation is prepared and reachable, but executing it needs the
-// runtime to hold a caller-owned payload: the eager value record builds an
-// `AllocationGroup` for every tensor, and a payload that owns no pooled storage
-// has no group. Giving it one is #1789's ownership decision, so the test records
-// the blocker instead of hiding it.
 #[test]
-#[ignore = "requires the caller-owned payload ownership contract from #1789"]
 fn the_extension_operation_runs_through_the_registered_module() {
     let low = 2f64.powi(-80);
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).expect("cpu runtime");
@@ -81,4 +75,31 @@ fn ordinary_work_shares_the_session_with_the_extension() {
         1
     );
     drop(runtime);
+}
+
+#[test]
+fn the_runtime_retains_and_returns_a_caller_owned_payload() {
+    let low = 2f64.powi(-80);
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).expect("cpu runtime");
+    let original = Df64::from_f64(1.0) + Df64::from_f64(low);
+    let leaf = tenferro_ad::EagerTensor::from_tensor_in(
+        external(vec![original, Df64::from_f64(3.0)]),
+        std::sync::Arc::clone(&runtime),
+    )
+    .expect("eager tensor");
+
+    // A caller-owned payload keeps every bit while the runtime retains it, so the
+    // low-order component survives the round trip unchanged.
+    let value = leaf.to_tensor().expect("round trip");
+    assert_eq!(payload(&value), vec![original, Df64::from_f64(3.0)]);
+    assert!(matches!(value, Tensor::External(..)));
+}
+
+#[test]
+fn an_allocation_group_rejects_a_caller_owned_payload_with_a_typed_error() {
+    // A payload tenferro does not define owns no pooled allocation group, so the
+    // group reports it explicitly instead of dropping or zeroing the value.
+    let error = AllocationGroup::from_tensors(vec![external(vec![Df64::from_f64(1.0)])])
+        .expect_err("a caller-owned payload has no allocation group");
+    assert!(matches!(error, GroupError::InvalidDescriptor { .. }));
 }

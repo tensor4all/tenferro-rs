@@ -4168,6 +4168,11 @@ impl TensorValue {
         self,
     ) -> std::result::Result<(AllocationGroup, DescriptorSlot, DType, Vec<usize>), Self> {
         let Self { owner, layout } = self;
+        if matches!(owner, Tensor::External(..)) {
+            // A caller-owned payload owns no allocation group, so it is returned
+            // unchanged instead of being forced into one.
+            return Err(Self { owner, layout });
+        }
         let dtype = owner.dtype();
         let shape = layout.shape().to_vec();
         let strides = layout.strides().to_vec();

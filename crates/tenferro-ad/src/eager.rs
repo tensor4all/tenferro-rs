@@ -738,17 +738,32 @@ impl<H> std::fmt::Display for IntoValueError<H> {
 
 impl<H: std::fmt::Debug + Send + Sync + 'static> std::error::Error for IntoValueError<H> {}
 
-/// One direct retention container owns the physical allocation group.
+/// What one direct retention container holds.
+// The pooled variant owns an allocation group inline; boxing it would add an
+// allocation to every retained value on the hot path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
-struct RetentionContainer {
-    group: AllocationGroup,
+enum RetentionContainer {
+    /// Pooled storage owned through an allocation group and one descriptor slot.
+    Pooled {
+        group: AllocationGroup,
+        slot: DescriptorSlot,
+    },
+    /// A caller-owned value the runtime retains without taking pool ownership.
+    ///
+    /// The value returns to its owner when the record drops, and the runtime never
+    /// substitutes it for pooled storage. A caller-owned payload has no typed
+    /// descriptor view, so only its read and consume paths are available.
+    CallerOwned {
+        /// Boxed because a tensor value is much larger than the pooled variant.
+        tensor: Box<Tensor>,
+    },
 }
 
 /// Read-only descriptor record used by eager handles and the AD registries.
 #[derive(Debug)]
 pub(crate) struct AdValueRecord {
     container: Arc<RetentionContainer>,
-    slot: DescriptorSlot,
     dtype: DType,
     shape: Box<[usize]>,
 }
@@ -761,8 +776,7 @@ impl AdValueRecord {
         shape: Vec<usize>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            container: Arc::new(RetentionContainer { group }),
-            slot,
+            container: Arc::new(RetentionContainer::Pooled { group, slot }),
             dtype,
             shape: shape.into_boxed_slice(),
         })
@@ -771,6 +785,18 @@ impl AdValueRecord {
     fn from_tensor(tensor: Tensor, op: &'static str) -> Result<Arc<Self>> {
         let dtype = tensor.dtype();
         let shape = tensor.shape().to_vec();
+        if matches!(tensor, Tensor::External(..)) {
+            // A caller-owned payload is retained directly: it owns no pooled
+            // storage, so there is no group to build and nothing to return to a
+            // pool when the record drops.
+            return Ok(Arc::new(Self {
+                container: Arc::new(RetentionContainer::CallerOwned {
+                    tensor: Box::new(tensor),
+                }),
+                dtype,
+                shape: shape.into_boxed_slice(),
+            }));
+        }
         let (group, bindings) = AllocationGroup::from_tensors(vec![tensor])
             .map_err(|error| Error::runtime_state_source(op, ErrorPhase::Execution, error))?;
         let slot = bindings.first().copied().ok_or_else(|| {
@@ -780,19 +806,30 @@ impl AdValueRecord {
     }
 
     fn tensor_read(&self, op: &'static str) -> Result<TensorRead<'_>> {
-        let mut reads = self
-            .container
-            .group
-            .read_views(std::slice::from_ref(&self.slot))
-            .map_err(|error| Error::runtime_state_source(op, ErrorPhase::Execution, error))?;
-        reads.pop().ok_or_else(|| {
-            Error::runtime_state(op, ErrorPhase::Execution, "empty allocation-group binding")
-        })
+        match self.container.as_ref() {
+            RetentionContainer::Pooled { group, slot } => {
+                let mut reads = group
+                    .read_views(std::slice::from_ref(slot))
+                    .map_err(|error| {
+                        Error::runtime_state_source(op, ErrorPhase::Execution, error)
+                    })?;
+                reads.pop().ok_or_else(|| {
+                    Error::runtime_state(
+                        op,
+                        ErrorPhase::Execution,
+                        "empty allocation-group binding",
+                    )
+                })
+            }
+            RetentionContainer::CallerOwned { tensor } => Ok(TensorRead::from_tensor(tensor)),
+        }
     }
 
     fn value(&self, op: &'static str) -> Result<ValueGuard<'_>> {
         match self.tensor_read(op)? {
             TensorRead::View(view) => Ok(ValueGuard { view }),
+            // A caller-owned payload has no typed descriptor view, so a path that
+            // needs one fails explicitly instead of borrowing the payload as bytes.
             TensorRead::Tensor(_) => Err(Error::runtime_state(
                 op,
                 ErrorPhase::Execution,
@@ -3468,19 +3505,21 @@ impl EagerTensor {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn duplicate_value(&self) -> Result<Tensor> {
-        let value = self.value()?;
-        match value.duplicate_host_tensor() {
-            Ok(tensor) => Ok(tensor),
-            Err(_) => {
-                let read = self
-                    ._record
-                    .value
-                    .tensor_read("EagerTensor::duplicate_value")?;
-                self.ctx
-                    .with_execution_session(|session| session.to_contiguous_read(read))?
-                    .map_err(Error::from)
+        // A pooled value duplicates through its descriptor view; a caller-owned
+        // payload has no such view and duplicates through its own read path, which
+        // copies the value while keeping its element type.
+        if let Ok(value) = self.value() {
+            if let Ok(tensor) = value.duplicate_host_tensor() {
+                return Ok(tensor);
             }
         }
+        let read = self
+            ._record
+            .value
+            .tensor_read("EagerTensor::duplicate_value")?;
+        self.ctx
+            .with_execution_session(|session| session.to_contiguous_read(read))?
+            .map_err(Error::from)
     }
 
     // INVARIANT: the error variants return the unchanged eager handle so a
@@ -3550,7 +3589,6 @@ impl EagerTensor {
         };
         let AdValueRecord {
             container,
-            slot,
             dtype,
             shape,
         } = value;
@@ -3560,7 +3598,6 @@ impl EagerTensor {
                 let record = Arc::new(EagerTensorRecord {
                     value: Arc::new(AdValueRecord {
                         container,
-                        slot,
                         dtype,
                         shape,
                     }),
@@ -3574,13 +3611,17 @@ impl EagerTensor {
                 return Err(IntoValueError::NotUnique(Self::from_record(record)));
             }
         };
-        match container.group.into_tensor(slot) {
+        let (group, slot) = match container {
+            // A caller-owned payload is handed back to its owner unchanged.
+            RetentionContainer::CallerOwned { tensor } => return Ok(*tensor),
+            RetentionContainer::Pooled { group, slot } => (group, slot),
+        };
+        match group.into_tensor(slot) {
             Ok(tensor) => Ok(tensor),
             Err((group, error)) => {
                 let record = Arc::new(EagerTensorRecord {
                     value: Arc::new(AdValueRecord {
-                        container: Arc::new(RetentionContainer { group }),
-                        slot,
+                        container: Arc::new(RetentionContainer::Pooled { group, slot }),
                         dtype,
                         shape,
                     }),

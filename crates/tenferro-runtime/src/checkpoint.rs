@@ -18,21 +18,36 @@ use crate::error::{Error, ErrorPhase, Result};
 #[derive(Clone)]
 pub struct RetainedValue {
     container: Arc<RetentionContainer>,
-    slot: DescriptorSlot,
     dtype: DType,
     shape: Box<[usize]>,
 }
 
+/// What one retained handle holds.
+// The pooled variant owns an allocation group inline; boxing it would add an
+// allocation to every retained value on the hot path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
-struct RetentionContainer {
-    group: AllocationGroup,
+enum RetentionContainer {
+    /// Pooled storage owned through an allocation group and one descriptor slot.
+    Pooled {
+        group: AllocationGroup,
+        slot: DescriptorSlot,
+    },
+    /// A caller-owned value the runtime retains without taking pool ownership.
+    ///
+    /// The value returns to its owner when the handle drops, and the runtime never
+    /// substitutes it for pooled storage.
+    CallerOwned {
+        /// Boxed because a tensor value is much larger than the pooled variant.
+        tensor: Box<Tensor>,
+    },
 }
 
 impl fmt::Debug for RetainedValue {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RetainedValue")
-            .field("slot", &self.slot)
+            .field("container", &self.container)
             .field("dtype", &self.dtype)
             .field("shape", &self.shape)
             .finish_non_exhaustive()
@@ -47,19 +62,41 @@ impl RetainedValue {
     /// Returns [`Error::RuntimeState`] when the value's descriptor cannot be
     /// transferred into a retention allocation group.
     pub fn from_tensor_value(value: TensorValue) -> Result<Self> {
-        let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
-            Error::runtime_state(
-                "RetainedValue::from_tensor_value",
-                ErrorPhase::Execution,
-                "a TensorValue could not be transferred into its retention group",
-            )
-        })?;
-        Ok(Self {
-            container: Arc::new(RetentionContainer { group }),
-            slot,
-            dtype,
-            shape: shape.into_boxed_slice(),
-        })
+        match value.try_into_group_parts() {
+            Ok((group, slot, dtype, shape)) => Ok(Self {
+                container: Arc::new(RetentionContainer::Pooled { group, slot }),
+                dtype,
+                shape: shape.into_boxed_slice(),
+            }),
+            Err(value) => {
+                let tensor = value.into_tensor().map_err(|_| {
+                    Error::runtime_state(
+                        "RetainedValue::from_tensor_value",
+                        ErrorPhase::Execution,
+                        "a TensorValue could not be transferred into its retention group",
+                    )
+                })?;
+                if !matches!(tensor, Tensor::External(..)) {
+                    return Err(Error::runtime_state(
+                        "RetainedValue::from_tensor_value",
+                        ErrorPhase::Execution,
+                        "a TensorValue could not be transferred into its retention group",
+                    ));
+                }
+                // A caller-owned payload is retained directly: it owns no pooled
+                // storage, so there is no group and nothing returns to a pool when
+                // the handle drops.
+                let dtype = tensor.dtype();
+                let shape = tensor.shape().to_vec();
+                Ok(Self {
+                    container: Arc::new(RetentionContainer::CallerOwned {
+                        tensor: Box::new(tensor),
+                    }),
+                    dtype,
+                    shape: shape.into_boxed_slice(),
+                })
+            }
+        }
     }
 
     /// Move an owned compact tensor into a retained group-backed handle.
@@ -91,13 +128,16 @@ impl RetainedValue {
     /// Returns [`Error::RuntimeState`] when the retained descriptor is vacant,
     /// out of bounds, or otherwise invalid in its allocation group.
     pub fn tensor_read(&self) -> Result<TensorRead<'_>> {
-        self.container.group.read_view(self.slot).map_err(|error| {
-            Error::runtime_state(
-                "RetainedValue::tensor_read",
-                ErrorPhase::Execution,
-                error.to_string(),
-            )
-        })
+        match self.container.as_ref() {
+            RetentionContainer::Pooled { group, slot } => group.read_view(*slot).map_err(|error| {
+                Error::runtime_state(
+                    "RetainedValue::tensor_read",
+                    ErrorPhase::Execution,
+                    error.to_string(),
+                )
+            }),
+            RetentionContainer::CallerOwned { tensor } => Ok(TensorRead::from_tensor(tensor)),
+        }
     }
 }
 

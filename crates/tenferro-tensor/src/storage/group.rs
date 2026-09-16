@@ -168,6 +168,24 @@ impl DescriptorRecord {
     }
 }
 
+/// Move one tensor owner into its allocation group.
+///
+/// # Errors
+///
+/// Returns [`GroupError::InvalidDescriptor`] when the tensor is caller-owned: a
+/// payload that tenferro does not define owns no pooled allocation group, so it is
+/// retained directly instead of being forced into one.
+fn into_group_parts(
+    tensor: crate::Tensor,
+) -> Result<(AllocationGroup, DescriptorSlot), GroupError> {
+    match tensor {
+        crate::Tensor::External(..) => Err(GroupError::InvalidDescriptor {
+            message: "a caller-owned payload has no allocation group".to_owned(),
+        }),
+        tensor => Ok(tensor.into_group_parts()),
+    }
+}
+
 /// Group construction and slot errors.
 ///
 /// # Examples
@@ -539,14 +557,15 @@ impl AllocationGroup {
     /// # Errors
     ///
     /// Returns [`GroupError::IndexOverflow`] when the input count cannot be
-    /// represented by a descriptor slot.
+    /// represented by a descriptor slot, or [`GroupError::InvalidDescriptor`]
+    /// when a tensor is caller-owned and therefore has no allocation group.
     pub fn from_tensors(
         tensors: Vec<crate::Tensor>,
     ) -> Result<(Self, Box<[DescriptorSlot]>), GroupError> {
         let mut group = Self::new();
         let mut bindings = Vec::with_capacity(tensors.len());
         for tensor in tensors {
-            let (source, source_slot) = tensor.into_group_parts();
+            let (source, source_slot) = into_group_parts(tensor)?;
             bindings.push(group.append_group(source, source_slot)?);
         }
         Ok((group, bindings.into_boxed_slice()))
@@ -612,9 +631,10 @@ impl AllocationGroup {
     ///
     /// Returns [`GroupError::IndexOverflow`] when allocation or descriptor
     /// indices cannot be represented, or [`GroupError::InvalidDescriptor`]
-    /// when the consumed tensor descriptor is invalid.
+    /// when the consumed tensor descriptor is invalid or the tensor is
+    /// caller-owned and therefore has no allocation group.
     pub fn append_tensor(&mut self, tensor: crate::Tensor) -> Result<DescriptorSlot, GroupError> {
-        let (source, source_slot) = tensor.into_group_parts();
+        let (source, source_slot) = into_group_parts(tensor)?;
         self.append_group(source, source_slot)
     }
 
