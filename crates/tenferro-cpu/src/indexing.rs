@@ -130,23 +130,58 @@ fn indexed_plan_key(
 }
 
 macro_rules! dispatch_tensor_unary_result {
-    ($input:expr, |$tensor:ident| $body:expr) => {
-        match $input {
-            Tensor::F32($tensor) => Ok(Tensor::F32($body?)),
-            Tensor::F64($tensor) => Ok(Tensor::F64($body?)),
-            Tensor::I32($tensor) => Ok(Tensor::I32($body?)),
-            Tensor::I64($tensor) => Ok(Tensor::I64($body?)),
-            Tensor::Bool($tensor) => Ok(Tensor::Bool($body?)),
-            Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
-            Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
+    ($input:expr, |$tensor:ident| $body:expr) => {{
+        let input = $input;
+        match input.dtype() {
+            DType::F32 => {
+                let $tensor = unary_operand::<f32>(input)?;
+                Ok(Tensor::from_typed::<f32>($body?))
+            }
+            DType::F64 => {
+                let $tensor = unary_operand::<f64>(input)?;
+                Ok(Tensor::from_typed::<f64>($body?))
+            }
+            DType::I32 => {
+                let $tensor = unary_operand::<i32>(input)?;
+                Ok(Tensor::from_typed::<i32>($body?))
+            }
+            DType::I64 => {
+                let $tensor = unary_operand::<i64>(input)?;
+                Ok(Tensor::from_typed::<i64>($body?))
+            }
+            DType::Bool => {
+                let $tensor = unary_operand::<bool>(input)?;
+                Ok(Tensor::from_typed::<bool>($body?))
+            }
+            DType::C32 => {
+                let $tensor = unary_operand::<num_complex::Complex32>(input)?;
+                Ok(Tensor::from_typed::<num_complex::Complex32>($body?))
+            }
+            DType::C64 => {
+                let $tensor = unary_operand::<num_complex::Complex64>(input)?;
+                Ok(Tensor::from_typed::<num_complex::Complex64>($body?))
+            }
             // A caller-owned payload has no CPU operation implementation.
-            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            DType::External(type_id) => Err(crate::Error::unsupported_dtype(
                 "cpu",
-                tenferro_tensor::DType::External(payload.element_type_id()),
+                tenferro_tensor::DType::External(type_id),
                 "an externally defined payload is not supported by this CPU operation",
             )),
         }
-    };
+    }};
+}
+
+/// The typed tensor behind `input`, or the refusal a tag the dispatch cannot resolve reports.
+fn unary_operand<T: tenferro_tensor::TensorScalar>(
+    input: &Tensor,
+) -> crate::Result<&TypedTensor<T>> {
+    input.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported_dtype(
+            "cpu",
+            input.dtype(),
+            "an externally defined payload is not supported by this CPU operation",
+        )
+    })
 }
 
 macro_rules! dispatch_same_dtype_result {
