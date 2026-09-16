@@ -756,18 +756,34 @@ surface already exists — `SemanticExtensionRuleSet` with `register_linearize`,
 first-order rule needs no new mechanism; it needs the graph to be plannable, which
 this change provides for programs built from a trace context.
 
-**What the AD layer still needs.** The `TracedTensor`/AD path reaches the program
-through the traced graph's own metadata (`TensorMeta`, defined in
-`tenferro-internal-ops/src/ad/context.rs`) rather than through
-`ProgramValueMetadata`, and the compiler builds program inputs from a descriptor
-that carries only a dtype and a semantic shape
-(`crates/tenferro-runtime/src/graph/compiler.rs`, the input-construction loop around
-line 940). The declared identity therefore has to exist in that layer too before an
-external scalar can be traced and differentiated end to end. The measured extent is
-47 `TensorMeta` references in `tenferro-runtime` plus its definition and AD users in
-`tenferro-internal-ops`; the natural shape is to carry the identity on the traced
-leaf and pass it through the descriptor into `ProgramInputSpec`, which reuses the
-declaration API this step added rather than inventing a second one.
+**The AD path now carries the identity too, so an external scalar can be
+differentiated.** The identity travels to the places the traced/AD path reads:
+
+- `TensorMeta` (`tenferro-internal-ops/src/ad/context.rs`) carries the declared name
+  with its dtype and extents, and `TracedTensor::input_concrete_shape_declaring_scalar`
+  and `TracedTensor::from_tensor_concrete_shape_declaring_scalar` declare it.
+- The runtime's compiler passes it from the traced value's registered metadata into
+  `ProgramInputSpec` for both an unbound placeholder and a bound default tensor, and
+  the import path keeps the declared name on the values it rebuilds.
+- `tenferro-ad` keeps it when it converts program metadata back into traced metadata.
+
+The adjoint is the contribution's own operation. `Df64Expand` broadcasts a scalar to
+a declared shape — a preset broadcast is not available for a scalar tenferro does not
+declare — and `Df64TotalVjpRule` emits it from the output cotangent, reading the
+target shape from the primal input metadata and rejecting a symbolic shape rather
+than guessing one. `ext/df64-proof/tests/extension_ad.rs` verifies the traced VJP,
+compilation, and execution of the backward program, including a case whose cotangent
+carries a `2^-80` low component that survives the adjoint.
+
+One structural fact this needed: the runtime keys one planning config per engine id,
+so a contribution owns one *family* of operations and distinguishes them by payload.
+Both `Df64Total` and `Df64Expand` therefore report the same family, the engine
+dispatches on the payload, and the VJP rule rejects a payload outside its domain
+instead of pretending to handle it.
+
+`ProgramBuildError::ExternalScalarWithoutIdentity` also reports *where* the tag
+reached the program (an input, an operation output, or a core operation), which is
+what located the remaining plumbing when this step was implemented.
 
 ## 6. Risks and open questions
 

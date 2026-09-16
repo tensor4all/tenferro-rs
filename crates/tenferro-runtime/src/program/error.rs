@@ -95,11 +95,15 @@ pub enum ProgramBuildError {
     },
     /// An externally defined scalar reached the semantic program.
     #[error(
-        "externally defined scalar {dtype:?} has no canonical program identity; a          contribution must declare a stable scalar identity before a traced program          can carry it"
+        "externally defined scalar {dtype:?} reached {site} without a canonical program \
+identity; a contribution must declare a stable scalar identity before a traced program can \
+carry it"
     )]
     ExternalScalarWithoutIdentity {
         /// The externally defined tag that reached the program.
         dtype: tenferro_tensor::DType,
+        /// Where the tag reached the program.
+        site: &'static str,
     },
     /// Alias declarations did not cover every output exactly once.
     #[error("semantic aliases must cover {expected} outputs exactly once, got {actual}")]

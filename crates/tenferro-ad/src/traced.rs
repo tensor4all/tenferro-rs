@@ -1168,7 +1168,13 @@ fn program_metadata_to_tensor_meta(
         .cloned()
         .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, input_shapes)))
         .collect();
-    TensorMeta::with_extents(metadata.dtype(), extents)
+    // An externally defined scalar keeps the canonical identity its program declared,
+    // so a differentiated value can still be given a reproducible program identity.
+    let meta = TensorMeta::with_extents(metadata.dtype(), extents);
+    match metadata.scalar_identity() {
+        Some(identity) => meta.with_scalar_identity(identity),
+        None => meta,
+    }
 }
 
 fn validate_seed_tensor(

@@ -256,6 +256,12 @@ pub struct TensorMeta {
     pub dtype: DType,
     /// Per-axis shape guarantees.
     pub extents: Vec<ShapeExtent<SymDim>>,
+    /// Canonical identity of an externally defined scalar, when the value carries one.
+    ///
+    /// A semantic program's identity must be reproducible across processes, while an
+    /// externally defined scalar's tag is a process-local `TypeId`, so a traced value
+    /// whose dtype is external declares the stable name here.
+    pub scalar_identity: Option<&'static str>,
 }
 
 impl TensorMeta {
@@ -272,7 +278,11 @@ impl TensorMeta {
     /// ```
     pub fn exact(dtype: DType, shape: Vec<SymDim>) -> Self {
         let extents = shape.iter().cloned().map(ShapeExtent::exact).collect();
-        Self { dtype, extents }
+        Self {
+            dtype,
+            extents,
+            scalar_identity: None,
+        }
     }
 
     /// Construct metadata from per-axis extents.
@@ -290,7 +300,36 @@ impl TensorMeta {
     /// assert_eq!(meta.exact_shape(), None);
     /// ```
     pub fn with_extents(dtype: DType, extents: Vec<ShapeExtent<SymDim>>) -> Self {
-        Self { dtype, extents }
+        Self {
+            dtype,
+            extents,
+            scalar_identity: None,
+        }
+    }
+
+    /// Declare the canonical identity of an externally defined scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ops::{SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let dtype = DType::External(std::any::TypeId::of::<f64>());
+    /// let meta = TensorMeta::exact(dtype, vec![SymDim::from(2usize)])
+    ///     .with_scalar_identity("example.scalar.v1");
+    /// assert_eq!(meta.scalar_identity(), Some("example.scalar.v1"));
+    /// ```
+    #[must_use]
+    pub fn with_scalar_identity(mut self, identity: &'static str) -> Self {
+        self.scalar_identity = Some(identity);
+        self
+    }
+
+    /// Return the declared identity of an externally defined scalar, if any.
+    #[must_use]
+    pub const fn scalar_identity(&self) -> Option<&'static str> {
+        self.scalar_identity
     }
 
     /// Return the tensor rank known by this metadata record.

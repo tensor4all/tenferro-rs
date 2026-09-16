@@ -275,3 +275,37 @@ descriptor into `ProgramInputSpec`, reusing the declaration API this step added.
 The rule itself needs no new mechanism: `SemanticPrimalVjpRule` plus
 `SemanticExtensionRuleSet::with_primal_vjp` already exist, and
 `crates/tenferro-ad/tests/integration/multi_input_traced.rs` drives one end to end.
+
+## First-order AD for the external scalar
+
+The next acceptance item was an external first-order rule, and it now runs end to end.
+The rule needed no new mechanism; what it needed was for the declared identity to
+reach every layer the traced/AD path reads, which took four fixes found one at a time:
+
+- `TensorMeta` carries the declared name beside dtype and extents, with
+  `TracedTensor::input_concrete_shape_declaring_scalar` and
+  `TracedTensor::from_tensor_concrete_shape_declaring_scalar` declaring it.
+- The runtime compiler passes it from the traced value's registered metadata into
+  `ProgramInputSpec`, for an unbound placeholder and for a bound default tensor; the
+  bound case was the first missed path, and the import path that rebuilds metadata
+  was the second and third.
+- `tenferro-ad` keeps it when converting program metadata back into traced metadata.
+
+That chain was only findable because `ProgramBuildError::ExternalScalarWithoutIdentity`
+now reports where the tag reached the program (an input, an operation output, or a
+core operation) instead of only which dtype it was; the error gained a `site` field
+for it.
+
+The adjoint is the contribution's own operation: `Df64Expand` broadcasts a scalar to a
+declared shape, and `Df64TotalVjpRule` emits it from the output cotangent, reading the
+target shape from the primal input metadata and rejecting a symbolic shape rather than
+guessing one. The runtime keys one planning config per engine id, so both operations
+report one family and the engine dispatches on the payload; the rule rejects a payload
+outside its domain.
+
+`ext/df64-proof/tests/extension_ad.rs` verifies the traced VJP, the compilation, and
+the execution of the backward program, including a cotangent whose `2^-80` low
+component survives the adjoint.
+
+Workspace after this: 5256 passed, 3 failed (the same pre-existing `trybuild`
+failures), clippy clean under `-D warnings` and the strict doc lints.

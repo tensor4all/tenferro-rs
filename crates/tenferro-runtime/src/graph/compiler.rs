@@ -41,6 +41,8 @@ struct InputDescriptor {
     shape: Vec<usize>,
     extent_identity: InputExtentIdentity,
     default_tensor: Option<Arc<RetainedValue>>,
+    /// Canonical identity declared for an externally defined scalar input.
+    scalar_identity: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -325,6 +327,9 @@ impl GraphCompiler {
                         shape: (*shape).to_vec(),
                         extent_identity: InputExtentIdentity::Concrete,
                         default_tensor: None,
+                        // A caller-supplied binding declares its own identity through
+                        // the traced value's metadata instead.
+                        scalar_identity: None,
                     },
                 )
                 .is_some()
@@ -936,12 +941,12 @@ fn compile_materialized_semantic_program(
             )));
         };
         let semantic_shape = descriptor.semantic_shape(input_idx);
-        let value = builder
-            .input(ProgramInputSpec::new(
-                descriptor.dtype,
-                semantic_shape.clone(),
-            ))
-            .map_err(semantic_build_error)?;
+        let spec = match descriptor.scalar_identity {
+            Some(identity) => ProgramInputSpec::new(descriptor.dtype, semantic_shape.clone())
+                .with_scalar_identity(identity),
+            None => ProgramInputSpec::new(descriptor.dtype, semantic_shape.clone()),
+        };
+        let value = builder.input(spec).map_err(semantic_build_error)?;
         if let Some(tensor) = &descriptor.default_tensor {
             builder
                 .bind_input_retained(value, Arc::clone(tensor))
@@ -1420,6 +1425,11 @@ fn descriptor_for_input(
             shape: tensor.shape().to_vec(),
             extent_identity: default_input_extent_identity(key, tensor)?,
             default_tensor: Some(tensor.clone()),
+            // A bound tensor carries no canonical name itself, so the declared
+            // identity comes from the traced value's registered metadata.
+            scalar_identity: registered_meta(&ValueKey::Input(key.clone()))
+                .ok()
+                .and_then(|metadata| metadata.scalar_identity()),
         });
     }
     if let Some(spec) = binding_specs.get(key) {
@@ -1445,6 +1455,7 @@ fn descriptor_for_unbound_input(key: &TensorInputKey) -> Result<InputDescriptor>
             shape,
             extent_identity: InputExtentIdentity::Concrete,
             default_tensor: None,
+            scalar_identity: metadata.scalar_identity(),
         });
     }
     Ok(InputDescriptor {
@@ -1452,6 +1463,7 @@ fn descriptor_for_unbound_input(key: &TensorInputKey) -> Result<InputDescriptor>
         shape: vec![0; metadata.rank()],
         extent_identity: InputExtentIdentity::Symbolic,
         default_tensor: None,
+        scalar_identity: metadata.scalar_identity(),
     })
 }
 

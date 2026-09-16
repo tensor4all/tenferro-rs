@@ -26,8 +26,11 @@ use tenferro_tensor_core::{ErasedHostTensor, HostTensor, Scalar};
 
 use crate::{Df64, Df64Add};
 
-/// Family identifier of the extension-owned total sum.
-pub const DF64_TOTAL_FAMILY: &str = "tenferro-df64-proof.df64_total.v1";
+/// Family identifier of the contribution's externally defined operations.
+///
+/// One family holds both the total sum and its adjoint broadcast, because the runtime
+/// keys one planning config per engine and a contribution owns one numerical engine.
+pub const DF64_OPS_FAMILY: &str = "tenferro-df64-proof.df64_ops.v1";
 
 /// Canonical identity of the externally defined `Df64` scalar.
 ///
@@ -36,6 +39,7 @@ pub const DF64_TOTAL_FAMILY: &str = "tenferro-df64-proof.df64_total.v1";
 /// program carrying `Df64` values reports instead of a process-local `TypeId`.
 pub const DF64_SCALAR_IDENTITY: &str = "tenferro-df64-proof.df64.v1";
 
+/// Family identifier of the extension-owned scalar broadcast.
 /// Total sum of an externally defined scalar tensor.
 ///
 /// The payload carries no parameters, so every instance is equal to every other.
@@ -53,7 +57,7 @@ pub struct Df64Total;
 
 impl ExtensionOp for Df64Total {
     fn family_id(&self) -> &'static str {
-        DF64_TOTAL_FAMILY
+        DF64_OPS_FAMILY
     }
 
     fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
@@ -113,46 +117,169 @@ impl ExtensionOp for Df64Total {
     }
 }
 
-fn external_payload<T: Scalar>(tensor: &Tensor) -> tenferro_tensor::Result<&HostTensor<T>> {
+/// Broadcast a scalar external value to a declared shape.
+///
+/// The total sum's adjoint needs to place the output cotangent back into the input's
+/// shape, and a preset broadcast is not available for a scalar tenferro does not
+/// declare, so the contribution owns this operation too.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::extension::Df64Expand;
+/// use tenferro_ad::extension::ExtensionOp;
+///
+/// let expand = Df64Expand::new(vec![2, 3]);
+/// assert_eq!(<Df64Expand as ExtensionOp>::family_id(&expand), "tenferro-df64-proof.df64_ops.v1");
+/// assert_eq!(&*expand.shape, &[2, 3]);
+/// ```
+#[derive(Clone, Debug)]
+pub struct Df64Expand {
+    /// Shape the scalar is broadcast to.
+    pub shape: Box<[usize]>,
+}
+
+impl Df64Expand {
+    /// Construct the operation for one output shape.
+    #[must_use]
+    pub fn new(shape: Vec<usize>) -> Self {
+        Self {
+            shape: shape.into_boxed_slice(),
+        }
+    }
+}
+
+impl ExtensionOp for Df64Expand {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        for extent in self.shape.iter() {
+            hasher.write_usize(*extent);
+        }
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| other.shape == self.shape)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    fn scalar_identity(&self) -> Option<&'static str> {
+        Some(DF64_SCALAR_IDENTITY)
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        if !matches!(dtype, DType::External(_)) {
+            return Err(tenferro_tensor::Error::unsupported_dtype(
+                "df64_expand",
+                dtype,
+                "df64_expand takes an externally defined scalar",
+            ));
+        }
+        Ok(vec![(
+            dtype,
+            self.shape
+                .iter()
+                .map(|extent| SymDim::from(*extent))
+                .collect(),
+        )])
+    }
+}
+
+fn external_payload<'a, T: Scalar>(
+    op: &'static str,
+    tensor: &'a Tensor,
+) -> tenferro_tensor::Result<&'a HostTensor<T>> {
     match tensor {
         Tensor::External(payload, _) => payload.downcast_ref::<T>().ok_or_else(|| {
             tenferro_tensor::Error::unsupported_dtype(
-                "df64_total",
+                op,
                 tensor.dtype(),
                 "the external payload does not hold the expected scalar",
             )
         }),
         other => Err(tenferro_tensor::Error::unsupported_dtype(
-            "df64_total",
+            op,
             other.dtype(),
-            "df64_total takes an externally defined payload",
+            "the operation takes an externally defined payload",
         )),
     }
 }
 
+/// Borrow the single owned input every operation in this crate takes.
+fn sole_input<'a>(
+    op: &'static str,
+    inputs: &'a [TensorRead<'a>],
+) -> tenferro_runtime::Result<&'a Tensor> {
+    match inputs.first() {
+        Some(TensorRead::Tensor(tensor)) => Ok(tensor),
+        Some(TensorRead::View(_)) => Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "input",
+                "the operation takes an owned externally defined payload",
+            ),
+        )),
+        None => Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(op, "input", "the operation takes one input"),
+        )),
+    }
+}
+
+/// Fill a tensor of `shape` with the scalar input's value.
+fn expand_of(shape: &[usize], inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let tensor = sole_input("df64_expand", inputs)?;
+    let payload =
+        external_payload::<Df64>("df64_expand", tensor).map_err(tenferro_runtime::Error::from)?;
+    let value = payload.as_slice().first().copied().ok_or_else(|| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
+            "df64_expand",
+            "input",
+            "df64_expand takes a scalar payload",
+        ))
+    })?;
+    let count: usize = shape.iter().product();
+    let output = HostTensor::from_vec_col_major(shape.to_vec(), vec![value; count])
+        .map_err(|source| tenferro_tensor::Error::validation("df64_expand", source))
+        .map_err(tenferro_runtime::Error::from)?;
+    Ok(vec![Tensor::external(ErasedHostTensor::new(output))])
+}
+
 fn total_of(inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
-    let tensor = match inputs.first() {
-        Some(TensorRead::Tensor(tensor)) => *tensor,
-        Some(TensorRead::View(_)) => {
-            return Err(tenferro_runtime::Error::from(
-                tenferro_tensor::Error::invalid_argument(
-                    "df64_total",
-                    "input",
-                    "df64_total takes an owned externally defined payload",
-                ),
-            ));
-        }
-        None => {
-            return Err(tenferro_runtime::Error::from(
-                tenferro_tensor::Error::invalid_argument(
-                    "df64_total",
-                    "input",
-                    "df64_total takes one input",
-                ),
-            ));
-        }
-    };
-    let payload = external_payload::<Df64>(tensor).map_err(tenferro_runtime::Error::from)?;
+    let tensor = sole_input("df64_total", inputs)?;
+    let payload =
+        external_payload::<Df64>("df64_total", tensor).map_err(tenferro_runtime::Error::from)?;
     let total = scalar_fold::<Df64, Df64Add>("df64_total", payload, Df64::zero())
         .map_err(tenferro_runtime::Error::from)?;
     let output = HostTensor::from_vec_col_major(vec![], vec![total])
@@ -161,13 +288,32 @@ fn total_of(inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> 
     Ok(vec![Tensor::external(ErasedHostTensor::new(output))])
 }
 
+/// Which numerical body a prepared operation runs.
 #[derive(Debug)]
-struct Df64TotalPrepared {
-    binding: PreparedOperationBinding,
-    specialization: SpecializationProjection,
+enum Df64Body {
+    /// Total sum of the input.
+    Total,
+    /// The scalar input broadcast to this shape.
+    Expand(Box<[usize]>),
 }
 
-impl PreparedOperation for Df64TotalPrepared {
+impl Df64Body {
+    fn execute(&self, inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
+        match self {
+            Self::Total => total_of(inputs),
+            Self::Expand(shape) => expand_of(shape, inputs),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Df64Prepared {
+    binding: PreparedOperationBinding,
+    specialization: SpecializationProjection,
+    body: Df64Body,
+}
+
+impl PreparedOperation for Df64Prepared {
     fn binding(&self) -> &PreparedOperationBinding {
         &self.binding
     }
@@ -181,14 +327,14 @@ impl PreparedOperation for Df64TotalPrepared {
     }
 }
 
-impl PreparedOperationExecutor for Df64TotalPrepared {
+impl PreparedOperationExecutor for Df64Prepared {
     fn execute(
         &self,
         _context: &mut ErasedExecutionContext<'_>,
         _caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
-        total_of(inputs)
+        self.body.execute(inputs)
     }
 
     fn supports_session(&self) -> bool {
@@ -201,18 +347,19 @@ impl PreparedOperationExecutor for Df64TotalPrepared {
         _caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
-        total_of(inputs)
+        self.body.execute(inputs)
     }
 }
 
 #[derive(Debug)]
-struct Df64TotalEngine {
+struct Df64Engine {
+    family_id: &'static str,
     engine_id: EngineId,
 }
 
-impl ExtensionEngine for Df64TotalEngine {
+impl ExtensionEngine for Df64Engine {
     fn family_id(&self) -> &'static str {
-        DF64_TOTAL_FAMILY
+        self.family_id
     }
 
     fn engine_id(&self) -> &EngineId {
@@ -227,9 +374,14 @@ impl ExtensionEngine for Df64TotalEngine {
         &self,
         request: ExtensionPrepareRequest<'_>,
     ) -> Result<PrepareCapability, PrepareError> {
-        let prepared = Arc::new(Df64TotalPrepared {
+        let body = match request.operation().as_any().downcast_ref::<Df64Expand>() {
+            Some(expand) => Df64Body::Expand(expand.shape.clone()),
+            None => Df64Body::Total,
+        };
+        let prepared = Arc::new(Df64Prepared {
             binding: request.binding().clone(),
             specialization: request.specialization().clone(),
+            body,
         });
         let operation: PreparedOperationHandle = Arc::clone(&prepared) as PreparedOperationHandle;
         let executor: PreparedOperationExecutorHandle = prepared as PreparedOperationExecutorHandle;
@@ -240,11 +392,11 @@ impl ExtensionEngine for Df64TotalEngine {
 }
 
 #[derive(Debug)]
-struct Df64TotalConfig {
+struct Df64Config {
     family_id: &'static str,
 }
 
-impl ExtensionPlanningConfig for Df64TotalConfig {
+impl ExtensionPlanningConfig for Df64Config {
     fn family_id(&self) -> &'static str {
         self.family_id
     }
@@ -284,13 +436,14 @@ impl ExtensionModule for Df64TotalModule {
         &self,
         registrar: &mut ExtensionModuleRegistrar<'_>,
     ) -> Result<(), ExtensionModuleError> {
-        registrar.register_engine(Arc::new(Df64TotalEngine {
+        registrar.register_engine(Arc::new(Df64Engine {
+            family_id: DF64_OPS_FAMILY,
             engine_id: self.engine_id.clone(),
         }))?;
         registrar.register_planning_config(
             self.engine_id.clone(),
-            Arc::new(Df64TotalConfig {
-                family_id: DF64_TOTAL_FAMILY,
+            Arc::new(Df64Config {
+                family_id: DF64_OPS_FAMILY,
             }),
         )
     }

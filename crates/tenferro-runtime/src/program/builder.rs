@@ -99,7 +99,7 @@ impl SemanticProgramBuilder {
     /// Returns [`ProgramBuildError::TooManyValues`] if the builder cannot
     /// represent another value slot.
     pub fn input(&mut self, spec: ProgramInputSpec) -> Result<ProgramValue, ProgramBuildError> {
-        require_scalar_identity(spec.metadata())?;
+        require_scalar_identity(spec.metadata(), "a program input")?;
         let slot = self.next_value_slot()?;
         let value = ProgramValue::new(slot, self.owner);
         self.values.push(spec.metadata().clone());
@@ -497,7 +497,7 @@ impl SemanticProgramBuilder {
                     *value = value.clone().with_scalar_identity(identity);
                 }
             }
-            require_scalar_identity(value)?;
+            require_scalar_identity(value, "an operation output")?;
         }
         let provenance = match &op {
             SemanticOp::Core(_) => SemanticProvenance::builder(None),
@@ -556,7 +556,10 @@ pub(super) fn reject_core_external_dtype(op: &CoreSemanticOp) -> Result<(), Prog
         _ => None,
     };
     match external {
-        Some(dtype) => Err(ProgramBuildError::ExternalScalarWithoutIdentity { dtype }),
+        Some(dtype) => Err(ProgramBuildError::ExternalScalarWithoutIdentity {
+            dtype,
+            site: "a core operation",
+        }),
         None => Ok(()),
     }
 }
@@ -569,14 +572,31 @@ pub(super) fn reject_core_external_dtype(op: &CoreSemanticOp) -> Result<(), Prog
 /// of being encoded as an unstable code.
 pub(super) fn require_scalar_identity(
     metadata: &ProgramValueMetadata,
+    site: &'static str,
 ) -> Result<(), ProgramBuildError> {
     match (metadata.dtype(), metadata.scalar_identity()) {
         (tenferro_tensor::DType::External(_), None) => {
             Err(ProgramBuildError::ExternalScalarWithoutIdentity {
                 dtype: metadata.dtype(),
+                site,
             })
         }
         _ => Ok(()),
+    }
+}
+
+/// Keep the canonical identity a source program declared on a rebuilt value.
+///
+/// An imported value's metadata is resolved against the destination program, so it is
+/// rebuilt from a dtype and shape; the declared identity of an externally defined
+/// scalar is not derivable from those and has to be carried across.
+fn keep_scalar_identity(
+    identity: &Option<&'static str>,
+    metadata: ProgramValueMetadata,
+) -> ProgramValueMetadata {
+    match identity {
+        Some(identity) => metadata.with_scalar_identity(identity),
+        None => metadata,
     }
 }
 
@@ -831,6 +851,7 @@ impl ImportTransaction {
                 continue;
             }
             let metadata = source.values[input.slot as usize].clone();
+            let identity = metadata.scalar_identity();
             let metadata = ProgramValueMetadata::from_extents(
                 metadata.dtype(),
                 metadata
@@ -839,6 +860,7 @@ impl ImportTransaction {
                     .map(&resolve_extent)
                     .collect::<Vec<_>>(),
             );
+            let metadata = keep_scalar_identity(&identity, metadata);
             let imported = transaction.next_value(destination.values.len(), destination.owner)?;
             transaction.inputs.push(imported);
             transaction
@@ -873,11 +895,14 @@ impl ImportTransaction {
                 let imported =
                     transaction.next_value(destination.values.len(), destination.owner)?;
                 let meta = source.values[output.slot as usize].clone();
+                let identity = meta.scalar_identity();
                 let resolved = ProgramValueMetadata::from_extents(
                     meta.dtype(),
                     meta.shape().iter().map(&resolve_extent).collect::<Vec<_>>(),
                 );
-                transaction.values.push(resolved);
+                transaction
+                    .values
+                    .push(keep_scalar_identity(&identity, resolved));
                 remap[output.slot as usize] = Some(imported);
                 outputs.push(imported);
             }

@@ -1113,14 +1113,14 @@ fn an_external_scalar_needs_a_declared_identity() {
 
     // A tag without a declared name cannot be encoded, so it is rejected.
     assert!(matches!(
-        super::builder::require_scalar_identity(&ProgramValueMetadata::new(external, [DimExpr::Const(2)])),
-        Err(ProgramBuildError::ExternalScalarWithoutIdentity { dtype }) if dtype == external
+        super::builder::require_scalar_identity(&ProgramValueMetadata::new(external, [DimExpr::Const(2)]), "a program input"),
+        Err(ProgramBuildError::ExternalScalarWithoutIdentity { dtype, .. }) if dtype == external
     ));
 
     // The declared name is what the program identity carries.
     let declared =
         ProgramValueMetadata::new(external, [DimExpr::Const(2)]).with_scalar_identity("example.v1");
-    assert!(super::builder::require_scalar_identity(&declared).is_ok());
+    assert!(super::builder::require_scalar_identity(&declared, "a program input").is_ok());
     assert_eq!(declared.scalar_identity(), Some("example.v1"));
 
     for dtype in [
@@ -1133,10 +1133,10 @@ fn an_external_scalar_needs_a_declared_identity() {
         DType::C64,
     ] {
         assert!(
-            super::builder::require_scalar_identity(&ProgramValueMetadata::new(
-                dtype,
-                [DimExpr::Const(2)]
-            ))
+            super::builder::require_scalar_identity(
+                &ProgramValueMetadata::new(dtype, [DimExpr::Const(2)]),
+                "a program input"
+            )
             .is_ok(),
             "{dtype:?}"
         );

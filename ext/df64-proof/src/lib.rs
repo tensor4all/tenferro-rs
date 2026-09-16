@@ -14,6 +14,7 @@
 
 #![deny(missing_docs)]
 
+pub mod ad;
 pub mod conversion;
 pub mod extension;
 
