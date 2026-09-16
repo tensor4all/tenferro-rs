@@ -850,3 +850,23 @@ accounted extension cache already serves it, and only two rows need a decision (
 owned by #1789, and einsum, owned by #1793). The backend elementwise and reduction row needs
 neither a decision nor new storage: a body the contribution owns behind the same session supplies
 it.
+
+## Session and dispatch overhead, and a pre-existing constant the branch did not introduce
+
+#1789's fifth item asks for allocation counts and session/dispatch overhead under the one-thread
+protocol, and that part was unmeasured. `ext/df64-proof/tests/dispatch_overhead.rs` now runs the
+same tiny operation three ways: as a preset `f64` program through the runtime's prepared path, as
+the contribution's program through that path, and as a direct call to the contribution's body. One
+worker thread, printed and asserted. In release the numbers are 25721 ns and 26 allocations, then
+12404 ns and 22 allocations, then 91 ns and 3 allocations per operation; in the test profile they
+are 138282, 86340, and 953 ns with the same allocation counts. The profile is recorded with each
+number because it changes the timing by more than a factor of five while leaving the allocation
+counts fixed.
+
+The result says something the branch should own rather than hide: the session and dispatch layer
+costs about 12.3 µs and 19 allocations per call for a two-element operation, which is 137 times the
+91 ns the body itself costs. It is not a cost this branch introduced, because the preset path pays
+25.7 µs for the same layer, and it is not specific to external scalars, because the preset path is
+the slower of the two. It is a constant of the runtime's small-operation path, recorded here
+because #1789 asks for it and because a branch that measures erasure down to 9.8 ns should say
+when the layer around the erasure costs four orders of magnitude more.

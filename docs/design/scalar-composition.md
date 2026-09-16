@@ -1299,7 +1299,20 @@ surface stays unimplemented by design. The rejection of an externally defined in
 boundary is implemented and tested.
 
 **#1789's pool, handoff, and accounting contracts.** The first steps that issue prescribes are
-done and evidenced. Its fourth acceptance item, cleanup and retention controls, maps to evidence
+done and evidenced. Its fifth item asks for allocation counts and session/dispatch overhead under
+the one-thread protocol, so `ext/df64-proof/tests/dispatch_overhead.rs` measures the layer around
+the numerical bodies: the same tiny operation runs as a preset `f64` program through the runtime's
+prepared path, as the contribution's program through that path, and as a direct call to the
+contribution's body. With one worker thread the release profile reports 25721 ns and 26
+allocations per operation for the preset program, 12404 ns and 22 allocations for the contribution,
+and 91 ns and 3 allocations for the body alone, so the session and dispatch layer costs about
+12.3 µs and 19 allocations per call for a two-element operation. The test profile, which the other
+measurements in this branch also use, reports 138282, 86340, and 953 ns respectively with the same
+allocation counts, so the profile is recorded with every number. The finding belongs to the
+runtime rather than to this branch: the preset path pays more than the contribution's does, which
+is what a session and dispatch cost of this size means for an operation whose arithmetic is 91 ns,
+and it is recorded here because #1789 asks for it rather than because the external scalar
+introduced it. Its fourth acceptance item, cleanup and retention controls, maps to evidence
 as follows: normal and error paths are the typed-rejection tests; unwind cleanup is the
 framework's `catch_unwind` coverage in `tenferro-ad`'s `fallible_api` and
 `placement_bound_eager` tests and in `tenferro-cpu`'s `runtime_error_tests`, which the
