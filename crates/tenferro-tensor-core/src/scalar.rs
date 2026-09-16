@@ -71,18 +71,58 @@ pub trait Scalar: Copy + Send + Sync + 'static {
 /// ```
 pub trait ScalarArithmetic: Scalar {
     /// Additive identity.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::ScalarArithmetic;
+    ///
+    /// assert_eq!(<f64 as ScalarArithmetic>::scalar_zero(), 0.0);
+    /// ```
     fn scalar_zero() -> Self;
 
     /// Multiplicative identity.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::ScalarArithmetic;
+    ///
+    /// assert_eq!(<f64 as ScalarArithmetic>::scalar_one(), 1.0);
+    /// ```
     fn scalar_one() -> Self;
 
     /// Sum under this scalar's own semantics.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::ScalarArithmetic;
+    ///
+    /// assert_eq!(<f64 as ScalarArithmetic>::scalar_add(1.0, 2.0), 3.0);
+    /// ```
     fn scalar_add(self, rhs: Self) -> Self;
 
     /// Difference under this scalar's own semantics.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::ScalarArithmetic;
+    ///
+    /// assert_eq!(<f64 as ScalarArithmetic>::scalar_sub(1.0, 2.0), -1.0);
+    /// ```
     fn scalar_sub(self, rhs: Self) -> Self;
 
     /// Product under this scalar's own semantics.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::ScalarArithmetic;
+    ///
+    /// assert_eq!(<f64 as ScalarArithmetic>::scalar_mul(3.0, 4.0), 12.0);
+    /// ```
     fn scalar_mul(self, rhs: Self) -> Self;
 }
 

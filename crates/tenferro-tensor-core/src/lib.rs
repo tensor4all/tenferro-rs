@@ -125,6 +125,16 @@ define_scalar_set! {
         C64 => Complex64,
     }
     /// Value enum of the scalar set tenferro ships.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{DType, DefaultScalars, HostTensor, ScalarSet};
+    ///
+    /// let value = DefaultScalars::I32(HostTensor::from_vec_col_major(vec![1], vec![7_i32])?);
+    /// assert_eq!(value.tag(), DType::I32);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
     pub enum DefaultScalars;
 }
 
