@@ -1,4 +1,5 @@
 use cubecl::prelude::{CubeCount, CubeDim, TensorBinding};
+use tenferro_tensor::DType;
 
 use super::*;
 use crate::{rank_revealing_qr::validate_rank_revealing_qr_options, RankRevealingQrOptions};
@@ -490,8 +491,9 @@ pub(super) fn rank_revealing_qr(
     options: RankRevealingQrOptions,
 ) -> Result<Vec<Tensor>> {
     validate_rank_revealing_qr_options(OP, options)?;
-    match input {
-        Tensor::F32(input) => {
+    match input.dtype() {
+        DType::F32 => {
+            let input = gpu_linalg_typed::<f32>(OP, input)?;
             rank_revealing_qr_typed(backend, input, options).map(|(q, r, p, rank)| {
                 vec![
                     Tensor::F32(q),
@@ -501,7 +503,8 @@ pub(super) fn rank_revealing_qr(
                 ]
             })
         }
-        Tensor::F64(input) => {
+        DType::F64 => {
+            let input = gpu_linalg_typed::<f64>(OP, input)?;
             rank_revealing_qr_typed(backend, input, options).map(|(q, r, p, rank)| {
                 vec![
                     Tensor::F64(q),
@@ -511,7 +514,8 @@ pub(super) fn rank_revealing_qr(
                 ]
             })
         }
-        Tensor::C32(input) => {
+        DType::C32 => {
+            let input = gpu_linalg_typed::<Complex32>(OP, input)?;
             rank_revealing_qr_typed(backend, input, options).map(|(q, r, p, rank)| {
                 vec![
                     Tensor::C32(q),
@@ -521,7 +525,8 @@ pub(super) fn rank_revealing_qr(
                 ]
             })
         }
-        Tensor::C64(input) => {
+        DType::C64 => {
+            let input = gpu_linalg_typed::<Complex64>(OP, input)?;
             rank_revealing_qr_typed(backend, input, options).map(|(q, r, p, rank)| {
                 vec![
                     Tensor::C64(q),
@@ -531,11 +536,23 @@ pub(super) fn rank_revealing_qr(
                 ]
             })
         }
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
             Err(unsupported_linalg_dtype(OP, input))
         }
-        Tensor::External(..) => Err(unsupported_linalg_dtype(OP, input)),
     }
+}
+
+/// The typed tensor behind `input`, or this module's standard refusal.
+///
+/// Callers reach this from a match on `input.dtype()`, so `None` means the tag table
+/// and the runtime dtype disagree rather than a caller mistake.
+fn gpu_linalg_typed<'a, T: tenferro_tensor::TensorScalar>(
+    op: &'static str,
+    input: &'a Tensor,
+) -> Result<&'a tenferro_tensor::TypedTensor<T>> {
+    input
+        .as_typed::<T>()
+        .ok_or_else(|| unsupported_linalg_dtype(op, input))
 }
 
 fn rank_revealing_qr_typed<T>(
