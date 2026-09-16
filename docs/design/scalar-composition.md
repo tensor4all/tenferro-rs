@@ -1312,6 +1312,23 @@ arm-dense hold about 1180 of them — 520 in `tenferro-gpu/src/cubecl/mod.rs`, 2
 choice into the public contract needs maintainer acceptance, which is why the design records it
 rather than the branch assuming it.
 
+**The recipe the conversion follows, per arm shape.** Seventeen of the densest file's twenty-nine
+direct matchers are converted, and the work left there is hand work by shape: arms that bind one tensor
+and discard the other, arms carrying shape guards whose bodies differ, and three-slot arms. The reliable
+method, used for `conj`, `abs`, the two diagonal operations, and `broadcast_in_dim`, is an explicit
+rewrite of the function's dispatch: match the tag (or the tuple of tags) instead of the variants, recover
+each bound tensor with `Tensor::as_typed` through the `typed_or_unsupported` helper, and leave the arm
+bodies untouched. Guards need no rewriting because they run against the outer `&Tensor`, whose `shape`
+and `dtype` are available, so the extraction goes inside the arm. A wildcard arm should be replaced by
+the tags it covered, with the externally defined tag refused separately, so every case stays an explicit
+conversion-or-rejection.
+
+Four attempts to *script* the tuple family were refused rather than half-applied, and the file is
+untouched: a line-oriented rewrite keeps mispairing the braces when an arm's body continues past its
+`=>` line. That is worth recording because the failure mode is silent-looking: the transform compiles
+nothing itself, so only the compiler catches a mispaired brace, and only if the file is compiled before
+the change is kept.
+
 **What the conversion actually is, measured rather than assumed.** Checking whether the conversion
 can start before the representation changes: it can, because tag-based dispatch and the seven variants
 can coexist while a file is converted a function at a time, and `TensorView::as_slice::<T>` and
