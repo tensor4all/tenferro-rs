@@ -408,7 +408,7 @@ fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
 
     for needle in [
         "self.to_contiguous(&view)?",
-        "let input = Tensor::F64(compact);",
+        "let input = Tensor::from_typed::<f64>(compact);",
         "self.svd(&input)",
     ] {
         assert!(
@@ -425,7 +425,7 @@ fn cubecl_linalg_overrides_qr_read_with_backend_canonicalization() {
 
     for needle in [
         "self.to_contiguous(&view)?",
-        "let input = Tensor::F64(compact);",
+        "let input = Tensor::from_typed::<f64>(compact);",
         "self.qr(&input)",
     ] {
         assert!(
@@ -442,7 +442,7 @@ fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
 
     for needle in [
         "self.to_contiguous(&view)?",
-        "let input = Tensor::F64(compact);",
+        "let input = Tensor::from_typed::<f64>(compact);",
         "self.eigh(&input)",
     ] {
         assert!(
@@ -941,7 +941,7 @@ fn cubecl_linalg_overrides_cholesky_read_with_backend_canonicalization() {
 
     for needle in [
         "self.to_contiguous(&view)?",
-        "let input = Tensor::F64(compact);",
+        "let input = Tensor::from_typed::<f64>(compact);",
         "self.cholesky(&input)",
     ] {
         assert!(
@@ -958,7 +958,7 @@ fn cubecl_linalg_overrides_lu_read_with_backend_canonicalization() {
 
     for needle in [
         "self.to_contiguous(&view)?",
-        "let input = Tensor::F64(compact);",
+        "let input = Tensor::from_typed::<f64>(compact);",
         "self.lu(&input)",
     ] {
         assert!(
@@ -975,7 +975,7 @@ fn cubecl_linalg_overrides_full_piv_lu_read_with_backend_canonicalization() {
 
     for needle in [
         "self.to_contiguous(&view)?",
-        "let input = Tensor::F64(compact);",
+        "let input = Tensor::from_typed::<f64>(compact);",
         "self.full_piv_lu(&input)",
     ] {
         assert!(
@@ -992,7 +992,7 @@ fn cubecl_linalg_overrides_eig_read_with_backend_canonicalization() {
 
     for needle in [
         "self.to_contiguous(&view)?",
-        "let input = Tensor::F64(compact);",
+        "let input = Tensor::from_typed::<f64>(compact);",
         "self.eig(&input)",
     ] {
         assert!(
