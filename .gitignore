@@ -123,3 +123,6 @@ docs/superpowers/plans/
 # pi session artifacts (local only)
 .pi-meetings/
 .pi-subagents/
+
+# LLVM profile data left by instrumented test runs
+*.profraw
