@@ -1,4 +1,5 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
+use num_complex::{Complex32, Complex64};
 use std::any::TypeId;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -10,6 +11,7 @@ use tenferro_tensor::backend::{
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
+use tenferro_tensor::DType;
 use tenferro_tensor::{
     with_session_entry_guard, TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView,
 };
@@ -85,6 +87,22 @@ pub(super) struct CudaExecSessionMarker;
 pub struct CudaExecSession<'a> {
     backend: &'a mut CudaBackend,
     _not_send_sync: PhantomData<Rc<()>>,
+}
+
+/// The typed tensor behind `input`, or the refusal this method produces for one.
+///
+/// Callers reach this from a match on `input.dtype()`, so `None` means the tag table
+/// and the runtime dtype disagree rather than a caller mistake.
+fn gpu_resident_typed<'a, T: TensorScalar>(
+    op: &'static str,
+    input: &'a Tensor,
+) -> crate::Result<&'a TypedTensor<T>> {
+    input.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported(
+            op,
+            "an externally defined payload is not supported by this GPU operation",
+        )
+    })
 }
 
 impl CudaExecSession<'_> {
@@ -178,16 +196,44 @@ impl CudaExecSession<'_> {
     /// let _ = check;
     /// ```
     pub fn ensure_gpu_resident(&self, input: &Tensor, op: &'static str) -> crate::Result<()> {
-        match input {
-            Tensor::F32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
-            Tensor::F64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
-            Tensor::I32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
-            Tensor::I64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
-            Tensor::Bool(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
-            Tensor::C32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
-            Tensor::C64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+        match input.dtype() {
+            DType::F32 => super::dispatch::ensure_resident_on_runtime(
+                self.runtime(),
+                gpu_resident_typed::<f32>("ensure_gpu_resident", input)?,
+                op,
+            ),
+            DType::F64 => super::dispatch::ensure_resident_on_runtime(
+                self.runtime(),
+                gpu_resident_typed::<f64>("ensure_gpu_resident", input)?,
+                op,
+            ),
+            DType::I32 => super::dispatch::ensure_resident_on_runtime(
+                self.runtime(),
+                gpu_resident_typed::<i32>("ensure_gpu_resident", input)?,
+                op,
+            ),
+            DType::I64 => super::dispatch::ensure_resident_on_runtime(
+                self.runtime(),
+                gpu_resident_typed::<i64>("ensure_gpu_resident", input)?,
+                op,
+            ),
+            DType::Bool => super::dispatch::ensure_resident_on_runtime(
+                self.runtime(),
+                gpu_resident_typed::<bool>("ensure_gpu_resident", input)?,
+                op,
+            ),
+            DType::C32 => super::dispatch::ensure_resident_on_runtime(
+                self.runtime(),
+                gpu_resident_typed::<Complex32>("ensure_gpu_resident", input)?,
+                op,
+            ),
+            DType::C64 => super::dispatch::ensure_resident_on_runtime(
+                self.runtime(),
+                gpu_resident_typed::<Complex64>("ensure_gpu_resident", input)?,
+                op,
+            ),
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "ensure_gpu_resident",
                 "an externally defined payload is not supported by this GPU operation",
             )),

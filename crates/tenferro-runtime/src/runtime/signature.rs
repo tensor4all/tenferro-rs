@@ -1,3 +1,4 @@
+use num_complex::{Complex32, Complex64};
 use std::mem::align_of;
 use std::mem::size_of;
 
@@ -468,16 +469,31 @@ fn read_alignment_log2(read: &TensorRead<'_>) -> Option<u8> {
 }
 
 fn tensor_alignment_log2(tensor: &Tensor) -> Option<u8> {
-    match tensor {
-        Tensor::F32(tensor) => typed_tensor_alignment_log2(tensor),
-        Tensor::F64(tensor) => typed_tensor_alignment_log2(tensor),
-        Tensor::I32(tensor) => typed_tensor_alignment_log2(tensor),
-        Tensor::I64(tensor) => typed_tensor_alignment_log2(tensor),
-        Tensor::Bool(tensor) => typed_tensor_alignment_log2(tensor),
-        Tensor::C32(tensor) => typed_tensor_alignment_log2(tensor),
-        Tensor::C64(tensor) => typed_tensor_alignment_log2(tensor),
-        // A caller-owned payload's owner declares its own alignment.
-        Tensor::External(..) => None,
+    match tensor.dtype() {
+        DType::F32 => tensor
+            .as_typed::<f32>()
+            .and_then(typed_tensor_alignment_log2),
+        DType::F64 => tensor
+            .as_typed::<f64>()
+            .and_then(typed_tensor_alignment_log2),
+        DType::I32 => tensor
+            .as_typed::<i32>()
+            .and_then(typed_tensor_alignment_log2),
+        DType::I64 => tensor
+            .as_typed::<i64>()
+            .and_then(typed_tensor_alignment_log2),
+        DType::Bool => tensor
+            .as_typed::<bool>()
+            .and_then(typed_tensor_alignment_log2),
+        DType::C32 => tensor
+            .as_typed::<Complex32>()
+            .and_then(typed_tensor_alignment_log2),
+        DType::C64 => tensor
+            .as_typed::<Complex64>()
+            .and_then(typed_tensor_alignment_log2),
+        // A caller-owned payload's owner declares its own alignment, which is also
+        // what the accessor falls back to when the tag and the runtime dtype differ.
+        DType::External(_) => None,
     }
 }
 
