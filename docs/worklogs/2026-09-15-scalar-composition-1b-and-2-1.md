@@ -111,6 +111,43 @@ the same 3 failed. The three are `trybuild` fixture renderings whose committed
 introduces no new failure; the three are pre-existing environment artifacts, and
 `cargo test --workspace` stops at the first of them without `--no-fail-fast`.
 
+## Stage 2 progress landed after this list
+
+- **Promotion lattice derived, not hand-written.** Each member declares its
+  arithmetic kind, rank within the kind, and component width; `define_scalar_set!`
+  derives `promote` from those facts. The hand-written table in
+  `tenferro-tensor/src/validate/mod.rs` is deleted and `promote_dtype` delegates to
+  the set. The derived lattice was checked against the recorded table for all 49
+  pairs, and the external set in `ext/df64-proof` promotes within its own lattice.
+- **Shared dispatch macros.** `same_variant_pair!` and `same_variant_unary!` live
+  in `tenferro-internal-cpu-kernels/src/dispatch.rs`, are re-exported through
+  `tenferro-cpu`, and take the fallback expression as a parameter, so a crate that
+  converts a call site pays no macro-definition cost. `tenferro-linalg` drops its
+  local copy and converts eight sites for 112 deleted lines net.
+- **The mechanically convertible set is exhausted.** A workspace scan for matches
+  whose whole body is a same-variant dispatch finds two remaining sites, both in
+  the householder-QR factor import path, where the dispatched value is a
+  `CompactQrResult` rather than a `Tensor`.
+- **The remaining large clusters are not whole matches.** The owned-tensor
+  elementwise operations carry six same-variant arms followed by four
+  scalar-mixing arms and a fallback, so a whole-match macro cannot take them.
+
+## The measurement that decides the next step
+
+Adding the variant in a disposable worktree and compiling the workspace measured
+what admitting an external member costs: an erased variant on `Tensor` needs 18
+explicit arms, all inside `tenferro-tensor`, and an external variant on `DType`
+needs 59 across about thirty files (7 in tests, 40 in production statement
+position, 12 in production value position where the enclosing function must start
+returning a result). Making `dtype()` fallible instead would touch 605 call sites.
+So the hybrid shape is roughly 77 arms against the 2267 production pattern sites
+that removing the seven variants rewrites, and it is the cheaper path.
+
+Both new variants change public types, so under this repository's rules the change
+needs maintainer acceptance before a feature pull request carries it. That, and
+#1789's decision that an external payload is caller-owned rather than pool-owned,
+are the only remaining inputs.
+
 ## Residual risk and open decisions
 
 - The runtime representation choice is recorded but not made: one boxing
