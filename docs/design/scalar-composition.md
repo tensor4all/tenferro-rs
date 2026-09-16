@@ -1312,6 +1312,15 @@ arm-dense hold about 1180 of them — 520 in `tenferro-gpu/src/cubecl/mod.rs`, 2
 choice into the public contract needs maintainer acceptance, which is why the design records it
 rather than the branch assuming it.
 
+**Where the substitution itself stops.** The transforms that converted `div`, `rem`, `pow`, `compare`,
+and `select` split a match at its arm heads and substitute the bound names with typed accessors. That
+works while every occurrence of a bound name in the arm's body refers to the binding the pattern
+introduced. `scatter` breaks it: its residual arms discard the operand (`(Tensor::Bool(_), _, _)`) and
+call `operand.dtype()` on the *parameter* of the same name, so a name-based substitution rewrites
+occurrences that never came from a binding. The same pass also has to know which of `indices` and
+`scatter_indices` the binding shadows. The function therefore needs a per-arm rewrite that distinguishes
+bindings from parameters, which is what the earlier hand conversions did.
+
 **Where the incremental approach stops.** Converting `reshape` showed the limit. Its dispatch recovers
 each typed tensor and *moves* it into a metadata helper that reuses the buffer, but `Tensor::as_typed`
 borrows, so a tag-dispatched version would have to clone the device tensor and change the operation's
