@@ -833,3 +833,20 @@ value and a later execution are unchanged. #1785's requirement that the contribu
 `Df64`-specific branch in tenferro or strided is also now measured rather than asserted: `grep` for
 `Df64` or `df64` under `crates/` returns no match at all, because the contribution lives entirely
 in `ext/df64-proof`.
+
+## The missing-operation inventory #1789 asks for
+
+#1789's first acceptance item asks for a public external-crate probe that records each missing
+operation and the minimum owner-scoped change. The probes already existed as the proof crate's
+boundary tests; the record did not. The design doc now carries the table, with each row either
+asserted by a named passing test or by a named rejection, and each row naming whose scope the
+fix belongs to.
+
+Writing it made one distinction explicit that the prose had blurred: three of the rows are
+rejections by design rather than missing capabilities (the core identity tensor, which the
+declared identity replaces; the AD contract, which admits first-order field arithmetic only; and
+the GPU/XLA backends, which are out of scope), one row needs no change at all because the
+accounted extension cache already serves it, and only two rows need a decision (pooled storage,
+owned by #1789, and einsum, owned by #1793). The backend elementwise and reduction row needs
+neither a decision nor new storage: a body the contribution owns behind the same session supplies
+it.

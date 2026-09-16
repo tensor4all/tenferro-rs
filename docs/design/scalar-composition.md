@@ -1339,6 +1339,35 @@ less common arms (`ad.rs`, 29), the eager retention guard (`eager.rs`, 16), and 
 `Debug` rendering plus a defensive fallback in `checkpoint.rs` (11) that no public path reaches
 because `RetainedValue` is not a public item.
 
+### 5.21 What an external scalar reaches, and what supporting it would cost
+
+#1789's first acceptance item asks for a public external-crate probe that records each missing
+operation and the minimum owner-scoped change. The probes are the proof crate's boundary tests,
+which are public cross-crate tests, and this table is the record. Every row was executed rather
+than reasoned about: the "present" rows are asserted by passing tests, and the "rejected" rows
+assert the typed error a caller receives. "Rejected" is not the same as missing: some boundaries
+are closed on purpose, and the row says which.
+
+| Reached boundary | Status | Evidence | Minimum owner-scoped change |
+| --- | --- | --- | --- |
+| Typed construction and storage of the contribution's scalar | present | the whole proof crate; `composition.rs` builds and reduces `HostTensor<Df64>` | none |
+| Erasure and typed projection, including alignment and aliasing | present | `external_views.rs` (`a_permutation_is_metadata_only_and_preserves_every_component`, `a_shared_payload_refuses_a_mutable_element_borrow`) | none |
+| Metadata-only permutation, contiguous materialization, mutation through a view | present | `external_views.rs` (`a_mutable_view_writes_the_element_the_view_names`, `a_materialized_view_keeps_the_low_component_in_logical_order`) | none |
+| Elementwise arithmetic and reduction through the accounted CPU entries | present | `composition.rs` (`external_scalar_runs_through_the_elementwise_entry_point`, `external_scalar_sum_retains_low_order_information`) | none |
+| Elementwise and reduction through the core backend surface (`neg`, `reduce_sum`, `reduce_prod`, `reduce_max`, `reduce_min`, and their borrowed-read forms) | rejected | `external_dtype_boundaries.rs` (`an_elementwise_operation_refuses_a_caller_owned_payload`, `a_reduction_refuses_a_caller_owned_payload`); a reduction over no axes returns the caller's value unchanged because it is the identity for every scalar | a per-scalar body on the backend, or a contribution-provided implementation behind the same session. The backend owns the arm, so this is a backend-scoped change rather than a storage one |
+| Core runtime identity tensor for a caller-owned scalar | rejected by design; the declared identity replaces it | `external_dtype_boundaries.rs` (`the_runtime_builds_no_core_identity_tensor_for_a_caller_owned_scalar`); `ProgramValueMetadata::with_scalar_identity` and `ProgramBuildError::ExternalScalarWithoutIdentity` | none: a program names its scalar through the declared identity, which this branch adds |
+| First-order AD through the contribution's rules | present | `extension_ad.rs`, `connected_conversion_ad.rs`, `connected_qr_ad.rs` | none |
+| An AD order other than one, a scalar that is not a field, and an operation outside the contribution's rule set | rejected | `crates/tenferro-tensor-core/src/scalar/tests.rs` (all three `ad_admission` branches) and `ad_rule_boundaries.rs` | none: the contract admits first-order field arithmetic and refuses the rest with a typed error |
+| The ordinary einsum surface | rejected | `crates/tenferro-einsum/src/extension/tests.rs` (`infer_output_meta_rejects_an_externally_defined_scalar`), executed twice per the coverage record | #1793's provider work: a contraction body the contribution owns, reached through the existing construction-time slots. Owned by einsum plus an extension provider |
+| Bulk pooled storage for a custom type | missing | the measured gap (189 allocations and 174857 bytes for a steady 64 by 64 factorization; 258 and 724668 for the adjoint) and the preset-only `PoolScalar` boundary | extend the pool boundary for a demonstrated gap, or take scratch from an account the runtime already tracks. Owned by #1789 |
+| Scratch reuse without extending the pool boundary | present | `scratch_allocation.rs` (one extension cache entry, 524288 retained bytes, one hit, and the steady adjoint costing fewer bytes than the first) and `retention_controls.rs` (clear releases the retained bytes and a live value is unchanged) | none: the accounted extension cache is the sanctioned mechanism |
+| GPU and XLA backends | rejected | the sixteen GPU arms in `tenferro-linalg` that reject through `unsupported_linalg_dtype`, and the XLA configuration | a backend-scoped implementation for the contribution, which is out of this issue's scope |
+
+The two rows that need a decision rather than an implementation are the pooled-storage row, whose
+contract #1789 owns, and the einsum row, whose authorization #1793 owns. The backend elementwise
+and reduction row needs neither: the contribution can be served by a body it owns behind the same
+session, and the refusal a caller sees today is typed and explicit.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing
