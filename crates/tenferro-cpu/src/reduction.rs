@@ -1256,3 +1256,6 @@ where
         "reduce_min",
     )
 }
+
+#[cfg(test)]
+mod tests;

@@ -3496,3 +3496,6 @@ fn unsupported_pair(
         Err(unsupported_dtype(op, lhs.dtype()))
     }
 }
+
+#[cfg(test)]
+mod tests;
