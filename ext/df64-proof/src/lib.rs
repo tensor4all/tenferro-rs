@@ -131,6 +131,101 @@ impl Df64 {
     pub fn narrow_to_f64(self) -> f64 {
         self.hi
     }
+
+    /// Quotient, refined to the full two-component precision.
+    ///
+    /// The first component of the result is the ordinary `f64` quotient and the
+    /// remaining error is recovered by two Newton corrections evaluated in the
+    /// two-component arithmetic, so the quotient carries both components.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::Df64;
+    ///
+    /// // One divided by three is not a binary fraction, and the low component holds
+    /// // the part an `f64` quotient cannot.
+    /// let third = Df64::from_f64(1.0).ratio(Df64::from_f64(3.0));
+    /// assert_eq!(third.hi, 1.0 / 3.0);
+    /// assert_ne!(third.lo, 0.0);
+    /// assert!((third * Df64::from_f64(3.0) - Df64::from_f64(1.0)).abs_hi() < 1e-31);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn ratio(self, divisor: Self) -> Self {
+        if divisor.hi == 0.0 || !divisor.hi.is_finite() || !self.hi.is_finite() {
+            // IEEE semantics for a non-finite operand, an infinite divisor, or a zero
+            // divisor: the first component is the answer and no correction applies.
+            return Self::from_f64(self.hi / divisor.hi);
+        }
+        let mut quotient = Self::from_f64(self.hi / divisor.hi);
+        for _ in 0..2 {
+            // The residual is computed in the two-component arithmetic, so the
+            // correction carries the part the previous quotient could not represent.
+            let residual = self - divisor * quotient;
+            if residual.hi == 0.0 {
+                break;
+            }
+            quotient = quotient + Self::from_f64(residual.hi / divisor.hi);
+        }
+        quotient
+    }
+
+    /// Square root, refined to the full two-component precision.
+    ///
+    /// A negative operand follows IEEE: the result is NaN with a zero low
+    /// component.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::Df64;
+    ///
+    /// let root = Df64::from_f64(2.0).sqrt();
+    /// assert_eq!(root.hi, 2.0_f64.sqrt());
+    /// // Squaring recovers two to a precision an `f64` root cannot reach.
+    /// assert!((root * root - Df64::from_f64(2.0)).abs_hi() < 1e-31);
+    /// assert!(Df64::from_f64(-1.0).sqrt().hi.is_nan());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn sqrt(self) -> Self {
+        if self.hi < 0.0 || !self.hi.is_finite() {
+            return Self::from_f64(self.hi.sqrt());
+        }
+        if self.hi == 0.0 {
+            return self;
+        }
+        let mut root = Self::from_f64(self.hi.sqrt());
+        for _ in 0..2 {
+            // Newton's step for a square root, evaluated in the two-component
+            // arithmetic so the refinement is not limited by `f64`.
+            let next = (root + self.ratio(root)) * Self::from_f64(0.5);
+            if next == root {
+                break;
+            }
+            root = next;
+        }
+        root
+    }
+
+    /// Absolute value of the rounded component.
+    ///
+    /// This is the scale a convergence test uses; it does not widen the represented
+    /// value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::Df64;
+    ///
+    /// assert_eq!(Df64 { hi: -2.0, lo: 1.0 }.abs_hi(), 2.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn abs_hi(self) -> f64 {
+        self.hi.abs()
+    }
 }
 
 /// Exact product of two `f64` values as a high and low component (Dekker's
@@ -206,6 +301,27 @@ pub struct Df64Add;
 impl tenferro_cpu::BinaryScalarOp<Df64> for Df64Add {
     fn apply(lhs: Df64, rhs: Df64) -> Df64 {
         std::ops::Add::add(lhs, rhs)
+    }
+}
+
+impl std::ops::Mul for Df64 {
+    type Output = Self;
+
+    /// Two-component product: the exact leading product plus the first-order
+    /// corrections, which is what the contract's arithmetic promises.
+    #[inline]
+    fn mul(self, other: Self) -> Self {
+        tenferro_tensor_core::ScalarArithmetic::scalar_mul(self, other)
+    }
+}
+
+impl std::ops::Div for Df64 {
+    type Output = Self;
+
+    /// Two-component quotient, refined to both components.
+    #[inline]
+    fn div(self, other: Self) -> Self {
+        Df64::ratio(self, other)
     }
 }
 

@@ -787,6 +787,31 @@ instead of pretending to handle it.
 reached the program (an input, an operation output, or a core operation), which is
 what located the remaining plumbing when this step was implemented.
 
+### 5.6 The contribution-owned QR factorization
+
+#1788's QR checkpoint does not need a new provider mechanism. The contribution owns
+its numerical body the same way it owns the total sum: `Df64Qr` is a second
+operation in the same family, with one input and two outputs, and the runtime reaches
+it through the same registered engine and prepared execution.
+
+The body is modified Gram-Schmidt with one re-orthogonalization pass, computed in the
+external scalar, which is why the factors keep its precision. That needed division
+and square root in the scalar: `Df64::ratio` refines the quotient with two Newton
+corrections evaluated in the two-component arithmetic, and `Df64::sqrt` refines a
+square root the same way, so `(1/3) * 3 - 1` and `sqrt(2)^2 - 2` are non-zero in the
+external scalar while the `f64` computation reports zero.
+
+`ext/df64-proof/tests/extension_qr.rs` verifies the factorization through the traced,
+compiled, and executed path: a square factorisation reconstructs its input with an
+error below `1e-30`, its columns are orthonormal below `1e-30`, its diagonal is
+positive, `[[3], [4]]` gives `R = [[5]]` and `Q = [[0.6], [0.8]]`, and a `2^-80` low
+component in the input reaches the factors instead of being narrowed away.
+
+What is still open for #1788/#1790 is the *differentiated* QR: the reverse rule needs
+the adjoint of the factorization (a triangular solve, so it needs the same division
+and a solve in the external scalar), and the conversions in the connected graphs need
+their own rules. Those are the next step, not a missing mechanism.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

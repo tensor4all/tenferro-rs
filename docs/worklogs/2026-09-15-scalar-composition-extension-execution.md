@@ -313,3 +313,29 @@ VJP, their compilation, and the execution of both programs.
 
 Workspace after this: 5258 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy clean under `-D warnings` and the strict doc lints.
+
+## The contribution-owned QR factorization
+
+#1788's QR checkpoint does not need a new provider mechanism: the contribution owns its
+numerical body the same way it owns the total sum. `Df64Qr` is a second operation in
+the same family, one input and two outputs, reached through the same registered engine
+and prepared execution.
+
+The body is modified Gram-Schmidt with one re-orthogonalization pass in the external
+scalar, which needed two additions to that scalar: `Df64::ratio` refines a quotient
+with two Newton corrections evaluated in the two-component arithmetic, and
+`Df64::sqrt` refines a square root the same way. The `f64` controls are decisive:
+`(1/3) * 3 - 1` is exactly zero in `f64` and non-zero in the external scalar, as is
+`sqrt(2)^2 - 2`.
+
+`ext/df64-proof/tests/extension_qr.rs` verifies the factorisation through the traced,
+compiled, and executed path: reconstruction error below `1e-30`, orthonormal columns
+below `1e-30`, a positive diagonal, `[[3], [4]]` giving `R = [[5]]` and
+`Q = [[0.6], [0.8]]`, and a `2^-80` low component in the input reaching the factors.
+
+Two mistakes in my own test expectations were caught by the run rather than left in:
+comparing rounded `f64` values against two-component results, and computing the
+expected value in `f64` before comparing it with an extended-precision result.
+
+Workspace after this: 5268 passed, 3 failed (the same pre-existing `trybuild`
+failures), clippy clean under `-D warnings` and the strict doc lints.

@@ -226,6 +226,184 @@ impl ExtensionOp for Df64Expand {
     }
 }
 
+/// Reduced QR factorization of a real square or tall matrix.
+///
+/// The factorization is the contribution's own numerical body: modified
+/// Gram-Schmidt with one re-orthogonalization pass, computed in the external scalar
+/// so the factors keep its precision. `R` has a positive diagonal and `Q` has
+/// orthonormal columns, returned as two externally defined tensors.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::extension::Df64Qr;
+/// use tenferro_ad::extension::ExtensionOp;
+///
+/// assert_eq!(<Df64Qr as ExtensionOp>::input_count(&Df64Qr), 1);
+/// assert_eq!(<Df64Qr as ExtensionOp>::output_count(&Df64Qr), 2);
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Df64Qr;
+
+impl ExtensionOp for Df64Qr {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(*self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        2
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    fn scalar_identity(&self) -> Option<&'static str> {
+        Some(DF64_SCALAR_IDENTITY)
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        if !matches!(dtype, DType::External(_)) {
+            return Err(tenferro_tensor::Error::unsupported_dtype(
+                "df64_qr",
+                dtype,
+                "df64_qr takes an externally defined scalar",
+            ));
+        }
+        // The factors have the input's extents, so the inference forwards them however
+        // they are expressed. Whether the matrix is tall enough is a property of the
+        // concrete input and is checked when the body runs.
+        let shape = ctx.input_shape(0)?.to_vec();
+        let [rows, columns] = match shape.as_slice() {
+            [rows, columns] => [rows.clone(), columns.clone()],
+            _ => {
+                return Err(tenferro_tensor::Error::invalid_argument(
+                    "df64_qr",
+                    "input",
+                    "df64_qr takes a rank-2 matrix",
+                ));
+            }
+        };
+        Ok(vec![
+            (dtype, vec![rows.clone(), columns.clone()]),
+            (dtype, vec![columns.clone(), columns]),
+        ])
+    }
+}
+
+/// Reduced QR factorization of a column-major dense matrix in the external scalar.
+///
+/// # Errors
+///
+/// Returns a typed error when the input is not a rank-2 externally defined matrix, or
+/// when a column is zero and the factorization has no unit vector for it.
+fn qr_of(inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let tensor = sole_input("df64_qr", inputs)?;
+    let payload =
+        external_payload::<Df64>("df64_qr", tensor).map_err(tenferro_runtime::Error::from)?;
+    let shape = tensor.shape();
+    let invalid = |message: &'static str| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
+            "df64_qr", "input", message,
+        ))
+    };
+    let [rows, columns] = match shape {
+        [rows, columns] if *rows >= *columns => [*rows, *columns],
+        _ => {
+            return Err(invalid(
+                "df64_qr takes a rank-2 matrix with at least as many rows as columns",
+            ));
+        }
+    };
+    let values = payload.as_slice();
+    if values.len() != rows * columns {
+        return Err(invalid("df64_qr takes a dense column-major matrix"));
+    }
+
+    // Column-major access into the source matrix.
+    let source = |row: usize, column: usize| values[row + column * rows];
+    let mut q = vec![Df64::zero(); rows * columns];
+    let mut r = vec![Df64::zero(); columns * columns];
+    for column in 0..columns {
+        for row in 0..rows {
+            q[row + column * rows] = source(row, column);
+        }
+        // One re-orthogonalization pass after the first projection, so the columns stay
+        // orthogonal to working precision even when the input is close to rank
+        // deficient.
+        for _pass in 0..2 {
+            for previous in 0..column {
+                let mut projection = Df64::zero();
+                for row in 0..rows {
+                    projection = projection + q[row + previous * rows] * q[row + column * rows];
+                }
+                for row in 0..rows {
+                    q[row + column * rows] =
+                        q[row + column * rows] - projection * q[row + previous * rows];
+                }
+                r[previous + column * columns] = r[previous + column * columns] + projection;
+            }
+        }
+        let mut squares = Df64::zero();
+        for row in 0..rows {
+            squares = squares + q[row + column * rows] * q[row + column * rows];
+        }
+        let norm = squares.sqrt();
+        if norm.hi == 0.0 {
+            return Err(invalid("df64_qr takes a matrix with no zero column"));
+        }
+        // A positive diagonal is part of the factorization's contract, so a negative
+        // norm flips the column and the entry together.
+        let sign = if norm.hi < 0.0 {
+            Df64::from_f64(-1.0)
+        } else {
+            Df64::from_f64(1.0)
+        };
+        let scale = sign * Df64::from_f64(1.0).ratio(norm);
+        for row in 0..rows {
+            q[row + column * rows] = q[row + column * rows] * scale;
+        }
+        r[column + column * columns] = sign * norm;
+    }
+
+    let q = HostTensor::from_vec_col_major(vec![rows, columns], q)
+        .map_err(|source| tenferro_tensor::Error::validation("df64_qr", source))
+        .map_err(tenferro_runtime::Error::from)?;
+    let r = HostTensor::from_vec_col_major(vec![columns, columns], r)
+        .map_err(|source| tenferro_tensor::Error::validation("df64_qr", source))
+        .map_err(tenferro_runtime::Error::from)?;
+    Ok(vec![
+        Tensor::external(ErasedHostTensor::new(q)),
+        Tensor::external(ErasedHostTensor::new(r)),
+    ])
+}
+
 fn external_payload<'a, T: Scalar>(
     op: &'static str,
     tensor: &'a Tensor,
@@ -304,6 +482,8 @@ enum Df64Body {
     Total,
     /// The scalar input broadcast to this shape.
     Expand(Box<[usize]>),
+    /// Reduced QR factorization of the matrix input.
+    Qr,
 }
 
 impl Df64Body {
@@ -311,6 +491,7 @@ impl Df64Body {
         match self {
             Self::Total => total_of(inputs),
             Self::Expand(shape) => expand_of(shape, inputs),
+            Self::Qr => qr_of(inputs),
         }
     }
 }
@@ -383,9 +564,13 @@ impl ExtensionEngine for Df64Engine {
         &self,
         request: ExtensionPrepareRequest<'_>,
     ) -> Result<PrepareCapability, PrepareError> {
-        let body = match request.operation().as_any().downcast_ref::<Df64Expand>() {
-            Some(expand) => Df64Body::Expand(expand.shape.clone()),
-            None => Df64Body::Total,
+        let operation = request.operation().as_any();
+        let body = if let Some(expand) = operation.downcast_ref::<Df64Expand>() {
+            Df64Body::Expand(expand.shape.clone())
+        } else if operation.downcast_ref::<Df64Qr>().is_some() {
+            Df64Body::Qr
+        } else {
+            Df64Body::Total
         };
         let prepared = Arc::new(Df64Prepared {
             binding: request.binding().clone(),
