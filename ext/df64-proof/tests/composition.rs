@@ -154,3 +154,25 @@ fn external_scalar_reaches_the_shared_admission_query() {
         Err(AdAdmissionError::NonFieldScalar)
     );
 }
+
+#[test]
+fn external_crate_defines_its_own_scalar_set() {
+    use tenferro_df64_proof::{ExtendedSet, ExtendedTag};
+    use tenferro_tensor_core::{HostTensor, ScalarSet};
+
+    let value = ExtendedSet::Df64(
+        HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)]).unwrap(),
+    );
+    assert_eq!(value.tag(), ExtendedTag::Df64);
+    assert_eq!(
+        <ExtendedSet as ScalarSet>::TAGS,
+        &[ExtendedTag::F64, ExtendedTag::Df64]
+    );
+
+    // The external set and the set tenferro ships coexist without sharing a type.
+    assert_eq!(
+        <tenferro_tensor_core::DefaultScalars as ScalarSet>::TAGS.len(),
+        7
+    );
+    assert_eq!(<ExtendedSet as ScalarSet>::TAGS.len(), 2);
+}

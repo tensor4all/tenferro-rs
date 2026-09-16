@@ -35,11 +35,14 @@ mod error;
 mod layout;
 mod rank;
 mod scalar;
+#[macro_use]
+mod scalar_set;
 
 pub use error::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 pub use layout::TensorLayout;
 pub use rank::{DynRank, IntoRankShape, Rank, TensorRank};
 pub use scalar::{ad_admission, AdAdmissionError, Scalar, ScalarArithmetic, ScalarDomain};
+pub use scalar_set::ScalarSet;
 
 /// Small tensor shape vector with inline capacity for common dynamic ranks.
 ///
@@ -95,24 +98,34 @@ pub type StrideVec = SmallVec<[isize; 8]>;
 /// ```
 pub type Result<T> = std::result::Result<T, ValidationError>;
 
-/// Runtime scalar dtype tag.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_tensor_core::DType;
-///
-/// assert_eq!(DType::F64, DType::F64);
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum DType {
-    F32,
-    F64,
-    I32,
-    I64,
-    Bool,
-    C32,
-    C64,
+define_scalar_set! {
+    /// Runtime scalar dtype tag.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::DType;
+    ///
+    /// assert_eq!(DType::F64, DType::F64);
+    /// ```
+    pub enum DType {
+        /// 32-bit floating point.
+        F32 => f32,
+        /// 64-bit floating point.
+        F64 => f64,
+        /// 32-bit signed integer.
+        I32 => i32,
+        /// 64-bit signed integer.
+        I64 => i64,
+        /// Boolean.
+        Bool => bool,
+        /// 32-bit complex floating point.
+        C32 => Complex32,
+        /// 64-bit complex floating point.
+        C64 => Complex64,
+    }
+    /// Value enum of the scalar set tenferro ships.
+    pub enum DefaultScalars;
 }
 
 /// Sealed trait for scalar types supported by the core tensor data model.
@@ -366,16 +379,7 @@ pub struct HostTensor<T> {
 /// assert_eq!(tensor.dtype(), DType::F64);
 /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
-#[derive(Clone, Debug, PartialEq)]
-pub enum Tensor {
-    F32(HostTensor<f32>),
-    F64(HostTensor<f64>),
-    I32(HostTensor<i32>),
-    I64(HostTensor<i64>),
-    Bool(HostTensor<bool>),
-    C32(HostTensor<Complex32>),
-    C64(HostTensor<Complex64>),
-}
+pub type Tensor = DefaultScalars;
 
 /// Borrowed host tensor view with shape, strides, and offset metadata.
 ///
@@ -1080,7 +1084,7 @@ impl<'a, T> HostTensorView<'a, T> {
     }
 }
 
-impl Tensor {
+impl DefaultScalars {
     /// Create a dynamic tensor from a column-major host buffer.
     ///
     /// # Examples

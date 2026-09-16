@@ -14,6 +14,18 @@
 
 #![deny(missing_docs)]
 
+tenferro_tensor_core::define_scalar_set! {
+    /// Tag for the external extended-precision set.
+    pub enum ExtendedTag {
+        /// Standard double precision.
+        F64 => f64,
+        /// The external two-component scalar.
+        Df64 => Df64,
+    }
+    /// Value enum for the external extended-precision set.
+    pub enum ExtendedSet;
+}
+
 /// A real scalar carrying a high and a low `f64` component.
 ///
 /// `hi` holds the rounded value and `lo` the exact residual, so
