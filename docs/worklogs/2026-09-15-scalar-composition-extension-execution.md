@@ -870,3 +870,28 @@ costs about 12.3 µs and 19 allocations per call for a two-element operation, wh
 the slower of the two. It is a constant of the runtime's small-operation path, recorded here
 because #1789 asks for it and because a branch that measures erasure down to 9.8 ns should say
 when the layer around the erasure costs four orders of magnitude more.
+
+## The runnable recipe #1790 asks for, and the helper closure #1788 asks for
+
+Reading #1790's and #1788's acceptance tables in full, rather than trusting the prose summaries I
+had been working from, found two documentation deliverables that were absent. #1790 asks for "a
+runnable recipe with commands, dependency versions, numerical domain, inherited versus added
+definitions, explicit selection/conversions, resource ownership, supported derivative order, and
+unsupported cases". #1788 asks to "document first-order helper closure", which the extension-op
+specification makes a condition for terminal helper families that omit their own higher-order
+rules. Neither existed: there was no guide for this work and no README in any of the three
+unpublished crates.
+
+`docs/guides/external-scalars.md` now carries both. Every command in it was executed before being
+written down, and every claim names the test that carries it, including the numerical domain, the
+3-4-5 case and the analytic adjoint reference in `extension_qr.rs`, the four configurations and the
+cross-owner handoff in `configurations.rs`, the accounted scratch and its clear in
+`scratch_allocation.rs` and `retention_controls.rs`, and the terminal helper families whose higher
+orders are refused by declaration rather than by accident.
+
+Adding the guide surfaced a real consequence of the dependency change made earlier in the session:
+`tenferro-scalar-consumer-application` gained the contribution as a normal dependency, so the
+checked-in `docs/assets/dependency-footprint.svg` no longer matched the workspace graph and the
+docs profile failed in `test-gen-dep-graph.py`. The graph was regenerated through the repository's
+own generator, with a Graphviz-webassembly shim standing in for the `dot` binary this machine does
+not have, and the profile passes again.

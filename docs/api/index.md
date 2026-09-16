@@ -41,7 +41,9 @@ For contributors, internal crate APIs are also available in the
 
 These crates are not published. They show how an application adds a scalar
 tenferro does not declare and how it composes that support with the canonical
-one, and their tests are the executable evidence for those boundaries.
+one, and their tests are the executable evidence for those boundaries. The
+[adding an external scalar](../guides/external-scalars.md) guide runs the path
+end to end and names the test behind every claim.
 
 - [tenferro-df64-proof](./tenferro_df64_proof/index.html): an externally defined
   scalar with its own arithmetic, QR factorisation, extension operations, and
