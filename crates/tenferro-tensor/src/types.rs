@@ -8593,6 +8593,31 @@ impl Tensor {
         }
     }
 
+    /// Consume this tensor and return the owned typed tensor when the dtype matches.
+    ///
+    /// This is the consuming counterpart of [`Tensor::as_typed`], for the tables whose arm hands the typed
+    /// tensor to a function that takes it by value — reusing its buffer rather than copying it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert!(tensor.into_typed::<f64>().is_ok());
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0])?;
+    /// assert!(tensor.into_typed::<f64>().is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    ///
+    /// Returns the same refusal [`Tensor::into_vec_col_major`] reports when `T` does not match this
+    /// tensor's dtype, or when the matching tensor uses backend storage that has not been downloaded.
+    pub fn into_typed<T: TensorScalar>(self) -> crate::Result<TypedTensor<T>> {
+        T::into_typed(self)
+    }
+
     /// Consume this tensor and return its owned column-major buffer when the
     /// dtype matches.
     ///

@@ -5081,34 +5081,57 @@ impl TensorStructural for CudaBackend {
         // An owned tensor cannot be returned by shallowly reusing a backend
         // buffer. Materialize one explicit same-placement copy first, then
         // change only its compact metadata.
-        let contiguous = match input {
-            Tensor::Bool(tensor) => self.duplicate_bool(tensor, "reshape").map(Tensor::Bool)?,
+        let contiguous = match input.dtype() {
+            DType::Bool => self
+                .duplicate_bool(
+                    input.as_typed::<bool>().ok_or_else(|| {
+                        crate::Error::unsupported(
+                            "reshape",
+                            "an externally defined payload is not supported by this GPU operation",
+                        )
+                    })?,
+                    "reshape",
+                )
+                .map(Tensor::Bool)?,
+            // Every other tag is materialized through the read path, which refuses the
+            // externally defined payload itself.
             _ => self.to_contiguous_read(TensorRead::from_tensor(input))?,
         };
-        match contiguous {
-            Tensor::F32(t) => {
-                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::F32)
+        match contiguous.dtype() {
+            DType::F32 => {
+                cubecl_reshape_metadata(contiguous.into_typed::<f32>()?, shape.to_vec(), "reshape")
+                    .map(Tensor::F32)
             }
-            Tensor::F64(t) => {
-                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::F64)
+            DType::F64 => {
+                cubecl_reshape_metadata(contiguous.into_typed::<f64>()?, shape.to_vec(), "reshape")
+                    .map(Tensor::F64)
             }
-            Tensor::I32(t) => {
-                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::I32)
+            DType::I32 => {
+                cubecl_reshape_metadata(contiguous.into_typed::<i32>()?, shape.to_vec(), "reshape")
+                    .map(Tensor::I32)
             }
-            Tensor::I64(t) => {
-                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::I64)
+            DType::I64 => {
+                cubecl_reshape_metadata(contiguous.into_typed::<i64>()?, shape.to_vec(), "reshape")
+                    .map(Tensor::I64)
             }
-            Tensor::Bool(t) => {
-                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::Bool)
+            DType::Bool => {
+                cubecl_reshape_metadata(contiguous.into_typed::<bool>()?, shape.to_vec(), "reshape")
+                    .map(Tensor::Bool)
             }
-            Tensor::C32(t) => {
-                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::C32)
-            }
-            Tensor::C64(t) => {
-                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::C64)
-            }
+            DType::C32 => cubecl_reshape_metadata(
+                contiguous.into_typed::<Complex32>()?,
+                shape.to_vec(),
+                "reshape",
+            )
+            .map(Tensor::C32),
+            DType::C64 => cubecl_reshape_metadata(
+                contiguous.into_typed::<Complex64>()?,
+                shape.to_vec(),
+                "reshape",
+            )
+            .map(Tensor::C64),
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "reshape",
                 "an externally defined payload is not supported by this GPU operation",
             )),
