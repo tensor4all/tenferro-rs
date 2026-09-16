@@ -1349,6 +1349,23 @@ could not delimit an arm's body, since these bodies nest calls whose parentheses
 pattern matching and a naive depth scan. The lesson is the same one the earlier files taught: the
 mechanical part is the rewrite, not the transcription of it.
 
+**What the remaining arm tail actually is.** Counting only arms in pattern position (not the
+`Tensor::F32(..)` constructions that share the spelling), the workspace has 328 `Tensor` arms across 32
+files and 236 arms over the view, read, and write types. Of the 328, 103 are in `types.rs`, which is the
+tag's own source, so roughly 225 remain in ordinary modules. The raw per-file counts are misleading in one
+direction: `crates/tenferro-cpu/src/structural.rs` showed 49 arms by the loose measure and none in pattern
+position, because every occurrence there builds a tensor rather than matching one.
+
+The tail is shape-by-shape rather than uniform. Besides the nested and move cases above, `cubecl/dispatch.rs`
+has its tables inside exported macros, where the kernel-launch helper takes the tensor as an identifier
+rather than an expression, so the tag arm needs a `let` and a block rather than an inline accessor, and where
+a pattern-only sweep must not touch the macros' own matchers. The faer and LAPACK eig tables take the inline
+accessor because `TypedTensor` is shadowed inside those impl blocks by the `FaerLinalg` associated type.
+
+Three inputs gate the tiers that are not this tail: a public borrow accessor on the view types, which the
+view tables need and which is an API addition; the erased-representation decision, which the move sites and
+the seven-variant removal need; and the feature-PR authorization that #1793's text withholds.
+
 **Two shapes the table pass cannot take.** `crates/tenferro-cpu/src/dot_runtime.rs` shows both. Its
 layout validators reach the tensor through `TensorRead::Tensor(tensor) => match tensor { .. }`, so the
 variant arms sit two matches deep and the binding shadows the name the outer arm introduced; and
