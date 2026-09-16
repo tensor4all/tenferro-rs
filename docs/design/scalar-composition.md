@@ -1157,7 +1157,20 @@ branch, and both are checked against `origin/main`:
 
 What this changes for the audit is that "the workspace check is clean" is only true of the
 default feature set, and that a change to `DType` or `Tensor` has to be swept across the GPU
-feature configurations too. The branch's verification now includes that sweep.
+feature configurations too. The verification now includes that sweep, and the configurations
+that are clean on this host are:
+
+| Configuration | Result |
+| --- | --- |
+| `cargo check --workspace --all-targets` (default set) | clean |
+| `-p tenferro-gpu --features cuda` and `webgpu` | clean |
+| `-p tenferro-linalg --features cuda` and `webgpu` | clean |
+| `-p tenferro-einsum --features cuda` and `webgpu` | clean |
+| `-p tenferro-fft --features cuda` and `webgpu` | clean |
+| `-p tenferro-xla --features pjrt` | clean |
+| `-p tenferro-cpu --features cpu-faer` | clean |
+| `--all-features` on any of these | not applicable: it pulls `accelerate-src`, an Apple-only framework, on every platform this branch can reach |
+| the whole workspace with one crate's GPU feature (`--features tenferro-linalg/cuda`) | fails in `tenferro-einsum`, pre-existing and unrelated to this branch |
 
 ## 6. Risks and open questions
 
