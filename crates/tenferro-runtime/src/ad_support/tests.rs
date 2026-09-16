@@ -172,3 +172,27 @@ fn bool_ones_tensor_rejects_shape_product_overflow_without_panicking() {
         })
     ));
 }
+
+#[test]
+fn a_retained_pooled_value_reads_back_and_renders_its_container() {
+    // A pooled value is retained through its allocation group, read back as a borrowed
+    // descriptor view, and its handle renders the container it holds rather than a slot.
+    let tensor =
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches data");
+    let retained = RetainedValue::from_tensor(tensor);
+
+    assert_eq!(retained.dtype(), DType::F64);
+    assert_eq!(retained.shape(), &[2]);
+    let rendered = format!("{retained:?}");
+    assert!(rendered.contains("RetainedValue"), "{rendered}");
+    assert!(rendered.contains("container"), "{rendered}");
+
+    match retained.tensor_read().expect("a pooled read") {
+        tenferro_tensor::TensorRead::View(view) => {
+            assert_eq!(view.as_slice::<f64>().expect("slice"), &[1.0, 2.0]);
+        }
+        tenferro_tensor::TensorRead::Tensor(_) => {
+            panic!("a pooled value is read as a borrowed descriptor view");
+        }
+    }
+}
