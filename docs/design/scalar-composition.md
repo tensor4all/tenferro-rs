@@ -1068,6 +1068,31 @@ triangle it had just written, and the gradients went wrong again. The suite caug
 lesson is that a scratch API should make "give me a clean buffer" and "let me extend the buffer
 I just filled" different operations rather than one accessor with a clearing side effect.
 
+### 5.14 A correctness defect the Stage 1b audit found
+
+Stage 1b requires the scalar contract to keep **wrapping** arithmetic for the integer
+members. The preset pool path does: it has a `wrapping_add_elem` entry point that dispatches
+`i32` and `i64` to `wrapping_add`. The shared operation types introduced for the
+caller-destination entry points did not: `AddOp`, `SubOp`, and `MulOp` were bounded on the
+operators (`T: core::ops::Add<Output = T>`), so their bodies were `lhs + rhs`, which **panics
+on overflow in a debug build and wraps in a release build**.
+
+That is two defects in one: a behavior difference between the two paths for the same
+operation, and a behavior difference between builds of the same path, in a contract whose own
+documentation asserts `scalar_add(i32::MAX, 1) == i32::MIN`.
+
+The fix routes the three operations through the contract
+(`T: ScalarArithmetic`, delegating to `scalar_add`/`scalar_sub`/`scalar_mul`), so the shared
+path and the preset path now agree on wrapping in every build, and the contract is the single
+source of the arithmetic. Tightening the bound broke no user in the workspace, which is
+evidence that the contract is universal here rather than a subset.
+
+The evidence is executable: `AddOp`'s documentation now asserts
+`<AddOp as BinaryScalarOp<i32>>::apply(i32::MAX, 1) == i32::MIN`, which a doc test runs in a
+debug build and which therefore fails against the operator implementation, and
+`scalar_ops::tests::integer_arithmetic_through_the_shared_entry_point_wraps` covers addition,
+subtraction, multiplication, and a reduction through the public entry points.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

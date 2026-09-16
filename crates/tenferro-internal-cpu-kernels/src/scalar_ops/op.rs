@@ -18,6 +18,8 @@
 /// use tenferro_internal_cpu_kernels::scalar_ops::{AddOp, BinaryScalarOp};
 ///
 /// assert_eq!(<AddOp as BinaryScalarOp<f64>>::apply(1.0, 2.0), 3.0);
+/// // Integers wrap, so the shared path agrees with the preset path in every build.
+/// assert_eq!(<AddOp as BinaryScalarOp<i32>>::apply(i32::MAX, 1), i32::MIN);
 /// ```
 pub trait BinaryScalarOp<T> {
     /// Apply the operation.
@@ -67,27 +69,34 @@ pub struct MulOp;
 
 impl<T> BinaryScalarOp<T> for AddOp
 where
-    T: core::ops::Add<Output = T>,
+    T: tenferro_tensor_core::ScalarArithmetic,
 {
+    /// The scalar contract's addition, which wraps for the integer members.
+    ///
+    /// Going through the contract rather than the operator matters for integers: the operator
+    /// panics on overflow in a debug build and wraps in a release build, while the contract
+    /// wraps in both, which is what the preset path and `ScalarArithmetic::scalar_add` promise.
     fn apply(lhs: T, rhs: T) -> T {
-        lhs + rhs
+        tenferro_tensor_core::ScalarArithmetic::scalar_add(lhs, rhs)
     }
 }
 
 impl<T> BinaryScalarOp<T> for SubOp
 where
-    T: core::ops::Sub<Output = T>,
+    T: tenferro_tensor_core::ScalarArithmetic,
 {
+    /// The scalar contract's subtraction, which wraps for the integer members.
     fn apply(lhs: T, rhs: T) -> T {
-        lhs - rhs
+        tenferro_tensor_core::ScalarArithmetic::scalar_sub(lhs, rhs)
     }
 }
 
 impl<T> BinaryScalarOp<T> for MulOp
 where
-    T: core::ops::Mul<Output = T>,
+    T: tenferro_tensor_core::ScalarArithmetic,
 {
+    /// The scalar contract's product, which wraps for the integer members.
     fn apply(lhs: T, rhs: T) -> T {
-        lhs * rhs
+        tenferro_tensor_core::ScalarArithmetic::scalar_mul(lhs, rhs)
     }
 }

@@ -525,3 +525,27 @@ dependency graph through the GPU stack (`t4a-cubecl-*` depend on it), so bf16's 
 new external package but a new public `DType` variant, which the repository requires
 maintainer acceptance for. And the cooperating configuration was never blocked by a missing
 capability; two earlier readings of a typed rejection were wrong.
+
+## A correctness defect the final audit found
+
+Auditing Stage 1b's requirement list rather than my own notes turned up one: the requirement
+says the contract keeps **wrapping** arithmetic for integers. The preset path does, through a
+`wrapping_add_elem` entry point that dispatches the integer members to `wrapping_add`. The
+shared operation types that the caller-destination entry points use did not: `AddOp`, `SubOp`,
+and `MulOp` were bounded on the operators and their bodies were `lhs + rhs`, which panics on
+overflow in a debug build and wraps in a release build.
+
+So the same operation had two behaviors depending on which path ran and on which build
+produced the binary, while the contract's own documentation asserts
+`scalar_add(i32::MAX, 1) == i32::MIN`.
+
+The three operations now go through the contract (`T: ScalarArithmetic`), which is what the
+design intended and which makes the contract the single source of the arithmetic. The bound
+tightening broke no user in the workspace. The evidence is executable rather than asserted:
+the `AddOp` documentation asserts the wrapping identity through the shared type, and
+`scalar_ops::tests::integer_arithmetic_through_the_shared_entry_point_wraps` covers addition,
+subtraction, multiplication, and a reduction through the public entry points, in a debug build
+where the operator implementation would have panicked.
+
+Workspace after this: 5303 passed, 3 failed (the same pre-existing `trybuild` failures),
+clippy clean under `-D warnings` and the strict doc lints.
