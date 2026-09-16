@@ -599,9 +599,10 @@ ordinary addition on `f64` tensors in that session, then runs the extension's ow
 Df64 kernel on the carried payloads through the public caller-destination entry
 point, and checks after the session that the low-order component survived. So an
 external scalar coexists with ordinary tensor work inside one admitted session and
-inherits its admission and thread budget. What it does not yet do is reach the
-extension through a registered `ExtensionModule` and prepared execution, which is
-the remaining #1785/#1790 step.
+inherits its admission and thread budget. The registered
+`ExtensionModule`/prepared-execution path is implemented and prepares the
+operation, so the only thing still missing from the #1785/#1790 step is the
+ownership slot described above.
 
 **Promotion between two distinct external scalars is not checked.**
 `promote(lhs, rhs)` returns the left operand when both are external, even when the
