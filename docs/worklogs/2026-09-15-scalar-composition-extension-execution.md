@@ -213,3 +213,25 @@ preset tag.
 
 Workspace after this: 5245 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy `-D warnings` clean.
+
+## Correction and follow-on: what actually blocks the traced/AD path
+
+Two claims from the earlier report needed checking against the source.
+
+**The extension AD surface already exists.** `tenferro-ad/src/semantic_extension.rs`
+exposes `SemanticExtensionRuleSet` with `register_linearize`,
+`register_linear_transpose`, and `register_primal_vjp`, and
+`crates/tenferro-ad/tests/integration/multi_input_traced.rs` drives a registered VJP
+rule end to end. So an external first-order rule does not need a new mechanism.
+What it needs is a value that survives program construction.
+
+**The identity change is bounded.** A canonical identity for an external tag is 40
+constructor sites and 28 identity reads, with the 57 `External(_)` wildcard matches
+untouched. The design doc now records three shapes and recommends carrying the
+declared identity in `DType::External` beside the `TypeId`, which keeps every
+wildcard working and extends the public payload contract only at construction.
+
+**bf16 is genuinely dependency-blocked.** `half` is not a workspace dependency and
+no crate mentions `bf16`, so #1785's "use `half::bf16` as a standard scalar
+representation" needs either that dependency or a locally defined standard
+representation, both of which are maintainer decisions.
