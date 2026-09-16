@@ -1342,7 +1342,12 @@ table, and because the operation label lives outside the arm being rewritten. Th
 per-table and self-contained: the scrutinee reads `input.dtype()`, each arm becomes a tag, and the typed
 value is bound with `input.as_typed::<T>().ok_or_else(|| unsupported_dtype(...))?`, which is the same
 accessor the concatenate conversion used and needs no helper. The first table (`lu_factor`) is converted
-and its focused tests pass; the remaining thirty-two take the same edit.
+and its focused tests pass. The remaining thirty-two need that edit done by hand: scripting it was tried
+three times and rejected by the compiler each time, once because six tables had their scrutinee changed
+while no arm was converted (their binding is not the `t` the pass assumed) and twice because the pass
+could not delimit an arm's body, since these bodies nest calls whose parentheses and braces defeat both
+pattern matching and a naive depth scan. The lesson is the same one the earlier files taught: the
+mechanical part is the rewrite, not the transcription of it.
 
 **Where the incremental approach stops.** Converting `reshape` showed the limit. Its dispatch recovers
 each typed tensor and *moves* it into a metadata helper that reuses the buffer, but `Tensor::as_typed`
