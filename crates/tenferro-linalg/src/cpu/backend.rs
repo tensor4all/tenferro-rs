@@ -17,6 +17,23 @@ trait FreshLinalgOutput {
     fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId);
 }
 
+/// Dispatch a same-variant pair of tensors to a typed kernel.
+///
+/// The four supported real and complex variants are matched once here instead of
+/// at every call site, so an operation supplies only the typed kernel and the
+/// unsupported-pair error is reported the same way everywhere.
+macro_rules! same_variant_pair {
+    ($op:literal, $lhs:expr, $rhs:expr, |$a:ident, $b:ident| $call:expr) => {
+        match ($lhs, $rhs) {
+            (Tensor::F32($a), Tensor::F32($b)) => $call.map(Tensor::F32),
+            (Tensor::F64($a), Tensor::F64($b)) => $call.map(Tensor::F64),
+            (Tensor::C32($a), Tensor::C32($b)) => $call.map(Tensor::C32),
+            (Tensor::C64($a), Tensor::C64($b)) => $call.map(Tensor::C64),
+            ($a, $b) => unsupported_pair($op, $a, $b),
+        }
+    };
+}
+
 impl FreshLinalgOutput for Tensor {
     fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId) {
         macro_rules! tag {
@@ -256,24 +273,10 @@ impl LinalgBackend for CpuExecSession<'_> {
             CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
-                    self.with_linalg_pool_fresh(|ctx, buffers| match (a, &rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => {
+                    self.with_linalg_pool_fresh(|ctx, buffers| {
+                        same_variant_pair!("full_piv_lu_solve", a, &rhs, |a, b| {
                             linalg::faer::full_piv_lu_solve(ctx, buffers, a, b, transpose_a)
-                                .map(Tensor::F32)
-                        }
-                        (Tensor::F64(a), Tensor::F64(b)) => {
-                            linalg::faer::full_piv_lu_solve(ctx, buffers, a, b, transpose_a)
-                                .map(Tensor::F64)
-                        }
-                        (Tensor::C32(a), Tensor::C32(b)) => {
-                            linalg::faer::full_piv_lu_solve(ctx, buffers, a, b, transpose_a)
-                                .map(Tensor::C32)
-                        }
-                        (Tensor::C64(a), Tensor::C64(b)) => {
-                            linalg::faer::full_piv_lu_solve(ctx, buffers, a, b, transpose_a)
-                                .map(Tensor::C64)
-                        }
-                        _ => unsupported_pair("full_piv_lu_solve", a, &rhs),
+                        })
                     })
                 }
                 #[cfg(not(feature = "cpu-faer"))]
@@ -284,24 +287,10 @@ impl LinalgBackend for CpuExecSession<'_> {
             CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
-                    self.with_linalg_pool_fresh(|_, buffers| match (a, &rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => {
+                    self.with_linalg_pool_fresh(|_, buffers| {
+                        same_variant_pair!("full_piv_lu_solve", a, &rhs, |a, b| {
                             linalg::blas::full_piv_lu_solve(buffers, a, b, transpose_a)
-                                .map(Tensor::F32)
-                        }
-                        (Tensor::F64(a), Tensor::F64(b)) => {
-                            linalg::blas::full_piv_lu_solve(buffers, a, b, transpose_a)
-                                .map(Tensor::F64)
-                        }
-                        (Tensor::C32(a), Tensor::C32(b)) => {
-                            linalg::blas::full_piv_lu_solve(buffers, a, b, transpose_a)
-                                .map(Tensor::C32)
-                        }
-                        (Tensor::C64(a), Tensor::C64(b)) => {
-                            linalg::blas::full_piv_lu_solve(buffers, a, b, transpose_a)
-                                .map(Tensor::C64)
-                        }
-                        _ => unsupported_pair("full_piv_lu_solve", a, &rhs),
+                        })
                     })
                 }
                 #[cfg(not(feature = "cpu-blas"))]
@@ -1152,8 +1141,8 @@ fn triangular_solve_entered(
         CpuLinalgProvider::Faer => {
             #[cfg(feature = "cpu-faer")]
             {
-                match (a, b) {
-                    (Tensor::F32(a), Tensor::F32(b)) => linalg::faer::triangular_solve(
+                same_variant_pair!("triangular_solve", a, b, |a, b| {
+                    linalg::faer::triangular_solve(
                         context,
                         buffers,
                         a,
@@ -1163,42 +1152,7 @@ fn triangular_solve_entered(
                         options.transpose_a,
                         options.unit_diagonal,
                     )
-                    .map(Tensor::F32),
-                    (Tensor::F64(a), Tensor::F64(b)) => linalg::faer::triangular_solve(
-                        context,
-                        buffers,
-                        a,
-                        b,
-                        options.left_side,
-                        options.lower,
-                        options.transpose_a,
-                        options.unit_diagonal,
-                    )
-                    .map(Tensor::F64),
-                    (Tensor::C32(a), Tensor::C32(b)) => linalg::faer::triangular_solve(
-                        context,
-                        buffers,
-                        a,
-                        b,
-                        options.left_side,
-                        options.lower,
-                        options.transpose_a,
-                        options.unit_diagonal,
-                    )
-                    .map(Tensor::C32),
-                    (Tensor::C64(a), Tensor::C64(b)) => linalg::faer::triangular_solve(
-                        context,
-                        buffers,
-                        a,
-                        b,
-                        options.left_side,
-                        options.lower,
-                        options.transpose_a,
-                        options.unit_diagonal,
-                    )
-                    .map(Tensor::C64),
-                    _ => unsupported_pair("triangular_solve", a, b),
-                }
+                })
             }
             #[cfg(not(feature = "cpu-faer"))]
             {
@@ -1213,8 +1167,8 @@ fn triangular_solve_entered(
             #[cfg(feature = "cpu-blas")]
             {
                 let _ = context;
-                match (a, b) {
-                    (Tensor::F32(a), Tensor::F32(b)) => linalg::blas::triangular_solve(
+                same_variant_pair!("triangular_solve", a, b, |a, b| {
+                    linalg::blas::triangular_solve(
                         buffers,
                         a,
                         b,
@@ -1223,39 +1177,7 @@ fn triangular_solve_entered(
                         options.transpose_a,
                         options.unit_diagonal,
                     )
-                    .map(Tensor::F32),
-                    (Tensor::F64(a), Tensor::F64(b)) => linalg::blas::triangular_solve(
-                        buffers,
-                        a,
-                        b,
-                        options.left_side,
-                        options.lower,
-                        options.transpose_a,
-                        options.unit_diagonal,
-                    )
-                    .map(Tensor::F64),
-                    (Tensor::C32(a), Tensor::C32(b)) => linalg::blas::triangular_solve(
-                        buffers,
-                        a,
-                        b,
-                        options.left_side,
-                        options.lower,
-                        options.transpose_a,
-                        options.unit_diagonal,
-                    )
-                    .map(Tensor::C32),
-                    (Tensor::C64(a), Tensor::C64(b)) => linalg::blas::triangular_solve(
-                        buffers,
-                        a,
-                        b,
-                        options.left_side,
-                        options.lower,
-                        options.transpose_a,
-                        options.unit_diagonal,
-                    )
-                    .map(Tensor::C64),
-                    _ => unsupported_pair("triangular_solve", a, b),
-                }
+                })
             }
             #[cfg(not(feature = "cpu-blas"))]
             {
@@ -1293,21 +1215,9 @@ fn solve_entered(
         CpuLinalgProvider::Faer => {
             #[cfg(feature = "cpu-faer")]
             {
-                match (a, &rhs) {
-                    (Tensor::F32(a), Tensor::F32(b)) => {
-                        linalg::faer::solve(context, buffers, a, b, false).map(Tensor::F32)
-                    }
-                    (Tensor::F64(a), Tensor::F64(b)) => {
-                        linalg::faer::solve(context, buffers, a, b, false).map(Tensor::F64)
-                    }
-                    (Tensor::C32(a), Tensor::C32(b)) => {
-                        linalg::faer::solve(context, buffers, a, b, false).map(Tensor::C32)
-                    }
-                    (Tensor::C64(a), Tensor::C64(b)) => {
-                        linalg::faer::solve(context, buffers, a, b, false).map(Tensor::C64)
-                    }
-                    _ => unsupported_pair("solve", a, &rhs),
-                }
+                same_variant_pair!("solve", a, &rhs, |a, b| {
+                    linalg::faer::solve(context, buffers, a, b, false)
+                })
             }
             #[cfg(not(feature = "cpu-faer"))]
             {
@@ -1319,21 +1229,9 @@ fn solve_entered(
             #[cfg(feature = "cpu-blas")]
             {
                 let _ = context;
-                match (a, &rhs) {
-                    (Tensor::F32(a), Tensor::F32(b)) => {
-                        linalg::blas::solve(buffers, a, b, false).map(Tensor::F32)
-                    }
-                    (Tensor::F64(a), Tensor::F64(b)) => {
-                        linalg::blas::solve(buffers, a, b, false).map(Tensor::F64)
-                    }
-                    (Tensor::C32(a), Tensor::C32(b)) => {
-                        linalg::blas::solve(buffers, a, b, false).map(Tensor::C32)
-                    }
-                    (Tensor::C64(a), Tensor::C64(b)) => {
-                        linalg::blas::solve(buffers, a, b, false).map(Tensor::C64)
-                    }
-                    _ => unsupported_pair("solve", a, &rhs),
-                }
+                same_variant_pair!("solve", a, &rhs, |a, b| {
+                    linalg::blas::solve(buffers, a, b, false)
+                })
             }
             #[cfg(not(feature = "cpu-blas"))]
             {
