@@ -383,3 +383,19 @@ fn the_validator_refuses_a_single_operand() {
         "a contraction takes at least two operands"
     );
 }
+
+#[test]
+fn a_label_the_output_names_is_not_contracted() {
+    // "ij,ij->ij" is the Hadamard product, which #1793 lists as a reached operation. The labels are
+    // shared but the output names them, so the body multiplies elementwise rather than contracting,
+    // which is what makes the row above a real case rather than a restatement of the matrix one.
+    let results = contract_with(
+        numbers(&[1.0, 3.0, 2.0, 4.0]),
+        vec![2, 2],
+        numbers(&[5.0, 7.0, 6.0, 8.0]),
+        vec![2, 2],
+        (&[0, 1], &[0, 1], &[0, 1]),
+    );
+    // [[5, 12], [21, 32]] in column-major order.
+    assert_eq!(results, numbers(&[5.0, 21.0, 12.0, 32.0]));
+}

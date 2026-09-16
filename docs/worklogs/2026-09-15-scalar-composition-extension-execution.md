@@ -1174,3 +1174,11 @@ explicit at both rule sites. Three tests cover the new capability: a three-opera
 intermediate must keep a label the third operand needs while summing one nothing later needs, a
 three-operand pattern whose first operand repeats a label, and the single-operand refusal. The AD
 refusal for a wide pattern has its own test rather than being assumed.
+
+## Checking a claimed row instead of asserting it
+
+The last report said the reached-operation table was covered, and one row had no test behind it: the
+Hadamard product, which the table lists beside the outer product. The label-driven core should already
+evaluate it, because a label the output names is not summed, but "should" is what this session keeps
+finding to be wrong. It was right this time: `ij,ij->ij` multiplies elementwise and the test with
+hand-written values passes, so the row is now covered by evidence rather than by inference.
