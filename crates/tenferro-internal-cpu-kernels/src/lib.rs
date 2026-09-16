@@ -164,3 +164,6 @@ where
     tensor.set_placement(view.placement().clone());
     Ok(tensor)
 }
+
+#[cfg(test)]
+mod tests;
