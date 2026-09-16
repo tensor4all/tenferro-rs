@@ -3767,6 +3767,32 @@ impl Tensor {
         Self::External(payload, Placement::default())
     }
 
+    /// Borrow the erased payload of an externally defined tensor.
+    ///
+    /// This is the counterpart of [`Tensor::external`] for dispatch: a table that matches on
+    /// [`Tensor::dtype`] reaches the externally defined tag and needs the payload that tag stands
+    /// for, just as the typed tags reach theirs through [`Tensor::as_typed`]. Every other tag
+    /// returns `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    ///
+    /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let tensor = Tensor::external(payload);
+    /// assert!(tensor.external_payload().is_some());
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
+    #[must_use]
+    pub fn external_payload(&self) -> Option<&tenferro_tensor_core::ErasedHostTensor> {
+        match self {
+            Self::External(payload, _) => Some(payload),
+            _ => None,
+        }
+    }
+
     pub(crate) fn into_group_parts(self) -> (AllocationGroup, DescriptorSlot) {
         match self {
             Self::F32(tensor) => tensor.group.into_parts(),

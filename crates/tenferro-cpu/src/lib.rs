@@ -84,6 +84,7 @@ mod runtime_adapter;
 mod structural;
 mod topology;
 
+use num_complex::{Complex32, Complex64};
 use std::ptr::NonNull;
 #[cfg(test)]
 use strided_kernel::col_major_strides as kernel_col_major_strides;
@@ -436,21 +437,68 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Te
         }};
     }
 
-    match tensor {
-        Tensor::F32(tensor) => clone_host!(F32, tensor),
-        Tensor::F64(tensor) => clone_host!(F64, tensor),
-        Tensor::I32(tensor) => clone_host!(I32, tensor),
-        Tensor::I64(tensor) => clone_host!(I64, tensor),
-        Tensor::Bool(tensor) => clone_host!(Bool, tensor),
-        Tensor::C32(tensor) => clone_host!(C32, tensor),
-        Tensor::C64(tensor) => clone_host!(C64, tensor),
+    match tensor.dtype() {
+        DType::F32 => {
+            let tensor = host_typed::<f32>(op, tensor)?;
+            clone_host!(F32, tensor)
+        }
+        DType::F64 => {
+            let tensor = host_typed::<f64>(op, tensor)?;
+            clone_host!(F64, tensor)
+        }
+        DType::I32 => {
+            let tensor = host_typed::<i32>(op, tensor)?;
+            clone_host!(I32, tensor)
+        }
+        DType::I64 => {
+            let tensor = host_typed::<i64>(op, tensor)?;
+            clone_host!(I64, tensor)
+        }
+        DType::Bool => {
+            let tensor = host_typed::<bool>(op, tensor)?;
+            clone_host!(Bool, tensor)
+        }
+        DType::C32 => {
+            let tensor = host_typed::<Complex32>(op, tensor)?;
+            clone_host!(C32, tensor)
+        }
+        DType::C64 => {
+            let tensor = host_typed::<Complex64>(op, tensor)?;
+            clone_host!(C64, tensor)
+        }
         // A caller-owned payload is a compact host tensor, so a contiguous copy is
         // the payload itself, copied into storage this value owns. Sharing the
         // payload would alias the caller's storage instead of copying it.
-        Tensor::External(payload, placement) => {
-            Ok(Tensor::External(payload.duplicate(), placement.clone()))
-        }
+        DType::External(_) => Ok(Tensor::External(
+            tensor
+                .external_payload()
+                .ok_or_else(|| host_typed_error(op, tensor))?
+                .duplicate(),
+            tensor.placement().clone(),
+        )),
     }
+}
+
+/// The typed tensor behind `tensor`, or this module's refusal for a dtype it cannot clone.
+///
+/// Callers reach this from a match on `tensor.dtype()`, so `None` means the tag table and the
+/// runtime dtype disagree rather than a caller mistake.
+fn host_typed<'a, T: TensorScalar>(
+    op: &'static str,
+    tensor: &'a Tensor,
+) -> crate::Result<&'a TypedTensor<T>> {
+    tensor
+        .as_typed::<T>()
+        .ok_or_else(|| host_typed_error(op, tensor))
+}
+
+/// The refusal the accessor reports when the tag and the runtime dtype disagree.
+fn host_typed_error(op: &'static str, tensor: &Tensor) -> crate::Error {
+    crate::Error::unsupported_dtype(
+        op,
+        tensor.dtype(),
+        "the CPU host clone requires a preset scalar",
+    )
 }
 
 fn materialize_tensor_view(
