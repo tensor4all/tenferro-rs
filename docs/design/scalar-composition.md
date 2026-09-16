@@ -898,25 +898,27 @@ the provider even by accident.
 
 ### 5.10 The four configurations of #1790
 
-`ext/scalar-consumer-application/tests/configurations.rs` exercises them:
+All four run, and both connected graphs execute in the mixed and cooperating ones:
 
-| Configuration | Status | Evidence |
-| --- | --- | --- |
-| Standard, assembled from reusable support | runs | the linalg module alone, `[6, 8]` as `f64` |
-| Df64-only numerical support | runs | the contribution's module alone, no linalg installed, `[[6], [8]]` as `Df64` |
-| Mixed | runs | both modules on one engine, both gradients in one runtime |
-| Cooperating, distinct standard and Df64-only backends | refused today | `RuntimeConfigError::DuplicateProviderDeviceTarget` |
+| Configuration | Evidence |
+| --- | --- |
+| Standard, assembled from reusable support | the linalg module alone, `[6, 8]` as `f64` |
+| Df64-only numerical support | the contribution's module alone with no linalg installed, `[[6], [8]]` as `Df64` |
+| Mixed | both modules on one engine, both gradients in one runtime |
+| Cooperating | two CPU resource domains under distinct engine identities in one runtime, the standard family on one and the contribution's on the other, both gradients |
 
-The refusal is the resource model rather than a missing mechanism. The runtime identifies
-an engine's resources by provider and device target, and the built-in CPU engine claims
-one host target, so a second CPU engine under a caller-selected identity is rejected even
-though `runtime_engine_registration_with_id` exists for exactly that purpose. Serving each
-family from its own engine needs a distinct owner or domain identity, which is #1789's
-decision. Everything else the configuration needs is already in place: the contribution's
-module binds its operations to a caller-selected engine
-(`extension::module_for_engine`), and each family is routed to the engine that registered
-it, so the configuration follows from installing the two modules once the identities
-differ.
+An earlier assessment called the cooperating configuration blocked, and it was wrong:
+the runtime tells two CPU owners apart by *resource domain*
+(`CpuBackend::from_external_managed_domains`), so two engines whose provider is the same
+still have distinct provider/device identities when their domains differ. The first
+attempt failed with `RuntimeConfigError::DuplicateProviderDeviceTarget` only because it
+registered the same default domain twice. The test now builds two external domains from
+the discovered topology and runs both connected programs in one runtime; on a host that
+declares fewer than two nodes it returns early rather than claiming the configuration.
+
+The contribution needs one thing for this shape, and it has it:
+`extension::module_for_engine` binds the contribution's operations to a caller-selected
+engine, and each family is routed to the engine that registered it.
 
 ## 6. Risks and open questions
 
