@@ -4,6 +4,7 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::CubeElement;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
+use tenferro_tensor::DType;
 
 use super::dispatch;
 use crate::cubecl::runtime::{CudaRuntime, PINNED_SCALAR_BYTES};
@@ -28,18 +29,43 @@ use crate::types::{
 /// Returns [`crate::Error::RuntimeState`] when the source is backend-resident
 /// or belongs to another placement, [`crate::Error::Unsupported`] for a dtype
 /// unavailable in CubeCL, or [`crate::Error::BackendSource`] on allocation.
+/// The typed tensor behind `tensor`, or a typed refusal.
+///
+/// Callers reach this from a match on the tensor's dtype, so `None` means the tag
+/// table and the runtime dtype disagree rather than a caller mistake.
+fn gpu_typed<'a, T: TensorScalar>(
+    op: &'static str,
+    tensor: &'a Tensor,
+) -> crate::Result<&'a TypedTensor<T>> {
+    tensor.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported(op, "the GPU memory path requires a preset scalar")
+    })
+}
+
 pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     let client = rt.client();
-    match tensor {
-        Tensor::F64(t) => upload_typed::<f64>(rt, client, t).map(Tensor::F64),
-        Tensor::F32(t) => upload_typed::<f32>(rt, client, t).map(Tensor::F32),
-        Tensor::I32(t) => upload_typed::<i32>(rt, client, t).map(Tensor::I32),
-        Tensor::I64(t) => upload_typed::<i64>(rt, client, t).map(Tensor::I64),
-        Tensor::Bool(t) => upload_bool(rt, client, t).map(Tensor::Bool),
-        Tensor::C64(t) => upload_typed::<Complex64>(rt, client, t).map(Tensor::C64),
-        Tensor::C32(t) => upload_typed::<Complex32>(rt, client, t).map(Tensor::C32),
+    match tensor.dtype() {
+        DType::F64 => upload_typed::<f64>(rt, client, gpu_typed::<f64>("upload_tensor", tensor)?)
+            .map(Tensor::F64),
+        DType::F32 => upload_typed::<f32>(rt, client, gpu_typed::<f32>("upload_tensor", tensor)?)
+            .map(Tensor::F32),
+        DType::I32 => upload_typed::<i32>(rt, client, gpu_typed::<i32>("upload_tensor", tensor)?)
+            .map(Tensor::I32),
+        DType::I64 => upload_typed::<i64>(rt, client, gpu_typed::<i64>("upload_tensor", tensor)?)
+            .map(Tensor::I64),
+        DType::Bool => {
+            upload_bool(rt, client, gpu_typed::<bool>("upload_tensor", tensor)?).map(Tensor::Bool)
+        }
+        DType::C64 => {
+            upload_typed::<Complex64>(rt, client, gpu_typed::<Complex64>("upload_tensor", tensor)?)
+                .map(Tensor::C64)
+        }
+        DType::C32 => {
+            upload_typed::<Complex32>(rt, client, gpu_typed::<Complex32>("upload_tensor", tensor)?)
+                .map(Tensor::C32)
+        }
         // A caller-owned payload has no GPU implementation for this operation.
-        Tensor::External(..) => Err(crate::Error::unsupported(
+        DType::External(_) => Err(crate::Error::unsupported(
             "upload_tensor",
             "an externally defined payload is not supported by this GPU operation",
         )),
@@ -64,16 +90,32 @@ pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor>
 /// typed validation error when device data cannot be decoded.
 pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     ensure_tensor_resident_on_runtime(rt, tensor, "download")?;
-    match tensor {
-        Tensor::F64(t) => download_typed::<f64>(rt, t).map(Tensor::F64),
-        Tensor::F32(t) => download_typed::<f32>(rt, t).map(Tensor::F32),
-        Tensor::I32(t) => download_typed::<i32>(rt, t).map(Tensor::I32),
-        Tensor::I64(t) => download_typed::<i64>(rt, t).map(Tensor::I64),
-        Tensor::Bool(t) => download_bool(rt, t).map(Tensor::Bool),
-        Tensor::C64(t) => download_typed::<Complex64>(rt, t).map(Tensor::C64),
-        Tensor::C32(t) => download_typed::<Complex32>(rt, t).map(Tensor::C32),
+    match tensor.dtype() {
+        DType::F64 => {
+            download_typed::<f64>(rt, gpu_typed::<f64>("download_tensor", tensor)?).map(Tensor::F64)
+        }
+        DType::F32 => {
+            download_typed::<f32>(rt, gpu_typed::<f32>("download_tensor", tensor)?).map(Tensor::F32)
+        }
+        DType::I32 => {
+            download_typed::<i32>(rt, gpu_typed::<i32>("download_tensor", tensor)?).map(Tensor::I32)
+        }
+        DType::I64 => {
+            download_typed::<i64>(rt, gpu_typed::<i64>("download_tensor", tensor)?).map(Tensor::I64)
+        }
+        DType::Bool => {
+            download_bool(rt, gpu_typed::<bool>("download_tensor", tensor)?).map(Tensor::Bool)
+        }
+        DType::C64 => {
+            download_typed::<Complex64>(rt, gpu_typed::<Complex64>("download_tensor", tensor)?)
+                .map(Tensor::C64)
+        }
+        DType::C32 => {
+            download_typed::<Complex32>(rt, gpu_typed::<Complex32>("download_tensor", tensor)?)
+                .map(Tensor::C32)
+        }
         // A caller-owned payload has no GPU implementation for this operation.
-        Tensor::External(..) => Err(crate::Error::unsupported(
+        DType::External(_) => Err(crate::Error::unsupported(
             "download_tensor",
             "an externally defined payload is not supported by this GPU operation",
         )),
@@ -259,16 +301,44 @@ fn ensure_tensor_resident_on_runtime(
     tensor: &Tensor,
     op: &'static str,
 ) -> crate::Result<()> {
-    match tensor {
-        Tensor::F64(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
-        Tensor::F32(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
-        Tensor::I32(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
-        Tensor::I64(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
-        Tensor::Bool(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
-        Tensor::C64(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
-        Tensor::C32(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+    match tensor.dtype() {
+        DType::F64 => dispatch::ensure_resident_on_runtime(
+            rt,
+            gpu_typed::<f64>("ensure_tensor_resident_on_runtime", tensor)?,
+            op,
+        ),
+        DType::F32 => dispatch::ensure_resident_on_runtime(
+            rt,
+            gpu_typed::<f32>("ensure_tensor_resident_on_runtime", tensor)?,
+            op,
+        ),
+        DType::I32 => dispatch::ensure_resident_on_runtime(
+            rt,
+            gpu_typed::<i32>("ensure_tensor_resident_on_runtime", tensor)?,
+            op,
+        ),
+        DType::I64 => dispatch::ensure_resident_on_runtime(
+            rt,
+            gpu_typed::<i64>("ensure_tensor_resident_on_runtime", tensor)?,
+            op,
+        ),
+        DType::Bool => dispatch::ensure_resident_on_runtime(
+            rt,
+            gpu_typed::<bool>("ensure_tensor_resident_on_runtime", tensor)?,
+            op,
+        ),
+        DType::C64 => dispatch::ensure_resident_on_runtime(
+            rt,
+            gpu_typed::<Complex64>("ensure_tensor_resident_on_runtime", tensor)?,
+            op,
+        ),
+        DType::C32 => dispatch::ensure_resident_on_runtime(
+            rt,
+            gpu_typed::<Complex32>("ensure_tensor_resident_on_runtime", tensor)?,
+            op,
+        ),
         // A caller-owned payload has no GPU implementation for this operation.
-        Tensor::External(..) => Err(crate::Error::unsupported(
+        DType::External(_) => Err(crate::Error::unsupported(
             "ensure_tensor_resident_on_runtime",
             "an externally defined payload is not supported by this GPU operation",
         )),
