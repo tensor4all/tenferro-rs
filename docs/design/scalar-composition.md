@@ -444,6 +444,15 @@ So the order in section 5.2 is refined: convert the sites whose arms differ only
 in the variant (measured, landed), and leave the heterogeneous real/complex sites
 for the representation change.
 
+The same limit applies to the remaining large clusters, which was measured after
+the first conversions. The biggest ones are not whole matches: the
+`tenferro-internal-cpu-kernels` owned-tensor operations (`add_with_pool` and its
+siblings, 42 arms in 8 sites) carry six same-variant arms followed by four
+real-with-complex scalar-mixing arms and a fallback, so a macro that replaces a
+whole match cannot take them, and one that pastes the extra arms would be as long
+as the match it removes. The shared dispatch macros therefore cover the sites
+whose whole match is the variant dispatch, and the rest wait for accessors.
+
 ### 5.3 Boundary decisions, with the current state as evidence
 
 Audited on `origin/main` rather than assumed:
