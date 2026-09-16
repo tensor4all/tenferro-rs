@@ -5750,91 +5750,183 @@ impl TensorIndexing for CudaBackend {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        match (operand, start_indices) {
-            (Tensor::F32(operand), Tensor::F32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::F32)
-            }
-            (Tensor::F64(operand), Tensor::F32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::F64)
-            }
-            (Tensor::C32(operand), Tensor::F32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::C32)
-            }
-            (Tensor::C64(operand), Tensor::F32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::C64)
-            }
-            (Tensor::I32(operand), Tensor::F32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::I32)
-            }
-            (Tensor::F32(operand), Tensor::F64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::F32)
-            }
-            (Tensor::F64(operand), Tensor::F64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::F64)
-            }
-            (Tensor::C32(operand), Tensor::F64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::C32)
-            }
-            (Tensor::C64(operand), Tensor::F64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::C64)
-            }
-            (Tensor::I32(operand), Tensor::F64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::I32)
-            }
-            (Tensor::F32(operand), Tensor::I32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::F32)
-            }
-            (Tensor::F64(operand), Tensor::I32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::F64)
-            }
-            (Tensor::C32(operand), Tensor::I32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::C32)
-            }
-            (Tensor::C64(operand), Tensor::I32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::C64)
-            }
-            (Tensor::I32(operand), Tensor::I32(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::I32)
-            }
-            (Tensor::F32(operand), Tensor::I64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::F32)
-            }
-            (Tensor::F64(operand), Tensor::I64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::F64)
-            }
-            (Tensor::C32(operand), Tensor::I64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::C32)
-            }
-            (Tensor::C64(operand), Tensor::I64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::C64)
-            }
-            (Tensor::I32(operand), Tensor::I64(indices)) => {
-                self.gather_typed(operand, indices, config).map(Tensor::I32)
-            }
-            (Tensor::Bool(operand), Tensor::F32(indices)) => {
-                self.gather_bool(operand, indices, config).map(Tensor::Bool)
-            }
-            (Tensor::Bool(operand), Tensor::F64(indices)) => {
-                self.gather_bool(operand, indices, config).map(Tensor::Bool)
-            }
-            (Tensor::Bool(operand), Tensor::I32(indices)) => {
-                self.gather_bool(operand, indices, config).map(Tensor::Bool)
-            }
-            (Tensor::Bool(operand), Tensor::I64(indices)) => {
-                self.gather_bool(operand, indices, config).map(Tensor::Bool)
-            }
-            (_, Tensor::Bool(_)) => Err(unsupported_dtype("gather", start_indices.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_)) => {
-                Err(unsupported_dtype("gather", start_indices.dtype()))
-            }
-            (Tensor::I64(_), _) => Err(unsupported_dtype("gather", operand.dtype())),
+        match (operand.dtype(), start_indices.dtype()) {
+            (DType::F32, DType::F32) => self
+                .gather_typed(
+                    typed_or_unsupported::<f32>(operand, "gather")?,
+                    typed_or_unsupported::<f32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::F32),
+            (DType::F64, DType::F32) => self
+                .gather_typed(
+                    typed_or_unsupported::<f64>(operand, "gather")?,
+                    typed_or_unsupported::<f32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::F64),
+            (DType::C32, DType::F32) => self
+                .gather_typed(
+                    typed_or_unsupported::<Complex32>(operand, "gather")?,
+                    typed_or_unsupported::<f32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::C32),
+            (DType::C64, DType::F32) => self
+                .gather_typed(
+                    typed_or_unsupported::<Complex64>(operand, "gather")?,
+                    typed_or_unsupported::<f32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::C64),
+            (DType::I32, DType::F32) => self
+                .gather_typed(
+                    typed_or_unsupported::<i32>(operand, "gather")?,
+                    typed_or_unsupported::<f32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::I32),
+            (DType::F32, DType::F64) => self
+                .gather_typed(
+                    typed_or_unsupported::<f32>(operand, "gather")?,
+                    typed_or_unsupported::<f64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::F32),
+            (DType::F64, DType::F64) => self
+                .gather_typed(
+                    typed_or_unsupported::<f64>(operand, "gather")?,
+                    typed_or_unsupported::<f64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::F64),
+            (DType::C32, DType::F64) => self
+                .gather_typed(
+                    typed_or_unsupported::<Complex32>(operand, "gather")?,
+                    typed_or_unsupported::<f64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::C32),
+            (DType::C64, DType::F64) => self
+                .gather_typed(
+                    typed_or_unsupported::<Complex64>(operand, "gather")?,
+                    typed_or_unsupported::<f64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::C64),
+            (DType::I32, DType::F64) => self
+                .gather_typed(
+                    typed_or_unsupported::<i32>(operand, "gather")?,
+                    typed_or_unsupported::<f64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::I32),
+            (DType::F32, DType::I32) => self
+                .gather_typed(
+                    typed_or_unsupported::<f32>(operand, "gather")?,
+                    typed_or_unsupported::<i32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::F32),
+            (DType::F64, DType::I32) => self
+                .gather_typed(
+                    typed_or_unsupported::<f64>(operand, "gather")?,
+                    typed_or_unsupported::<i32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::F64),
+            (DType::C32, DType::I32) => self
+                .gather_typed(
+                    typed_or_unsupported::<Complex32>(operand, "gather")?,
+                    typed_or_unsupported::<i32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::C32),
+            (DType::C64, DType::I32) => self
+                .gather_typed(
+                    typed_or_unsupported::<Complex64>(operand, "gather")?,
+                    typed_or_unsupported::<i32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::C64),
+            (DType::I32, DType::I32) => self
+                .gather_typed(
+                    typed_or_unsupported::<i32>(operand, "gather")?,
+                    typed_or_unsupported::<i32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::I32),
+            (DType::F32, DType::I64) => self
+                .gather_typed(
+                    typed_or_unsupported::<f32>(operand, "gather")?,
+                    typed_or_unsupported::<i64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::F32),
+            (DType::F64, DType::I64) => self
+                .gather_typed(
+                    typed_or_unsupported::<f64>(operand, "gather")?,
+                    typed_or_unsupported::<i64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::F64),
+            (DType::C32, DType::I64) => self
+                .gather_typed(
+                    typed_or_unsupported::<Complex32>(operand, "gather")?,
+                    typed_or_unsupported::<i64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::C32),
+            (DType::C64, DType::I64) => self
+                .gather_typed(
+                    typed_or_unsupported::<Complex64>(operand, "gather")?,
+                    typed_or_unsupported::<i64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::C64),
+            (DType::I32, DType::I64) => self
+                .gather_typed(
+                    typed_or_unsupported::<i32>(operand, "gather")?,
+                    typed_or_unsupported::<i64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::I32),
+            (DType::Bool, DType::F32) => self
+                .gather_bool(
+                    typed_or_unsupported::<bool>(operand, "gather")?,
+                    typed_or_unsupported::<f32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::Bool),
+            (DType::Bool, DType::F64) => self
+                .gather_bool(
+                    typed_or_unsupported::<bool>(operand, "gather")?,
+                    typed_or_unsupported::<f64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::Bool),
+            (DType::Bool, DType::I32) => self
+                .gather_bool(
+                    typed_or_unsupported::<bool>(operand, "gather")?,
+                    typed_or_unsupported::<i32>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::Bool),
+            (DType::Bool, DType::I64) => self
+                .gather_bool(
+                    typed_or_unsupported::<bool>(operand, "gather")?,
+                    typed_or_unsupported::<i64>(start_indices, "gather")?,
+                    config,
+                )
+                .map(Tensor::Bool),
+            (_, DType::Bool) => Err(unsupported_dtype("gather", start_indices.dtype())),
+            (_, DType::C32 | DType::C64) => Err(unsupported_dtype("gather", start_indices.dtype())),
+            (DType::I64, _) => Err(unsupported_dtype("gather", operand.dtype())),
             // A caller-owned payload has no GPU implementation for this operation.
-            (Tensor::External(..), _) | (_, Tensor::External(..)) => {
-                Err(crate::Error::unsupported(
-                    "gather",
-                    "an externally defined payload is not supported by this GPU operation",
-                ))
-            }
+            (DType::External(_), _) | (_, DType::External(_)) => Err(crate::Error::unsupported(
+                "gather",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
