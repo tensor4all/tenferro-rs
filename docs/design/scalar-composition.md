@@ -391,11 +391,27 @@ was demonstrated on the highest-density CPU file that can be verified locally,
   variants, so it does not change again when the value type stops being a closed
   enum. That is why this happens before the representation change.
 
-What remains in the same file: 35 single-tensor sites. They are not uniform
-because their outputs differ (a single tensor, or a `Vec` mixing the element type
-with an `I32` pivots tensor), so each needs its own wrapper expression. The same
-pattern applies with the wrapper parameterized; the sites are enumerated by
-`unsupported_dtype(` in that file.
+What remains in the same file, and why: 26 single-tensor sites were attempted
+with a second macro (`same_variant_unary!`) plus the generic constructor
+`TensorScalar::typed_tensor_into_tensor`, so that a call site would not need to
+name the variant its result lands in. Eight sites converted and the tests passed,
+but the file's net change went from 102 deleted lines to 22, because the two macro
+definitions cost more than the sites they removed. That is the opposite of the
+simplification this work is for, so the unary conversion was reverted and the
+measured outcome is recorded here instead of being carried.
+
+The reason is structural, not cosmetic: the remaining sites are not uniform. Their
+real and complex arms use *different* conversions, for example
+`.map(|outputs| outputs.into_iter().map(Tensor::F32).collect())` for the real arm
+against `.and_then(svd_c32_outputs_to_public_tensors)` for the complex one. A
+variant-agnostic wrapper cannot express that difference, so those sites need the
+representation change (one erased payload with accessors) rather than a mechanical
+rewrite, and converting them before it would only move the same branching around.
+The pair sites did convert cleanly because their arms differ only in the variant.
+
+So the order in section 5.2 is refined: convert the sites whose arms differ only
+in the variant (measured, landed), and leave the heterogeneous real/complex sites
+for the representation change.
 
 ### 5.3 Boundary decisions, with the current state as evidence
 
