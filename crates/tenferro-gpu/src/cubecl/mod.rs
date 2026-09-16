@@ -5019,16 +5019,37 @@ impl TensorStructural for CudaBackend {
     }
 
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(t) => permutation::transpose(self, t, perm).map(Tensor::F32),
-            Tensor::F64(t) => permutation::transpose(self, t, perm).map(Tensor::F64),
-            Tensor::I32(t) => self.transpose_typed(t, perm).map(Tensor::I32),
-            Tensor::I64(t) => self.transpose_typed(t, perm).map(Tensor::I64),
-            Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool),
-            Tensor::C32(t) => permutation::transpose(self, t, perm).map(Tensor::C32),
-            Tensor::C64(t) => permutation::transpose(self, t, perm).map(Tensor::C64),
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "transpose")?;
+                permutation::transpose(self, t, perm).map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "transpose")?;
+                permutation::transpose(self, t, perm).map(Tensor::F64)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "transpose")?;
+                self.transpose_typed(t, perm).map(Tensor::I32)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "transpose")?;
+                self.transpose_typed(t, perm).map(Tensor::I64)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "transpose")?;
+                self.transpose_bool(t, perm).map(Tensor::Bool)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "transpose")?;
+                permutation::transpose(self, t, perm).map(Tensor::C32)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "transpose")?;
+                permutation::transpose(self, t, perm).map(Tensor::C64)
+            }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "transpose",
                 "an externally defined payload is not supported by this GPU operation",
             )),
@@ -5327,16 +5348,37 @@ impl TensorStructural for CudaBackend {
     }
 
     fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(t) => self.tril_typed(t, k).map(Tensor::F32),
-            Tensor::F64(t) => self.tril_typed(t, k).map(Tensor::F64),
-            Tensor::I32(t) => self.tril_typed(t, k).map(Tensor::I32),
-            Tensor::I64(t) => self.tril_typed(t, k).map(Tensor::I64),
-            Tensor::Bool(t) => self.tril_bool(t, k).map(Tensor::Bool),
-            Tensor::C32(t) => self.tril_typed(t, k).map(Tensor::C32),
-            Tensor::C64(t) => self.tril_typed(t, k).map(Tensor::C64),
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "tril")?;
+                self.tril_typed(t, k).map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "tril")?;
+                self.tril_typed(t, k).map(Tensor::F64)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "tril")?;
+                self.tril_typed(t, k).map(Tensor::I32)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "tril")?;
+                self.tril_typed(t, k).map(Tensor::I64)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "tril")?;
+                self.tril_bool(t, k).map(Tensor::Bool)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "tril")?;
+                self.tril_typed(t, k).map(Tensor::C32)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "tril")?;
+                self.tril_typed(t, k).map(Tensor::C64)
+            }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "tril",
                 "an externally defined payload is not supported by this GPU operation",
             )),
@@ -5344,16 +5386,37 @@ impl TensorStructural for CudaBackend {
     }
 
     fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(t) => self.triu_typed(t, k).map(Tensor::F32),
-            Tensor::F64(t) => self.triu_typed(t, k).map(Tensor::F64),
-            Tensor::I32(t) => self.triu_typed(t, k).map(Tensor::I32),
-            Tensor::I64(t) => self.triu_typed(t, k).map(Tensor::I64),
-            Tensor::Bool(t) => self.triu_bool(t, k).map(Tensor::Bool),
-            Tensor::C32(t) => self.triu_typed(t, k).map(Tensor::C32),
-            Tensor::C64(t) => self.triu_typed(t, k).map(Tensor::C64),
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "triu")?;
+                self.triu_typed(t, k).map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "triu")?;
+                self.triu_typed(t, k).map(Tensor::F64)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "triu")?;
+                self.triu_typed(t, k).map(Tensor::I32)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "triu")?;
+                self.triu_typed(t, k).map(Tensor::I64)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "triu")?;
+                self.triu_bool(t, k).map(Tensor::Bool)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "triu")?;
+                self.triu_typed(t, k).map(Tensor::C32)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "triu")?;
+                self.triu_typed(t, k).map(Tensor::C64)
+            }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "triu",
                 "an externally defined payload is not supported by this GPU operation",
             )),
@@ -5775,16 +5838,37 @@ impl TensorIndexing for CudaBackend {
     }
 
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(t) => self.slice_typed(t, config).map(Tensor::F32),
-            Tensor::F64(t) => self.slice_typed(t, config).map(Tensor::F64),
-            Tensor::I32(t) => self.slice_typed(t, config).map(Tensor::I32),
-            Tensor::I64(t) => self.slice_typed(t, config).map(Tensor::I64),
-            Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool),
-            Tensor::C32(t) => self.slice_typed(t, config).map(Tensor::C32),
-            Tensor::C64(t) => self.slice_typed(t, config).map(Tensor::C64),
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "slice")?;
+                self.slice_typed(t, config).map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "slice")?;
+                self.slice_typed(t, config).map(Tensor::F64)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "slice")?;
+                self.slice_typed(t, config).map(Tensor::I32)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "slice")?;
+                self.slice_typed(t, config).map(Tensor::I64)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "slice")?;
+                self.slice_bool(t, config).map(Tensor::Bool)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "slice")?;
+                self.slice_typed(t, config).map(Tensor::C32)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "slice")?;
+                self.slice_typed(t, config).map(Tensor::C64)
+            }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "slice",
                 "an externally defined payload is not supported by this GPU operation",
             )),
@@ -5898,16 +5982,37 @@ impl TensorIndexing for CudaBackend {
     }
 
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(t) => self.pad_typed(t, config).map(Tensor::F32),
-            Tensor::F64(t) => self.pad_typed(t, config).map(Tensor::F64),
-            Tensor::I32(t) => self.pad_typed(t, config).map(Tensor::I32),
-            Tensor::I64(t) => self.pad_typed(t, config).map(Tensor::I64),
-            Tensor::Bool(t) => self.pad_bool(t, config).map(Tensor::Bool),
-            Tensor::C32(t) => self.pad_typed(t, config).map(Tensor::C32),
-            Tensor::C64(t) => self.pad_typed(t, config).map(Tensor::C64),
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "pad")?;
+                self.pad_typed(t, config).map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "pad")?;
+                self.pad_typed(t, config).map(Tensor::F64)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "pad")?;
+                self.pad_typed(t, config).map(Tensor::I32)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "pad")?;
+                self.pad_typed(t, config).map(Tensor::I64)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "pad")?;
+                self.pad_bool(t, config).map(Tensor::Bool)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "pad")?;
+                self.pad_typed(t, config).map(Tensor::C32)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "pad")?;
+                self.pad_typed(t, config).map(Tensor::C64)
+            }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "pad",
                 "an externally defined payload is not supported by this GPU operation",
             )),
@@ -6002,16 +6107,37 @@ impl TensorIndexing for CudaBackend {
     }
 
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(t) => self.reverse_typed(t, axes).map(Tensor::F32),
-            Tensor::F64(t) => self.reverse_typed(t, axes).map(Tensor::F64),
-            Tensor::I32(t) => self.reverse_typed(t, axes).map(Tensor::I32),
-            Tensor::I64(t) => self.reverse_typed(t, axes).map(Tensor::I64),
-            Tensor::Bool(t) => self.reverse_bool(t, axes).map(Tensor::Bool),
-            Tensor::C32(t) => self.reverse_typed(t, axes).map(Tensor::C32),
-            Tensor::C64(t) => self.reverse_typed(t, axes).map(Tensor::C64),
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "reverse")?;
+                self.reverse_typed(t, axes).map(Tensor::F32)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "reverse")?;
+                self.reverse_typed(t, axes).map(Tensor::F64)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "reverse")?;
+                self.reverse_typed(t, axes).map(Tensor::I32)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "reverse")?;
+                self.reverse_typed(t, axes).map(Tensor::I64)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "reverse")?;
+                self.reverse_bool(t, axes).map(Tensor::Bool)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "reverse")?;
+                self.reverse_typed(t, axes).map(Tensor::C32)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "reverse")?;
+                self.reverse_typed(t, axes).map(Tensor::C64)
+            }
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "reverse",
                 "an externally defined payload is not supported by this GPU operation",
             )),

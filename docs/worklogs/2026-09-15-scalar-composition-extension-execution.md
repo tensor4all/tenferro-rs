@@ -1320,6 +1320,13 @@ nested matches of their own, so a line-oriented rewrite either truncates the arm
 pattern behind. The batch attempt skipped all eight and left the file untouched, which is the right
 outcome for a transform that does not fit: the guard refused rather than writing something broken.
 
+**Corrected on the next attempt:** the reason the family was skipped was narrower than the record
+below says. Six of the eight — transpose, tril, triu, reverse, pad, and slice — have one-line arms; the
+transform missed them only because their boolean arm binds the tensor (`Tensor::Bool(t) => ...`) rather
+than discarding it, and the script's arm pattern did not cover that form. With the bound form handled,
+all six converted in one step and the cuda build is clean. Only extract_diagonal and embed_diagonal have
+the genuinely awkward shape, where the body continues on the following line.
+
 So the remaining work has two speeds. Where a family shares one arm shape the conversion is mechanical
 and cheap; where it does not, each function is a hand rewrite of its dispatch with the compiler as the
 check, which is what conj, the promoted scalar helper, and abs were. Measured state on this head: seven
