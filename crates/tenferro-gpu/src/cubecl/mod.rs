@@ -4322,46 +4322,57 @@ impl TensorElementwise for CudaBackend {
         )?;
         let op = descriptor.name;
         dispatch::require_owned_capability(self, PrimitiveOpKind::Abs, input.dtype())?;
-        match input {
-            Tensor::F32(tensor) => {
+        // Dispatch on the tag and recover the typed tensor, which is what `as_typed` exists for.
+        match input.dtype() {
+            DType::F32 => {
+                let tensor = typed_or_unsupported::<f32>(input, op)?;
                 dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_float, f32, F32)
             }
-            Tensor::F64(tensor) => {
+            DType::F64 => {
+                let tensor = typed_or_unsupported::<f64>(input, op)?;
                 dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_float, f64, F64)
             }
-            Tensor::I32(tensor) => {
+            DType::I32 => {
+                let tensor = typed_or_unsupported::<i32>(input, op)?;
                 dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_int, i32, I32)
             }
-            Tensor::I64(tensor) => {
+            DType::I64 => {
+                let tensor = typed_or_unsupported::<i64>(input, op)?;
                 dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_int, i64, I64)
             }
-            Tensor::C32(tensor) => dispatch::launch_unary(
-                self.runtime(),
-                tensor,
-                tensor.shape(),
-                op,
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::abs_complex32::launch_unchecked::<CubeclCudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::C64(tensor) => dispatch::launch_unary(
-                self.runtime(),
-                tensor,
-                tensor.shape(),
-                op,
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::abs_complex64::launch_unchecked::<CubeclCudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            Tensor::Bool(_) => Err(unsupported_dtype(op, input.dtype())),
+            DType::C32 => {
+                let tensor = typed_or_unsupported::<Complex32>(input, op)?;
+                dispatch::launch_unary(
+                    self.runtime(),
+                    tensor,
+                    tensor.shape(),
+                    op,
+                    |client, count, dim, out, input_arg| unsafe {
+                        elementwise::abs_complex32::launch_unchecked::<CubeclCudaRuntime>(
+                            client, count, dim, out, input_arg,
+                        );
+                    },
+                )
+                .map(Tensor::F32)
+            }
+            DType::C64 => {
+                let tensor = typed_or_unsupported::<Complex64>(input, op)?;
+                dispatch::launch_unary(
+                    self.runtime(),
+                    tensor,
+                    tensor.shape(),
+                    op,
+                    |client, count, dim, out, input_arg| unsafe {
+                        elementwise::abs_complex64::launch_unchecked::<CubeclCudaRuntime>(
+                            client, count, dim, out, input_arg,
+                        );
+                    },
+                )
+                .map(Tensor::F64)
+            }
+            DType::Bool => Err(unsupported_dtype(op, input.dtype())),
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "abs",
                 "an externally defined payload is not supported by this GPU operation",
             )),
