@@ -1296,8 +1296,11 @@ macro_rules! dispatch_unary_float_complex_int {
         let op = descriptor.name;
         let input = $input;
         $crate::cubecl::dispatch::require_owned_capability($backend, $kind, input.dtype())?;
-        match input {
-            Tensor::F32(tensor) => {
+        match input.dtype() {
+            DType::F32 => {
+                let tensor = input.as_typed::<f32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
                     $backend,
                     tensor,
@@ -1307,7 +1310,10 @@ macro_rules! dispatch_unary_float_complex_int {
                     F32
                 )
             }
-            Tensor::F64(tensor) => {
+            DType::F64 => {
+                let tensor = input.as_typed::<f64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
                     $backend,
                     tensor,
@@ -1317,7 +1323,10 @@ macro_rules! dispatch_unary_float_complex_int {
                     F64
                 )
             }
-            Tensor::I32(tensor) => {
+            DType::I32 => {
+                let tensor = input.as_typed::<i32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
                     $backend,
                     tensor,
@@ -1327,7 +1336,10 @@ macro_rules! dispatch_unary_float_complex_int {
                     I32
                 )
             }
-            Tensor::I64(tensor) => {
+            DType::I64 => {
+                let tensor = input.as_typed::<i64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
                     $backend,
                     tensor,
@@ -1337,25 +1349,35 @@ macro_rules! dispatch_unary_float_complex_int {
                     I64
                 )
             }
-            Tensor::C32(tensor) => $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
-                $backend,
-                tensor,
-                op,
-                $complex_kernel,
-                num_complex::Complex32,
-                C32
-            ),
-            Tensor::C64(tensor) => $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
-                $backend,
-                tensor,
-                op,
-                $complex_kernel,
-                num_complex::Complex64,
-                C64
-            ),
-            Tensor::Bool(_) => Err($crate::cubecl::unsupported_dtype(op, input.dtype())),
+            DType::C32 => {
+                let tensor = input.as_typed::<num_complex::Complex32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
+                    $backend,
+                    tensor,
+                    op,
+                    $complex_kernel,
+                    num_complex::Complex32,
+                    C32
+                )
+            }
+            DType::C64 => {
+                let tensor = input.as_typed::<num_complex::Complex64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
+                    $backend,
+                    tensor,
+                    op,
+                    $complex_kernel,
+                    num_complex::Complex64,
+                    C64
+                )
+            }
+            DType::Bool => Err($crate::cubecl::unsupported_dtype(op, input.dtype())),
             // A caller-owned payload has no GPU implementation for this operation.
-            Tensor::External(..) => Err(crate::Error::unsupported(
+            DType::External(_) => Err(crate::Error::unsupported(
                 "compare_mode",
                 "an externally defined payload is not supported by this GPU operation",
             )),
@@ -1372,8 +1394,11 @@ macro_rules! dispatch_unary_float_only {
         let op = descriptor.name;
         let input = $input;
         $crate::cubecl::dispatch::require_owned_capability($backend, $kind, input.dtype())?;
-        match input {
-            Tensor::F32(tensor) => {
+        match input.dtype() {
+            DType::F32 => {
+                let tensor = input.as_typed::<f32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
                     $backend,
                     tensor,
@@ -1383,7 +1408,10 @@ macro_rules! dispatch_unary_float_only {
                     F32
                 )
             }
-            Tensor::F64(tensor) => {
+            DType::F64 => {
+                let tensor = input.as_typed::<f64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
                     $backend,
                     tensor,
