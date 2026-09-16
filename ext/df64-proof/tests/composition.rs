@@ -176,3 +176,41 @@ fn external_crate_defines_its_own_scalar_set() {
     );
     assert_eq!(<ExtendedSet as ScalarSet>::TAGS.len(), 2);
 }
+
+#[test]
+fn erased_values_carry_a_scalar_tenferro_does_not_define() {
+    use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+
+    let low = 2f64.powi(-80);
+    let mut values = [
+        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, low]).unwrap()),
+        ErasedHostTensor::new(
+            HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)]).unwrap(),
+        ),
+    ];
+
+    // Identity is the actual Rust type, not a tag and not a size.
+    assert!(values[0].is::<f64>());
+    assert!(!values[0].is::<Df64>());
+    assert!(values[1].is::<Df64>());
+    assert!(!values[1].is::<f64>());
+
+    // The external member reaches the shared numerical body through the same
+    // erased container tenferro's own scalars use.
+    let typed = values[1].downcast_ref::<Df64>().unwrap();
+    let total = scalar_fold("sum", typed, Df64::zero(), Df64::add).unwrap();
+    assert_eq!(total, Df64::from_f64(2.0));
+
+    // A mismatched recovery returns nothing rather than reinterpreting bytes.
+    assert!(values[0].downcast_ref::<Df64>().is_none());
+    let owned =
+        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap());
+    assert!(owned.into_typed::<Df64>().is_none());
+
+    // Mutation through the erased value reaches the stored tensor.
+    values[1].downcast_mut::<Df64>().unwrap().as_mut_slice()[0] = Df64::from_f64(5.0);
+    assert_eq!(
+        values[1].downcast_ref::<Df64>().unwrap().as_slice(),
+        &[Df64::from_f64(5.0)]
+    );
+}

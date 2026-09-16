@@ -284,6 +284,22 @@ contract for erasure, layout, and reinterpretation, which is #1785 design
 question 2 and #1789's resource boundary; it is recorded here as the decision
 stage 2 must make rather than left implicit in the notation.
 
+Prototype landed: `ErasedHostTensor` carries a host tensor whose element type is
+recovered at run time. The payload keeps its own concrete type and the value
+stores its `TypeId` explicitly, so identity is the actual Rust type; recovery by
+the wrong type returns nothing and no bytes are ever reinterpreted. The external
+proof crate builds one container holding both a preset `f64` value and its own
+two-component scalar, runs the shared reduction on the external member, mutates
+it in place through the erased value, and confirms that a mismatched recovery
+returns nothing. That establishes the shape: an externally defined member needs
+no variant.
+
+Open prototype question: the runtime payload is pool-owned (`TypedTensor`, not a
+`Box<dyn Any>`), so the remaining contract is how pool-backed storage is erased,
+who releases it, and how alignment, drop, and provider retirement survive
+erasure. That is the next stage 2 step and it is a resource-ownership question
+(#1789), not a numerical one.
+
 Landed and measured: `DType` and `DefaultScalars` are now generated from one
 declaration in `tenferro-tensor-core`, `ScalarSet` is the open membership
 contract, and `ext/df64-proof` declares its own two-member set with the same

@@ -31,6 +31,7 @@
 use num_complex::{Complex32, Complex64};
 use smallvec::SmallVec;
 
+mod erased;
 mod error;
 mod layout;
 mod rank;
@@ -38,6 +39,7 @@ mod scalar;
 #[macro_use]
 mod scalar_set;
 
+pub use erased::ErasedHostTensor;
 pub use error::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 pub use layout::TensorLayout;
 pub use rank::{DynRank, IntoRankShape, Rank, TensorRank};
