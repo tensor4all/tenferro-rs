@@ -327,6 +327,22 @@ impl TensorMeta {
     }
 
     /// Return the declared identity of an externally defined scalar, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ops::{SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let dtype = DType::External(std::any::TypeId::of::<f64>());
+    /// assert_eq!(TensorMeta::exact(dtype, vec![SymDim::from(1usize)]).scalar_identity(), None);
+    /// assert_eq!(
+    ///     TensorMeta::exact(dtype, vec![SymDim::from(1usize)])
+    ///         .with_scalar_identity("example.scalar.v1")
+    ///         .scalar_identity(),
+    ///     Some("example.scalar.v1")
+    /// );
+    /// ```
     #[must_use]
     pub const fn scalar_identity(&self) -> Option<&'static str> {
         self.scalar_identity

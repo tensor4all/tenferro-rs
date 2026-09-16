@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use tenferro_ad::semantic_extension::{
-    AdValue, ResidualSpec, SemanticAdError, SemanticAdRuleRole, SemanticPrimalVjpRequest,
+    AdValue, ResidualSpec, SemanticAdError, SemanticAdRuleRole, SemanticLinearizeRequest,
+    SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
     SemanticPrimalVjpRule,
 };
 use tenferro_ops::dim_expr::DimExpr;
@@ -109,4 +110,79 @@ fn exact_shape(request: &SemanticPrimalVjpRequest<'_>) -> Result<Vec<usize>, Sem
             }),
         })
         .collect()
+}
+
+/// Linearization of the extension-owned total sum.
+///
+/// The sum is linear, so its tangent output is the sum of its tangent inputs, which is
+/// the same operation again. The rule declares no residual because the tangent does
+/// not depend on the primal value.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::semantic_extension::{
+///     SemanticExtensionRuleSet, SemanticLinearizeRule,
+/// };
+/// use tenferro_df64_proof::ad::Df64TotalLinearizeRule;
+///
+/// let rules = SemanticExtensionRuleSet::new()
+///     .with_linearize(std::sync::Arc::new(Df64TotalLinearizeRule))
+///     .expect("one linearize rule per family");
+/// assert!(rules.lookup_linearize("tenferro-df64-proof.df64_ops.v1").is_some());
+/// ```
+#[derive(Debug)]
+pub struct Df64TotalLinearizeRule;
+
+impl SemanticLinearizeRule for Df64TotalLinearizeRule {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn linearize(
+        &self,
+        request: SemanticLinearizeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> Result<SemanticLinearizeResult, SemanticAdError> {
+        if request.op().as_any().downcast_ref::<Df64Total>().is_none() {
+            return Err(SemanticAdError::Rule {
+                family_id: DF64_OPS_FAMILY,
+                role: SemanticAdRuleRole::Linearize,
+                source: Box::new(std::io::Error::other(
+                    "the Df64 ops family linearization is defined for the total sum",
+                )),
+            });
+        }
+        let tangents: Vec<_> = request
+            .tangent_inputs()
+            .iter()
+            .filter_map(|value| value.value())
+            .collect();
+        let inactive: Vec<_> = (0..request.primal_outputs().len())
+            .map(|_| AdValue::Absent)
+            .collect();
+        if tangents.is_empty() {
+            return Ok(SemanticLinearizeResult::new(inactive, Vec::new()));
+        }
+        let summed = builder
+            .add_extension(Arc::new(Df64Total), &tangents)
+            .map_err(SemanticAdError::Build)?;
+        let outputs = summed
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if request
+                    .active_outputs()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    AdValue::Value(*value)
+                } else {
+                    AdValue::Absent
+                }
+            })
+            .collect::<Vec<_>>();
+        Ok(SemanticLinearizeResult::new(outputs, Vec::new()))
+    }
 }

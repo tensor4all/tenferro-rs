@@ -307,5 +307,9 @@ outside its domain.
 the execution of the backward program, including a cotangent whose `2^-80` low
 component survives the adjoint.
 
-Workspace after this: 5256 passed, 3 failed (the same pre-existing `trybuild`
+Both directions are covered: `Df64TotalLinearizeRule` sums the tangent inputs, so
+the forward rule needs no new operation, and the test suite verifies the JVP and the
+VJP, their compilation, and the execution of both programs.
+
+Workspace after this: 5258 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy clean under `-D warnings` and the strict doc lints.

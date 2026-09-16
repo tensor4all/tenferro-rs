@@ -771,9 +771,11 @@ The adjoint is the contribution's own operation. `Df64Expand` broadcasts a scala
 a declared shape — a preset broadcast is not available for a scalar tenferro does not
 declare — and `Df64TotalVjpRule` emits it from the output cotangent, reading the
 target shape from the primal input metadata and rejecting a symbolic shape rather
-than guessing one. `ext/df64-proof/tests/extension_ad.rs` verifies the traced VJP,
-compilation, and execution of the backward program, including a case whose cotangent
-carries a `2^-80` low component that survives the adjoint.
+than guessing one. Both directions run: `Df64TotalLinearizeRule` sums the tangent inputs (the sum is
+linear, so the linearization is the same operation) and `Df64TotalVjpRule` emits the
+broadcast. `ext/df64-proof/tests/extension_ad.rs` verifies the traced VJP and JVP,
+their compilation, and the execution of both programs, including cases whose
+cotangent and tangent carry a `2^-80` low component that survives.
 
 One structural fact this needed: the runtime keys one planning config per engine id,
 so a contribution owns one *family* of operations and distinguishes them by payload.

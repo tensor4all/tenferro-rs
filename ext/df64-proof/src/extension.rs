@@ -141,6 +141,15 @@ pub struct Df64Expand {
 
 impl Df64Expand {
     /// Construct the operation for one output shape.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64Expand;
+    ///
+    /// let expand = Df64Expand::new(vec![2, 3]);
+    /// assert_eq!(&*expand.shape, &[2, 3]);
+    /// ```
     #[must_use]
     pub fn new(shape: Vec<usize>) -> Self {
         Self {
