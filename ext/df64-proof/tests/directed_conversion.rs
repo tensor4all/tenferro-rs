@@ -157,3 +157,17 @@ fn a_directed_conversion_rejects_a_source_it_does_not_declare() {
     assert!(conversion::to_df64(&external_df64(&[Df64::from_f64(1.0)])).is_err());
     assert!(conversion::to_f64(&ordinary).is_err());
 }
+
+#[test]
+fn a_directed_conversion_rejects_a_payload_of_another_element_type() {
+    // The narrowing direction takes the contribution's element type, so a payload of a
+    // different element type is neither the scalar it declares nor an ordinary f64 tensor.
+    let other = external_df64(&[Df64::from_f64(1.0)]);
+    assert!(conversion::to_f64(&other).is_ok());
+
+    let foreign = Tensor::external(ErasedHostTensor::new(
+        HostTensor::from_vec_col_major(vec![1], vec![7_i64]).expect("shape matches data"),
+    ));
+    assert!(conversion::to_f64(&foreign).is_err());
+    assert!(conversion::to_df64(&foreign).is_err());
+}

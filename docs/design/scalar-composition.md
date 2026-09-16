@@ -961,12 +961,12 @@ tenferro-scalar-consumer-application --json`:
 
 | File | Line coverage |
 | --- | --- |
+| `ext/df64-proof/src/dense.rs` | 99.2% |
 | `ext/df64-proof/src/lib.rs` | 95.2% |
-| `ext/df64-proof/src/dense.rs` | 95.0% |
-| `ext/df64-proof/src/extension.rs` | 84.2% |
-| `ext/df64-proof/src/conversion.rs` | 82.6% |
+| `ext/df64-proof/src/conversion.rs` | 93.5% |
+| `ext/df64-proof/src/extension.rs` | 86.7% |
 | `ext/df64-proof/src/ad.rs` | 78.5% |
-| `ext/scalar-consumer-algorithm/src/lib.rs` | 82.6% |
+| `ext/scalar-consumer-algorithm/src/lib.rs` | 78.3% |
 
 Two facts explain why the smaller numbers are not untested behavior. First, llvm-cov does
 not instrument doctests, and this branch's public items carry runnable examples: whole
@@ -975,13 +975,16 @@ bodies that the doc tests execute. Second, several branches are deliberate refus
 another guard makes unreachable, such as the conversion bodies rejecting a payload the
 operation entry point already validated.
 
-Adding boundary tests raised `ad.rs` from 72.6% to 78.5% and `extension.rs` from 79.9% to
-84.2% by covering real refusals: a vector, a wide matrix and a zero column for the
-factorization; a preset input for the narrowing and an external one for the widening; a
-singular triangular factor for both derivative operations; and a derivative rule asked
-about an operation outside its domain. Those are
-`ext/df64-proof/tests/extension_boundaries.rs`. Raising the remaining lines would mean
-testing doctest bodies a second time or padding defensive arms, which the repository's
+Boundary tests raised `conversion.rs` from 82.6% to 93.5%, `ad.rs` from 72.6% to 78.5%, and
+`extension.rs` from 79.9% to 86.7%, by covering real refusals and edge cases: a vector, a wide
+matrix and a zero column for the factorization; a preset input for the narrowing and an
+external one for the widening; a payload of another element type for both conversions; a
+singular triangular factor for both derivative operations; a derivative rule asked about an
+operation outside its domain; and an algorithm whose loss does not depend on its input. Those
+are `ext/df64-proof/tests/extension_boundaries.rs`, `tests/directed_conversion.rs`, and the
+algorithm crate's own tests. What keeps `ad.rs` and `extension.rs` below the goal's 90% is the
+doctest bodies, which llvm-cov does not instrument, plus arms another guard makes unreachable;
+covering those would mean testing examples twice or padding defensives, which the repository's
 coverage policy forbids.
 
 ### 5.12 The survival half of #1790's "later backward"
