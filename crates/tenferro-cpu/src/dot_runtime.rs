@@ -1029,16 +1029,27 @@ fn allocate_canonical_operand(
 }
 
 fn reclaim_temporary(buffers: &mut BufferPool, tensor: Tensor) {
-    match tensor {
-        // A caller-owned payload owns no pooled storage.
-        Tensor::External(..) => {}
-        Tensor::F32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
-        Tensor::F64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
-        Tensor::I32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
-        Tensor::I64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
-        Tensor::Bool(tensor) => crate::backend::reclaim_typed(buffers, tensor),
-        Tensor::C32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
-        Tensor::C64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+    match tensor.dtype() {
+        // A caller-owned payload owns no pooled storage, and a tag the conversion cannot
+        // recover behaves the same way rather than guessing.
+        DType::External(_) => {}
+        DType::F32 => reclaim_typed_dispatch::<f32>(buffers, tensor),
+        DType::F64 => reclaim_typed_dispatch::<f64>(buffers, tensor),
+        DType::I32 => reclaim_typed_dispatch::<i32>(buffers, tensor),
+        DType::I64 => reclaim_typed_dispatch::<i64>(buffers, tensor),
+        DType::Bool => reclaim_typed_dispatch::<bool>(buffers, tensor),
+        DType::C32 => reclaim_typed_dispatch::<Complex32>(buffers, tensor),
+        DType::C64 => reclaim_typed_dispatch::<Complex64>(buffers, tensor),
+    }
+}
+
+/// Hand the typed tensor back to the pool when the tag table reached the matching tag.
+fn reclaim_typed_dispatch<T: tenferro_cpu_basic::PoolScalar>(
+    buffers: &mut BufferPool,
+    tensor: Tensor,
+) {
+    if let Ok(typed) = tensor.into_typed::<T>() {
+        crate::backend::reclaim_typed(buffers, typed);
     }
 }
 

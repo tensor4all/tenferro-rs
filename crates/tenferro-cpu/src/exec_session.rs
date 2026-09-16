@@ -1,5 +1,6 @@
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
+use num_complex::{Complex32, Complex64};
 use std::any::TypeId;
 use std::sync::Arc;
 use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
@@ -840,16 +841,17 @@ impl TensorIndexing for CpuExecSession<'_> {
 
 impl TensorBuffer for CpuExecSession<'_> {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
-        match tensor {
-            Tensor::F32(t) => reclaim_typed(self.buffers, t),
-            Tensor::F64(t) => reclaim_typed(self.buffers, t),
-            Tensor::I32(t) => reclaim_typed(self.buffers, t),
-            Tensor::I64(t) => reclaim_typed(self.buffers, t),
-            Tensor::Bool(t) => reclaim_typed(self.buffers, t),
-            Tensor::C32(t) => reclaim_typed(self.buffers, t),
-            Tensor::C64(t) => reclaim_typed(self.buffers, t),
-            // A caller-owned payload owns no pooled storage.
-            Tensor::External(..) => {}
+        match tensor.dtype() {
+            DType::F32 => reclaim_buffer_typed::<f32>(self.buffers, tensor),
+            DType::F64 => reclaim_buffer_typed::<f64>(self.buffers, tensor),
+            DType::I32 => reclaim_buffer_typed::<i32>(self.buffers, tensor),
+            DType::I64 => reclaim_buffer_typed::<i64>(self.buffers, tensor),
+            DType::Bool => reclaim_buffer_typed::<bool>(self.buffers, tensor),
+            DType::C32 => reclaim_buffer_typed::<Complex32>(self.buffers, tensor),
+            DType::C64 => reclaim_buffer_typed::<Complex64>(self.buffers, tensor),
+            // A caller-owned payload owns no pooled storage, and a tag the conversion
+            // cannot recover behaves the same way rather than guessing.
+            DType::External(_) => {}
         }
     }
 }
@@ -970,3 +972,13 @@ impl BackendSession for CpuExecSession<'_> {
 
 #[cfg(test)]
 mod tests;
+
+/// Hand the typed tensor back to the pool when the tag table reached the matching tag.
+fn reclaim_buffer_typed<T: tenferro_cpu_basic::PoolScalar>(
+    buffers: &mut BufferPool,
+    tensor: Tensor,
+) {
+    if let Ok(typed) = tensor.into_typed::<T>() {
+        reclaim_typed(buffers, typed);
+    }
+}
