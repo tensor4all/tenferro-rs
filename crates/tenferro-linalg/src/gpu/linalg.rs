@@ -183,6 +183,7 @@ fn ensure_supported_linalg_pair(op: &'static str, lhs: &Tensor, rhs: &Tensor) ->
     match lhs {
         Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_) => Ok(()),
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(unsupported_linalg_dtype(op, lhs)),
+        Tensor::External(..) => Err(unsupported_linalg_dtype(op, lhs)),
     }
 }
 
@@ -195,6 +196,7 @@ fn ensure_cubecl_resident_tensor(op: &'static str, input: &Tensor) -> Result<()>
         Tensor::Bool(t) => ensure_cubecl_resident_typed(op, t),
         Tensor::C32(t) => ensure_cubecl_resident_typed(op, t),
         Tensor::C64(t) => ensure_cubecl_resident_typed(op, t),
+        Tensor::External(..) => Err(unsupported_linalg_dtype(op, input)),
     }
 }
 
@@ -231,6 +233,7 @@ pub(super) fn cholesky(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Res
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("cholesky", input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("cholesky", input)),
     }
 }
 
@@ -309,6 +312,7 @@ pub(super) fn lu(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Ve
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("lu", input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("lu", input)),
     }
 }
 
@@ -345,6 +349,7 @@ pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Re
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("lu_factor", input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("lu_factor", input)),
     }
 }
 
@@ -383,6 +388,7 @@ pub(super) fn svd(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<V
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("svd", input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("svd", input)),
     }
 }
 
@@ -395,6 +401,7 @@ pub(super) fn svd_values(backend: &mut CudaExecSession<'_>, input: &Tensor) -> R
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("svd_values", input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("svd_values", input)),
     }
 }
 
@@ -407,6 +414,7 @@ pub(super) fn qr(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Ve
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("qr", input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("qr", input)),
     }
 }
 
@@ -442,6 +450,7 @@ pub(super) fn householder_qr(
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             return Err(unsupported_linalg_dtype("householder_qr", input));
         }
+        Tensor::External(..) => return Err(unsupported_linalg_dtype("householder_qr", input)),
     };
     Ok(CompactQrResult { packed, coeff })
 }
@@ -496,6 +505,7 @@ fn validate_upper_trapezoidal_gpu(
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             return Err(unsupported_linalg_dtype(op, r));
         }
+        Tensor::External(..) => return Err(unsupported_linalg_dtype(op, r)),
     };
     let maximum = backend.reduce_max(&Tensor::I32(flags), &[0, 1])?;
     backend.runtime().synchronize()?;
@@ -723,6 +733,7 @@ pub(super) fn eigh(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("eigh", input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("eigh", input)),
     }
 }
 
@@ -735,6 +746,7 @@ pub(super) fn eigh_values(backend: &mut CudaExecSession<'_>, input: &Tensor) -> 
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("eigh_values", input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("eigh_values", input)),
     }
 }
 
@@ -3262,6 +3274,7 @@ fn zero_like_linalg_device_tensor(
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype(op, input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype(op, input)),
     }
 }
 
@@ -3304,7 +3317,7 @@ fn validate_nonsingular_gpu(backend: &mut CudaExecSession<'_>, u: &Tensor) -> Re
     let host_min = download_tensor(backend.runtime(), &min_val)?;
     let host_max = download_tensor(backend.runtime(), &max_val)?;
     let (value, max_magnitude) = host_min_max_magnitudes(&host_min, &host_max)?;
-    let tolerance = singularity_tolerance(abs_diag.dtype(), max_magnitude);
+    let tolerance = singularity_tolerance(abs_diag.dtype(), max_magnitude)?;
     let is_singular = !value.is_finite() || !max_magnitude.is_finite() || value <= tolerance;
 
     if is_singular {
@@ -3325,6 +3338,7 @@ fn diagonal_magnitude(backend: &mut CudaExecSession<'_>, diag: &Tensor) -> Resul
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("validate_nonsingular_gpu", diag))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype("validate_nonsingular_gpu", diag)),
     }
 }
 
@@ -3395,11 +3409,19 @@ fn host_min_max_magnitudes(host_min: &Tensor, host_max: &Tensor) -> Result<(f64,
     }
 }
 
-fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> f64 {
+fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> Result<f64> {
     let eps = match dtype {
         DType::F32 | DType::C32 => f32::EPSILON as f64,
         DType::F64 | DType::C64 => f64::EPSILON,
         DType::I32 | DType::I64 | DType::Bool => f64::EPSILON,
+        // The solve path validates the dtype before it reaches here, and a scalar tenferro does
+        // not declare has no tolerance this kernel could pick.
+        DType::External(_) => {
+            return Err(crate::error::unsupported_dtype(
+                "singularity_tolerance",
+                dtype,
+            ));
+        }
     };
-    eps * max_magnitude.max(1.0)
+    Ok(eps * max_magnitude.max(1.0))
 }

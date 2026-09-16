@@ -1127,6 +1127,38 @@ debug build and which therefore fails against the operator implementation, and
 `scalar_ops::tests::integer_arithmetic_through_the_shared_entry_point_wraps` covers addition,
 subtraction, multiplication, and a reduction through the public entry points.
 
+### 5.15 A hole in this branch's own verification, found by sweeping features
+
+Opening `DType` and `Tensor` to an externally defined member left sixteen non-exhaustive
+matches in `tenferro-linalg`'s GPU code (`crates/tenferro-linalg/src/gpu/linalg.rs` and
+`gpu/linalg/rank_revealing_qr.rs`). They were invisible to this branch's own verification
+because `cargo check --workspace --all-targets` compiles the default feature set, and those
+files sit behind `cuda` and `webgpu`. `cargo check -p tenferro-linalg --features cuda` failed
+with sixteen errors.
+
+Every site now carries an explicit typed rejection through the file's existing
+`unsupported_linalg_dtype` helper, and the one site that matches on `DType` rather than `Tensor`
+(`singularity_tolerance`) became fallible so it can reject instead of picking a tolerance for a
+scalar tenferro does not declare. The repository's own source-contract test pinned that
+helper's old signature and was updated to the new one, with an added assertion that the
+external tag is rejected.
+
+The sweep that found this also turned up two facts about the repository rather than about this
+branch, and both are checked against `origin/main`:
+
+- Building the *whole workspace* with one crate's GPU feature enabled
+  (`--features tenferro-linalg/cuda`) fails in `tenferro-einsum`, whose match on
+  `EagerExtensionBackendKind` gates the `Cuda` arm behind its own feature. The file is
+  byte-identical at `origin/main` and this branch never touched it, and each crate builds
+  cleanly with its own GPU feature, so the mismatch is a pre-existing feature-interaction hole.
+- Clippy over `tenferro-linalg --features cuda` reports 43 pre-existing lints in the GPU files
+  (unneeded `Ok(..?)`, too many arguments, complex types). None is in the arms this branch
+  added.
+
+What this changes for the audit is that "the workspace check is clean" is only true of the
+default feature set, and that a change to `DType` or `Tensor` has to be swept across the GPU
+feature configurations too. The branch's verification now includes that sweep.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

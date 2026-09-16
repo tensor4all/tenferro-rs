@@ -590,3 +590,26 @@ required baseline for small-work overhead, printed in the report alongside the n
 
 Workspace after this: 5303 passed, 3 failed (the same pre-existing `trybuild` failures), clippy
 clean under `-D warnings` and the strict doc lints.
+
+## Sweeping feature configurations found a hole this branch had left
+
+`cargo check --workspace --all-targets` compiles the default feature set, so the sixteen
+non-exhaustive matches this branch left in `tenferro-linalg`'s GPU code were invisible to it:
+those files sit behind `cuda` and `webgpu`. `cargo check -p tenferro-linalg --features cuda`
+failed.
+
+Every site now rejects an externally defined value explicitly through the file's existing
+`unsupported_linalg_dtype` helper, and `singularity_tolerance`, which matches on `DType` rather
+than `Tensor`, became fallible so it can reject rather than pick a tolerance. The repository's
+source-contract test pinned that helper's signature and now asserts the new one plus the
+external rejection.
+
+The sweep also produced two facts about the repository, both checked against `origin/main`:
+building the whole workspace with a single crate's GPU feature fails in `tenferro-einsum`
+because its match on `EagerExtensionBackendKind` gates the `Cuda` arm behind its own feature
+(the file is byte-identical at `origin/main` and this branch never touched it, and each crate
+builds cleanly with its own feature), and clippy over the cuda-enabled linalg crate reports 43
+pre-existing lints in GPU files, none of them in the arms added here.
+
+The lesson for this branch's verification is that a change to `DType` or `Tensor` has to be
+swept across the GPU feature configurations, and that the sweep is now part of the gate.

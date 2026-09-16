@@ -534,6 +534,7 @@ pub(super) fn rank_revealing_qr(
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype(OP, input))
         }
+        Tensor::External(..) => Err(unsupported_linalg_dtype(OP, input)),
     }
 }
 

@@ -874,8 +874,14 @@ fn gpu_validate_nonsingular_uses_complex_magnitude_and_tolerance() {
         "GPU singularity validation should compute max diagonal magnitude for a scaled tolerance"
     );
     assert!(
-        source.contains("fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> f64"),
+        source
+            .contains("fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> Result<f64>"),
         "GPU singularity validation should use a dtype-aware tolerance helper"
+    );
+    assert!(
+        source.contains("DType::External(_) =>"),
+        "GPU singularity validation should reject a scalar tenferro does not declare instead of \
+         picking a tolerance for it"
     );
     assert!(
         validate.contains("value <= tolerance"),

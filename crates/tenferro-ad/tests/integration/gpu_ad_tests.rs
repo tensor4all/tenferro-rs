@@ -48,6 +48,8 @@ fn assert_device_backed(tensor: &Tensor) {
         Tensor::C64(inner) => assert!(is_cubecl(inner.buffer())),
         Tensor::I32(inner) => assert!(is_cubecl(inner.buffer())),
         Tensor::Bool(inner) => assert!(is_cubecl(inner.buffer())),
+        // A caller-owned payload has no device buffer to inspect.
+        Tensor::External(..) => panic!("a caller-owned payload is not a device tensor"),
     }
 }
 
