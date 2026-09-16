@@ -1271,10 +1271,19 @@ recording because it is a property of the verification, not of the change:
 | `check-docs-site.py` | the contribution and the two consumer crates missing from `docs/api/index.md` |
 | `gen_dep_graph.py` layer map | three crates falling back to a `core` cluster that the tests forbid |
 
-All four are fixed. One artifact remains outstanding and cannot be produced here:
-`docs/assets/dependency-footprint.svg` is generated with Graphviz, whose `dot` binary is absent
-and cannot be installed without root on this host, so the `docs` profile's dependency-graph test
-fails on the checked-in SVG. The regeneration command is recorded in the work log.
+All four are fixed, and the generated artifacts are current rather than outstanding. The
+dependency graph was regenerated after the Graphviz `dot` binary proved absent on this host, by
+running the repository's generator with a WebAssembly `dot` shim in place of the system binary; the
+shim and the command are recorded in the work log. Re-running the `docs` profile at this head
+completes all nine of its steps.
+
+The `workspace-faer` profile is a separate case, and it fails on one test:
+`tenferro-tensor::storage_compile_contract::storage_ui_compile_contracts`. That test is a trybuild
+harness comparing compiler diagnostics verbatim, and the mismatches are in fixtures about
+`TypedTensorView` rank parameters and `StorageBuffer` references. The branch neither touches that test
+nor its fixtures — `git diff --stat` over the branch reports nothing for either path — and the test
+file is identical to the one on `origin/main`, so its outcome belongs to the toolchain rather than to
+this change.
 
 ### 5.18 The remaining inputs, each with the evidence behind it
 
