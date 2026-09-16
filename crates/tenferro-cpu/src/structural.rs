@@ -576,7 +576,7 @@ pub(crate) fn cast_with_pool(
     }
 
     match (input, to) {
-        (Tensor::F32(t), DType::F32) => Ok(Tensor::F32(t.duplicate()?)),
+        (Tensor::F32(t), DType::F32) => Ok(Tensor::from_typed::<f32>(t.duplicate()?)),
         (Tensor::F32(t), DType::F64) => converted!(F64, t, |x| x as f64),
         (Tensor::F32(t), DType::I32) => {
             validate_real_values_cast_to_i32(t, |x| x as f64)?;
@@ -592,7 +592,7 @@ pub(crate) fn cast_with_pool(
             converted!(C64, t, |x| Complex64::new(x as f64, 0.0))
         }
         (Tensor::F64(t), DType::F32) => converted!(F32, t, |x| x as f32),
-        (Tensor::F64(t), DType::F64) => Ok(Tensor::F64(t.duplicate()?)),
+        (Tensor::F64(t), DType::F64) => Ok(Tensor::from_typed::<f64>(t.duplicate()?)),
         (Tensor::F64(t), DType::I32) => {
             validate_real_values_cast_to_i32(t, |x| x)?;
             converted!(I32, t, |x| x as i32)
@@ -608,7 +608,7 @@ pub(crate) fn cast_with_pool(
         (Tensor::F64(t), DType::C64) => converted!(C64, t, |x| Complex64::new(x, 0.0)),
         (Tensor::I32(t), DType::F32) => converted!(F32, t, |x| x as f32),
         (Tensor::I32(t), DType::F64) => converted!(F64, t, |x| x as f64),
-        (Tensor::I32(t), DType::I32) => Ok(Tensor::I32(t.duplicate()?)),
+        (Tensor::I32(t), DType::I32) => Ok(Tensor::from_typed::<i32>(t.duplicate()?)),
         (Tensor::I32(t), DType::I64) => converted!(I64, t, |x| x as i64),
         (Tensor::I32(t), DType::Bool) => converted!(Bool, t, |x| x != 0),
         (Tensor::I32(t), DType::C32) => {
@@ -620,7 +620,7 @@ pub(crate) fn cast_with_pool(
         (Tensor::I64(t), DType::F32) => converted!(F32, t, |x| x as f32),
         (Tensor::I64(t), DType::F64) => converted!(F64, t, |x| x as f64),
         (Tensor::I64(t), DType::I32) => converted!(I32, t, |x| x as i32),
-        (Tensor::I64(t), DType::I64) => Ok(Tensor::I64(t.duplicate()?)),
+        (Tensor::I64(t), DType::I64) => Ok(Tensor::from_typed::<i64>(t.duplicate()?)),
         (Tensor::I64(t), DType::Bool) => converted!(Bool, t, |x| x != 0),
         (Tensor::I64(t), DType::C32) => {
             converted!(C32, t, |x| Complex32::new(x as f32, 0.0))
@@ -632,7 +632,7 @@ pub(crate) fn cast_with_pool(
         (Tensor::Bool(t), DType::F64) => converted!(F64, t, |x| if x { 1.0 } else { 0.0 }),
         (Tensor::Bool(t), DType::I32) => converted!(I32, t, |x| if x { 1 } else { 0 }),
         (Tensor::Bool(t), DType::I64) => converted!(I64, t, |x| if x { 1 } else { 0 }),
-        (Tensor::Bool(t), DType::Bool) => Ok(Tensor::Bool(t.duplicate()?)),
+        (Tensor::Bool(t), DType::Bool) => Ok(Tensor::from_typed::<bool>(t.duplicate()?)),
         (Tensor::Bool(t), DType::C32) => {
             converted!(C32, t, |x| Complex32::new(if x { 1.0 } else { 0.0 }, 0.0))
         }
@@ -650,7 +650,7 @@ pub(crate) fn cast_with_pool(
             converted!(I64, t, |z| z.re as i64)
         }
         (Tensor::C32(t), DType::Bool) => converted!(Bool, t, |z| z.re != 0.0 || z.im != 0.0),
-        (Tensor::C32(t), DType::C32) => Ok(Tensor::C32(t.duplicate()?)),
+        (Tensor::C32(t), DType::C32) => Ok(Tensor::from_typed::<Complex32>(t.duplicate()?)),
         (Tensor::C32(t), DType::C64) => {
             converted!(C64, t, |z| Complex64::new(z.re as f64, z.im as f64))
         }
@@ -668,7 +668,7 @@ pub(crate) fn cast_with_pool(
         (Tensor::C64(t), DType::C32) => {
             converted!(C32, t, |z| Complex32::new(z.re as f32, z.im as f32))
         }
-        (Tensor::C64(t), DType::C64) => Ok(Tensor::C64(t.duplicate()?)),
+        (Tensor::C64(t), DType::C64) => Ok(Tensor::from_typed::<Complex64>(t.duplicate()?)),
         // An externally defined destination has no conversion table here, so the
         // conversion rejects it explicitly rather than guessing a representation.
         (_, DType::External(_)) => Err(crate::Error::dtype_mismatch("convert", input.dtype(), to)),
