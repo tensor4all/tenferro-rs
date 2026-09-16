@@ -3035,29 +3035,50 @@ pub fn select_with_pool(
     on_true: &Tensor,
     on_false: &Tensor,
 ) -> crate::Result<Tensor> {
-    match (pred, on_true, on_false) {
-        (Tensor::Bool(p), Tensor::F32(t), Tensor::F32(f)) => Ok(Tensor::from_typed::<f32>(
-            typed_select_with_pool(buffers, p, t, f)?,
-        )),
-        (Tensor::Bool(p), Tensor::F64(t), Tensor::F64(f)) => Ok(Tensor::from_typed::<f64>(
-            typed_select_with_pool(buffers, p, t, f)?,
-        )),
-        (Tensor::Bool(p), Tensor::I32(t), Tensor::I32(f)) => Ok(Tensor::from_typed::<i32>(
-            typed_select_with_pool(buffers, p, t, f)?,
-        )),
-        (Tensor::Bool(p), Tensor::I64(t), Tensor::I64(f)) => Ok(Tensor::from_typed::<i64>(
-            typed_select_with_pool(buffers, p, t, f)?,
-        )),
-        (Tensor::Bool(p), Tensor::Bool(t), Tensor::Bool(f)) => Ok(Tensor::from_typed::<bool>(
-            typed_select_with_pool(buffers, p, t, f)?,
-        )),
-        (Tensor::Bool(p), Tensor::C32(t), Tensor::C32(f)) => Ok(
-            Tensor::from_typed::<Complex<f32>>(typed_select_with_pool(buffers, p, t, f)?),
-        ),
-        (Tensor::Bool(p), Tensor::C64(t), Tensor::C64(f)) => Ok(
-            Tensor::from_typed::<Complex<f64>>(typed_select_with_pool(buffers, p, t, f)?),
-        ),
-        (Tensor::Bool(_), _, _) => Err(crate::Error::dtype_mismatch(
+    match (pred.dtype(), on_true.dtype(), on_false.dtype()) {
+        (DType::Bool, DType::F32, DType::F32) => {
+            let (p, t, f) = select_operands::<f32>("select", pred, on_true, on_false)?;
+            Ok(Tensor::from_typed::<f32>(typed_select_with_pool(
+                buffers, p, t, f,
+            )?))
+        }
+        (DType::Bool, DType::F64, DType::F64) => {
+            let (p, t, f) = select_operands::<f64>("select", pred, on_true, on_false)?;
+            Ok(Tensor::from_typed::<f64>(typed_select_with_pool(
+                buffers, p, t, f,
+            )?))
+        }
+        (DType::Bool, DType::I32, DType::I32) => {
+            let (p, t, f) = select_operands::<i32>("select", pred, on_true, on_false)?;
+            Ok(Tensor::from_typed::<i32>(typed_select_with_pool(
+                buffers, p, t, f,
+            )?))
+        }
+        (DType::Bool, DType::I64, DType::I64) => {
+            let (p, t, f) = select_operands::<i64>("select", pred, on_true, on_false)?;
+            Ok(Tensor::from_typed::<i64>(typed_select_with_pool(
+                buffers, p, t, f,
+            )?))
+        }
+        (DType::Bool, DType::Bool, DType::Bool) => {
+            let (p, t, f) = select_operands::<bool>("select", pred, on_true, on_false)?;
+            Ok(Tensor::from_typed::<bool>(typed_select_with_pool(
+                buffers, p, t, f,
+            )?))
+        }
+        (DType::Bool, DType::C32, DType::C32) => {
+            let (p, t, f) = select_operands::<Complex<f32>>("select", pred, on_true, on_false)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(typed_select_with_pool(
+                buffers, p, t, f,
+            )?))
+        }
+        (DType::Bool, DType::C64, DType::C64) => {
+            let (p, t, f) = select_operands::<Complex<f64>>("select", pred, on_true, on_false)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(typed_select_with_pool(
+                buffers, p, t, f,
+            )?))
+        }
+        (DType::Bool, _, _) => Err(crate::Error::dtype_mismatch(
             "select",
             on_true.dtype(),
             on_false.dtype(),
@@ -3067,6 +3088,47 @@ pub fn select_with_pool(
             pred.dtype(),
             crate::DType::Bool,
         )),
+    }
+}
+
+/// The predicate and value pair behind a select, or the refusal this table reports.
+///
+/// Callers reach this from a match on the three dtypes, so `None` means the tags and the runtime
+/// dtypes disagree rather than a caller mistake.
+fn select_operands<'a, T: TensorScalar>(
+    op: &'static str,
+    pred: &'a Tensor,
+    on_true: &'a Tensor,
+    on_false: &'a Tensor,
+) -> crate::Result<(
+    &'a TypedTensor<bool>,
+    &'a TypedTensor<T>,
+    &'a TypedTensor<T>,
+)> {
+    let p = pred
+        .as_typed::<bool>()
+        .ok_or_else(|| select_error(op, pred, on_true, on_false))?;
+    let t = on_true
+        .as_typed::<T>()
+        .ok_or_else(|| select_error(op, pred, on_true, on_false))?;
+    let f = on_false
+        .as_typed::<T>()
+        .ok_or_else(|| select_error(op, pred, on_true, on_false))?;
+    Ok((p, t, f))
+}
+
+/// The refusal the select table reports, which is the pair's or the predicate's depending on which
+/// arm would have answered.
+fn select_error(
+    op: &'static str,
+    pred: &Tensor,
+    on_true: &Tensor,
+    on_false: &Tensor,
+) -> crate::Error {
+    if pred.dtype() != DType::Bool {
+        crate::Error::dtype_mismatch(op, pred.dtype(), DType::Bool)
+    } else {
+        crate::Error::dtype_mismatch(op, on_true.dtype(), on_false.dtype())
     }
 }
 
