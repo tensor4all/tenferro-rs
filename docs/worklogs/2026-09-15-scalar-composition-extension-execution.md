@@ -483,6 +483,15 @@ scratch is reused, which is the gap in numbers.
 The measurement also caught a violation of #1789's own rule against hidden tensor-sized
 copies: `matrix_of` copied each input payload before any arithmetic. The dense helpers now
 borrow the caller-owned payload, so the adjoint's bytes fell by exactly the three input
-copies (196608 bytes) and its allocations from 256 to 253. Reusing the *intermediate*
-buffers is the remaining, larger step, and the accounted `ExtensionCacheStore` is where it
-belongs.
+copies (196608 bytes) and its allocations from 256 to 253.
+
+The acquisition and return path for a reused buffer is now proven rather than described: the
+adjoint's largest intermediate comes from a scratch buffer acquired from the runtime's
+accounted extension cache and returned afterwards. The runtime reports one entry with 65536
+retained bytes, one hit and one miss after two executions, and the second adjoint costs
+847892 bytes instead of 921204 with 222 allocations instead of 258.
+
+My first attempt at it had a real defect that the suite caught: reading the accumulator by
+asking the scratch for the buffer a second time clears and zero-fills it, so the connected QR
+gradients silently became zero. The fix reads the buffer without touching it. Extending the
+same pattern to the remaining intermediates is mechanical.

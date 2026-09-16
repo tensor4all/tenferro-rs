@@ -1012,10 +1012,27 @@ Two findings came out of it, and the second is already fixed:
   (`dense::Matrix<'a>` holds a `Cow`), so the adjoint's bytes dropped by exactly the three
   input copies, 196608 bytes, and 256 allocations became 253.
 
-What remains for #1789 is reuse of the *intermediate* buffers the computing helpers
-allocate, which is a larger change than the copies: it needs a reusable scratch buffer
-carried through the bodies, and the accounted `ExtensionCacheStore` is the sanctioned place
-for one, since it takes a `retained_bytes` figure for each entry.
+**The acquisition and return path is now proven.** The adjoint's largest intermediate comes
+from a scratch buffer the body acquires from the runtime's accounted extension cache
+(`ExtensionCacheStore::put` with a `retained_bytes` figure) and returns afterwards. The
+runtime's own statistics show the path working after two executions of one program: one
+entry, 65536 retained bytes, one hit and one miss. The measured effect on the same 64 by 64
+case is
+
+| Execution | Allocations | Bytes |
+| --- | --- | --- |
+| adjoint, first | 258 | 921204 |
+| adjoint, second (reused) | 222 | 847892 |
+
+so the reuse is a number rather than an intention, and it is accounted rather than an
+extension-private cache. Extending the same path to the remaining intermediates is
+mechanical: each one needs a slot in the scratch and a `retained_bytes` figure the cache
+already collects.
+
+That work also found a real defect in my own first attempt: the body asked the scratch for
+the accumulator a second time to read it, which clears and zero-fills the buffer, and the
+connected QR gradients silently became zero. The workspace suite caught it, and the fix is
+to read the buffer without touching it (`Scratch::buffer_ref`).
 
 ## 6. Risks and open questions
 

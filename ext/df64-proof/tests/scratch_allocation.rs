@@ -132,6 +132,15 @@ fn report_scratch_allocation_per_execution() {
                 .expect("adjoint"),
         );
     });
+    // The second execution can reuse the scratch the first one left in the runtime's
+    // accounted extension cache.
+    let (steady_adjoint_allocations, steady_adjoint_bytes) = measure(|| {
+        drop(
+            runtime
+                .run_compiled(&adjoint_program, &[&q_value, &r_value, &cotangent_value])
+                .expect("adjoint"),
+        );
+    });
 
     let elements = order * order;
     println!(
@@ -139,6 +148,7 @@ fn report_scratch_allocation_per_execution() {
          \x20 first QR:   {first_qr_allocations:>6} allocations, {first_qr_bytes:>9} bytes\n\
          \x20 steady QR:  {next_qr_allocations:>6} allocations, {next_qr_bytes:>9} bytes\n\
          \x20 adjoint:    {adjoint_allocations:>6} allocations, {adjoint_bytes:>9} bytes\n\
+         \x20 steady adj: {steady_adjoint_allocations:>6} allocations, {steady_adjoint_bytes:>9} bytes\n\
          \x20 payload:    {:>6} bytes per matrix",
         elements * std::mem::size_of::<Df64>()
     );
@@ -155,5 +165,26 @@ fn report_scratch_allocation_per_execution() {
     assert!(
         next_qr_allocations > 0 && adjoint_allocations > 0,
         "the bodies allocate no scratch at all, so this report is stale"
+    );
+    // The accounted scratch is what makes the second adjoint cheaper than the first, so the
+    // report fails if the reuse path stops being taken.
+    assert!(
+        steady_adjoint_bytes < adjoint_bytes,
+        "the adjoint's scratch is not reused: {adjoint_bytes} then {steady_adjoint_bytes}"
+    );
+
+    // The runtime reports the scratch as an accounted extension cache entry, which is what
+    // makes this a declared reuse path rather than a private cache.
+    let stats = runtime.cache_stats().expect("runtime cache statistics");
+    println!(
+        "extension cache: {} entries, {} retained bytes, {} hits, {} misses",
+        stats.extensions.entries,
+        stats.extensions.retained_bytes,
+        stats.extensions.hits,
+        stats.extensions.misses
+    );
+    assert!(
+        stats.extensions.entries > 0 && stats.extensions.retained_bytes > 0,
+        "the reuse path is not accounted for: {stats:?}"
     );
 }
