@@ -117,3 +117,6 @@ where
         .map_err(|err| crate::Error::backend_source(op, err))?;
     reduce(&view, |element| element, f, init).map_err(|err| crate::Error::backend_source(op, err))
 }
+
+#[cfg(test)]
+mod tests;

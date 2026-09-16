@@ -79,6 +79,26 @@ payload.
   contract, entry points, `ad_admission`, the set machinery, the erased prototype,
   and the proof crate are new code.
 
+### Coverage of the changed files
+
+Measured with `cargo llvm-cov -p tenferro-tensor-core -p tenferro-internal-cpu-kernels -p tenferro-df64-proof --profile ci --json`:
+
+| File | Line coverage |
+| --- | --- |
+| `crates/tenferro-tensor-core/src/erased.rs` | 100% |
+| `crates/tenferro-tensor-core/src/scalar_set.rs` | 100% |
+| `crates/tenferro-tensor-core/src/scalar.rs` | 87.5% |
+| `crates/tenferro-internal-cpu-kernels/src/scalar_ops.rs` | 88.5% |
+| `ext/df64-proof/src/lib.rs` | 100% |
+
+The repository enforces the default 80% per-file threshold from
+`coverage-thresholds.json`, and every changed file clears it. The remaining
+uncovered regions are the `map_err` closures that map a strided failure into
+`crate::Error`: a host tensor with column-major strides cannot make
+`StridedView::new` or `reduce` fail, so those branches are unreachable rather
+than untested. Reaching the 90% soft target by padding them would add tests that
+assert nothing, so they are left as measured.
+
 ## Residual risk and open decisions
 
 - The runtime representation choice is recorded but not made: one boxing

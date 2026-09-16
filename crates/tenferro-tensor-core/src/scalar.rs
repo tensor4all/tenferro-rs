@@ -196,3 +196,6 @@ pub fn ad_admission<T: Scalar>(order: u32) -> Result<(), AdAdmissionError> {
         ScalarDomain::NonField => Err(AdAdmissionError::NonFieldScalar),
     }
 }
+
+#[cfg(test)]
+mod tests;

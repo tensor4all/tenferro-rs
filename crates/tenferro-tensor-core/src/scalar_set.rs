@@ -124,3 +124,6 @@ macro_rules! define_scalar_set {
         }
     };
 }
+
+#[cfg(test)]
+mod tests;

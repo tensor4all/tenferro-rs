@@ -145,3 +145,6 @@ impl ErasedHostTensor {
             .map(|boxed| *boxed)
     }
 }
+
+#[cfg(test)]
+mod tests;
