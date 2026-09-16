@@ -647,9 +647,12 @@ real problems in this branch, all now fixed:
 One gate cannot be finished in this environment: `docs/assets/dependency-footprint.svg` is a
 generated artifact that has to be regenerated when the crate set changes, and the check compares
 its node and edge inventory against the current graph. Regeneration needs Graphviz's `dot`,
-which is not installed; the runtime library (`libgvc.so.6`) is present but the binary is not, the
-package that ships it is not extractable into a usable binary without root, and this account has
-no root. The exact command, for a machine that has Graphviz, is
+which is not installed. I checked every route available to this account: the `dot` binary is
+absent from `PATH`; the `graphviz` package can be downloaded and unpacked without root but its
+`usr/bin/dot` is a symlink to an alternatives target that the package does not ship; the core
+library `libgvc.so.6` is present system-wide but no layout plugin (`libgvplugin_dot_layout`,
+`libgvplugin_core`) is, so linking the library directly cannot lay the graph out either; and
+there is no root to install the missing pieces. The exact command, for a machine that has Graphviz, is
 
 ```bash
 python3 scripts/gen_dep_graph.py --format svg --output docs/assets/dependency-footprint.svg
