@@ -373,16 +373,20 @@ pub(crate) fn reduce_sum_squares(
         return elementwise::mul_with_pool(buffers, input, input);
     }
 
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_erased(
-            t,
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_reduce_erased(
+            input.as_typed::<f32>().ok_or_else(|| {
+                unsupported_sum_squares_dtype("reduce_sum_squares", input.dtype())
+            })?,
             axes,
             ReduceOp::SumSquares,
             "reduce_sum_squares",
             exec_context,
         )?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_erased(
-            t,
+        DType::F64 => Ok(Tensor::F64(typed_reduce_erased(
+            input.as_typed::<f64>().ok_or_else(|| {
+                unsupported_sum_squares_dtype("reduce_sum_squares", input.dtype())
+            })?,
             axes,
             ReduceOp::SumSquares,
             "reduce_sum_squares",
