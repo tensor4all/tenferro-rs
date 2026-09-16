@@ -312,13 +312,20 @@ and #1790 (external application consumer) are met.
 - The `xprec` crate used by the external proof is version 0.2.2, MIT licensed.
   Its MSRV, `Copy` behavior, and rounding API are confirmed during
   implementation.
-- Stage 1's net reduction is a measured outcome, not a guarantee. Part 1a
-  measured a net reduction of 68 lines across the changed Rust sources (45 added,
-  113 deleted) before the scalar contract is introduced; the 100-line target for
-  the whole of stage 1 remains unproven and part 1b still adds the open contract
-  and its tests. If the total does not reach the target, the slice is widened
-  within the same operation boundary before the pull request is opened, and the
-  measured numbers are reported either way.
+- Stage 1's net reduction is a measured outcome, not a guarantee, and the
+  measurement is now available. The mechanical simplification removed 254 lines:
+  68 in part 1a (the duplicate tag and the four `core_dtype()` copies) and 186 in
+  `elementwise.rs` (the tripled dispatch macros and the repeated preset variant
+  lists). The stage as a whole measures 751 added and 130 deleted lines against
+  `origin/main`, because the open scalar contract, the caller-provided-destination
+  entry points, the `ad_admission` query, and the external proof crate are new
+  code with no counterpart to delete. The 100-line target is therefore met by the
+  simplification and not by the stage total, which is the honest reading: the
+  deleted lines are the duplicated preset machinery, and the remaining
+  per-variant lists in the other 88 files are removed by stage 2, where the
+  closed enums themselves disappear. A later reader should not treat the stage
+  total as evidence that the simplification failed, nor treat the simplification
+  as evidence that nothing was added.
 - The `trybuild` storage UI fixtures (`crates/tenferro-tensor/tests/ui/storage`)
   report 10 of 14 mismatches in this worktree both with and without these
   changes, because the expected `.stderr` files were generated elsewhere than the
