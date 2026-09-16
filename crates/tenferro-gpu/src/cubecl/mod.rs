@@ -4031,25 +4031,23 @@ impl TensorElementwise for CudaBackend {
         {
             return result;
         }
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) if lhs.shape() != rhs.shape() => {
-                launch_scalar_binary(
-                    self,
-                    lhs,
-                    rhs,
-                    op,
-                    |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                        elementwise::scalar_div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+        match (lhs.dtype(), rhs.dtype()) {
+            (DType::F32, DType::F32) if lhs.shape() != rhs.shape() => launch_scalar_binary(
+                self,
+                typed_or_unsupported::<f32>(lhs, op)?,
+                typed_or_unsupported::<f32>(rhs, op)?,
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                    elementwise::scalar_div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (DType::F32, DType::F32) => launch_binary(
                 self.runtime(),
-                lhs,
-                rhs,
+                typed_or_unsupported::<f32>(lhs, op)?,
+                typed_or_unsupported::<f32>(rhs, op)?,
                 lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -4059,24 +4057,22 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::F32),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) if lhs.shape() != rhs.shape() => {
-                launch_scalar_binary(
-                    self,
-                    lhs,
-                    rhs,
-                    op,
-                    |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                        elementwise::scalar_div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+            (DType::F64, DType::F64) if lhs.shape() != rhs.shape() => launch_scalar_binary(
+                self,
+                typed_or_unsupported::<f64>(lhs, op)?,
+                typed_or_unsupported::<f64>(rhs, op)?,
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                    elementwise::scalar_div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            (DType::F64, DType::F64) => launch_binary(
                 self.runtime(),
-                lhs,
-                rhs,
+                typed_or_unsupported::<f64>(lhs, op)?,
+                typed_or_unsupported::<f64>(rhs, op)?,
                 lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -4086,11 +4082,11 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::F64),
-            (Tensor::I32(lhs), Tensor::I32(rhs)) if lhs.shape() != rhs.shape() => {
+            (DType::I32, DType::I32) if lhs.shape() != rhs.shape() => {
                 launch_checked_integer_scalar_binary(
                     self,
-                    lhs,
-                    rhs,
+                    typed_or_unsupported::<i32>(lhs, op)?,
+                    typed_or_unsupported::<i32>(rhs, op)?,
                     op,
                     crate::DType::I32,
                     CheckedIntegerDomain::DivisionByZero,
@@ -4105,10 +4101,10 @@ impl TensorElementwise for CudaBackend {
                 )
                 .map(Tensor::I32)
             }
-            (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_checked_integer_binary(
+            (DType::I32, DType::I32) => launch_checked_integer_binary(
                 self,
-                lhs,
-                rhs,
+                typed_or_unsupported::<i32>(lhs, op)?,
+                typed_or_unsupported::<i32>(rhs, op)?,
                 op,
                 crate::DType::I32,
                 CheckedIntegerDomain::DivisionByZero,
@@ -4119,11 +4115,11 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::I32),
-            (Tensor::I64(lhs), Tensor::I64(rhs)) if lhs.shape() != rhs.shape() => {
+            (DType::I64, DType::I64) if lhs.shape() != rhs.shape() => {
                 launch_checked_integer_scalar_binary(
                     self,
-                    lhs,
-                    rhs,
+                    typed_or_unsupported::<i64>(lhs, op)?,
+                    typed_or_unsupported::<i64>(rhs, op)?,
                     op,
                     crate::DType::I64,
                     CheckedIntegerDomain::DivisionByZero,
@@ -4138,10 +4134,10 @@ impl TensorElementwise for CudaBackend {
                 )
                 .map(Tensor::I64)
             }
-            (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_checked_integer_binary(
+            (DType::I64, DType::I64) => launch_checked_integer_binary(
                 self,
-                lhs,
-                rhs,
+                typed_or_unsupported::<i64>(lhs, op)?,
+                typed_or_unsupported::<i64>(rhs, op)?,
                 op,
                 crate::DType::I64,
                 CheckedIntegerDomain::DivisionByZero,
@@ -4152,10 +4148,10 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::I64),
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_binary(
+            (DType::C32, DType::C32) => launch_binary(
                 self.runtime(),
-                lhs,
-                rhs,
+                typed_or_unsupported::<Complex32>(lhs, op)?,
+                typed_or_unsupported::<Complex32>(rhs, op)?,
                 lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -4165,10 +4161,10 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::C32),
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_binary(
+            (DType::C64, DType::C64) => launch_binary(
                 self.runtime(),
-                lhs,
-                rhs,
+                typed_or_unsupported::<Complex64>(lhs, op)?,
+                typed_or_unsupported::<Complex64>(rhs, op)?,
                 lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
