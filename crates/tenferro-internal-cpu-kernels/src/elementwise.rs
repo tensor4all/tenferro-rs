@@ -407,6 +407,120 @@ pub fn add_with_pool(
     }
 }
 
+/// Dispatch a same-variant read pair to that variant's typed kernel.
+///
+/// Every erased elementwise operation reaches the same typed kernels through
+/// these declarations, so an operation adds no matching code of its own.
+macro_rules! dispatch_read_same_variant {
+    ($buffers:expr, $lhs:expr, $rhs:expr, $variant:ident, $func:ident) => {
+        match (&$lhs, &$rhs) {
+            (
+                TensorRead::Tensor(Tensor::$variant(a)),
+                TensorRead::View(TensorView::$variant(b)),
+            ) => {
+                let a = a.as_view();
+                return Ok(Tensor::$variant($func($buffers, &a, b)?));
+            }
+            (
+                TensorRead::View(TensorView::$variant(a)),
+                TensorRead::Tensor(Tensor::$variant(b)),
+            ) => {
+                let b = b.as_view();
+                return Ok(Tensor::$variant($func($buffers, a, &b)?));
+            }
+            (
+                TensorRead::View(TensorView::$variant(a)),
+                TensorRead::View(TensorView::$variant(b)),
+            ) => {
+                return Ok(Tensor::$variant($func($buffers, a, b)?));
+            }
+            _ => {}
+        }
+    };
+}
+
+/// The single list of preset variants an erased elementwise operation reaches.
+///
+/// An operation supplies only the kernel that implements it for a float-like
+/// variant and for an integer variant; the variant list itself exists once here,
+/// so adding a preset scalar is a single edit rather than one edit per
+/// operation.
+macro_rules! dispatch_read_presets {
+    ($buffers:expr, $lhs:expr, $rhs:expr, $float:ident, $integer:ident) => {
+        dispatch_read_real_complex_scalar!($buffers, $lhs, $rhs, F32, C32, $float);
+        dispatch_read_real_complex_scalar!($buffers, $lhs, $rhs, F64, C64, $float);
+
+        dispatch_read_same_variant!($buffers, $lhs, $rhs, F32, $float);
+        dispatch_read_same_variant!($buffers, $lhs, $rhs, F64, $float);
+        dispatch_read_same_variant!($buffers, $lhs, $rhs, I32, $integer);
+        dispatch_read_same_variant!($buffers, $lhs, $rhs, I64, $integer);
+        dispatch_read_same_variant!($buffers, $lhs, $rhs, C32, $float);
+        dispatch_read_same_variant!($buffers, $lhs, $rhs, C64, $float);
+    };
+}
+
+macro_rules! dispatch_read_real_complex_scalar {
+    ($buffers:expr, $lhs:expr, $rhs:expr, $real_variant:ident, $complex_variant:ident, $func:ident) => {
+        match (&$lhs, &$rhs) {
+            (
+                TensorRead::Tensor(Tensor::$real_variant(real)),
+                TensorRead::View(TensorView::$complex_variant(complex)),
+            ) if real.shape().is_empty() => {
+                let scalar = complex_scalar_tensor_from_tensor(real)?;
+                let scalar = scalar.as_view();
+                return Ok(Tensor::$complex_variant($func($buffers, &scalar, complex)?));
+            }
+            (
+                TensorRead::View(TensorView::$real_variant(real)),
+                TensorRead::Tensor(Tensor::$complex_variant(complex)),
+            ) if real.shape().is_empty() => {
+                let scalar = complex_scalar_tensor_from_view(real)?;
+                let scalar = scalar.as_view();
+                let complex = complex.as_view();
+                return Ok(Tensor::$complex_variant($func(
+                    $buffers, &scalar, &complex,
+                )?));
+            }
+            (
+                TensorRead::View(TensorView::$real_variant(real)),
+                TensorRead::View(TensorView::$complex_variant(complex)),
+            ) if real.shape().is_empty() => {
+                let scalar = complex_scalar_tensor_from_view(real)?;
+                let scalar = scalar.as_view();
+                return Ok(Tensor::$complex_variant($func($buffers, &scalar, complex)?));
+            }
+            (
+                TensorRead::Tensor(Tensor::$complex_variant(complex)),
+                TensorRead::View(TensorView::$real_variant(real)),
+            ) if real.shape().is_empty() => {
+                let complex = complex.as_view();
+                let scalar = complex_scalar_tensor_from_view(real)?;
+                let scalar = scalar.as_view();
+                return Ok(Tensor::$complex_variant($func(
+                    $buffers, &complex, &scalar,
+                )?));
+            }
+            (
+                TensorRead::View(TensorView::$complex_variant(complex)),
+                TensorRead::Tensor(Tensor::$real_variant(real)),
+            ) if real.shape().is_empty() => {
+                let scalar = complex_scalar_tensor_from_tensor(real)?;
+                let scalar = scalar.as_view();
+                return Ok(Tensor::$complex_variant($func($buffers, complex, &scalar)?));
+            }
+            (
+                TensorRead::View(TensorView::$complex_variant(complex)),
+                TensorRead::View(TensorView::$real_variant(real)),
+            ) if real.shape().is_empty() => {
+                let scalar = complex_scalar_tensor_from_view(real)?;
+                let scalar = scalar.as_view();
+                return Ok(Tensor::$complex_variant($func($buffers, complex, &scalar)?));
+            }
+            _ => {}
+        }
+    };
+}
+
 #[doc(hidden)]
 pub fn add_read_with_pool(
     buffers: &mut BufferPool,
@@ -417,113 +531,13 @@ pub fn add_read_with_pool(
         return add_with_pool(buffers, lhs, rhs);
     }
 
-    macro_rules! dispatch {
-        ($variant:ident, $func:ident) => {
-            match (&lhs, &rhs) {
-                (
-                    TensorRead::Tensor(Tensor::$variant(a)),
-                    TensorRead::View(TensorView::$variant(b)),
-                ) => {
-                    let a = a.as_view();
-                    return Ok(Tensor::$variant($func(buffers, &a, b)?));
-                }
-                (
-                    TensorRead::View(TensorView::$variant(a)),
-                    TensorRead::Tensor(Tensor::$variant(b)),
-                ) => {
-                    let b = b.as_view();
-                    return Ok(Tensor::$variant($func(buffers, a, &b)?));
-                }
-                (
-                    TensorRead::View(TensorView::$variant(a)),
-                    TensorRead::View(TensorView::$variant(b)),
-                ) => {
-                    return Ok(Tensor::$variant($func(buffers, a, b)?));
-                }
-                _ => {}
-            }
-        };
-    }
-
-    macro_rules! dispatch_real_complex_scalar {
-        ($real_variant:ident, $complex_variant:ident) => {
-            match (&lhs, &rhs) {
-                (
-                    TensorRead::Tensor(Tensor::$real_variant(real)),
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_tensor(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_add_view_with_pool(
-                        buffers, &scalar, complex,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$real_variant(real)),
-                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    let complex = complex.as_view();
-                    return Ok(Tensor::$complex_variant(typed_add_view_with_pool(
-                        buffers, &scalar, &complex,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$real_variant(real)),
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_add_view_with_pool(
-                        buffers, &scalar, complex,
-                    )?));
-                }
-                (
-                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
-                    TensorRead::View(TensorView::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let complex = complex.as_view();
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_add_view_with_pool(
-                        buffers, &complex, &scalar,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                    TensorRead::Tensor(Tensor::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_tensor(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_add_view_with_pool(
-                        buffers, complex, &scalar,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                    TensorRead::View(TensorView::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_add_view_with_pool(
-                        buffers, complex, &scalar,
-                    )?));
-                }
-                _ => {}
-            }
-        };
-    }
-
-    dispatch_real_complex_scalar!(F32, C32);
-    dispatch_real_complex_scalar!(F64, C64);
-
-    dispatch!(F32, typed_add_view_with_pool);
-    dispatch!(F64, typed_add_view_with_pool);
-    dispatch!(I32, typed_wrapping_add_view_with_pool);
-    dispatch!(I64, typed_wrapping_add_view_with_pool);
-    dispatch!(C32, typed_add_view_with_pool);
-    dispatch!(C64, typed_add_view_with_pool);
+    dispatch_read_presets!(
+        buffers,
+        lhs,
+        rhs,
+        typed_add_view_with_pool,
+        typed_wrapping_add_view_with_pool
+    );
 
     Err(read_pair_error("add", lhs, rhs))
 }
@@ -595,113 +609,13 @@ pub fn sub_read_with_pool(
         return sub_with_pool(buffers, lhs, rhs);
     }
 
-    macro_rules! dispatch {
-        ($variant:ident, $func:ident) => {
-            match (&lhs, &rhs) {
-                (
-                    TensorRead::Tensor(Tensor::$variant(a)),
-                    TensorRead::View(TensorView::$variant(b)),
-                ) => {
-                    let a = a.as_view();
-                    return Ok(Tensor::$variant($func(buffers, &a, b)?));
-                }
-                (
-                    TensorRead::View(TensorView::$variant(a)),
-                    TensorRead::Tensor(Tensor::$variant(b)),
-                ) => {
-                    let b = b.as_view();
-                    return Ok(Tensor::$variant($func(buffers, a, &b)?));
-                }
-                (
-                    TensorRead::View(TensorView::$variant(a)),
-                    TensorRead::View(TensorView::$variant(b)),
-                ) => {
-                    return Ok(Tensor::$variant($func(buffers, a, b)?));
-                }
-                _ => {}
-            }
-        };
-    }
-
-    macro_rules! dispatch_real_complex_scalar {
-        ($real_variant:ident, $complex_variant:ident) => {
-            match (&lhs, &rhs) {
-                (
-                    TensorRead::Tensor(Tensor::$real_variant(real)),
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_tensor(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
-                        buffers, &scalar, complex,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$real_variant(real)),
-                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    let complex = complex.as_view();
-                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
-                        buffers, &scalar, &complex,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$real_variant(real)),
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
-                        buffers, &scalar, complex,
-                    )?));
-                }
-                (
-                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
-                    TensorRead::View(TensorView::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let complex = complex.as_view();
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
-                        buffers, &complex, &scalar,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                    TensorRead::Tensor(Tensor::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_tensor(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
-                        buffers, complex, &scalar,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                    TensorRead::View(TensorView::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
-                        buffers, complex, &scalar,
-                    )?));
-                }
-                _ => {}
-            }
-        };
-    }
-
-    dispatch_real_complex_scalar!(F32, C32);
-    dispatch_real_complex_scalar!(F64, C64);
-
-    dispatch!(F32, typed_sub_view_with_pool);
-    dispatch!(F64, typed_sub_view_with_pool);
-    dispatch!(I32, typed_wrapping_sub_view_with_pool);
-    dispatch!(I64, typed_wrapping_sub_view_with_pool);
-    dispatch!(C32, typed_sub_view_with_pool);
-    dispatch!(C64, typed_sub_view_with_pool);
+    dispatch_read_presets!(
+        buffers,
+        lhs,
+        rhs,
+        typed_sub_view_with_pool,
+        typed_wrapping_sub_view_with_pool
+    );
 
     Err(read_pair_error("sub", lhs, rhs))
 }
@@ -787,113 +701,13 @@ pub fn mul_read_with_pool(
         return mul_with_pool(buffers, lhs, rhs);
     }
 
-    macro_rules! dispatch {
-        ($variant:ident, $func:ident) => {
-            match (&lhs, &rhs) {
-                (
-                    TensorRead::Tensor(Tensor::$variant(a)),
-                    TensorRead::View(TensorView::$variant(b)),
-                ) => {
-                    let a = a.as_view();
-                    return Ok(Tensor::$variant($func(buffers, &a, b)?));
-                }
-                (
-                    TensorRead::View(TensorView::$variant(a)),
-                    TensorRead::Tensor(Tensor::$variant(b)),
-                ) => {
-                    let b = b.as_view();
-                    return Ok(Tensor::$variant($func(buffers, a, &b)?));
-                }
-                (
-                    TensorRead::View(TensorView::$variant(a)),
-                    TensorRead::View(TensorView::$variant(b)),
-                ) => {
-                    return Ok(Tensor::$variant($func(buffers, a, b)?));
-                }
-                _ => {}
-            }
-        };
-    }
-
-    macro_rules! dispatch_real_complex_scalar {
-        ($real_variant:ident, $complex_variant:ident) => {
-            match (&lhs, &rhs) {
-                (
-                    TensorRead::Tensor(Tensor::$real_variant(real)),
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_tensor(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
-                        buffers, &scalar, complex,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$real_variant(real)),
-                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    let complex = complex.as_view();
-                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
-                        buffers, &scalar, &complex,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$real_variant(real)),
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
-                        buffers, &scalar, complex,
-                    )?));
-                }
-                (
-                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
-                    TensorRead::View(TensorView::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let complex = complex.as_view();
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
-                        buffers, &complex, &scalar,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                    TensorRead::Tensor(Tensor::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_tensor(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
-                        buffers, complex, &scalar,
-                    )?));
-                }
-                (
-                    TensorRead::View(TensorView::$complex_variant(complex)),
-                    TensorRead::View(TensorView::$real_variant(real)),
-                ) if real.shape().is_empty() => {
-                    let scalar = complex_scalar_tensor_from_view(real)?;
-                    let scalar = scalar.as_view();
-                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
-                        buffers, complex, &scalar,
-                    )?));
-                }
-                _ => {}
-            }
-        };
-    }
-
-    dispatch_real_complex_scalar!(F32, C32);
-    dispatch_real_complex_scalar!(F64, C64);
-
-    dispatch!(F32, typed_mul_view_with_pool);
-    dispatch!(F64, typed_mul_view_with_pool);
-    dispatch!(I32, typed_wrapping_mul_view_with_pool);
-    dispatch!(I64, typed_wrapping_mul_view_with_pool);
-    dispatch!(C32, typed_mul_view_with_pool);
-    dispatch!(C64, typed_mul_view_with_pool);
+    dispatch_read_presets!(
+        buffers,
+        lhs,
+        rhs,
+        typed_mul_view_with_pool,
+        typed_wrapping_mul_view_with_pool
+    );
 
     binary_read_with_pool("mul", buffers, lhs, rhs, mul_with_pool)
 }

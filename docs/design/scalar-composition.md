@@ -188,7 +188,12 @@ implement, and the proof crate's scalar implementing `Scalar` and
 `ScalarArithmetic` for itself so the contract has an external consumer. The
 external scalar reaches `ad_admission` and is rejected explicitly
 (`AdRuleUnavailable` at first order, `UnsupportedAdOrder` above it) rather than
-receiving a zero gradient. Still outstanding in 1b: the shared erased dispatch.
+receiving a zero gradient. The shared erased dispatch followed: `elementwise.rs` now declares the
+variant-to-kernel dispatch once (`dispatch_read_same_variant`,
+`dispatch_read_real_complex_scalar`) and the preset variant list once
+(`dispatch_read_presets`), so `add`, `sub`, and `mul` supply only their
+kernel rather than three copies of the matching code. Stage 1b is complete;
+Stage 2 is next.
 
 The slice must exercise: typed construction, shared and mutable borrowing, one
 binary operation, one reduction, and one explicit precision-reducing conversion.
