@@ -1182,3 +1182,11 @@ Hadamard product, which the table lists beside the outer product. The label-driv
 evaluate it, because a label the output names is not summed, but "should" is what this session keeps
 finding to be wrong. It was right this time: `ij,ij->ij` multiplies elementwise and the test with
 hand-written values passes, so the row is now covered by evidence rather than by inference.
+
+## The CI profiles run late rather than assumed
+
+Two profiles had not been run since early in the session: `extensions`, which builds and tests the
+workspace-excluded crates (`ext/tropical` with autodiff, `ext/sparse`, `tenferro-cpu-tblis`) and the
+samples, and `blas-inject`, which exercises the injected BLAS provider. Both touch the tag and value
+changes this branch made, so both were worth re-running rather than listing as CI's business. The
+`extensions` profile passes: the excluded crates and both samples build and test green on this head.
