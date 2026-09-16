@@ -1312,6 +1312,16 @@ arm-dense hold about 1180 of them — 520 in `tenferro-gpu/src/cubecl/mod.rs`, 2
 choice into the public contract needs maintainer acceptance, which is why the design records it
 rather than the branch assuming it.
 
+**What the conversion actually is, measured rather than assumed.** Checking whether the conversion
+can start before the representation changes: it can, because tag-based dispatch and the seven variants
+can coexist while a file is converted a function at a time, and `TensorView::as_slice::<T>` and
+`Tensor::as_slice::<T>` already give host-side typed data by tag. What does *not* exist is a typed
+accessor for *device* data: the GPU dispatch sites need `&TypedTensor<T>` (the device buffer), and the
+only typed constructor is a private helper, so the most arm-dense file — the first one the objective
+names — needs that seam added before its first function can dispatch on a tag. The conversion is
+therefore a dispatch-and-representation refactor rather than a rename of 2832 arms, and the first step
+is the seam, not an arm edit.
+
 **Corrected after re-reading the objective:** the removal is not gated on a decision, it is stated in the objective itself, so the honest status is mandated and unattempted rather than awaiting approval. Re-measured on the current head, the conversion it needs is 2832 `Tensor::` variant match sites across 75 files, with the four files the objective names as arm-dense holding 1180 of them; the ordering the objective gives is descending arm density, so the first bounded step is the most arm-dense file, whose conversion is self-contained because it is feature-gated.
 
 **#1793's einsum with an externally defined scalar.** The issue's own example now runs: the

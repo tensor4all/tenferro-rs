@@ -1293,3 +1293,18 @@ so the first bounded step is the most arm-dense file, and that conversion is sel
 file sits behind the GPU features. I have not started it: a partial conversion of that size would leave
 the branch broken across many working sessions, and the honest report of a measured, unattempted
 mandate is worth more than a half-converted tree.
+
+## What the mandated conversion actually costs, checked rather than assumed
+
+I had described the variant removal as 2832 arm edits, and that description is wrong in a way that
+matters. Measured this turn: tag-based dispatch and the seven variants can coexist, so a file can be
+converted a function at a time and stay green; and the host-side typed data is already reachable by tag,
+because `TensorView::as_slice::<T>` and `Tensor::as_slice::<T>` exist. What does not exist is a typed
+accessor for device data. The GPU dispatch sites extract `&TypedTensor<T>` — the device buffer, not a
+host slice — and the only typed constructor is a private helper, so the most arm-dense file, which the
+objective names first, cannot dispatch on a tag until that seam exists.
+
+So the first step is a public typed accessor, not an arm edit, and the conversion is a refactor of the
+dispatch surface rather than a rename. That is a smaller thing than 2832 mechanical edits and a larger
+thing than starting anywhere: it is the seam that makes the rest mechanical, and the objective's
+ordering means the seam comes first because the densest file needs it.
