@@ -6130,91 +6130,183 @@ impl TensorIndexing for CudaBackend {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor> {
-        match (input, starts) {
-            (Tensor::F32(input), Tensor::F32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+        match (input.dtype(), starts.dtype()) {
+            (DType::F32, DType::F32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<f32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::F32),
-            (Tensor::F64(input), Tensor::F32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::F64, DType::F32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<f64>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::F64),
-            (Tensor::C32(input), Tensor::F32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::C32, DType::F32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<Complex32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::C32),
-            (Tensor::C64(input), Tensor::F32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::C64, DType::F32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<Complex64>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::C64),
-            (Tensor::I32(input), Tensor::F32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::I32, DType::F32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<i32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::I32),
-            (Tensor::F32(input), Tensor::F64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::F32, DType::F64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<f32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::F32),
-            (Tensor::F64(input), Tensor::F64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::F64, DType::F64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<f64>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::F64),
-            (Tensor::C32(input), Tensor::F64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::C32, DType::F64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<Complex32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::C32),
-            (Tensor::C64(input), Tensor::F64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::C64, DType::F64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<Complex64>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::C64),
-            (Tensor::I32(input), Tensor::F64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::I32, DType::F64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<i32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::I32),
-            (Tensor::F32(input), Tensor::I32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::F32, DType::I32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<f32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::F32),
-            (Tensor::F64(input), Tensor::I32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::F64, DType::I32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<f64>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::F64),
-            (Tensor::C32(input), Tensor::I32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::C32, DType::I32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<Complex32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::C32),
-            (Tensor::C64(input), Tensor::I32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::C64, DType::I32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<Complex64>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::C64),
-            (Tensor::I32(input), Tensor::I32(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::I32, DType::I32) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<i32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::I32),
-            (Tensor::F32(input), Tensor::I64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::F32, DType::I64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<f32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::F32),
-            (Tensor::F64(input), Tensor::I64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::F64, DType::I64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<f64>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::F64),
-            (Tensor::C32(input), Tensor::I64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::C32, DType::I64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<Complex32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::C32),
-            (Tensor::C64(input), Tensor::I64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::C64, DType::I64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<Complex64>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::C64),
-            (Tensor::I32(input), Tensor::I64(starts)) => self
-                .dynamic_slice_typed(input, starts, slice_sizes)
+            (DType::I32, DType::I64) => self
+                .dynamic_slice_typed(
+                    typed_or_unsupported::<i32>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::I32),
-            (Tensor::Bool(input), Tensor::I32(starts)) => self
-                .dynamic_slice_bool(input, starts, slice_sizes)
+            (DType::Bool, DType::I32) => self
+                .dynamic_slice_bool(
+                    typed_or_unsupported::<bool>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::Bool),
-            (Tensor::Bool(input), Tensor::I64(starts)) => self
-                .dynamic_slice_bool(input, starts, slice_sizes)
+            (DType::Bool, DType::I64) => self
+                .dynamic_slice_bool(
+                    typed_or_unsupported::<bool>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::Bool),
-            (Tensor::Bool(input), Tensor::F32(starts)) => self
-                .dynamic_slice_bool(input, starts, slice_sizes)
+            (DType::Bool, DType::F32) => self
+                .dynamic_slice_bool(
+                    typed_or_unsupported::<bool>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::Bool),
-            (Tensor::Bool(input), Tensor::F64(starts)) => self
-                .dynamic_slice_bool(input, starts, slice_sizes)
+            (DType::Bool, DType::F64) => self
+                .dynamic_slice_bool(
+                    typed_or_unsupported::<bool>(input, "dynamic_slice")?,
+                    typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
+                    slice_sizes,
+                )
                 .map(Tensor::Bool),
-            (_, Tensor::Bool(_)) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_)) => {
-                Err(unsupported_dtype("dynamic_slice", starts.dtype()))
-            }
-            (Tensor::I64(_), _) => Err(unsupported_dtype("dynamic_slice", input.dtype())),
+            (_, DType::Bool) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
+            (_, DType::C32 | DType::C64) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
+            (DType::I64, _) => Err(unsupported_dtype("dynamic_slice", input.dtype())),
             // A caller-owned payload has no GPU implementation for this operation.
-            (Tensor::External(..), _) | (_, Tensor::External(..)) => {
-                Err(crate::Error::unsupported(
-                    "dynamic_slice",
-                    "an externally defined payload is not supported by this GPU operation",
-                ))
-            }
+            (DType::External(_), _) | (_, DType::External(_)) => Err(crate::Error::unsupported(
+                "dynamic_slice",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
     }
 
