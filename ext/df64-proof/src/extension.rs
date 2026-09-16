@@ -369,6 +369,176 @@ impl ExtensionOp for Df64ToF64 {
     }
 }
 
+/// Reverse-mode adjoint of the reduced QR factorization.
+///
+/// The adjoint is a numerical body of its own: it needs a triangular solve against the
+/// primal factor, so it is an operation rather than a graph of preset operations, which
+/// a scalar tenferro does not declare could not execute anyway.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::extension::Df64QrVjp;
+/// use tenferro_ad::extension::ExtensionOp;
+///
+/// // A loss that depends on the triangular factor alone supplies one cotangent.
+/// let adjoint = Df64QrVjp::of(false, true);
+/// assert_eq!(<Df64QrVjp as ExtensionOp>::input_count(&adjoint), 3);
+/// assert_eq!(<Df64QrVjp as ExtensionOp>::output_count(&adjoint), 1);
+/// assert_eq!(
+///     <Df64QrVjp as ExtensionOp>::input_count(&Df64QrVjp::of(true, true)),
+///     4
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Df64QrVjp {
+    /// Whether the caller supplied the factor's cotangent.
+    pub has_q: bool,
+    /// Whether the caller supplied the triangular factor's cotangent.
+    pub has_r: bool,
+}
+
+impl Df64QrVjp {
+    /// Construct the adjoint for one cotangent availability.
+    #[must_use]
+    pub const fn of(has_q: bool, has_r: bool) -> Self {
+        Self { has_q, has_r }
+    }
+}
+
+impl ExtensionOp for Df64QrVjp {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write_u8(u8::from(self.has_q) | (u8::from(self.has_r) << 1));
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| other.has_q == self.has_q && other.has_r == self.has_r)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(*self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        // The primal factors, plus one cotangent per available output.
+        2 + usize::from(self.has_q) + usize::from(self.has_r)
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    fn scalar_identity(&self) -> Option<&'static str> {
+        Some(DF64_SCALAR_IDENTITY)
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        if !matches!(dtype, DType::External(_)) {
+            return Err(tenferro_tensor::Error::unsupported_dtype(
+                "df64_qr_vjp",
+                dtype,
+                "df64_qr_vjp takes an externally defined scalar",
+            ));
+        }
+        Ok(vec![(dtype, ctx.input_shape(0)?.to_vec())])
+    }
+}
+
+/// Forward-mode tangent of the reduced QR factorization.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::extension::Df64QrJvp;
+/// use tenferro_ad::extension::ExtensionOp;
+///
+/// assert_eq!(<Df64QrJvp as ExtensionOp>::input_count(&Df64QrJvp), 3);
+/// assert_eq!(<Df64QrJvp as ExtensionOp>::output_count(&Df64QrJvp), 2);
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Df64QrJvp;
+
+impl ExtensionOp for Df64QrJvp {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(*self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        3
+    }
+
+    fn output_count(&self) -> usize {
+        2
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    fn scalar_identity(&self) -> Option<&'static str> {
+        Some(DF64_SCALAR_IDENTITY)
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        if !matches!(dtype, DType::External(_)) {
+            return Err(tenferro_tensor::Error::unsupported_dtype(
+                "df64_qr_jvp",
+                dtype,
+                "df64_qr_jvp takes an externally defined scalar",
+            ));
+        }
+        Ok(vec![
+            (dtype, ctx.input_shape(0)?.to_vec()),
+            (dtype, ctx.input_shape(1)?.to_vec()),
+        ])
+    }
+}
+
 /// The externally defined element type of the contribution's scalar.
 ///
 /// This is what the runtime tag reports, next to the canonical identity.
@@ -678,6 +848,83 @@ fn owned_f64_read(read: &TensorRead<'_>) -> tenferro_runtime::Result<Tensor> {
     })
 }
 
+/// Resolve every input of an operation.
+///
+/// A borrowed read is materialized in one pass first, so the session borrow does not
+/// have to outlive the resolved inputs.
+fn inputs_of<'a>(
+    op: &'static str,
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &'a [TensorRead<'a>],
+) -> tenferro_runtime::Result<Vec<Input<'a>>> {
+    let borrowed = inputs
+        .iter()
+        .any(|read| matches!(read, TensorRead::View(_)));
+    if borrowed && session.is_none() {
+        return Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "input",
+                "the operation needs a session to read a borrowed input",
+            ),
+        ));
+    }
+    let mut materialized: Vec<Option<Tensor>> = (0..inputs.len()).map(|_| None).collect();
+    if let Some(session) = session {
+        for (index, read) in inputs.iter().enumerate() {
+            if matches!(read, TensorRead::View(_)) {
+                materialized[index] = Some(
+                    session
+                        .to_contiguous_read(read.clone())
+                        .map_err(tenferro_runtime::Error::from)?,
+                );
+            }
+        }
+    }
+    let mut resolved = Vec::with_capacity(inputs.len());
+    for (read, owned) in inputs.iter().zip(materialized) {
+        resolved.push(match (read, owned) {
+            (TensorRead::Tensor(tensor), _) => Input::Borrowed(tensor),
+            (TensorRead::View(_), Some(tensor)) => Input::Materialized(Box::new(tensor)),
+            (TensorRead::View(_), None) => {
+                return Err(tenferro_runtime::Error::from(
+                    tenferro_tensor::Error::invalid_argument(
+                        op,
+                        "input",
+                        "the operation needs a session to read a borrowed input",
+                    ),
+                ));
+            }
+        });
+    }
+    Ok(resolved)
+}
+
+/// Resolve one input to a borrow or to materialized storage.
+fn resolve_input<'a>(
+    op: &'static str,
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    read: &TensorRead<'a>,
+) -> tenferro_runtime::Result<Input<'a>> {
+    match read {
+        TensorRead::Tensor(tensor) => Ok(Input::Borrowed(tensor)),
+        view @ TensorRead::View(_) => match session {
+            Some(session) => Ok(Input::Materialized(Box::new(
+                session
+                    .to_contiguous_read(view.clone())
+                    .map_err(tenferro_runtime::Error::from)?,
+            ))),
+            None => Err(tenferro_runtime::Error::from(
+                tenferro_tensor::Error::invalid_argument(
+                    op,
+                    "input",
+                    "the operation needs a session to read a borrowed input",
+                ),
+            )),
+        },
+    }
+}
+
 /// Resolve the single input every operation in this crate takes.
 ///
 /// The reverse pass can hand an operation a borrowed view of another value, so a
@@ -689,25 +936,138 @@ fn sole_input<'a>(
     inputs: &'a [TensorRead<'a>],
 ) -> tenferro_runtime::Result<Input<'a>> {
     match inputs.first() {
-        Some(TensorRead::Tensor(tensor)) => Ok(Input::Borrowed(tensor)),
-        Some(read @ TensorRead::View(_)) => match session {
-            Some(session) => Ok(Input::Materialized(Box::new(
-                session
-                    .to_contiguous_read(read.clone())
-                    .map_err(tenferro_runtime::Error::from)?,
-            ))),
-            None => Err(tenferro_runtime::Error::from(
-                tenferro_tensor::Error::invalid_argument(
-                    op,
-                    "input",
-                    "the operation needs a session to read a borrowed input",
-                ),
-            )),
-        },
+        Some(read) => resolve_input(op, session, read),
         None => Err(tenferro_runtime::Error::from(
             tenferro_tensor::Error::invalid_argument(op, "input", "the operation takes one input"),
         )),
     }
+}
+
+/// Read one externally defined dense matrix from a tensor.
+fn matrix_of(op: &'static str, tensor: &Tensor) -> tenferro_runtime::Result<crate::dense::Matrix> {
+    let invalid = |message: &'static str| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
+            op, "input", message,
+        ))
+    };
+    let payload = external_payload::<Df64>(op, tensor).map_err(tenferro_runtime::Error::from)?;
+    let [rows, columns] = match tensor.shape() {
+        [rows, columns] => [*rows, *columns],
+        _ => return Err(invalid("the operation takes a rank-2 matrix")),
+    };
+    if payload.as_slice().len() != rows * columns {
+        return Err(invalid("the operation takes a dense column-major matrix"));
+    }
+    Ok(crate::dense::Matrix::new(rows, payload.as_slice().to_vec()))
+}
+
+/// Wrap one dense matrix as an externally defined tensor.
+fn tensor_of(op: &'static str, matrix: crate::dense::Matrix) -> tenferro_runtime::Result<Tensor> {
+    let columns = matrix.columns();
+    let host = HostTensor::from_vec_col_major(vec![matrix.rows, columns], matrix.data).map_err(
+        |source| {
+            tenferro_runtime::Error::from(tenferro_tensor::Error::runtime_state_source(op, source))
+        },
+    )?;
+    Ok(Tensor::external(ErasedHostTensor::new(host)))
+}
+
+/// Reverse-mode adjoint of the reduced QR factorization.
+///
+/// The adjoint of `A = Q R` for full column rank `A` is
+/// `A_bar = (Q_bar + Q copyltu(R R_bar^T - Q_bar^T Q)) R^{-T}`, evaluated in the
+/// external scalar, so the derivative keeps the factorization's precision.
+fn qr_vjp_of(
+    mask: (bool, bool),
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let op = "df64_qr_vjp";
+    let (has_q, has_r) = mask;
+    let resolved = inputs_of(op, session, inputs)?;
+    if resolved.len() != 2 + usize::from(has_q) + usize::from(has_r) {
+        return Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "input",
+                "the adjoint takes Q, R, and both cotangents",
+            ),
+        ));
+    }
+    let q = matrix_of(op, resolved[0].tensor())?;
+    let r = matrix_of(op, resolved[1].tensor())?;
+    let mut next = 2;
+    // An absent cotangent is the zero cotangent, which is what an inactive derivative
+    // means.
+    let q_bar = if has_q {
+        let matrix = matrix_of(op, resolved[next].tensor())?;
+        next += 1;
+        matrix
+    } else {
+        crate::dense::zeros(q.rows, q.columns())
+    };
+    let r_bar = if has_r {
+        matrix_of(op, resolved[next].tensor())?
+    } else {
+        crate::dense::zeros(r.rows, r.columns())
+    };
+
+    let q_bar_transposed = crate::dense::transpose(&q_bar);
+    let m = crate::dense::subtract(
+        &crate::dense::multiply(&r, &crate::dense::transpose(&r_bar)),
+        &crate::dense::multiply(&q_bar_transposed, &q),
+    );
+    // copyltu(M) is the lower triangle plus the strict lower triangle transposed.
+    let s = crate::dense::add(
+        &crate::dense::lower_triangle(&m),
+        &crate::dense::transpose(&crate::dense::strictly_lower_triangle(&m)),
+    );
+    let b = crate::dense::add(&q_bar, &crate::dense::multiply(&q, &s));
+    let a_bar = crate::dense::solve_upper_from_the_right(&r, &b).ok_or_else(|| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
+            op,
+            "input",
+            "the adjoint needs an invertible triangular factor",
+        ))
+    })?;
+    Ok(vec![tensor_of(op, a_bar)?])
+}
+
+/// Forward-mode tangent of the reduced QR factorization.
+///
+/// With `A = Q R`, the tangent satisfies
+/// `R_dot = triu(Q^T A_dot) R` and `Q_dot = (A_dot - Q R_dot) R^{-1}`, so the forward
+/// rule emits both tangent outputs from the primal factors.
+fn qr_jvp_of(
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let op = "df64_qr_jvp";
+    let resolved = inputs_of(op, session, inputs)?;
+    if resolved.len() != 3 {
+        return Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "input",
+                "the tangent takes Q, R, and the input tangent",
+            ),
+        ));
+    }
+    let q = matrix_of(op, resolved[0].tensor())?;
+    let r = matrix_of(op, resolved[1].tensor())?;
+    let a_dot = matrix_of(op, resolved[2].tensor())?;
+
+    let m = crate::dense::multiply(&crate::dense::transpose(&q), &a_dot);
+    let r_dot = crate::dense::multiply(&crate::dense::upper_triangle(&m), &r);
+    let residual = crate::dense::subtract(&a_dot, &crate::dense::multiply(&q, &r_dot));
+    let q_dot = crate::dense::solve_upper_from_the_right(&r, &residual).ok_or_else(|| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
+            op,
+            "input",
+            "the tangent needs an invertible triangular factor",
+        ))
+    })?;
+    Ok(vec![tensor_of(op, q_dot)?, tensor_of(op, r_dot)?])
 }
 
 /// Fill a tensor of `shape` with the scalar input's value.
@@ -763,6 +1123,10 @@ enum Df64Body {
     ToF64,
     /// Widen a preset `f64` tensor into the external scalar.
     FromF64,
+    /// The adjoint of the factorization, with the cotangents the caller supplied.
+    QrVjp((bool, bool)),
+    /// The tangent of the factorization.
+    QrJvp,
 }
 
 impl Df64Body {
@@ -777,6 +1141,8 @@ impl Df64Body {
             Self::Qr => qr_of(session, inputs),
             Self::ToF64 => to_f64_of(session, inputs),
             Self::FromF64 => from_f64_of(session, inputs),
+            Self::QrVjp(mask) => qr_vjp_of(*mask, session, inputs),
+            Self::QrJvp => qr_jvp_of(session, inputs),
         }
     }
 }
@@ -860,6 +1226,10 @@ impl ExtensionEngine for Df64Engine {
             Df64Body::ToF64
         } else if operation.downcast_ref::<Df64FromF64>().is_some() {
             Df64Body::FromF64
+        } else if let Some(adjoint) = operation.downcast_ref::<Df64QrVjp>() {
+            Df64Body::QrVjp((adjoint.has_q, adjoint.has_r))
+        } else if operation.downcast_ref::<Df64QrJvp>().is_some() {
+            Df64Body::QrJvp
         } else {
             Df64Body::Total
         };

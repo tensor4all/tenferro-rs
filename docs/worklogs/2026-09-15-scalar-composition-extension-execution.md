@@ -362,3 +362,23 @@ discarded low component, and the widening program differentiates into an ordinar
 
 Workspace after this: 5272 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy clean under `-D warnings` and the strict doc lints.
+
+## The connected QR program
+
+#1790's second checkpoint now runs: `Df64 input -> QR -> narrow -> ordinary f64 loss`
+differentiates back into the external scalar as `[[6], [8]]` for `A = [[3], [4]]`, which
+is the orientation case #1790 states. The forward tangent of the same graph is `3` for
+the first unit direction and leaves as an ordinary `f64` value.
+
+Both derivative directions are the contribution's own operations (`Df64QrVjp`,
+`Df64QrJvp`) because both need a triangular solve in the external scalar. The adjoint's
+payload records which cotangents are present, so a loss that depends on one factor still
+differentiates.
+
+The development found a real bug in my own adjoint body: it subtracted `Q^T Q` instead
+of `Q_bar^T Q`. Measuring the adjoint *in isolation* first showed a factor of `0.98` that
+depended on the data, which localized the fault to the body rather than to the rule or
+the cotangent plumbing; the connected test then verified the whole graph.
+
+Workspace after this: 5277 passed, 3 failed (the same pre-existing `trybuild`
+failures), clippy clean under `-D warnings` and the strict doc lints.

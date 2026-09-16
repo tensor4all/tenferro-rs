@@ -187,3 +187,70 @@ fn the_arithmetic_refines_beyond_f64_precision() {
     let f64_residual = (1.0_f64 / 3.0) * 3.0 - 1.0;
     assert_eq!(f64_residual, 0.0, "f64 saw a residual it cannot represent");
 }
+
+#[test]
+fn the_adjoint_of_the_factorization_matches_the_analytic_gradient() {
+    use tenferro_df64_proof::extension::Df64QrVjp;
+
+    // dL/dA for L = R[0,0]^2 at A = [[3], [4]] is 2 R A / |A| = [[6], [8]].
+    let q = vec![
+        Df64::from_f64(3.0).ratio(Df64::from_f64(5.0)),
+        Df64::from_f64(4.0).ratio(Df64::from_f64(5.0)),
+    ];
+    let r = vec![Df64::from_f64(5.0)];
+    let r_bar = vec![Df64::from_f64(10.0)];
+
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
+        .expect("register the CPU engine");
+    builder
+        .install_extension_module(tenferro_df64_proof::extension::module().expect("module"))
+        .expect("install the Df64 module");
+    let runtime = builder.build().expect("runtime");
+
+    let dtype = DType::External(std::any::TypeId::of::<Df64>());
+    let q_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(q.clone(), vec![2, 1]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced Q");
+    let r_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(r, vec![1, 1]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced R");
+    let r_bar_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(r_bar, vec![1, 1]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced cotangent");
+    assert_eq!(q_leaf.dtype, dtype);
+
+    // The adjoint is told that only the triangular factor carries a cotangent.
+    let adjoint = apply(
+        Arc::new(tenferro_df64_proof::extension::Df64QrVjp::of(false, true)),
+        &[&q_leaf, &r_leaf, &r_bar_leaf],
+    )
+    .expect("traced adjoint");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&adjoint[0]).expect("compiled adjoint");
+    let results = runtime
+        .run_compiled(&program, &[])
+        .expect("executed adjoint");
+    let gradient = payload(&results[0]);
+    assert_eq!(gradient.len(), 2);
+    assert!(
+        (gradient[0] - Df64::from_f64(6.0)).abs_hi() < 1e-30,
+        "the adjoint is {gradient:?}"
+    );
+    assert!(
+        (gradient[1] - Df64::from_f64(8.0)).abs_hi() < 1e-30,
+        "the adjoint is {gradient:?}"
+    );
+    assert_eq!(
+        <Df64QrVjp as ExtensionOp>::input_count(&Df64QrVjp::of(false, true)),
+        3
+    );
+}

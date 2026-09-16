@@ -15,7 +15,9 @@
 #![deny(missing_docs)]
 
 pub mod ad;
+
 pub mod conversion;
+mod dense;
 pub mod extension;
 
 tenferro_tensor_core::define_scalar_set! {

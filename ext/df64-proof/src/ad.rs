@@ -16,7 +16,9 @@ use tenferro_ad::semantic_extension::{
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_runtime::program::SemanticProgramBuilder;
 
-use crate::extension::{Df64Expand, Df64FromF64, Df64Qr, Df64ToF64, Df64Total, DF64_OPS_FAMILY};
+use crate::extension::{
+    Df64Expand, Df64FromF64, Df64Qr, Df64QrJvp, Df64QrVjp, Df64ToF64, Df64Total, DF64_OPS_FAMILY,
+};
 
 /// One operation of the contribution's family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +33,10 @@ enum Df64Op {
     ToF64,
     /// The widening conversion from `f64`.
     FromF64,
+    /// The factorization's adjoint.
+    QrVjp,
+    /// The factorization's tangent.
+    QrJvp,
 }
 
 impl Df64Op {
@@ -47,6 +53,10 @@ impl Df64Op {
             Some(Self::ToF64)
         } else if any.downcast_ref::<Df64FromF64>().is_some() {
             Some(Self::FromF64)
+        } else if any.downcast_ref::<Df64QrVjp>().is_some() {
+            Some(Self::QrVjp)
+        } else if any.downcast_ref::<Df64QrJvp>().is_some() {
+            Some(Self::QrJvp)
         } else {
             None
         }
@@ -97,7 +107,9 @@ impl SemanticPrimalVjpRule for Df64VjpRule {
     }
 
     fn residual_mask(&self) -> ResidualSpec {
-        ResidualSpec::none()
+        // The union over the family: the factorization's adjoint reads its primal
+        // factors, and the other operations read nothing.
+        ResidualSpec::all_outputs()
     }
 
     fn primal_vjp(
@@ -114,12 +126,12 @@ impl SemanticPrimalVjpRule for Df64VjpRule {
             )),
         })?;
         let inactive = || vec![AdValue::Absent; request.primal_input_count()].into_boxed_slice();
-        let Some(AdValue::Value(cotangent)) = request.cotangent_outputs().first().copied() else {
-            return Ok(inactive());
-        };
-
         let emitted = match op {
             Df64Op::Total => {
+                let Some(AdValue::Value(cotangent)) = request.cotangent_outputs().first().copied()
+                else {
+                    return Ok(inactive());
+                };
                 // The adjoint places the cotangent back into the input's shape, which
                 // the broadcast payload carries, so the shape is read from the primal
                 // input's metadata.
@@ -127,9 +139,47 @@ impl SemanticPrimalVjpRule for Df64VjpRule {
                 builder.add_extension(Arc::new(Df64Expand::new(shape)), &[cotangent])
             }
             // A linear conversion's adjoint is the opposite conversion.
-            Df64Op::ToF64 => builder.add_extension(Arc::new(Df64FromF64), &[cotangent]),
-            Df64Op::FromF64 => builder.add_extension(Arc::new(Df64ToF64), &[cotangent]),
-            Df64Op::Expand | Df64Op::Qr => return Err(unsupported(op, role)),
+            Df64Op::ToF64 | Df64Op::FromF64 => {
+                let Some(AdValue::Value(cotangent)) = request.cotangent_outputs().first().copied()
+                else {
+                    return Ok(inactive());
+                };
+                let operation = if op == Df64Op::ToF64 {
+                    Arc::new(Df64FromF64) as Arc<dyn ExtensionOp>
+                } else {
+                    Arc::new(Df64ToF64) as Arc<dyn ExtensionOp>
+                };
+                builder.add_extension(operation, &[cotangent])
+            }
+            Df64Op::Qr => {
+                // A loss need not depend on both factors, so the adjoint is told which
+                // cotangents are present and reads the primal factors it needs.
+                let has_q = matches!(request.cotangent_outputs().first(), Some(AdValue::Value(_)));
+                let has_r = matches!(request.cotangent_outputs().get(1), Some(AdValue::Value(_)));
+                if !has_q && !has_r {
+                    return Ok(inactive());
+                }
+                let mut operands = vec![
+                    request.primal_output_value(0)?,
+                    request.primal_output_value(1)?,
+                ];
+                for (present, cotangent) in [
+                    (has_q, request.cotangent_outputs().first().copied()),
+                    (has_r, request.cotangent_outputs().get(1).copied()),
+                ] {
+                    if !present {
+                        continue;
+                    }
+                    match cotangent {
+                        Some(AdValue::Value(value)) => operands.push(value),
+                        _ => return Ok(inactive()),
+                    }
+                }
+                builder.add_extension(Arc::new(Df64QrVjp::of(has_q, has_r)), &operands)
+            }
+            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp => {
+                return Err(unsupported(op, role));
+            }
         }
         .map_err(SemanticAdError::Build)?;
 
@@ -206,7 +256,31 @@ impl SemanticLinearizeRule for Df64LinearizeRule {
                 };
                 (operation, tangent.into_iter().collect())
             }
-            Df64Op::Expand | Df64Op::Qr => return Err(unsupported(op, role)),
+            Df64Op::Qr => {
+                // The tangent of the factorization is its own body: it needs both primal
+                // factors and the input tangent, so the rule emits one operation.
+                let Some(tangent) = request
+                    .tangent_inputs()
+                    .first()
+                    .and_then(|value| value.value())
+                else {
+                    let inactive = (0..request.primal_outputs().len())
+                        .map(|_| AdValue::Absent)
+                        .collect::<Vec<_>>();
+                    return Ok(SemanticLinearizeResult::new(inactive, Vec::new()));
+                };
+                (
+                    Arc::new(Df64QrJvp) as Arc<dyn ExtensionOp>,
+                    vec![
+                        request.primal_outputs()[0],
+                        request.primal_outputs()[1],
+                        tangent,
+                    ],
+                )
+            }
+            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp => {
+                return Err(unsupported(op, role));
+            }
         };
         if tangents.is_empty() {
             let inactive = (0..request.primal_outputs().len())

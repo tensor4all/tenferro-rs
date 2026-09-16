@@ -838,6 +838,35 @@ instead of running.
   `f64` gradient of `[6, 8]` for the input `[3, 4]`, so the graph's dtype boundary is
   respected in both directions.
 
+### 5.8 The differentiated factorization and the connected QR program
+
+#1790's second checkpoint is the connected program `Df64 input -> QR -> f64 loss` with
+the gradient flowing back into the external scalar. It runs.
+
+The reverse rule needs the adjoint of `A = Q R`, which is
+`A_bar = (Q_bar + Q copyltu(R R_bar^T - Q_bar^T Q)) R^{-T}`, and the forward rule needs
+`R_dot = triu(Q^T A_dot) R` with `Q_dot = (A_dot - Q R_dot) R^{-1}`. Both need a
+triangular solve in the external scalar, so both are operations in the contribution's
+family (`Df64QrVjp`, `Df64QrJvp`) rather than graphs of preset operations, which could
+not execute for a scalar tenferro does not declare. The adjoint's payload records which
+cotangents are present, because a loss need not depend on both factors, and an absent
+cotangent is the zero cotangent.
+
+`ext/df64-proof/tests/extension_qr.rs` checks the adjoint in isolation against the
+analytic derivative, and `ext/df64-proof/tests/connected_qr_ad.rs` runs the connected
+program end to end:
+
+- `A -> QR -> R -> f64 -> R^2` with `A = [[3], [4]]` differentiates back into the
+  external scalar as `[[6], [8]]`, which is #1790's orientation case
+  (`R = [[5]]`, `L = 25`, `dL/dA = 2 R A / |A|`).
+- The forward tangent of the same graph is `3` for the first unit direction, which is
+  `(Q^T A_dot) R = (3/5)(5)`, and it leaves the graph as an ordinary `f64` value.
+
+Implementing this found one real bug in my own body: the adjoint subtracted `Q^T Q`
+instead of `Q_bar^T Q`, which scales the gradient by an amount that depends on the
+data. The isolated adjoint test measured that factor (`0.98`) before the connected test
+was touched, which is why the two tests exist separately.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing
