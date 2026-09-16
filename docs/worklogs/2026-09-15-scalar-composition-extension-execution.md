@@ -138,3 +138,27 @@ and the accounting a caller-owned payload participates in) and the numerical wor
 of #1788/#1793 (first-order Df64 AD, QR) remain. Promotion between two distinct
 external tags is still unchecked at the lattice and belongs at the executing entry
 points.
+
+## Follow-on: what promotion between two external scalars actually does
+
+The design doc recorded promotion between two distinct external tags as an
+unchecked gap. It is now measured, and the conclusion is narrower than the
+recording implied:
+
+- The lattice is imprecise by construction: `promote(External(Df64), External(i64))`
+  is `External(Df64)` and the reversed pair is `External(i64)`, because a scalar
+  tenferro does not declare has no declared relation to another one.
+- No executing entry point turns that into a wrong value. A conversion between two
+  distinct external tags is rejected in both directions, a conversion between a
+  preset and an external tag is rejected in both directions, and a binary operation
+  on external tensors does not run at all, matching or not, because no preset kernel
+  is instantiated for a caller-owned payload.
+
+`ext/df64-proof/tests/external_mixing.rs` pins all of it, including the
+`can_convert_dtype` answers a caller can consult first. The remaining sharp edge is
+the dtype a traced graph *reports* for such a pair before execution rejects the
+program; closing that needs a checked promotion threaded through the runtime's
+infallible inference paths, so it is recorded rather than guessed at.
+
+Workspace after this: 5235 passed, 3 failed (the same pre-existing `trybuild`
+failures).

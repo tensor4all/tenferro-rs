@@ -654,16 +654,34 @@ mutable view that writes exactly the element it names, a shared payload that
 refuses a mutable borrow, materialization into logical order, and a sum reduction
 whose low-order component survives (`1 + 2^-80 + 2^-80 = 1 + 2^-79` exactly).
 
-**Promotion between two distinct external scalars is not checked.**
-`promote(lhs, rhs)` returns the left operand when both are external, even when the
-two tags name different Rust types. Tenferro cannot relate an external scalar to
-anything, so returning one of them silently is the wrong answer; it should be a
-typed rejection at the point where a promotion drives execution. The reason it is
-not fixed here is cost rather than doubt: `promote_dtype` and `promote_dtypes`
-have 69 call sites, most of them infallible expressions such as
-`let output_dtype = promote_dtype(lhs, rhs);`, so the fix is a checked promotion at
-the executing entry points rather than a global signature change, and it belongs
-with the extension step above where an external scalar first reaches execution.
+**Promotion between two distinct external scalars is checked at execution, not
+in the lattice.** `promote(lhs, rhs)` is derived from declared facts and cannot
+relate a scalar tenferro does not declare to anything, so for two distinct
+external tags it returns one of its two inputs. That is now measured rather than
+assumed: `promote(External(Df64), External(i64))` is `External(Df64)` and the
+reversed pair is `External(i64)`.
+
+What matters is that no executing entry point can turn that imprecise answer into a
+wrong value, and that is verified in
+`ext/df64-proof/tests/external_mixing.rs`:
+
+- A conversion between two distinct external tags is rejected in both directions,
+  as is a conversion between a preset and an external tag. The promotion answer can
+  therefore only ever reach an explicit rejection; it never selects one payload's
+  kernel for the other's elements.
+- A binary operation on two external tensors does not run at all, whether the tags
+  match or not, because no preset kernel is instantiated for a caller-owned
+  payload. The supported route for external arithmetic is the registered
+  extension operation.
+- `can_convert_dtype` agrees, so a caller can ask before executing.
+
+The remaining sharp edge is the inferred dtype a *traced* graph reports for such a
+pair: it names one operand's tag before execution rejects the program. Closing that
+would need a checked promotion threaded through
+`tenferro-runtime/src/shape_infer.rs` (16 call sites on infallible inference paths)
+and `tenferro-ad/src/eager_exec.rs`, which is a signature change rather than a
+missing check, so it stays recorded as a known imprecision with execution-time
+rejection instead of being guessed at.
 
 ## 6. Risks and open questions
 
