@@ -1203,3 +1203,22 @@ The profile's next step, the workspace doctests under `--no-default-features --f
 need the flags the repository uses for BLAS linkage: without them every failing doctest was a linker
 error rather than a test failure. With `RUSTFLAGS='-l dylib=openblas -l dylib=lapack'` the step passes
 with 1883 doctests and no failures, so this branch's examples run under that feature combination too.
+
+## Why bf16 einsum is not a bounded addition
+
+#1793's precision table lists a bf16 CPU einsum with documented f32 accumulation, and the bf16
+contribution already has the scalar with that contract, the shared elementwise path, and the
+reduction whose accumulation is measured against repeated rounding. What it does not have is the
+apparatus an operation needs: an extension module, an engine, a planning config, a prepared
+operation, and that operation's binding and specialization.
+
+That is not a small gap. The same apparatus in `ext/sparse/src/extension.rs` is 1202 lines, and the
+DF64 one is 2454, because each crate reimplements it. The einsum op this branch added could reuse the
+DF64 crate's module, which is why it was bounded; a new bf16 op cannot. Adding bf16 einsum therefore
+means either duplicating that apparatus in a third place, which the repository's rules forbid, or
+giving the runtime a shared module facility for reference bodies, which is a core API change and a
+decision rather than an afternoon.
+
+I had assumed this row was the last bounded implementation item and it is not; measuring before
+starting is what showed that, and it is cheaper to record than to discover halfway through 1200 lines
+of duplication.
