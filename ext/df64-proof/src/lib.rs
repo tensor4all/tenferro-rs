@@ -179,6 +179,32 @@ impl tenferro_tensor_core::ScalarArithmetic for Df64 {
     }
 }
 
+/// The external contribution's addition operation.
+///
+/// The operation is a type in the crate that owns the scalar, so tenferro's
+/// kernels are instantiated once per element type and operation rather than once
+/// per call site.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::{Df64, Df64Add};
+/// use tenferro_cpu::BinaryScalarOp;
+///
+/// let sum = <Df64Add as BinaryScalarOp<Df64>>::apply(
+///     Df64::from_f64(1.0),
+///     Df64::from_f64(2.0),
+/// );
+/// assert_eq!(sum, Df64::from_f64(3.0));
+/// ```
+pub struct Df64Add;
+
+impl tenferro_cpu::BinaryScalarOp<Df64> for Df64Add {
+    fn apply(lhs: Df64, rhs: Df64) -> Df64 {
+        std::ops::Add::add(lhs, rhs)
+    }
+}
+
 impl std::ops::Add for Df64 {
     type Output = Self;
 

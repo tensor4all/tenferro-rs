@@ -253,6 +253,30 @@ exist.
 - Every new public item has a runnable doc example, changed files meet the
   coverage target, and the local gate passes.
 
+### 4.6.1 The operation is a type, and the sharing is measured
+
+The first version of the entry points took the arithmetic as a closure. Symbol
+inspection of the proof test binary showed the consequence: `strided-kernel`'s
+`zip_map2_into` was instantiated once per call site, because a closure is part of
+a generic function's type parameters. Three `f64` instantiations existed for two
+call sites, which is exactly the set-induced duplication #1793 forbids and which
+linker deduplication must not be relied on to repair.
+
+The entry points now take a named operation (`BinaryScalarOp` with `AddOp`,
+`SubOp`, and `MulOp`), and an external contribution supplies its own operation
+type for its own scalar. Re-measured on the rebuilt proof test binary with
+`nm -C`, counting distinct `zip_map2_into` instantiations:
+
+| Element type | Instantiations | Call sites in the test binary |
+| --- | --- | --- |
+| `f64` | 1 | 2, in two different sets |
+| external `Df64` | 1 | 3 |
+
+So the heavy kernel body is keyed on the element type and the operation, and two
+sets that contain the same scalar reach one compiled body. This is a structural
+property of the signature rather than a linker effect. It is measured on a
+debug test binary in one crate and is not yet the full #1706/#1790 protocol.
+
 ### 4.7 Honest limit
 
 Stage 1 does not prove that an external scalar traverses the erased `Tensor`
