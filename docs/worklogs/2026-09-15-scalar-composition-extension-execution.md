@@ -1332,3 +1332,19 @@ and cheap; where it does not, each function is a hand rewrite of its dispatch wi
 check, which is what conj, the promoted scalar helper, and abs were. Measured state on this head: seven
 of twenty-nine direct matchers converted, 494 variant-match sites left in the file (from 520), and both
 gated features plus the default workspace build clean.
+
+## The tuple family is hand work, confirmed by three attempts
+
+Fifteen of the densest file's twenty-nine direct matchers are converted. The remaining fourteen include
+the tuple family — div, rem, pow, compare, execute_broadcast_multiply, and the three-slot select, clamp,
+cast, gather, scatter, dynamic_slice — and I tried three times to convert it mechanically: matching the
+pair of variants and injecting the two extractions, allowing for the guard between the pattern and the
+body, and handling discarded slots. Each attempt was refused rather than half-applied, and the file is
+untouched, because the pattern space is wider than a pair: arms bind one side and discard the other, or
+carry shape guards whose bodies differ, or match three slots at once.
+
+That settles the cost model for what is left in this file: the fourteen are hand rewrites of their
+dispatch, one function at a time, with the three builds as the check — the same work conj, abs, and the
+two diagonal operations took. The remaining three files are larger still (277, 206, and 177 sites), so
+the mandate's conversion is a long effort rather than a long afternoon, and the record should not
+pretend otherwise.
