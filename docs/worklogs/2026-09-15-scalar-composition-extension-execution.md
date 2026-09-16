@@ -214,7 +214,29 @@ preset tag.
 Workspace after this: 5245 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy `-D warnings` clean.
 
-## Correction and follow-on: what actually blocks the traced/AD path
+## The traced and prepared path works, with a declared identity
+
+The rejection recorded earlier was the "explicit rejection" half of the design's
+conversion-or-rejection rule. The enabling half is now implemented, because the
+goal's acceptance requires the traced and AD paths rather than only their refusal.
+
+A semantic program declares the canonical name of an externally defined scalar:
+`ProgramValueMetadata::with_scalar_identity` and
+`ProgramInputSpec::with_scalar_identity` for inputs,
+`ExtensionOp::scalar_identity` (defaulted) for an operation's values, the identity
+encoder writes that name instead of a process-local type code, and a value without
+one is still rejected with `ProgramBuildError::ExternalScalarWithoutIdentity`. A
+core operation may not name an external scalar at all, since tenferro owns no kernel
+for one.
+
+The result is verified end to end:
+`ext/df64-proof/tests/extension_execution.rs::the_module_installs_and_plans_the_declared_scalar`
+installs the module, traces the operation, compiles it, and runs it through prepared
+execution, checking that the total is computed in the external scalar; the same test
+asserts the undeclared case is a typed error, and two unit tests in
+`crates/tenferro-runtime/src/program/tests.rs` cover the rejection helpers.
+
+## An earlier report needed correcting
 
 Two claims from the earlier report needed checking against the source.
 

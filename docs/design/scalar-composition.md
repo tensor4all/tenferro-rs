@@ -726,37 +726,35 @@ of being guessed at. `ext/df64-proof/tests/extension_execution.rs` pins the
 rejection, and installing the module into a runtime with the CPU engine is
 verified in the same test.
 
-### 5.5 The enabled path past the traced boundary, and what it would cost
+### 5.5 The traced and prepared path, and the identity it needs
 
-The runtime rejects an external scalar at program construction because its tag has
-no canonical identity, so the traced and prepared path — and with it the AD path
-for an external scalar — stops there. Two facts bound the work that would change
-that.
+A semantic program's identity must be reproducible across processes, and an
+externally defined tag is a process-local `TypeId`, so the traced and prepared path
+had no identity for one. This is now resolved by declaring the identity instead of
+guessing an encoding, in 228 added lines across seven files:
 
-**The extension AD surface already exists.** `tenferro-ad`'s
-`semantic_extension` module exposes `SemanticExtensionRuleSet` with
-`register_linearize`, `register_linear_transpose`, and `register_primal_vjp`, the
-request types carry the operation, the primal input/output values and their
-metadata, and `crates/tenferro-ad/tests/integration/multi_input_traced.rs` drives a
-registered rule end to end. So a Df64 first-order rule does not need a new
-mechanism; it needs the value to survive program construction.
+- `ProgramValueMetadata::with_scalar_identity` and
+  `ProgramInputSpec::with_scalar_identity` let a program declare the canonical name
+  of an input's externally defined scalar.
+- `ExtensionOp::scalar_identity` is a defaulted method, so an operation whose values
+  are externally defined declares the name once and the runtime stamps it onto that
+  operation's external value metadata.
+- The identity encoder writes the declared name for an external value
+  (`DType::External` code 7) rather than a bare type code, so two processes agree.
+- A value that carries an external tag without a declared name is rejected with
+  `ProgramBuildError::ExternalScalarWithoutIdentity`, and a *core* operation may not
+  name an external scalar at all, because tenferro owns no kernel for it. Carrying
+  one through a program is what an extension operation is for.
 
-**A stable identity is a bounded change, and it has three shapes.** The identity
-must be reproducible across processes, and two different external scalars must not
-share one. Measured on this head:
-
-| Shape | Where the identity lives | Measured sites |
-| --- | --- | --- |
-| A tag payload | `DType::External` carries the declared identity beside the `TypeId` | 40 constructor sites, 28 identity reads; the 57 `External(_)` wildcard matches are untouched |
-| B value metadata | the identity travels in `ProgramValueMetadata` and the encoder reads it from there | the program IR and its metadata constructors, plus the same 28 reads |
-| C lookup | the encoder resolves a `TypeId` to a name through a table | same as A, plus a process-wide registry, which the design's constraints exclude |
-
-Shape A is the recommended one: the identity travels with the tag that already
-exists, every wildcard keeps working, and the declaration point is the payload
-construction (`ErasedHostTensor` gains an identity-carrying constructor, with the
-existing one meaning "no declared identity" and staying rejected). The change needs
-maintainer acceptance because it extends the public payload contract, and it is
-what unblocks the traced, prepared, and AD paths for an external scalar together.
+`ext/df64-proof/tests/extension_execution.rs` verifies both halves: the undeclared
+case is a typed error, and the declared case runs the registered operation through
+trace, compilation, and prepared execution
+(`the_module_installs_and_plans_the_declared_scalar`). The repository's extension AD
+surface already exists — `SemanticExtensionRuleSet` with `register_linearize`,
+`register_linear_transpose`, and `register_primal_vjp`, exercised by
+`crates/tenferro-ad/tests/integration/multi_input_traced.rs` — so an external
+first-order rule needs no new mechanism; it needs the graph to be plannable, which
+this change provides.
 
 ## 6. Risks and open questions
 

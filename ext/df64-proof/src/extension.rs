@@ -29,6 +29,13 @@ use crate::{Df64, Df64Add};
 /// Family identifier of the extension-owned total sum.
 pub const DF64_TOTAL_FAMILY: &str = "tenferro-df64-proof.df64_total.v1";
 
+/// Canonical identity of the externally defined `Df64` scalar.
+///
+/// A semantic program's identity must be reproducible across processes, so the
+/// contribution that owns a scalar declares its stable name. This is the name a
+/// program carrying `Df64` values reports instead of a process-local `TypeId`.
+pub const DF64_SCALAR_IDENTITY: &str = "tenferro-df64-proof.df64.v1";
+
 /// Total sum of an externally defined scalar tensor.
 ///
 /// The payload carries no parameters, so every instance is equal to every other.
@@ -79,6 +86,12 @@ impl ExtensionOp for Df64Total {
     /// The total is a new value rather than a view of the input.
     fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
         tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    /// The operation carries the contribution's externally defined scalar, so it
+    /// declares that scalar's canonical identity for the value metadata.
+    fn scalar_identity(&self) -> Option<&'static str> {
+        Some(DF64_SCALAR_IDENTITY)
     }
 
     fn infer_output_meta(

@@ -1108,12 +1108,20 @@ fn semantic_identity_ordinals_report_exact_retained_bytes() {
 }
 
 #[test]
-fn only_an_external_tag_is_rejected_for_identity() {
+fn an_external_scalar_needs_a_declared_identity() {
     let external = DType::External(core::any::TypeId::of::<f64>());
+
+    // A tag without a declared name cannot be encoded, so it is rejected.
     assert!(matches!(
-        super::builder::reject_external_scalar(external),
+        super::builder::require_scalar_identity(&ProgramValueMetadata::new(external, [DimExpr::Const(2)])),
         Err(ProgramBuildError::ExternalScalarWithoutIdentity { dtype }) if dtype == external
     ));
+
+    // The declared name is what the program identity carries.
+    let declared =
+        ProgramValueMetadata::new(external, [DimExpr::Const(2)]).with_scalar_identity("example.v1");
+    assert!(super::builder::require_scalar_identity(&declared).is_ok());
+    assert_eq!(declared.scalar_identity(), Some("example.v1"));
 
     for dtype in [
         DType::F32,
@@ -1125,8 +1133,40 @@ fn only_an_external_tag_is_rejected_for_identity() {
         DType::C64,
     ] {
         assert!(
-            super::builder::reject_external_scalar(dtype).is_ok(),
+            super::builder::require_scalar_identity(&ProgramValueMetadata::new(
+                dtype,
+                [DimExpr::Const(2)]
+            ))
+            .is_ok(),
             "{dtype:?}"
         );
     }
+}
+
+#[test]
+fn a_core_operation_may_not_name_an_external_scalar() {
+    let external = DType::External(core::any::TypeId::of::<f64>());
+
+    assert!(matches!(
+        super::builder::reject_core_external_dtype(&CoreSemanticOp::Convert {
+            from: external,
+            to: DType::F64,
+        }),
+        Err(ProgramBuildError::ExternalScalarWithoutIdentity { .. })
+    ));
+    assert!(matches!(
+        super::builder::reject_core_external_dtype(&CoreSemanticOp::Constant {
+            dtype: external,
+            bytes: Vec::new(),
+        }),
+        Err(ProgramBuildError::ExternalScalarWithoutIdentity { .. })
+    ));
+    assert!(
+        super::builder::reject_core_external_dtype(&CoreSemanticOp::Convert {
+            from: DType::F32,
+            to: DType::F64,
+        })
+        .is_ok()
+    );
+    assert!(super::builder::reject_core_external_dtype(&CoreSemanticOp::Neg).is_ok());
 }

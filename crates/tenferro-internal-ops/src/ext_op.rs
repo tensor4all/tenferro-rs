@@ -426,6 +426,18 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
         ExtensionAliasDeclaration::Undeclared
     }
 
+    /// Canonical identity of an externally defined scalar this operation carries.
+    ///
+    /// A semantic program's identity must be reproducible across processes, while an
+    /// externally defined scalar's tag is a process-local `TypeId`. An operation
+    /// whose inputs or outputs are externally defined declares the stable name here,
+    /// and the runtime stamps it onto that operation's external value metadata. The
+    /// name belongs to the contribution that owns the scalar, and two scalars must
+    /// not share one.
+    fn scalar_identity(&self) -> Option<&'static str> {
+        None
+    }
+
     // ----- Shape and dtype inference (spec Section 7) -----
 
     /// Infer output dtypes and shapes for each output slot.

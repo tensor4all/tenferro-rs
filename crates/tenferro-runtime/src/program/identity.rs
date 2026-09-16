@@ -495,7 +495,17 @@ fn encode_core_op(encoder: &mut CanonicalEncoder, op: &CoreSemanticOp) {
 }
 
 fn encode_metadata(encoder: &mut CanonicalEncoder, metadata: &ProgramValueMetadata) {
-    encode_dtype(encoder, metadata.dtype());
+    match (metadata.dtype(), metadata.scalar_identity()) {
+        // An externally defined scalar has no process-stable type identity, so its
+        // canonical name is what the program identity encodes. Two scalars that
+        // share a name would collide, which is the declaring contribution's
+        // responsibility.
+        (DType::External(_), Some(identity)) => {
+            encoder.u8(7);
+            encoder.string(identity);
+        }
+        (dtype, _) => encode_dtype(encoder, dtype),
+    }
     encoder.usize(metadata.shape().len());
     for extent in metadata.shape() {
         match extent {
@@ -521,12 +531,11 @@ fn encode_dtype(encoder: &mut CanonicalEncoder, dtype: DType) {
         DType::Bool => 4,
         DType::C32 => 5,
         DType::C64 => 6,
-        // INVARIANT: the semantic-program builder rejects an externally defined
-        // scalar tag before it can reach an identity, because a process-local
-        // `TypeId` has no canonical encoding and a bare code would make two
-        // different external scalars share an identity. Giving the tag an encoding
-        // here is what a contribution-declared stable identity would enable.
-        DType::External(_) => unreachable!("the builder rejects an external tag before identity"),
+        // INVARIANT: value metadata encodes an external scalar through its declared
+        // identity, and a core operation may not name one, so this arm is reached
+        // only if a value carried an external tag without an identity, which the
+        // builder rejects.
+        DType::External(_) => unreachable!("an external scalar reached a bare dtype encoding"),
     });
 }
 

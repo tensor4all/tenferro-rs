@@ -105,11 +105,11 @@ fn an_allocation_group_rejects_a_caller_owned_payload_with_a_typed_error() {
 }
 
 #[test]
-fn the_module_installs_and_planning_rejects_the_scalar_without_a_stable_identity() {
-    use tenferro_df64_proof::extension::module;
+fn the_module_installs_and_plans_the_declared_scalar() {
+    use tenferro_df64_proof::extension::{module, Df64Total, DF64_SCALAR_IDENTITY};
     use tenferro_ops::dim_expr::DimExpr;
     use tenferro_runtime::program::{ProgramBuildError, ProgramInputSpec};
-    use tenferro_runtime::{Runtime, TraceContext};
+    use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
     use tenferro_tensor::DType;
 
     let backend = CpuBackend::new();
@@ -122,20 +122,42 @@ fn the_module_installs_and_planning_rejects_the_scalar_without_a_stable_identity
     builder
         .install_extension_module(module().expect("module"))
         .expect("install the Df64 module");
-    let _runtime = builder.build().expect("runtime with the module");
+    let runtime = builder.build().expect("runtime with the module");
 
-    // A traced program needs a canonical identity, and an external tag is a
-    // process-local `TypeId`, so planning rejects it explicitly instead of
-    // encoding an unstable code or panicking.
-    let mut context = TraceContext::new();
-    let error = context
-        .input(ProgramInputSpec::new(
-            DType::External(std::any::TypeId::of::<Df64>()),
-            [DimExpr::Const(2)],
-        ))
-        .expect_err("an external scalar has no canonical program identity");
+    let external_dtype = DType::External(std::any::TypeId::of::<Df64>());
+
+    // Without a declared identity the program cannot be given a canonical one, so
+    // planning rejects the tag instead of encoding a process-local code.
+    let mut undeclared = TraceContext::new();
     assert!(matches!(
-        error,
+        undeclared
+            .input(ProgramInputSpec::new(external_dtype, [DimExpr::Const(2)]))
+            .expect_err("an undeclared external scalar has no canonical identity"),
         ProgramBuildError::ExternalScalarWithoutIdentity { .. }
     ));
+
+    // With the contribution's declared identity the same program plans, and the
+    // registered engine executes it through the prepared path.
+    let mut context = TraceContext::new();
+    let input = context
+        .input(
+            ProgramInputSpec::new(external_dtype, [DimExpr::Const(2)])
+                .with_scalar_identity(DF64_SCALAR_IDENTITY),
+        )
+        .expect("the declared scalar is accepted");
+    let outputs = context
+        .add_extension(std::sync::Arc::new(Df64Total), &[input])
+        .expect("the family is planned from its declared metadata");
+    let graph = context.finish(&outputs).expect("finished trace");
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_traced_graph(&graph)
+        .expect("compiled program");
+    let values = external(vec![Df64::from_f64(1.0), Df64::from_f64(2.0)]);
+    let results = runtime
+        .run_compiled(&program, &[&values])
+        .expect("prepared execution");
+    assert_eq!(results.len(), 1);
+    assert_eq!(payload(&results[0]), vec![Df64::from_f64(3.0)]);
 }

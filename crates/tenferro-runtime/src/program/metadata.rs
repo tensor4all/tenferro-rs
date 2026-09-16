@@ -72,6 +72,7 @@ impl std::fmt::Debug for SemanticProvenanceView<'_> {
 pub struct ProgramValueMetadata {
     dtype: DType,
     shape: Box<[ShapeExtent<DimExpr>]>,
+    scalar_identity: Option<&'static str>,
 }
 
 impl ProgramValueMetadata {
@@ -80,6 +81,7 @@ impl ProgramValueMetadata {
         Self {
             dtype,
             shape: shape.into_iter().map(ShapeExtent::Exact).collect(),
+            scalar_identity: None,
         }
     }
 
@@ -91,7 +93,40 @@ impl ProgramValueMetadata {
         Self {
             dtype,
             shape: shape.into_iter().collect(),
+            scalar_identity: None,
         }
+    }
+
+    /// Declare the canonical identity of an externally defined scalar.
+    ///
+    /// A semantic program's identity must be reproducible across processes, and an
+    /// externally defined tag is a process-local `TypeId`, so a program that carries
+    /// one has to declare the stable name. The name belongs to the contribution that
+    /// owns the scalar, and two scalars must not share one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_runtime::program::ProgramValueMetadata;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let dtype = DType::External(std::any::TypeId::of::<f64>());
+    /// let declared = ProgramValueMetadata::new(dtype, [DimExpr::Const(3)])
+    ///     .with_scalar_identity("example.scalar.v1");
+    /// assert_eq!(declared.scalar_identity(), Some("example.scalar.v1"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_scalar_identity(mut self, identity: &'static str) -> Self {
+        self.scalar_identity = Some(identity);
+        self
+    }
+
+    /// Return the declared identity of an externally defined scalar, if any.
+    #[must_use]
+    pub const fn scalar_identity(&self) -> Option<&'static str> {
+        self.scalar_identity
     }
 
     /// Return the value dtype.
@@ -129,6 +164,28 @@ impl ProgramInputSpec {
     }
 
     /// Construct an input specification with exact, bounded, or unknown extents.
+    /// Declare the canonical identity of this input's externally defined scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_runtime::program::ProgramInputSpec;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let dtype = DType::External(std::any::TypeId::of::<f64>());
+    /// let spec = ProgramInputSpec::new(dtype, [DimExpr::Const(3)])
+    ///     .with_scalar_identity("example.scalar.v1");
+    /// assert_eq!(spec.metadata().scalar_identity(), Some("example.scalar.v1"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_scalar_identity(mut self, identity: &'static str) -> Self {
+        self.metadata = self.metadata.with_scalar_identity(identity);
+        self
+    }
+
+    /// Construct a specification from existing value metadata.
     pub fn from_metadata(metadata: ProgramValueMetadata) -> Self {
         Self { metadata }
     }
