@@ -5159,146 +5159,246 @@ impl TensorStructural for CudaBackend {
     }
 
     fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
-        match (input, to) {
+        match (input.dtype(), to) {
             // An externally defined destination has no CUDA conversion, so the
             // backend rejects it instead of guessing a representation.
             (_, crate::DType::External(_)) => Err(crate::Error::unsupported(
                 "cast",
                 "an externally defined scalar has no CUDA conversion",
             )),
-            (Tensor::F32(t), crate::DType::F32) => self.duplicate_typed(t).map(Tensor::F32),
-            (Tensor::F64(t), crate::DType::F64) => self.duplicate_typed(t).map(Tensor::F64),
-            (Tensor::I32(t), crate::DType::I32) => self.duplicate_typed(t).map(Tensor::I32),
-            (Tensor::I64(t), crate::DType::I64) => self.duplicate_typed(t).map(Tensor::I64),
-            (Tensor::Bool(t), crate::DType::Bool) => {
-                self.duplicate_bool(t, "cast").map(Tensor::Bool)
-            }
-            (Tensor::C32(t), crate::DType::C32) => self.duplicate_typed(t).map(Tensor::C32),
-            (Tensor::C64(t), crate::DType::C64) => self.duplicate_typed(t).map(Tensor::C64),
-            (Tensor::F32(t), crate::DType::F64) => {
-                self.convert_float_to_float::<f32, f64>(t).map(Tensor::F64)
-            }
-            (Tensor::F32(t), crate::DType::I32) => {
-                validate_cuda_real_cast::<f32, f32>(self, t, 1, CastIntegerTarget::I32)?;
-                self.convert_numeric::<f32, i32>(t).map(Tensor::I32)
-            }
-            (Tensor::F32(t), crate::DType::I64) => {
-                validate_cuda_real_cast::<f32, f32>(self, t, 1, CastIntegerTarget::I64)?;
-                self.convert_numeric::<f32, i64>(t).map(Tensor::I64)
-            }
-            (Tensor::F32(t), crate::DType::Bool) => {
-                self.convert_numeric_to_bool(t).map(Tensor::Bool)
-            }
-            (Tensor::F32(t), crate::DType::C32) => self.convert_f32_to_c32(t).map(Tensor::C32),
-            (Tensor::F32(t), crate::DType::C64) => self.convert_f32_to_c64(t).map(Tensor::C64),
-            (Tensor::F64(t), crate::DType::F32) => {
-                self.convert_float_to_float::<f64, f32>(t).map(Tensor::F32)
-            }
-            (Tensor::F64(t), crate::DType::I32) => {
-                validate_cuda_real_cast::<f64, f64>(self, t, 1, CastIntegerTarget::I32)?;
-                self.convert_numeric::<f64, i32>(t).map(Tensor::I32)
-            }
-            (Tensor::F64(t), crate::DType::I64) => {
-                validate_cuda_real_cast::<f64, f64>(self, t, 1, CastIntegerTarget::I64)?;
-                self.convert_numeric::<f64, i64>(t).map(Tensor::I64)
-            }
-            (Tensor::F64(t), crate::DType::Bool) => {
-                self.convert_numeric_to_bool(t).map(Tensor::Bool)
-            }
-            (Tensor::F64(t), crate::DType::C32) => self.convert_f64_to_c32(t).map(Tensor::C32),
-            (Tensor::F64(t), crate::DType::C64) => self.convert_f64_to_c64(t).map(Tensor::C64),
-            (Tensor::I32(t), crate::DType::F32) => {
-                self.convert_numeric::<i32, f32>(t).map(Tensor::F32)
-            }
-            (Tensor::I32(t), crate::DType::F64) => {
-                self.convert_numeric::<i32, f64>(t).map(Tensor::F64)
-            }
-            (Tensor::I32(t), crate::DType::I64) => {
-                self.convert_numeric::<i32, i64>(t).map(Tensor::I64)
-            }
-            (Tensor::I32(t), crate::DType::Bool) => {
-                self.convert_numeric_to_bool(t).map(Tensor::Bool)
-            }
-            (Tensor::I32(t), crate::DType::C32) => self
-                .convert_numeric_to_complex::<i32, Complex32, f32>(t)
+            (DType::F32, crate::DType::F32) => self
+                .duplicate_typed(typed_or_unsupported::<f32>(input, "cast")?)
+                .map(Tensor::F32),
+            (DType::F64, crate::DType::F64) => self
+                .duplicate_typed(typed_or_unsupported::<f64>(input, "cast")?)
+                .map(Tensor::F64),
+            (DType::I32, crate::DType::I32) => self
+                .duplicate_typed(typed_or_unsupported::<i32>(input, "cast")?)
+                .map(Tensor::I32),
+            (DType::I64, crate::DType::I64) => self
+                .duplicate_typed(typed_or_unsupported::<i64>(input, "cast")?)
+                .map(Tensor::I64),
+            (DType::Bool, crate::DType::Bool) => self
+                .duplicate_bool(typed_or_unsupported::<bool>(input, "cast")?, "cast")
+                .map(Tensor::Bool),
+            (DType::C32, crate::DType::C32) => self
+                .duplicate_typed(typed_or_unsupported::<Complex32>(input, "cast")?)
                 .map(Tensor::C32),
-            (Tensor::I32(t), crate::DType::C64) => self
-                .convert_numeric_to_complex::<i32, Complex64, f64>(t)
+            (DType::C64, crate::DType::C64) => self
+                .duplicate_typed(typed_or_unsupported::<Complex64>(input, "cast")?)
                 .map(Tensor::C64),
-            (Tensor::I64(t), crate::DType::F32) => {
-                self.convert_numeric::<i64, f32>(t).map(Tensor::F32)
-            }
-            (Tensor::I64(t), crate::DType::F64) => {
-                self.convert_numeric::<i64, f64>(t).map(Tensor::F64)
-            }
-            (Tensor::I64(t), crate::DType::I32) => {
-                self.convert_numeric::<i64, i32>(t).map(Tensor::I32)
-            }
-            (Tensor::I64(t), crate::DType::Bool) => {
-                self.convert_numeric_to_bool(t).map(Tensor::Bool)
-            }
-            (Tensor::I64(t), crate::DType::C32) => self
-                .convert_numeric_to_complex::<i64, Complex32, f32>(t)
-                .map(Tensor::C32),
-            (Tensor::I64(t), crate::DType::C64) => self
-                .convert_numeric_to_complex::<i64, Complex64, f64>(t)
-                .map(Tensor::C64),
-            (Tensor::Bool(t), crate::DType::F32) => {
-                self.convert_bool_to_numeric::<f32>(t).map(Tensor::F32)
-            }
-            (Tensor::Bool(t), crate::DType::F64) => {
-                self.convert_bool_to_numeric::<f64>(t).map(Tensor::F64)
-            }
-            (Tensor::Bool(t), crate::DType::I32) => {
-                self.convert_bool_to_numeric::<i32>(t).map(Tensor::I32)
-            }
-            (Tensor::Bool(t), crate::DType::I64) => {
-                self.convert_bool_to_numeric::<i64>(t).map(Tensor::I64)
-            }
-            (Tensor::Bool(t), crate::DType::C32) => self
-                .convert_bool_to_complex::<Complex32, f32>(t)
-                .map(Tensor::C32),
-            (Tensor::Bool(t), crate::DType::C64) => self
-                .convert_bool_to_complex::<Complex64, f64>(t)
-                .map(Tensor::C64),
-            (Tensor::C32(t), crate::DType::F32) => self.convert_c32_to_f32(t).map(Tensor::F32),
-            (Tensor::C32(t), crate::DType::F64) => self.convert_c32_to_f64(t).map(Tensor::F64),
-            (Tensor::C32(t), crate::DType::I32) => {
-                validate_cuda_real_cast::<Complex32, f32>(self, t, 2, CastIntegerTarget::I32)?;
-                self.convert_complex_to_numeric::<Complex32, i32>(t)
+            (DType::F32, crate::DType::F64) => self
+                .convert_float_to_float::<f32, f64>(typed_or_unsupported::<f32>(input, "cast")?)
+                .map(Tensor::F64),
+            (DType::F32, crate::DType::I32) => {
+                validate_cuda_real_cast::<f32, f32>(
+                    self,
+                    typed_or_unsupported::<f32>(input, "cast")?,
+                    1,
+                    CastIntegerTarget::I32,
+                )?;
+                self.convert_numeric::<f32, i32>(typed_or_unsupported::<f32>(input, "cast")?)
                     .map(Tensor::I32)
             }
-            (Tensor::C32(t), crate::DType::I64) => {
-                validate_cuda_real_cast::<Complex32, f32>(self, t, 2, CastIntegerTarget::I64)?;
-                self.convert_complex_to_numeric::<Complex32, i64>(t)
+            (DType::F32, crate::DType::I64) => {
+                validate_cuda_real_cast::<f32, f32>(
+                    self,
+                    typed_or_unsupported::<f32>(input, "cast")?,
+                    1,
+                    CastIntegerTarget::I64,
+                )?;
+                self.convert_numeric::<f32, i64>(typed_or_unsupported::<f32>(input, "cast")?)
                     .map(Tensor::I64)
             }
-            (Tensor::C32(t), crate::DType::Bool) => self
-                .convert_complex_to_bool::<Complex32, f32>(t)
+            (DType::F32, crate::DType::Bool) => self
+                .convert_numeric_to_bool(typed_or_unsupported::<f32>(input, "cast")?)
                 .map(Tensor::Bool),
-            (Tensor::C32(t), crate::DType::C64) => self
-                .convert_complex_to_complex::<Complex32, Complex64, f32, f64>(t)
+            (DType::F32, crate::DType::C32) => self
+                .convert_f32_to_c32(typed_or_unsupported::<f32>(input, "cast")?)
+                .map(Tensor::C32),
+            (DType::F32, crate::DType::C64) => self
+                .convert_f32_to_c64(typed_or_unsupported::<f32>(input, "cast")?)
                 .map(Tensor::C64),
-            (Tensor::C64(t), crate::DType::F32) => self.convert_c64_to_f32(t).map(Tensor::F32),
-            (Tensor::C64(t), crate::DType::F64) => self.convert_c64_to_f64(t).map(Tensor::F64),
-            (Tensor::C64(t), crate::DType::I32) => {
-                validate_cuda_real_cast::<Complex64, f64>(self, t, 2, CastIntegerTarget::I32)?;
-                self.convert_complex_to_numeric::<Complex64, i32>(t)
+            (DType::F64, crate::DType::F32) => self
+                .convert_float_to_float::<f64, f32>(typed_or_unsupported::<f64>(input, "cast")?)
+                .map(Tensor::F32),
+            (DType::F64, crate::DType::I32) => {
+                validate_cuda_real_cast::<f64, f64>(
+                    self,
+                    typed_or_unsupported::<f64>(input, "cast")?,
+                    1,
+                    CastIntegerTarget::I32,
+                )?;
+                self.convert_numeric::<f64, i32>(typed_or_unsupported::<f64>(input, "cast")?)
                     .map(Tensor::I32)
             }
-            (Tensor::C64(t), crate::DType::I64) => {
-                validate_cuda_real_cast::<Complex64, f64>(self, t, 2, CastIntegerTarget::I64)?;
-                self.convert_complex_to_numeric::<Complex64, i64>(t)
+            (DType::F64, crate::DType::I64) => {
+                validate_cuda_real_cast::<f64, f64>(
+                    self,
+                    typed_or_unsupported::<f64>(input, "cast")?,
+                    1,
+                    CastIntegerTarget::I64,
+                )?;
+                self.convert_numeric::<f64, i64>(typed_or_unsupported::<f64>(input, "cast")?)
                     .map(Tensor::I64)
             }
-            (Tensor::C64(t), crate::DType::Bool) => self
-                .convert_complex_to_bool::<Complex64, f64>(t)
+            (DType::F64, crate::DType::Bool) => self
+                .convert_numeric_to_bool(typed_or_unsupported::<f64>(input, "cast")?)
                 .map(Tensor::Bool),
-            (Tensor::C64(t), crate::DType::C32) => self
-                .convert_complex_to_complex::<Complex64, Complex32, f64, f32>(t)
+            (DType::F64, crate::DType::C32) => self
+                .convert_f64_to_c32(typed_or_unsupported::<f64>(input, "cast")?)
+                .map(Tensor::C32),
+            (DType::F64, crate::DType::C64) => self
+                .convert_f64_to_c64(typed_or_unsupported::<f64>(input, "cast")?)
+                .map(Tensor::C64),
+            (DType::I32, crate::DType::F32) => self
+                .convert_numeric::<i32, f32>(typed_or_unsupported::<i32>(input, "cast")?)
+                .map(Tensor::F32),
+            (DType::I32, crate::DType::F64) => self
+                .convert_numeric::<i32, f64>(typed_or_unsupported::<i32>(input, "cast")?)
+                .map(Tensor::F64),
+            (DType::I32, crate::DType::I64) => self
+                .convert_numeric::<i32, i64>(typed_or_unsupported::<i32>(input, "cast")?)
+                .map(Tensor::I64),
+            (DType::I32, crate::DType::Bool) => self
+                .convert_numeric_to_bool(typed_or_unsupported::<i32>(input, "cast")?)
+                .map(Tensor::Bool),
+            (DType::I32, crate::DType::C32) => self
+                .convert_numeric_to_complex::<i32, Complex32, f32>(typed_or_unsupported::<i32>(
+                    input, "cast",
+                )?)
+                .map(Tensor::C32),
+            (DType::I32, crate::DType::C64) => self
+                .convert_numeric_to_complex::<i32, Complex64, f64>(typed_or_unsupported::<i32>(
+                    input, "cast",
+                )?)
+                .map(Tensor::C64),
+            (DType::I64, crate::DType::F32) => self
+                .convert_numeric::<i64, f32>(typed_or_unsupported::<i64>(input, "cast")?)
+                .map(Tensor::F32),
+            (DType::I64, crate::DType::F64) => self
+                .convert_numeric::<i64, f64>(typed_or_unsupported::<i64>(input, "cast")?)
+                .map(Tensor::F64),
+            (DType::I64, crate::DType::I32) => self
+                .convert_numeric::<i64, i32>(typed_or_unsupported::<i64>(input, "cast")?)
+                .map(Tensor::I32),
+            (DType::I64, crate::DType::Bool) => self
+                .convert_numeric_to_bool(typed_or_unsupported::<i64>(input, "cast")?)
+                .map(Tensor::Bool),
+            (DType::I64, crate::DType::C32) => self
+                .convert_numeric_to_complex::<i64, Complex32, f32>(typed_or_unsupported::<i64>(
+                    input, "cast",
+                )?)
+                .map(Tensor::C32),
+            (DType::I64, crate::DType::C64) => self
+                .convert_numeric_to_complex::<i64, Complex64, f64>(typed_or_unsupported::<i64>(
+                    input, "cast",
+                )?)
+                .map(Tensor::C64),
+            (DType::Bool, crate::DType::F32) => self
+                .convert_bool_to_numeric::<f32>(typed_or_unsupported::<bool>(input, "cast")?)
+                .map(Tensor::F32),
+            (DType::Bool, crate::DType::F64) => self
+                .convert_bool_to_numeric::<f64>(typed_or_unsupported::<bool>(input, "cast")?)
+                .map(Tensor::F64),
+            (DType::Bool, crate::DType::I32) => self
+                .convert_bool_to_numeric::<i32>(typed_or_unsupported::<bool>(input, "cast")?)
+                .map(Tensor::I32),
+            (DType::Bool, crate::DType::I64) => self
+                .convert_bool_to_numeric::<i64>(typed_or_unsupported::<bool>(input, "cast")?)
+                .map(Tensor::I64),
+            (DType::Bool, crate::DType::C32) => self
+                .convert_bool_to_complex::<Complex32, f32>(typed_or_unsupported::<bool>(
+                    input, "cast",
+                )?)
+                .map(Tensor::C32),
+            (DType::Bool, crate::DType::C64) => self
+                .convert_bool_to_complex::<Complex64, f64>(typed_or_unsupported::<bool>(
+                    input, "cast",
+                )?)
+                .map(Tensor::C64),
+            (DType::C32, crate::DType::F32) => self
+                .convert_c32_to_f32(typed_or_unsupported::<Complex32>(input, "cast")?)
+                .map(Tensor::F32),
+            (DType::C32, crate::DType::F64) => self
+                .convert_c32_to_f64(typed_or_unsupported::<Complex32>(input, "cast")?)
+                .map(Tensor::F64),
+            (DType::C32, crate::DType::I32) => {
+                validate_cuda_real_cast::<Complex32, f32>(
+                    self,
+                    typed_or_unsupported::<Complex32>(input, "cast")?,
+                    2,
+                    CastIntegerTarget::I32,
+                )?;
+                self.convert_complex_to_numeric::<Complex32, i32>(
+                    typed_or_unsupported::<Complex32>(input, "cast")?,
+                )
+                .map(Tensor::I32)
+            }
+            (DType::C32, crate::DType::I64) => {
+                validate_cuda_real_cast::<Complex32, f32>(
+                    self,
+                    typed_or_unsupported::<Complex32>(input, "cast")?,
+                    2,
+                    CastIntegerTarget::I64,
+                )?;
+                self.convert_complex_to_numeric::<Complex32, i64>(
+                    typed_or_unsupported::<Complex32>(input, "cast")?,
+                )
+                .map(Tensor::I64)
+            }
+            (DType::C32, crate::DType::Bool) => self
+                .convert_complex_to_bool::<Complex32, f32>(typed_or_unsupported::<Complex32>(
+                    input, "cast",
+                )?)
+                .map(Tensor::Bool),
+            (DType::C32, crate::DType::C64) => self
+                .convert_complex_to_complex::<Complex32, Complex64, f32, f64>(
+                    typed_or_unsupported::<Complex32>(input, "cast")?,
+                )
+                .map(Tensor::C64),
+            (DType::C64, crate::DType::F32) => self
+                .convert_c64_to_f32(typed_or_unsupported::<Complex64>(input, "cast")?)
+                .map(Tensor::F32),
+            (DType::C64, crate::DType::F64) => self
+                .convert_c64_to_f64(typed_or_unsupported::<Complex64>(input, "cast")?)
+                .map(Tensor::F64),
+            (DType::C64, crate::DType::I32) => {
+                validate_cuda_real_cast::<Complex64, f64>(
+                    self,
+                    typed_or_unsupported::<Complex64>(input, "cast")?,
+                    2,
+                    CastIntegerTarget::I32,
+                )?;
+                self.convert_complex_to_numeric::<Complex64, i32>(
+                    typed_or_unsupported::<Complex64>(input, "cast")?,
+                )
+                .map(Tensor::I32)
+            }
+            (DType::C64, crate::DType::I64) => {
+                validate_cuda_real_cast::<Complex64, f64>(
+                    self,
+                    typed_or_unsupported::<Complex64>(input, "cast")?,
+                    2,
+                    CastIntegerTarget::I64,
+                )?;
+                self.convert_complex_to_numeric::<Complex64, i64>(
+                    typed_or_unsupported::<Complex64>(input, "cast")?,
+                )
+                .map(Tensor::I64)
+            }
+            (DType::C64, crate::DType::Bool) => self
+                .convert_complex_to_bool::<Complex64, f64>(typed_or_unsupported::<Complex64>(
+                    input, "cast",
+                )?)
+                .map(Tensor::Bool),
+            (DType::C64, crate::DType::C32) => self
+                .convert_complex_to_complex::<Complex64, Complex32, f64, f32>(
+                    typed_or_unsupported::<Complex64>(input, "cast")?,
+                )
                 .map(Tensor::C32),
             // A caller-owned payload has no GPU implementation for this operation.
-            (Tensor::External(..), _) => Err(crate::Error::unsupported(
+            (DType::External(_), _) => Err(crate::Error::unsupported(
                 "cast",
                 "an externally defined payload is not supported by this GPU operation",
             )),
