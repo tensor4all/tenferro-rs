@@ -391,7 +391,7 @@ pub struct HostTensor<T> {
 /// assert_eq!(tensor.dtype(), DType::F64);
 /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
-pub type Tensor = DefaultScalars;
+pub use DefaultScalars as Tensor;
 
 /// Borrowed host tensor view with shape, strides, and offset metadata.
 ///
