@@ -414,19 +414,40 @@ pub fn check_singular_diagonal<T: DiagSingularity + TensorScalar + std::fmt::Deb
 /// Returns [`crate::Error::Validation`] with the applicable typed shape, rank,
 /// axis, dtype, or argument source when validation fails. Singular or
 /// non-finite diagonal checks return [`crate::Error::BackendFailure`].
+/// The refusal this module produces for a dtype it cannot validate a diagonal in.
+///
+/// Returning it from an accessor is the same refusal the wildcard arm produced; a
+/// caller reaches that accessor from a match on `u.dtype()`, so it is unreachable in
+/// practice rather than a caller mistake.
+fn unsupported_diagonal_dtype(u: &Tensor) -> Error {
+    Error::extension(
+        "solve",
+        "tensor-validation",
+        ErrorKind::Unsupported,
+        DiagonalError::UnsupportedDType { dtype: u.dtype() },
+    )
+}
+
 pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
-    match u {
-        Tensor::F64(t) => check_singular_diagonal(t),
-        Tensor::F32(t) => check_singular_diagonal(t),
-        Tensor::C64(t) => check_singular_diagonal(t),
-        Tensor::C32(t) => check_singular_diagonal(t),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::External(..) => {
-            Err(Error::extension(
-                "solve",
-                "tensor-validation",
-                ErrorKind::Unsupported,
-                DiagonalError::UnsupportedDType { dtype: u.dtype() },
-            ))
+    match u.dtype() {
+        DType::F64 => check_singular_diagonal(
+            u.as_typed::<f64>()
+                .ok_or_else(|| unsupported_diagonal_dtype(u))?,
+        ),
+        DType::F32 => check_singular_diagonal(
+            u.as_typed::<f32>()
+                .ok_or_else(|| unsupported_diagonal_dtype(u))?,
+        ),
+        DType::C64 => check_singular_diagonal(
+            u.as_typed::<Complex64>()
+                .ok_or_else(|| unsupported_diagonal_dtype(u))?,
+        ),
+        DType::C32 => check_singular_diagonal(
+            u.as_typed::<Complex32>()
+                .ok_or_else(|| unsupported_diagonal_dtype(u))?,
+        ),
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
+            Err(unsupported_diagonal_dtype(u))
         }
     }
 }
