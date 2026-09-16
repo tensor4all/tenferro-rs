@@ -1334,6 +1334,16 @@ result constructions such as `.map(Tensor::F32)`, not patterns. `reshape` is the
 the move-semantics case: it hands the typed tensor to the kernel-launch helper and reuses the device
 buffer, so it needs the erased representation rather than a borrow.
 
+**The linalg backend's repeated tables.** `crates/tenferro-linalg/src/cpu/backend.rs` holds the same
+extraction table thirty-three times: each one matches `input`, dispatches to a generic faer routine per
+scalar, and ends in a refusal. A span-based pass was rejected by the compiler twice here, because an arm's
+span runs to the next variant head *anywhere in the file*, so it reached the patterns of the following
+table, and because the operation label lives outside the arm being rewritten. The working shape is
+per-table and self-contained: the scrutinee reads `input.dtype()`, each arm becomes a tag, and the typed
+value is bound with `input.as_typed::<T>().ok_or_else(|| unsupported_dtype(...))?`, which is the same
+accessor the concatenate conversion used and needs no helper. The first table (`lu_factor`) is converted
+and its focused tests pass; the remaining thirty-two take the same edit.
+
 **Where the incremental approach stops.** Converting `reshape` showed the limit. Its dispatch recovers
 each typed tensor and *moves* it into a metadata helper that reuses the buffer, but `Tensor::as_typed`
 borrows, so a tag-dispatched version would have to clone the device tensor and change the operation's
