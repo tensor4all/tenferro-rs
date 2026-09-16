@@ -339,3 +339,26 @@ expected value in `f64` before comparing it with an extended-precision result.
 
 Workspace after this: 5268 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy clean under `-D warnings` and the strict doc lints.
+
+## Connected programs across a conversion
+
+#1790's connected programs need the conversion to be an operation in the graph, so the
+contribution now owns both directions (`Df64ToF64`, `Df64FromF64`) in the same family,
+with the opposite conversion as each adjoint.
+
+Implementing them found a real limitation: the reverse pass hands an operation a
+borrowed read, because the adjoint of an ordinary `f64` reduction is a broadcast, which
+is a strided view. The executor now resolves an input to either a borrow or a
+materialized tensor, using the session the context carries when it has one and
+gathering a preset `f64` read by its own layout when it does not. The first attempt
+threaded only `execute_in_session` and still failed, because the runtime reaches this
+path through `execute`; the erased context does not expose a session, so the preset
+gather is what makes the path work.
+
+`ext/df64-proof/tests/connected_conversion_ad.rs` verifies both directions: the
+narrowing program differentiates into the external scalar and does *not* recover the
+discarded low component, and the widening program differentiates into an ordinary
+`f64` gradient of `[6, 8]` for the input `[3, 4]`.
+
+Workspace after this: 5272 passed, 3 failed (the same pre-existing `trybuild`
+failures), clippy clean under `-D warnings` and the strict doc lints.

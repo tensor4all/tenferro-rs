@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
-use tenferro_df64_proof::ad::Df64TotalVjpRule;
+use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64Total, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
@@ -49,7 +49,7 @@ fn runtime_with_module() -> Runtime {
 #[test]
 fn the_total_sum_adjoint_broadcasts_the_cotangent() {
     let rules = SemanticExtensionRuleSet::new()
-        .with_primal_vjp(Arc::new(Df64TotalVjpRule))
+        .with_primal_vjp(Arc::new(Df64VjpRule))
         .expect("one rule per family");
     let ad = AdContext::builder()
         .with_semantic_extension_rules(rules)
@@ -97,7 +97,7 @@ fn the_total_sum_adjoint_broadcasts_the_cotangent() {
 #[test]
 fn the_adjoint_retains_low_order_information() {
     let rules = SemanticExtensionRuleSet::new()
-        .with_primal_vjp(Arc::new(Df64TotalVjpRule))
+        .with_primal_vjp(Arc::new(Df64VjpRule))
         .expect("one rule per family");
     let ad = AdContext::builder()
         .with_semantic_extension_rules(rules)
@@ -140,10 +140,10 @@ fn the_adjoint_retains_low_order_information() {
 
 #[test]
 fn the_total_sum_linearization_sums_the_tangents() {
-    use tenferro_df64_proof::ad::Df64TotalLinearizeRule;
+    use tenferro_df64_proof::ad::Df64LinearizeRule;
 
     let rules = SemanticExtensionRuleSet::new()
-        .with_linearize(Arc::new(Df64TotalLinearizeRule))
+        .with_linearize(Arc::new(Df64LinearizeRule))
         .expect("one linearize rule per family");
     let ad = AdContext::builder()
         .with_semantic_extension_rules(rules)

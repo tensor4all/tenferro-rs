@@ -812,6 +812,32 @@ the adjoint of the factorization (a triangular solve, so it needs the same divis
 and a solve in the external scalar), and the conversions in the connected graphs need
 their own rules. Those are the next step, not a missing mechanism.
 
+### 5.7 Connected programs across a conversion
+
+The connected programs of #1790 need the conversion to be an operation in the graph
+rather than a call between graphs, so the contribution now owns both directions:
+`Df64ToF64` and `Df64FromF64`, in the same family as the total sum, the broadcast and
+the factorization. Their adjoints are the opposite conversions, so the reverse rule
+emits one op and no residual.
+
+The reverse pass can hand an operation a borrowed read: the adjoint of an ordinary
+`f64` reduction is a broadcast, which is a strided view rather than an owned tensor.
+The executor therefore resolves an input to either a borrow or a materialized tensor,
+using the session the context carries when it has one, and gathering a preset `f64`
+read by its own layout when it does not. That removed a real limitation rather than
+working around it: before this, a connected reverse pass failed with a typed error
+instead of running.
+
+`ext/df64-proof/tests/connected_conversion_ad.rs` verifies both directions:
+
+- `Df64 -> to_f64 -> sum of squares` differentiates back into the external scalar, and
+  the gradient is `2x` evaluated at the *narrowed* values: the low component the
+  narrowing discarded is not recovered by widening it back, which is the convention
+  #1788 asks to check.
+- `f64 -> from_f64 -> to_f64 -> sum of squares` differentiates back into an ordinary
+  `f64` gradient of `[6, 8]` for the input `[3, 4]`, so the graph's dtype boundary is
+  respected in both directions.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

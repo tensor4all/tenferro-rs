@@ -21,7 +21,7 @@ use tenferro_runtime::{
     PreparedOperationExecutorHandle, PreparedOperationHandle, PreparedOperationPlan,
     SpecializationProjection,
 };
-use tenferro_tensor::{DType, Tensor, TensorRead};
+use tenferro_tensor::{DType, Tensor, TensorRead, TensorView};
 use tenferro_tensor_core::{ErasedHostTensor, HostTensor, Scalar};
 
 use crate::{Df64, Df64Add};
@@ -226,6 +226,154 @@ impl ExtensionOp for Df64Expand {
     }
 }
 
+/// Widen a preset `f64` tensor into the externally defined scalar.
+///
+/// The widening is exact, so the result's low component is zero. A conversion is a
+/// separate operation from the factorization, which is what lets a connected program
+/// start from ordinary `f64` values.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::extension::Df64FromF64;
+/// use tenferro_ad::extension::ExtensionOp;
+///
+/// assert_eq!(<Df64FromF64 as ExtensionOp>::input_count(&Df64FromF64), 1);
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Df64FromF64;
+
+impl ExtensionOp for Df64FromF64 {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(*self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    fn scalar_identity(&self) -> Option<&'static str> {
+        Some(DF64_SCALAR_IDENTITY)
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        if dtype != DType::F64 {
+            return Err(tenferro_tensor::Error::unsupported_dtype(
+                "df64_from_f64",
+                dtype,
+                "df64_from_f64 takes a preset f64 tensor",
+            ));
+        }
+        Ok(vec![(
+            DType::External(DF64_SCALAR),
+            ctx.input_shape(0)?.to_vec(),
+        )])
+    }
+}
+
+/// Narrow the externally defined scalar into a preset `f64` tensor.
+///
+/// The low component participates and the result is rounded to nearest with ties to
+/// even, so this is not the truncation to the high component that reinterpreting the
+/// payload would give. Information the narrowing discards is not recovered later.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_df64_proof::extension::Df64ToF64;
+/// use tenferro_ad::extension::ExtensionOp;
+///
+/// assert_eq!(<Df64ToF64 as ExtensionOp>::output_count(&Df64ToF64), 1);
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Df64ToF64;
+
+impl ExtensionOp for Df64ToF64 {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(*self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        if !matches!(dtype, DType::External(_)) {
+            return Err(tenferro_tensor::Error::unsupported_dtype(
+                "df64_to_f64",
+                dtype,
+                "df64_to_f64 takes an externally defined scalar",
+            ));
+        }
+        Ok(vec![(DType::F64, ctx.input_shape(0)?.to_vec())])
+    }
+}
+
+/// The externally defined element type of the contribution's scalar.
+///
+/// This is what the runtime tag reports, next to the canonical identity.
+pub const DF64_SCALAR: std::any::TypeId = std::any::TypeId::of::<Df64>();
+
 /// Reduced QR factorization of a real square or tall matrix.
 ///
 /// The factorization is the contribution's own numerical body: modified
@@ -323,8 +471,12 @@ impl ExtensionOp for Df64Qr {
 ///
 /// Returns a typed error when the input is not a rank-2 externally defined matrix, or
 /// when a column is zero and the factorization has no unit vector for it.
-fn qr_of(inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
-    let tensor = sole_input("df64_qr", inputs)?;
+fn qr_of(
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let input = sole_input("df64_qr", session, inputs)?;
+    let tensor = input.tensor();
     let payload =
         external_payload::<Df64>("df64_qr", tensor).map_err(tenferro_runtime::Error::from)?;
     let shape = tensor.shape();
@@ -404,6 +556,37 @@ fn qr_of(inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
     ])
 }
 
+/// Narrow the external scalar to `f64` through the contribution's own conversion.
+fn to_f64_of(
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let input = sole_input("df64_to_f64", session, inputs)?;
+    let tensor = input.tensor();
+    crate::conversion::to_f64(tensor)
+        .map(|tensor| vec![tensor])
+        .map_err(tenferro_runtime::Error::from)
+}
+
+/// Widen a preset `f64` tensor into the external scalar.
+fn from_f64_of(
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let input = match inputs.first() {
+        // A borrowed read of the preset input is gathered by its own layout rather than
+        // requiring a session the executor may not have.
+        Some(read @ TensorRead::View(_)) if session.is_none() => {
+            Input::Materialized(Box::new(owned_f64_read(read)?))
+        }
+        _ => sole_input("df64_from_f64", session, inputs)?,
+    };
+    let tensor = input.tensor();
+    crate::conversion::to_df64(tensor)
+        .map(|tensor| vec![tensor])
+        .map_err(tenferro_runtime::Error::from)
+}
+
 fn external_payload<'a, T: Scalar>(
     op: &'static str,
     tensor: &'a Tensor,
@@ -424,20 +607,103 @@ fn external_payload<'a, T: Scalar>(
     }
 }
 
-/// Borrow the single owned input every operation in this crate takes.
+/// One operation input, borrowed when the runtime already owns it.
+enum Input<'a> {
+    Borrowed(&'a Tensor),
+    // Boxed because a tensor value is much larger than a borrow, and every body only
+    // reads it through `tensor`.
+    Materialized(Box<Tensor>),
+}
+
+impl Input<'_> {
+    fn tensor(&self) -> &Tensor {
+        match self {
+            Self::Borrowed(tensor) => tensor,
+            Self::Materialized(tensor) => tensor,
+        }
+    }
+}
+
+/// Materialize a borrowed `f64` read without a session.
+///
+/// A reverse pass can hand the widening operation a strided view, such as the
+/// broadcast of a seeding cotangent, and the widening operation's input is always a
+/// preset `f64` tensor, so the elements are gathered by their own layout.
+///
+/// # Errors
+///
+/// Returns a typed error when the read is not a host `f64` tensor or its layout names
+/// storage outside the borrowed buffer.
+fn owned_f64_read(read: &TensorRead<'_>) -> tenferro_runtime::Result<Tensor> {
+    let invalid = |message: &'static str| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
+            "df64_from_f64",
+            "input",
+            message,
+        ))
+    };
+    let TensorView::F64(view) = read.clone().tensor_view() else {
+        return Err(invalid("df64_from_f64 takes a preset f64 tensor"));
+    };
+    let storage = view.host_storage().map_err(|source| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::runtime_state_source(
+            "df64_from_f64",
+            source,
+        ))
+    })?;
+    let shape = view.shape().to_vec();
+    let mut values = Vec::with_capacity(storage.len().min(view.n_elements()));
+    let mut index = vec![0usize; shape.len()];
+    for _ in 0..view.n_elements() {
+        let offset = view
+            .linear_offset(&index)
+            .ok_or_else(|| invalid("the borrowed f64 view is outside its buffer"))?;
+        let value = storage
+            .get(offset)
+            .ok_or_else(|| invalid("the borrowed f64 view is outside its buffer"))?;
+        values.push(*value);
+        for (position, current) in index.iter_mut().enumerate() {
+            *current += 1;
+            if *current < shape[position] {
+                break;
+            }
+            *current = 0;
+        }
+    }
+    Tensor::from_vec_col_major(shape, values).map_err(|source| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::runtime_state_source(
+            "df64_from_f64",
+            source,
+        ))
+    })
+}
+
+/// Resolve the single input every operation in this crate takes.
+///
+/// The reverse pass can hand an operation a borrowed view of another value, so a
+/// session materializes it into storage the operation owns. Without a session a view
+/// is rejected explicitly rather than read through.
 fn sole_input<'a>(
     op: &'static str,
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
     inputs: &'a [TensorRead<'a>],
-) -> tenferro_runtime::Result<&'a Tensor> {
+) -> tenferro_runtime::Result<Input<'a>> {
     match inputs.first() {
-        Some(TensorRead::Tensor(tensor)) => Ok(tensor),
-        Some(TensorRead::View(_)) => Err(tenferro_runtime::Error::from(
-            tenferro_tensor::Error::invalid_argument(
-                op,
-                "input",
-                "the operation takes an owned externally defined payload",
-            ),
-        )),
+        Some(TensorRead::Tensor(tensor)) => Ok(Input::Borrowed(tensor)),
+        Some(read @ TensorRead::View(_)) => match session {
+            Some(session) => Ok(Input::Materialized(Box::new(
+                session
+                    .to_contiguous_read(read.clone())
+                    .map_err(tenferro_runtime::Error::from)?,
+            ))),
+            None => Err(tenferro_runtime::Error::from(
+                tenferro_tensor::Error::invalid_argument(
+                    op,
+                    "input",
+                    "the operation needs a session to read a borrowed input",
+                ),
+            )),
+        },
         None => Err(tenferro_runtime::Error::from(
             tenferro_tensor::Error::invalid_argument(op, "input", "the operation takes one input"),
         )),
@@ -445,8 +711,13 @@ fn sole_input<'a>(
 }
 
 /// Fill a tensor of `shape` with the scalar input's value.
-fn expand_of(shape: &[usize], inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
-    let tensor = sole_input("df64_expand", inputs)?;
+fn expand_of(
+    shape: &[usize],
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let input = sole_input("df64_expand", session, inputs)?;
+    let tensor = input.tensor();
     let payload =
         external_payload::<Df64>("df64_expand", tensor).map_err(tenferro_runtime::Error::from)?;
     let value = payload.as_slice().first().copied().ok_or_else(|| {
@@ -463,8 +734,12 @@ fn expand_of(shape: &[usize], inputs: &[TensorRead<'_>]) -> tenferro_runtime::Re
     Ok(vec![Tensor::external(ErasedHostTensor::new(output))])
 }
 
-fn total_of(inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
-    let tensor = sole_input("df64_total", inputs)?;
+fn total_of(
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let input = sole_input("df64_total", session, inputs)?;
+    let tensor = input.tensor();
     let payload =
         external_payload::<Df64>("df64_total", tensor).map_err(tenferro_runtime::Error::from)?;
     let total = scalar_fold::<Df64, Df64Add>("df64_total", payload, Df64::zero())
@@ -484,14 +759,24 @@ enum Df64Body {
     Expand(Box<[usize]>),
     /// Reduced QR factorization of the matrix input.
     Qr,
+    /// Narrow the external scalar to `f64`.
+    ToF64,
+    /// Widen a preset `f64` tensor into the external scalar.
+    FromF64,
 }
 
 impl Df64Body {
-    fn execute(&self, inputs: &[TensorRead<'_>]) -> tenferro_runtime::Result<Vec<Tensor>> {
+    fn execute(
+        &self,
+        session: Option<&mut dyn tenferro_tensor::BackendSession>,
+        inputs: &[TensorRead<'_>],
+    ) -> tenferro_runtime::Result<Vec<Tensor>> {
         match self {
-            Self::Total => total_of(inputs),
-            Self::Expand(shape) => expand_of(shape, inputs),
-            Self::Qr => qr_of(inputs),
+            Self::Total => total_of(session, inputs),
+            Self::Expand(shape) => expand_of(shape, session, inputs),
+            Self::Qr => qr_of(session, inputs),
+            Self::ToF64 => to_f64_of(session, inputs),
+            Self::FromF64 => from_f64_of(session, inputs),
         }
     }
 }
@@ -524,7 +809,9 @@ impl PreparedOperationExecutor for Df64Prepared {
         _caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
-        self.body.execute(inputs)
+        // The erased context does not expose a session, so a body that needs one relies
+        // on the session entry point and gathers what it can without one.
+        self.body.execute(None, inputs)
     }
 
     fn supports_session(&self) -> bool {
@@ -533,11 +820,11 @@ impl PreparedOperationExecutor for Df64Prepared {
 
     fn execute_in_session(
         &self,
-        _session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::BackendSession,
         _caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
-        self.body.execute(inputs)
+        self.body.execute(Some(session), inputs)
     }
 }
 
@@ -569,6 +856,10 @@ impl ExtensionEngine for Df64Engine {
             Df64Body::Expand(expand.shape.clone())
         } else if operation.downcast_ref::<Df64Qr>().is_some() {
             Df64Body::Qr
+        } else if operation.downcast_ref::<Df64ToF64>().is_some() {
+            Df64Body::ToF64
+        } else if operation.downcast_ref::<Df64FromF64>().is_some() {
+            Df64Body::FromF64
         } else {
             Df64Body::Total
         };
