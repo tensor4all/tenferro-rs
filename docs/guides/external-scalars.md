@@ -179,10 +179,19 @@ the summation walks the output index space and accumulates the contracted one in
 scalar, so the low component survives a contraction whose accumulation would otherwise round it
 away.
 
+The contraction is differentiable in reverse mode. Its adjoint rotates the labels rather than
+changing them — `lhs_bar = einsum(out, rhs -> lhs)` and `rhs_bar = einsum(lhs, out -> rhs)` — so the
+cotangent of each operand is computed with the extended scalar's own accumulation.
+`ext/df64-proof/tests/einsum_ad.rs` checks it three ways: against hand-written products for the
+matrix case, against a scalar loss's central difference at a step of `1e-12` (where the two agree
+exactly, and where an `f64` loss could not agree at all), and against a configuration whose
+cotangent is `1 + 2^-80` and has to keep the low component, with the `f64` control losing it. The
+forward tangent is not implemented, so requesting it fails with the family's own message that it has
+no Linearize rule for the operation, and the test asserts that rather than assuming it.
+
 What is refused is refused with a typed error rather than approximated: a label that repeats inside
-one input, because that is a trace; an output label that no input names; inputs that disagree on the
-extent of a shared label; and differentiating the contraction, which fails with the family's own
-message that it has no Linearize rule for the operation. That capability matches the reference
+one input, because that is a trace; an output label that no input names; and inputs that disagree on
+the extent of a shared label. That capability matches the reference
 consumer in `ext/tropical`, which also refuses diagonal extraction, pre-reduction, and N-ary
 contractions — #1787 calls this deliverable "#1793's einsum/tropical example", so matching that
 example is the bar, and the refusals are typed on both sides.

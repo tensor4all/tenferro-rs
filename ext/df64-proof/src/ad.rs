@@ -17,8 +17,8 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_runtime::program::SemanticProgramBuilder;
 
 use crate::extension::{
-    Df64Einsum, Df64Expand, Df64FromF64, Df64Qr, Df64QrJvp, Df64QrVjp, Df64ToF64, Df64Total,
-    DF64_OPS_FAMILY,
+    Df64Einsum, Df64EinsumVjp, Df64Expand, Df64FromF64, Df64Qr, Df64QrJvp, Df64QrVjp, Df64ToF64,
+    Df64Total, DF64_OPS_FAMILY,
 };
 
 /// One operation of the contribution's family.
@@ -113,8 +113,9 @@ impl SemanticPrimalVjpRule for Df64VjpRule {
 
     fn residual_mask(&self) -> ResidualSpec {
         // The union over the family: the factorization's adjoint reads its primal
-        // factors, and the other operations read nothing.
-        ResidualSpec::all_outputs()
+        // factors, and the contraction's adjoint reads its operands (the case the
+        // residual specification names for an einsum rule).
+        ResidualSpec::all_outputs().with_all_inputs()
     }
 
     fn primal_vjp(
@@ -182,7 +183,33 @@ impl SemanticPrimalVjpRule for Df64VjpRule {
                 }
                 builder.add_extension(Arc::new(Df64QrVjp::of(has_q, has_r)), &operands)
             }
-            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp | Df64Op::Einsum => {
+            Df64Op::Einsum => {
+                // The adjoint of a contraction contracts the output cotangent with the other
+                // operand, so the helper reads both operands and the cotangent and produces one
+                // cotangent per operand.
+                let Some(contraction) = request.op().as_any().downcast_ref::<Df64Einsum>() else {
+                    return Err(unsupported(op, role));
+                };
+                let Some(AdValue::Value(cotangent)) = request.cotangent_outputs().first().copied()
+                else {
+                    return Ok(inactive());
+                };
+                let (lhs, rhs, out) = contraction.labels();
+                // The primal operation accepted this pattern, so the adjoint's validation is a
+                // rule-level invariant rather than a user error.
+                let Ok(adjoint) = Df64EinsumVjp::of(lhs, rhs, out) else {
+                    return Err(unsupported(op, role));
+                };
+                builder.add_extension(
+                    Arc::new(adjoint),
+                    &[
+                        request.primal_input_value(0)?,
+                        request.primal_input_value(1)?,
+                        cotangent,
+                    ],
+                )
+            }
+            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp => {
                 return Err(unsupported(op, role));
             }
         }

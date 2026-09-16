@@ -643,6 +643,142 @@ impl ExtensionOp for Df64Einsum {
     }
 }
 
+/// The adjoint of a two-input contraction.
+///
+/// The adjoint of `out = einsum(lhs, rhs)` contracts the output cotangent with the other operand,
+/// which is the same operation with the labels rotated: `lhs_bar = einsum(out, rhs -> lhs)` and
+/// `rhs_bar = einsum(lhs, out -> rhs)`. It carries the pattern so the adjoint uses exactly the
+/// labels the primal used, and it has two outputs because the contraction has two inputs.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::extension::ExtensionOp;
+/// use tenferro_df64_proof::extension::Df64EinsumVjp;
+///
+/// let adjoint = Df64EinsumVjp::of(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
+/// assert_eq!(<Df64EinsumVjp as ExtensionOp>::input_count(&adjoint), 3);
+/// assert_eq!(<Df64EinsumVjp as ExtensionOp>::output_count(&adjoint), 2);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Df64EinsumVjp {
+    lhs: Vec<u32>,
+    rhs: Vec<u32>,
+    out: Vec<u32>,
+}
+
+impl Df64EinsumVjp {
+    /// Build the adjoint for the same labels as the primal contraction.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same pattern errors as [`Df64Einsum::new`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64EinsumVjp;
+    ///
+    /// assert!(Df64EinsumVjp::of(&[0, 1], &[1, 2], &[0, 2]).is_ok());
+    /// assert!(Df64EinsumVjp::of(&[], &[1, 2], &[0, 2]).is_err());
+    /// ```
+    pub fn of(lhs: &[u32], rhs: &[u32], out: &[u32]) -> tenferro_runtime::Result<Self> {
+        Df64Einsum::new(lhs, rhs, out)?;
+        Ok(Self {
+            lhs: lhs.to_vec(),
+            rhs: rhs.to_vec(),
+            out: out.to_vec(),
+        })
+    }
+
+    /// The primal pattern's label lists.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64EinsumVjp;
+    ///
+    /// let adjoint = Df64EinsumVjp::of(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
+    /// let (lhs, rhs, out) = adjoint.labels();
+    /// assert_eq!((lhs, rhs, out), (&[0, 1][..], &[1, 2][..], &[0, 2][..]));
+    /// ```
+    #[must_use]
+    pub fn labels(&self) -> (&[u32], &[u32], &[u32]) {
+        (&self.lhs, &self.rhs, &self.out)
+    }
+}
+
+impl ExtensionOp for Df64EinsumVjp {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        for labels in [&self.lhs, &self.rhs, &self.out] {
+            hasher.write_usize(labels.len());
+            for label in labels {
+                hasher.write_u32(*label);
+            }
+        }
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| other == self)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        // Both operands and the output cotangent.
+        3
+    }
+
+    fn output_count(&self) -> usize {
+        // One cotangent per operand.
+        2
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    fn scalar_identity(&self) -> Option<&'static str> {
+        Some(DF64_SCALAR_IDENTITY)
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        if !matches!(dtype, DType::External(_)) {
+            return Err(tenferro_tensor::Error::unsupported_dtype(
+                "df64_einsum_vjp",
+                dtype,
+                "df64_einsum_vjp takes an externally defined scalar",
+            ));
+        }
+        // Each cotangent has the shape of the operand it belongs to.
+        Ok(vec![
+            (dtype, ctx.input_shape(0)?.to_vec()),
+            (dtype, ctx.input_shape(1)?.to_vec()),
+        ])
+    }
+}
+
 /// Forward-mode tangent of the reduced QR factorization.
 ///
 /// # Examples
@@ -1313,37 +1449,44 @@ fn qr_jvp_of(
     Ok(vec![tensor_of(op, q_dot)?, tensor_of(op, r_dot)?])
 }
 
-/// Contract two external tensors over their shared labels.
+/// The output shape a label list describes, given the extents the operands declare.
+fn shape_of_labels(labels: &[Box<[u32]>], shapes: &[Vec<usize>], out_labels: &[u32]) -> Vec<usize> {
+    let mut extents: Vec<(u32, usize)> = Vec::new();
+    for (operand, operand_labels) in labels.iter().enumerate() {
+        for (axis, label) in operand_labels.iter().enumerate() {
+            if !extents.iter().any(|(existing, _)| existing == label) {
+                extents.push((*label, shapes[operand][axis]));
+            }
+        }
+    }
+    out_labels
+        .iter()
+        .map(|label| {
+            extents
+                .iter()
+                .find(|(existing, _)| existing == label)
+                .map(|(_, extent)| *extent)
+                .unwrap_or(1)
+        })
+        .collect()
+}
+
+/// Contract two operand payloads over their shared labels, in the external scalar's arithmetic.
 ///
-/// A rank-2 pattern whose labels are the matrix pattern takes the shared dense product, which is
-/// the GEMM-shaped path #1793 asks to reuse. Every other two-input pattern is evaluated directly:
-/// the output index space is walked once and, for each of its points, the contracted index space
-/// is summed in the external scalar's own arithmetic. A label that appears in an input but not in
-/// the output is summed, which is what ordinary einsum notation means by it, and a repeating label
-/// inside one input is refused when the operation is built rather than guessed at here.
-fn einsum_of(
+/// The output index space is walked once and, for each of its points, the contracted index space is
+/// summed. A label an operand names but the output does not is summed, which is what ordinary einsum
+/// notation means by it, and a label that repeats inside one operand was refused when the operation
+/// was built.
+fn contract_in_scalar(
+    op: &'static str,
     labels: &[Box<[u32]>],
     out_labels: &[u32],
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
-    inputs: &[TensorRead<'_>],
-) -> tenferro_runtime::Result<Vec<Tensor>> {
-    let op = "df64_einsum";
-    let resolved = inputs_of(op, session, inputs)?;
-    if resolved.len() != 2 || labels.len() != 2 {
-        return Err(tenferro_runtime::Error::from(
-            tenferro_tensor::Error::invalid_argument(
-                op,
-                "input",
-                "a pairwise contraction takes two inputs",
-            ),
-        ));
-    }
-    let lhs_values = payload_of::<Df64>(op, resolved[0].tensor())?;
-    let rhs_values = payload_of::<Df64>(op, resolved[1].tensor())?;
-    let lhs_shape = resolved[0].tensor().shape().to_vec();
-    let rhs_shape = resolved[1].tensor().shape().to_vec();
-    if element_count(&lhs_shape) != lhs_values.len()
-        || element_count(&rhs_shape) != rhs_values.len()
+    lhs_values: &[Df64],
+    lhs_shape: &[usize],
+    rhs_values: &[Df64],
+    rhs_shape: &[usize],
+) -> tenferro_runtime::Result<Vec<Df64>> {
+    if element_count(lhs_shape) != lhs_values.len() || element_count(rhs_shape) != rhs_values.len()
     {
         return Err(tenferro_runtime::Error::from(
             tenferro_tensor::Error::invalid_argument(
@@ -1354,7 +1497,6 @@ fn einsum_of(
         ));
     }
 
-    // The output extent of every label, taken from whichever input declares it.
     let mut extents: Vec<(u32, usize)> = Vec::new();
     let label_extent = |label: u32, extent: usize, extents: &mut Vec<(u32, usize)>| match extents
         .iter()
@@ -1389,22 +1531,16 @@ fn einsum_of(
             .map(|(_, extent)| *extent)
             .unwrap_or(1)
     };
-
     let out_shape: Vec<usize> = out_labels
         .iter()
         .map(|label| extent_of(*label, &extents))
         .collect();
-    // Everything an input names but the output does not is summed. A label named by both inputs
-    // and by the output too is a batch axis, so only the labels missing from the output contract.
-    let summed_labels: Vec<u32> = {
-        let mut summed: Vec<u32> = Vec::new();
-        for label in labels[0].iter().chain(labels[1].iter()) {
-            if !out_labels.contains(label) && !summed.contains(label) {
-                summed.push(*label);
-            }
+    let mut summed_labels: Vec<u32> = Vec::new();
+    for label in labels[0].iter().chain(labels[1].iter()) {
+        if !out_labels.contains(label) && !summed_labels.contains(label) {
+            summed_labels.push(*label);
         }
-        summed
-    };
+    }
     let summed_shape: Vec<usize> = summed_labels
         .iter()
         .map(|label| extent_of(*label, &extents))
@@ -1415,9 +1551,7 @@ fn einsum_of(
     let mut result = vec![Df64::zero(); out_count];
     let mut out_index = vec![0usize; out_shape.len()];
     let mut summed_index = vec![0usize; summed_shape.len()];
-    for (out_position, slot) in result.iter_mut().enumerate() {
-        let _ = out_position;
-        // Reset the contracted odometer for every output point.
+    for slot in result.iter_mut() {
         for value in summed_index.iter_mut() {
             *value = 0;
         }
@@ -1425,7 +1559,7 @@ fn einsum_of(
         for _ in 0..summed_count {
             let lhs_offset = offset_for(
                 &labels[0],
-                &lhs_shape,
+                lhs_shape,
                 out_labels,
                 &out_index,
                 &summed_labels,
@@ -1433,7 +1567,7 @@ fn einsum_of(
             );
             let rhs_offset = offset_for(
                 &labels[1],
-                &rhs_shape,
+                rhs_shape,
                 out_labels,
                 &out_index,
                 &summed_labels,
@@ -1445,11 +1579,108 @@ fn einsum_of(
         *slot = accumulator;
         advance(&mut out_index, &out_shape);
     }
+    Ok(result)
+}
 
-    let output = HostTensor::from_vec_col_major(out_shape, result)
+/// Wrap a payload as an external tensor of the shape the labels describe.
+fn external_of(
+    op: &'static str,
+    values: Vec<Df64>,
+    shape: Vec<usize>,
+) -> tenferro_runtime::Result<Tensor> {
+    let tensor = HostTensor::from_vec_col_major(shape, values)
         .map_err(|source| tenferro_tensor::Error::validation(op, source))
         .map_err(tenferro_runtime::Error::from)?;
-    Ok(vec![Tensor::external(ErasedHostTensor::new(output))])
+    Ok(Tensor::external(ErasedHostTensor::new(tensor)))
+}
+
+/// Contract two external tensors, returning the result as an external tensor.
+fn einsum_of(
+    labels: &[Box<[u32]>],
+    out_labels: &[u32],
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let op = "df64_einsum";
+    let resolved = inputs_of(op, session, inputs)?;
+    if resolved.len() != 2 || labels.len() != 2 {
+        return Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "input",
+                "a pairwise contraction takes two inputs",
+            ),
+        ));
+    }
+    let lhs_values = payload_of::<Df64>(op, resolved[0].tensor())?;
+    let rhs_values = payload_of::<Df64>(op, resolved[1].tensor())?;
+    let lhs_shape = resolved[0].tensor().shape().to_vec();
+    let rhs_shape = resolved[1].tensor().shape().to_vec();
+    let values = contract_in_scalar(
+        op,
+        labels,
+        out_labels,
+        &lhs_values,
+        &lhs_shape,
+        &rhs_values,
+        &rhs_shape,
+    )?;
+    let out_shape = shape_of_labels(labels, &[lhs_shape, rhs_shape], out_labels);
+    Ok(vec![external_of(op, values, out_shape)?])
+}
+
+/// The adjoint of a contraction: the cotangent of each operand, in the extended scalar.
+///
+/// The labels rotate rather than change, so the adjoint contracts the output cotangent with the
+/// other operand and lands on the operand it differentiates.
+fn einsum_vjp_of(
+    labels: &[Box<[u32]>],
+    out_labels: &[u32],
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let op = "df64_einsum_vjp";
+    let resolved = inputs_of(op, session, inputs)?;
+    if resolved.len() != 3 || labels.len() != 2 {
+        return Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "input",
+                "the adjoint takes both operands and the output cotangent",
+            ),
+        ));
+    }
+    let lhs_values = payload_of::<Df64>(op, resolved[0].tensor())?;
+    let rhs_values = payload_of::<Df64>(op, resolved[1].tensor())?;
+    let cotangent = payload_of::<Df64>(op, resolved[2].tensor())?;
+    let lhs_shape = resolved[0].tensor().shape().to_vec();
+    let rhs_shape = resolved[1].tensor().shape().to_vec();
+    let cotangent_shape = resolved[2].tensor().shape().to_vec();
+    let out_operand = out_labels.to_vec().into_boxed_slice();
+
+    // lhs_bar = einsum(out, rhs -> lhs), rhs_bar = einsum(lhs, out -> rhs).
+    let lhs_bar = contract_in_scalar(
+        op,
+        &[out_operand.clone(), labels[1].clone()],
+        &labels[0],
+        &cotangent,
+        &cotangent_shape,
+        &rhs_values,
+        &rhs_shape,
+    )?;
+    let rhs_bar = contract_in_scalar(
+        op,
+        &[labels[0].clone(), out_operand],
+        &labels[1],
+        &lhs_values,
+        &lhs_shape,
+        &cotangent,
+        &cotangent_shape,
+    )?;
+    Ok(vec![
+        external_of(op, lhs_bar, lhs_shape)?,
+        external_of(op, rhs_bar, rhs_shape)?,
+    ])
 }
 
 /// The column-major offset an input's labels select at one output and contracted index.
@@ -1564,6 +1795,13 @@ enum Df64Body {
     QrVjp((bool, bool)),
     /// The tangent of the factorization.
     QrJvp,
+    /// The adjoint of a pairwise contraction.
+    EinsumVjp {
+        /// The labels of each operand, in that operand's own axis order.
+        inputs: Box<[Box<[u32]>]>,
+        /// The labels of the contraction's output, in the output's axis order.
+        out: Box<[u32]>,
+    },
     /// A pairwise contraction of two external tensors over their shared labels.
     Einsum {
         /// The labels of each input, in that input's own axis order.
@@ -1592,6 +1830,10 @@ impl Df64Body {
                 inputs: labels,
                 out,
             } => einsum_of(labels, out, session, inputs),
+            Self::EinsumVjp {
+                inputs: labels,
+                out,
+            } => einsum_vjp_of(labels, out, session, inputs),
         }
     }
 }
@@ -1679,6 +1921,16 @@ impl ExtensionEngine for Df64Engine {
             Df64Body::QrVjp((adjoint.has_q, adjoint.has_r))
         } else if operation.downcast_ref::<Df64QrJvp>().is_some() {
             Df64Body::QrJvp
+        } else if let Some(adjoint) = operation.downcast_ref::<Df64EinsumVjp>() {
+            let (lhs, rhs, out) = adjoint.labels();
+            Df64Body::EinsumVjp {
+                inputs: vec![
+                    lhs.to_vec().into_boxed_slice(),
+                    rhs.to_vec().into_boxed_slice(),
+                ]
+                .into_boxed_slice(),
+                out: out.to_vec().into_boxed_slice(),
+            }
         } else if let Some(contraction) = operation.downcast_ref::<Df64Einsum>() {
             let (lhs, rhs, out) = contraction.labels();
             Df64Body::Einsum {

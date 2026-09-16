@@ -1100,3 +1100,26 @@ unused import.
 The refusals are unchanged in kind and typed in every case: a repeated label inside one input, an
 output label no input names, inputs that disagree on a shared label's extent, and differentiation,
 which fails with the family's own missing-rule message.
+
+## The contraction's adjoint, and the declaration it needed
+
+#1793 asks for canonical first-order AD for the contraction, which was a typed refusal. The adjoint
+of `out = einsum(lhs, rhs)` rotates the labels rather than changing them —
+`lhs_bar = einsum(out, rhs -> lhs)`, `rhs_bar = einsum(lhs, out -> rhs)` — so it is a helper with two
+outputs that reuses the contraction body. `add_extension` returns a boxed slice of outputs, which is
+what makes a two-output helper expressible in a rule at all.
+
+The first run failed with `UndeclaredResidualValue { kind: Input, index: 0 }`, which is the harness
+saying that the rule had not declared what it reads: the family's residual mask allowed every output
+but no input, because the factorization's adjoint reads outputs. `ResidualSpec`'s own documentation
+names einsum as the case for `with_all_inputs`, so the mask is now the union. Nothing about the
+mathematics was wrong; the rule simply had to say what it touches.
+
+Three expectation errors of mine followed, each caught by the tests rather than assumed away: the
+adjoint of the second operand is the first operand's transpose, which in column-major order is
+`[1, 2, 3, 4]` and not the row-major reading I wrote; the low component in the precision case lives
+in an operand's *value*, so asking for that operand's cotangent tests nothing, which is why the test
+now asks for the operand whose cotangent accumulates `1 + 2^-80`; and a step of `1e-16` leaves only
+about `1e-16` of relative agreement, because dividing by `2h` amplifies the loss's own rounding, so
+the step is `1e-12` and the two sides now agree exactly. The forward tangent stays refused and the
+test asserts that refusal.
