@@ -82,6 +82,39 @@ fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
 }
 
 #[test]
+fn infer_output_meta_rejects_an_externally_defined_scalar() {
+    let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));
+    let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
+    let rhs_shape = [SymDim::from(3usize), SymDim::from(4usize)];
+    // The rejection is driven by the tag, so a synthetic external identity exercises the
+    // branch without depending on a contribution crate; a real adapter supplies its own.
+    let external = DType::External(core::any::TypeId::of::<u64>());
+
+    for dtypes in [[external, DType::F64], [DType::F64, external]] {
+        let error = invoke_extension_shape_inference(
+            &op,
+            &dtypes,
+            &[lhs_shape.as_slice(), rhs_shape.as_slice()],
+        )
+        .expect_err("an externally defined scalar has no inferred output metadata");
+
+        match error {
+            tenferro_tensor::Error::UnsupportedDType {
+                op, dtype, message, ..
+            } => {
+                assert_eq!(op, "einsum");
+                assert_eq!(dtype, external, "the error must name the offending input");
+                assert!(
+                    message.contains("preset"),
+                    "the error must say why the dtype is unsupported, got {message}"
+                );
+            }
+            other => panic!("expected an unsupported-dtype error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn extension_dtype_promotion_delegates_to_canonical_tensor_rules() {
     let source = include_str!("../extension.rs");
     assert!(
