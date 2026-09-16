@@ -479,8 +479,8 @@ impl Df64Einsum {
     /// use tenferro_df64_proof::extension::Df64Einsum;
     ///
     /// assert!(Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).is_ok());
-    /// // A repeated label inside one input is not a matrix contraction.
-    /// assert!(Df64Einsum::new(&[0, 0], &[0, 2], &[0, 2]).is_err());
+    /// // A repeated label inside one input is a trace, which the body evaluates.
+    /// assert!(Df64Einsum::new(&[0, 0], &[0, 2], &[0, 2]).is_ok());
     /// ```
     pub fn new(lhs: &[u32], rhs: &[u32], out: &[u32]) -> tenferro_runtime::Result<Self> {
         let invalid = |message: &str| {
@@ -493,16 +493,10 @@ impl Df64Einsum {
         if lhs.is_empty() || rhs.is_empty() {
             return Err(invalid("an input must carry at least one label"));
         }
-        for labels in [lhs, rhs] {
-            let mut seen = labels.to_vec();
-            seen.sort_unstable();
-            seen.dedup();
-            if seen.len() != labels.len() {
-                return Err(invalid(
-                    "a label repeats within one input, which is a trace and not supported here",
-                ));
-            }
-        }
+        // A label may repeat inside one input: that is a trace. The body reads the repeated axes at
+        // the same index, so a repeated label is a trace when the output omits it and a diagonal
+        // extraction when the output names it. The repeated axes must have the same extent, which
+        // the body checks when it resolves them.
         for label in out {
             if !lhs.contains(label) && !rhs.contains(label) {
                 return Err(invalid("an output label must appear in at least one input"));

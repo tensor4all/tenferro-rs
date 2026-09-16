@@ -1142,3 +1142,19 @@ not asked for. Each case now supplies exactly one tangent and says why.
 The previous turn's test asserting that differentiating the contraction fails was obsolete the moment
 the tangent landed, so it now builds a rule set with both roles and asserts that both modes work,
 which keeps the file honest instead of leaving a claim the code no longer satisfies.
+
+## Traces, which the body already evaluated, and the tests a rewrite had dropped
+
+The core of the contraction maps each axis by its label, so two axes carrying the same label read the
+same index without any special case: a repeated label is a trace when the output omits it and a
+diagonal extraction when the output names it. The only thing standing in the way was the validator,
+which refused repeated labels outright, so enabling the case meant deleting that refusal and keeping
+the extent agreement the body already checks. Two tests with hand-written values cover the pair, and
+the guide now notes that this goes past the reference consumer, which refuses diagonal extraction.
+
+Adding them turned up something worse. My generalization of the pattern two turns ago appended the
+helper and the batched, outer-product, and summed-label tests to this file, and a later rewrite of the
+same file truncated them, so the suite passed with those tests absent while the report claimed they
+were there. They are restored and green now, and the trace tests join them. The lesson is the one this
+session keeps repeating: a report is a claim, and a claim about tests has to be checked against the
+file rather than against what I remember writing.

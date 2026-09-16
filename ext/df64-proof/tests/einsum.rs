@@ -212,3 +212,103 @@ fn differentiating_the_contraction_is_supported_in_both_modes() {
         "the adjoint of the contraction is implemented"
     );
 }
+
+/// Contract with an explicit pattern, returning the result's elements.
+fn contract_with(
+    lhs: Vec<Df64>,
+    lhs_shape: Vec<usize>,
+    rhs: Vec<Df64>,
+    rhs_shape: Vec<usize>,
+    pattern: (&[u32], &[u32], &[u32]),
+) -> Vec<Df64> {
+    let op = Df64Einsum::new(pattern.0, pattern.1, pattern.2).expect("a valid pattern");
+    let lhs_leaf = leaf(lhs.clone(), lhs_shape.clone());
+    let rhs_leaf = leaf(rhs.clone(), rhs_shape.clone());
+    let output =
+        apply(std::sync::Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&output[0]).expect("compiled contraction");
+    let results = runtime_with_module()
+        .run_compiled(
+            &program,
+            &[&external(lhs, lhs_shape), &external(rhs, rhs_shape)],
+        )
+        .expect("contraction execution");
+    payload(&results[0])
+}
+
+fn numbers(values: &[f64]) -> Vec<Df64> {
+    values.iter().copied().map(Df64::from_f64).collect()
+}
+
+#[test]
+fn a_batched_contraction_with_a_free_batch_label_runs() {
+    // "bij,bjk->bik" with two batches of a 1x1 matrix: each output entry is that batch's product,
+    // so the batch label is free rather than contracted.
+    let results = contract_with(
+        numbers(&[1.0, 2.0]),
+        vec![2, 1, 1],
+        numbers(&[3.0, 4.0]),
+        vec![2, 1, 1],
+        (&[0, 1, 2], &[0, 2, 3], &[0, 1, 3]),
+    );
+    assert_eq!(results, numbers(&[3.0, 8.0]));
+}
+
+#[test]
+fn an_outer_product_has_no_contracted_label() {
+    // "i,j->ij" has no shared label, so the contraction is a product.
+    let results = contract_with(
+        numbers(&[2.0, 3.0]),
+        vec![2],
+        numbers(&[5.0, 7.0]),
+        vec![2],
+        (&[0], &[1], &[0, 1]),
+    );
+    // [[10, 14], [15, 21]] in column-major order.
+    assert_eq!(results, numbers(&[10.0, 15.0, 14.0, 21.0]));
+}
+
+#[test]
+fn a_label_only_one_input_names_and_the_output_omits_is_summed() {
+    // "ij,kl->ik" sums each input over its omitted label before multiplying, which is what the
+    // notation means by a label the output does not name.
+    let results = contract_with(
+        numbers(&[1.0, 3.0, 2.0, 4.0]),
+        vec![2, 2],
+        numbers(&[5.0, 7.0, 6.0, 8.0]),
+        vec![2, 2],
+        (&[0, 1], &[2, 3], &[0, 2]),
+    );
+    // Rows of A sum to [3, 7] and rows of B to [11, 15], so the product is [[33, 45], [77, 105]].
+    assert_eq!(results, numbers(&[33.0, 77.0, 45.0, 105.0]));
+}
+
+#[test]
+fn a_repeated_label_extracts_the_diagonal_before_contracting() {
+    // "iij,jk->ik" takes the diagonal of the first operand's first two axes. With A[i, i, 0] =
+    // [1, 2] and B = [[3, 4]] the result is the diagonal placed against B's row: [[3, 4], [6, 8]],
+    // which is [3, 6, 4, 8] in column-major order.
+    let results = contract_with(
+        numbers(&[1.0, 0.0, 0.0, 2.0]),
+        vec![2, 2, 1],
+        numbers(&[3.0, 4.0]),
+        vec![1, 2],
+        (&[0, 0, 1], &[1, 2], &[0, 2]),
+    );
+    assert_eq!(results, numbers(&[3.0, 6.0, 4.0, 8.0]));
+}
+
+#[test]
+fn a_repeated_label_the_output_omits_is_a_trace() {
+    // "ii,j->j" sums the repeated label's diagonal: with A[i, i] = [1, 2] the trace is 3, and the
+    // scalar operand leaves it unchanged.
+    let results = contract_with(
+        numbers(&[1.0, 0.0, 0.0, 2.0]),
+        vec![2, 2],
+        numbers(&[1.0]),
+        vec![1],
+        (&[0, 0], &[1], &[1]),
+    );
+    assert_eq!(results, numbers(&[3.0]));
+}

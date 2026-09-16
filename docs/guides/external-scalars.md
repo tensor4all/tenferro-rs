@@ -193,12 +193,15 @@ zero. The same file checks the tangent against hand-written products and, for th
 **duality** between the two modes: `sum(JVP(v) * w)` equals `sum(v * VJP(w))` one operand at a time,
 with the two sides agreeing exactly.
 
-What is refused is refused with a typed error rather than approximated: a label that repeats inside
-one input, because that is a trace; an output label that no input names; and inputs that disagree on
-the extent of a shared label. That capability matches the reference
-consumer in `ext/tropical`, which also refuses diagonal extraction, pre-reduction, and N-ary
-contractions — #1787 calls this deliverable "#1793's einsum/tropical example", so matching that
-example is the bar, and the refusals are typed on both sides.
+A label may also repeat inside one input, which is a trace when the output omits it and a diagonal
+extraction when the output names it: the body reads the repeated axes at the same index, and their
+extents must agree. Both cases have tests with hand-written values.
+
+What is refused is refused with a typed error rather than approximated: an output label that no input
+names, inputs that disagree on the extent of a shared label, and N-ary patterns, because the operation
+is the pairwise one. That is a wider capability than the reference consumer in `ext/tropical`, which
+refuses diagonal extraction and pre-reduction outright; #1787 calls this deliverable "#1793's
+einsum/tropical example", so it meets that bar and goes past it on repeated labels.
 
 ## Unsupported cases
 
