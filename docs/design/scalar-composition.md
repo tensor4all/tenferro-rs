@@ -366,21 +366,27 @@ below counts every occurrence of `Tensor::<variant>(..)`, test files included, a
 was measured on this branch; test files hold 1057 of the arms in 103 files, and
 the remaining 2279 arms sit in 62 production files.
 
-| Order | Module | Arms |
-| --- | --- | --- |
-| — | all files | 3298 arms in 165 files |
-| — | production files only | 2279 arms in 62 files |
-| 1 | `tenferro-gpu/src/cubecl/mod.rs` | 477 |
-| 2 | `tenferro-internal-cpu-kernels/src/elementwise.rs` | 331 |
-| 3 | `tenferro-linalg/src/cpu/backend.rs` | 277 (was 340 before the pair conversion) |
-| 4 | `tenferro-linalg/src/gpu/linalg.rs` | 253 |
-| 5 | `tenferro-tensor/src/types.rs` | 119 |
-| 6 | `tenferro-cpu/src/structural.rs` | 91 |
-| 7 | `tenferro-cpu/src/reduction.rs` | 85 |
-| 8 | `tenferro-cpu/src/indexing.rs` | 65 |
-| 9 | `tenferro-tensor/src/dispatch.rs` | 47 |
-| 10 | `tenferro-gpu/src/cubecl/dispatch.rs` | 33 |
-| — | remaining production files | 501 |
+Counting the arms that sit in plain code rather than inside a `macro_rules!`
+definition separates the real conversion targets from the arms that are already
+declared once per crate. Of the 2279 production arms, **2083 are plain and 196 sit
+inside macro definitions**, so the density table below is close to the real
+workload and a file's raw count is not misleading.
+
+| Order | Module | Plain arms | Inside macros |
+| --- | --- | --- | --- |
+| — | all files | 3298 in 165 files | — |
+| — | production files only | 2083 in 62 files | 196 |
+| 1 | `tenferro-gpu/src/cubecl/mod.rs` | 476 | 1 |
+| 2 | `tenferro-internal-cpu-kernels/src/elementwise.rs` | 323 | 8 |
+| 3 | `tenferro-linalg/src/cpu/backend.rs` | 267 | 10 |
+| 4 | `tenferro-linalg/src/gpu/linalg.rs` | 253 | 0 |
+| 5 | `tenferro-tensor/src/types.rs` | 119 | 0 |
+| 6 | `tenferro-cpu/src/reduction.rs` | 85 | 0 |
+| 7 | `tenferro-cpu/src/structural.rs` | 56 | 35 |
+| 8 | `tenferro-linalg/src/gpu/mod.rs` | 44 | 0 |
+| 9 | `tenferro-cpu/src/analytic.rs` | 31 | 0 |
+| 10 | `tenferro-cpu/src/dot_runtime.rs` | 25 | 0 |
+| — | remaining production files | 304 | 142 |
 
 The seven `Tensor` variants are removed last.
 
