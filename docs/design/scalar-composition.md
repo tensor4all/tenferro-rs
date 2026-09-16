@@ -322,12 +322,23 @@ The pool-backed payload is measured rather than assumed: `TypedTensor<T>`,
 `crates/tenferro-tensor/src/tests/types_tests.rs`, so an erased container can hold
 a pool-backed payload with the same identity-based recovery, and the concrete
 payload releases its storage when it is dropped. What remains is a cost and
-ownership choice, not a type-system blocker: an erased value adds one boxing
-allocation per tensor, so stage 2 must decide between a tag plus a boxed payload
-for every member and a fast path for the preset members with erasure only for
-externally defined ones, and must state where a released payload returns to its
-originating owner (#1789). The measured 1-thread allocation and dispatch cost of
-each option is the input that decision needs, and it has not been measured yet.
+ownership choice, not a type-system blocker, and the cost is now measured.
+`ext/df64-proof/tests/erasure_cost.rs` compares the direct host payload with the
+erased one, single-threaded, host-only, fastest of nine rounds of 200,000
+iterations over a 64-element `f64` payload:
+
+| Operation | Direct | Erased | Delta |
+| --- | --- | --- | --- |
+| Element-type recovery plus access | 12.0 ns | 17.8 ns | +5.8 ns |
+| Construction and drop | 602.7 ns | 661.2 ns | +58.5 ns |
+
+Erasure therefore costs about 6 ns per access that recovers the element type and
+about 59 ns per tensor for the extra allocation, roughly a tenth of the host
+construction cost for this payload size. That is the input for choosing between a
+tag plus an erased payload for every member and a fast path for the preset
+members with erasure only for externally defined ones. The measurement is
+host-only and single-threaded; the pool-backed runtime payload and its release to
+the originating owner (#1789) are not covered by it.
 
 Landed and measured: `DType` and `DefaultScalars` are now generated from one
 declaration in `tenferro-tensor-core`, `ScalarSet` is the open membership
