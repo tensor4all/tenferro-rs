@@ -3652,23 +3652,33 @@ fn promoted_real_complex_scalar_binary(
     op: &'static str,
     mode: usize,
 ) -> Option<crate::Result<Tensor>> {
-    match (lhs, rhs) {
-        (Tensor::F32(real), Tensor::C32(complex)) if real.shape().is_empty() => Some(
+    // Dispatch on the pair of tags and recover each typed tensor, which is what `as_typed` exists
+    // for; the closure keeps the typed error inside the `Option` the caller expects.
+    match (lhs.dtype(), rhs.dtype()) {
+        (DType::F32, DType::C32) if lhs.shape().is_empty() => Some((|| {
+            let real = typed_or_unsupported::<f32>(lhs, op)?;
+            let complex = typed_or_unsupported::<Complex32>(rhs, op)?;
             launch_real_complex_scalar_binary(backend, real, complex, op, true, mode)
-                .map(Tensor::C32),
-        ),
-        (Tensor::C32(complex), Tensor::F32(real)) if real.shape().is_empty() => Some(
+                .map(Tensor::C32)
+        })()),
+        (DType::C32, DType::F32) if rhs.shape().is_empty() => Some((|| {
+            let complex = typed_or_unsupported::<Complex32>(lhs, op)?;
+            let real = typed_or_unsupported::<f32>(rhs, op)?;
             launch_real_complex_scalar_binary(backend, real, complex, op, false, mode)
-                .map(Tensor::C32),
-        ),
-        (Tensor::F64(real), Tensor::C64(complex)) if real.shape().is_empty() => Some(
+                .map(Tensor::C32)
+        })()),
+        (DType::F64, DType::C64) if lhs.shape().is_empty() => Some((|| {
+            let real = typed_or_unsupported::<f64>(lhs, op)?;
+            let complex = typed_or_unsupported::<Complex64>(rhs, op)?;
             launch_real_complex_scalar_binary(backend, real, complex, op, true, mode)
-                .map(Tensor::C64),
-        ),
-        (Tensor::C64(complex), Tensor::F64(real)) if real.shape().is_empty() => Some(
+                .map(Tensor::C64)
+        })()),
+        (DType::C64, DType::F64) if rhs.shape().is_empty() => Some((|| {
+            let complex = typed_or_unsupported::<Complex64>(lhs, op)?;
+            let real = typed_or_unsupported::<f64>(rhs, op)?;
             launch_real_complex_scalar_binary(backend, real, complex, op, false, mode)
-                .map(Tensor::C64),
-        ),
+                .map(Tensor::C64)
+        })()),
         _ => None,
     }
 }
