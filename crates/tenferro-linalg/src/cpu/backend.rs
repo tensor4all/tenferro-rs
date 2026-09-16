@@ -166,7 +166,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                                 .as_typed::<f32>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::faer::lu_factor(ctx, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(parity)]
+                                vec![
+                                    Tensor::from_typed::<f32>(lu),
+                                    Tensor::from_typed::<i32>(pivots),
+                                    Tensor::from_typed::<f32>(parity),
+                                ]
                             })
                         }
                         DType::F64 => {
@@ -174,7 +178,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                                 .as_typed::<f64>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::faer::lu_factor(ctx, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![Tensor::F64(lu), Tensor::I32(pivots), Tensor::F64(parity)]
+                                vec![
+                                    Tensor::from_typed::<f64>(lu),
+                                    Tensor::from_typed::<i32>(pivots),
+                                    Tensor::from_typed::<f64>(parity),
+                                ]
                             })
                         }
                         DType::C32 => {
@@ -182,7 +190,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                                 .as_typed::<Complex32>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::faer::lu_factor(ctx, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![Tensor::C32(lu), Tensor::I32(pivots), Tensor::C32(parity)]
+                                vec![
+                                    Tensor::from_typed::<Complex32>(lu),
+                                    Tensor::from_typed::<i32>(pivots),
+                                    Tensor::from_typed::<Complex32>(parity),
+                                ]
                             })
                         }
                         DType::C64 => {
@@ -190,7 +202,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                                 .as_typed::<Complex64>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::faer::lu_factor(ctx, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![Tensor::C64(lu), Tensor::I32(pivots), Tensor::C64(parity)]
+                                vec![
+                                    Tensor::from_typed::<Complex64>(lu),
+                                    Tensor::from_typed::<i32>(pivots),
+                                    Tensor::from_typed::<Complex64>(parity),
+                                ]
                             })
                         }
                         _ => Err(unsupported_dtype("lu_factor", input.dtype())),
@@ -210,7 +226,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                                 .as_typed::<f32>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
-                                vec![Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(parity)]
+                                vec![
+                                    Tensor::from_typed::<f32>(lu),
+                                    Tensor::from_typed::<i32>(pivots),
+                                    Tensor::from_typed::<f32>(parity),
+                                ]
                             })
                         }
                         DType::F64 => {
@@ -218,7 +238,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                                 .as_typed::<f64>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
-                                vec![Tensor::F64(lu), Tensor::I32(pivots), Tensor::F64(parity)]
+                                vec![
+                                    Tensor::from_typed::<f64>(lu),
+                                    Tensor::from_typed::<i32>(pivots),
+                                    Tensor::from_typed::<f64>(parity),
+                                ]
                             })
                         }
                         DType::C32 => {
@@ -226,7 +250,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                                 .as_typed::<Complex32>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
-                                vec![Tensor::C32(lu), Tensor::I32(pivots), Tensor::C32(parity)]
+                                vec![
+                                    Tensor::from_typed::<Complex32>(lu),
+                                    Tensor::from_typed::<i32>(pivots),
+                                    Tensor::from_typed::<Complex32>(parity),
+                                ]
                             })
                         }
                         DType::C64 => {
@@ -234,7 +262,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                                 .as_typed::<Complex64>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
-                                vec![Tensor::C64(lu), Tensor::I32(pivots), Tensor::C64(parity)]
+                                vec![
+                                    Tensor::from_typed::<Complex64>(lu),
+                                    Tensor::from_typed::<i32>(pivots),
+                                    Tensor::from_typed::<Complex64>(parity),
+                                ]
                             })
                         }
                         _ => Err(unsupported_dtype("lu_factor", input.dtype())),
@@ -2112,8 +2144,8 @@ fn rank_revealing_qr_entered(
                 vec![
                     Tensor::$variant(result.q),
                     Tensor::$variant(result.r),
-                    Tensor::I64(result.column_permutation),
-                    Tensor::I64(result.rank),
+                    Tensor::from_typed::<i64>(result.column_permutation),
+                    Tensor::from_typed::<i64>(result.rank),
                 ]
             })
         }};
@@ -2388,10 +2420,14 @@ fn householder_qr_from_factors_entered(
             }};
         }
         match (q, r) {
-            (Tensor::F32(q), Tensor::F32(r)) => import!(q, r, F32),
-            (Tensor::F64(q), Tensor::F64(r)) => import!(q, r, F64),
-            (Tensor::C32(q), Tensor::C32(r)) => import!(q, r, C32),
-            (Tensor::C64(q), Tensor::C64(r)) => import!(q, r, C64),
+            (Tensor::from_typed::<f32>(q), Tensor::from_typed::<f32>(r)) => import!(q, r, F32),
+            (Tensor::from_typed::<f64>(q), Tensor::from_typed::<f64>(r)) => import!(q, r, F64),
+            (Tensor::from_typed::<Complex32>(q), Tensor::from_typed::<Complex32>(r)) => {
+                import!(q, r, C32)
+            }
+            (Tensor::from_typed::<Complex64>(q), Tensor::from_typed::<Complex64>(r)) => {
+                import!(q, r, C64)
+            }
             _ => Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
         }
     }
@@ -2461,10 +2497,26 @@ fn householder_qr_append_entered(
             }};
         }
         match (packed, coeff, block) {
-            (Tensor::F32(p), Tensor::F32(c), Tensor::F32(b)) => append!(p, c, b, F32),
-            (Tensor::F64(p), Tensor::F64(c), Tensor::F64(b)) => append!(p, c, b, F64),
-            (Tensor::C32(p), Tensor::C32(c), Tensor::C32(b)) => append!(p, c, b, C32),
-            (Tensor::C64(p), Tensor::C64(c), Tensor::C64(b)) => append!(p, c, b, C64),
+            (
+                Tensor::from_typed::<f32>(p),
+                Tensor::from_typed::<f32>(c),
+                Tensor::from_typed::<f32>(b),
+            ) => append!(p, c, b, F32),
+            (
+                Tensor::from_typed::<f64>(p),
+                Tensor::from_typed::<f64>(c),
+                Tensor::from_typed::<f64>(b),
+            ) => append!(p, c, b, F64),
+            (
+                Tensor::from_typed::<Complex32>(p),
+                Tensor::from_typed::<Complex32>(c),
+                Tensor::from_typed::<Complex32>(b),
+            ) => append!(p, c, b, C32),
+            (
+                Tensor::from_typed::<Complex64>(p),
+                Tensor::from_typed::<Complex64>(c),
+                Tensor::from_typed::<Complex64>(b),
+            ) => append!(p, c, b, C64),
             _ => Err(unsupported_dtype("householder_qr_append", packed.dtype())),
         }
     }
@@ -2608,10 +2660,14 @@ fn householder_qr_q_columns_entered(
             };
         }
         match (packed, coeff) {
-            (Tensor::F32(p), Tensor::F32(c)) => columns!(p, c, F32),
-            (Tensor::F64(p), Tensor::F64(c)) => columns!(p, c, F64),
-            (Tensor::C32(p), Tensor::C32(c)) => columns!(p, c, C32),
-            (Tensor::C64(p), Tensor::C64(c)) => columns!(p, c, C64),
+            (Tensor::from_typed::<f32>(p), Tensor::from_typed::<f32>(c)) => columns!(p, c, F32),
+            (Tensor::from_typed::<f64>(p), Tensor::from_typed::<f64>(c)) => columns!(p, c, F64),
+            (Tensor::from_typed::<Complex32>(p), Tensor::from_typed::<Complex32>(c)) => {
+                columns!(p, c, C32)
+            }
+            (Tensor::from_typed::<Complex64>(p), Tensor::from_typed::<Complex64>(c)) => {
+                columns!(p, c, C64)
+            }
             _ => Err(Error::dtype_mismatch(
                 "householder_qr_q_columns",
                 packed.dtype(),
@@ -3139,19 +3195,19 @@ fn zeros_like_tensor(input: &Tensor) -> tenferro_tensor::Result<Tensor> {
                 DType::External(type_id),
             ));
         }
-        DType::F32 => Tensor::F32(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::F64 => Tensor::F64(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::I32 => Tensor::I32(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::I64 => Tensor::I64(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::F32 => Tensor::from_typed::<f32>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::F64 => Tensor::from_typed::<f64>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::I32 => Tensor::from_typed::<i32>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::I64 => Tensor::from_typed::<i64>(TypedTensor::zeros(input.shape().to_vec())?),
         DType::Bool => {
             let t = typed_host::<bool>(input, "zeros_like_tensor")?;
-            Tensor::Bool(TypedTensor::from_vec_col_major(
+            Tensor::from_typed::<bool>(TypedTensor::from_vec_col_major(
                 t.shape().to_vec(),
                 vec![false; t.n_elements()],
             )?)
         }
-        DType::C32 => Tensor::C32(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::C64 => Tensor::C64(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::C32 => Tensor::from_typed::<Complex32>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::C64 => Tensor::from_typed::<Complex64>(TypedTensor::zeros(input.shape().to_vec())?),
     })
 }
 
@@ -3209,11 +3265,11 @@ fn full_piv_lu_c32_outputs_to_public_tensors(
         outputs.next(),
     ) {
         (Some(p), Some(l), Some(u), Some(q), Some(parity), None) => Ok(vec![
-            Tensor::C32(p),
-            Tensor::C32(l),
-            Tensor::C32(u),
-            Tensor::C32(q),
-            Tensor::F32(complex32_real_part_tensor(parity)?),
+            Tensor::from_typed::<Complex32>(p),
+            Tensor::from_typed::<Complex32>(l),
+            Tensor::from_typed::<Complex32>(u),
+            Tensor::from_typed::<Complex32>(q),
+            Tensor::from_typed::<f32>(complex32_real_part_tensor(parity)?),
         ]),
         _ => Err(full_piv_lu_output_count_error(count)),
     }
@@ -3233,11 +3289,11 @@ fn full_piv_lu_c64_outputs_to_public_tensors(
         outputs.next(),
     ) {
         (Some(p), Some(l), Some(u), Some(q), Some(parity), None) => Ok(vec![
-            Tensor::C64(p),
-            Tensor::C64(l),
-            Tensor::C64(u),
-            Tensor::C64(q),
-            Tensor::F64(complex64_real_part_tensor(parity)?),
+            Tensor::from_typed::<Complex64>(p),
+            Tensor::from_typed::<Complex64>(l),
+            Tensor::from_typed::<Complex64>(u),
+            Tensor::from_typed::<Complex64>(q),
+            Tensor::from_typed::<f64>(complex64_real_part_tensor(parity)?),
         ]),
         _ => Err(full_piv_lu_output_count_error(count)),
     }
@@ -3255,9 +3311,9 @@ fn svd_c32_outputs_to_public_tensors(
         outputs.next(),
     ) {
         (Some(u), Some(values), Some(vt), None) => Ok(vec![
-            Tensor::C32(u),
-            Tensor::F32(complex32_real_part_tensor(values)?),
-            Tensor::C32(vt),
+            Tensor::from_typed::<Complex32>(u),
+            Tensor::from_typed::<f32>(complex32_real_part_tensor(values)?),
+            Tensor::from_typed::<Complex32>(vt),
         ]),
         _ => Err(svd_output_count_error(count)),
     }
@@ -3275,9 +3331,9 @@ fn svd_c64_outputs_to_public_tensors(
         outputs.next(),
     ) {
         (Some(u), Some(values), Some(vt), None) => Ok(vec![
-            Tensor::C64(u),
-            Tensor::F64(complex64_real_part_tensor(values)?),
-            Tensor::C64(vt),
+            Tensor::from_typed::<Complex64>(u),
+            Tensor::from_typed::<f64>(complex64_real_part_tensor(values)?),
+            Tensor::from_typed::<Complex64>(vt),
         ]),
         _ => Err(svd_output_count_error(count)),
     }
@@ -3290,8 +3346,8 @@ fn eigh_c32_outputs_to_public_tensors(
     let mut outputs = outputs.into_iter();
     match (outputs.next(), outputs.next(), outputs.next()) {
         (Some(values), Some(vectors), None) => Ok(vec![
-            Tensor::F32(complex32_real_part_tensor(values)?),
-            Tensor::C32(vectors),
+            Tensor::from_typed::<f32>(complex32_real_part_tensor(values)?),
+            Tensor::from_typed::<Complex32>(vectors),
         ]),
         _ => Err(eigh_output_count_error(count)),
     }
@@ -3304,8 +3360,8 @@ fn eigh_c64_outputs_to_public_tensors(
     let mut outputs = outputs.into_iter();
     match (outputs.next(), outputs.next(), outputs.next()) {
         (Some(values), Some(vectors), None) => Ok(vec![
-            Tensor::F64(complex64_real_part_tensor(values)?),
-            Tensor::C64(vectors),
+            Tensor::from_typed::<f64>(complex64_real_part_tensor(values)?),
+            Tensor::from_typed::<Complex64>(vectors),
         ]),
         _ => Err(eigh_output_count_error(count)),
     }
