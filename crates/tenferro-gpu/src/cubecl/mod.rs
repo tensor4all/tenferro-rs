@@ -4417,11 +4417,11 @@ impl TensorElementwise for CudaBackend {
             PrimitiveOpKind::Compare,
             op_descriptor::GpuLaunchKind::CompareFloatIntToBool,
         )?;
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_compare_bool(
+        match (lhs.dtype(), rhs.dtype()) {
+            (DType::F32, DType::F32) => launch_compare_bool(
                 self.runtime(),
-                lhs,
-                rhs,
+                typed_or_unsupported::<f32>(lhs, op)?,
+                typed_or_unsupported::<f32>(rhs, op)?,
                 lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -4437,10 +4437,10 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::Bool),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_compare_bool(
+            (DType::F64, DType::F64) => launch_compare_bool(
                 self.runtime(),
-                lhs,
-                rhs,
+                typed_or_unsupported::<f64>(lhs, op)?,
+                typed_or_unsupported::<f64>(rhs, op)?,
                 lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -4456,10 +4456,10 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::Bool),
-            (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_compare_bool(
+            (DType::I32, DType::I32) => launch_compare_bool(
                 self.runtime(),
-                lhs,
-                rhs,
+                typed_or_unsupported::<i32>(lhs, op)?,
+                typed_or_unsupported::<i32>(rhs, op)?,
                 lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -4475,10 +4475,10 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::Bool),
-            (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_compare_bool(
+            (DType::I64, DType::I64) => launch_compare_bool(
                 self.runtime(),
-                lhs,
-                rhs,
+                typed_or_unsupported::<i64>(lhs, op)?,
+                typed_or_unsupported::<i64>(rhs, op)?,
                 lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -4494,7 +4494,7 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::Bool),
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
+            (DType::C32, DType::C32) | (DType::C64, DType::C64) => {
                 Err(unsupported_dtype(op, lhs.dtype()))
             }
             _ => Err(dtype_mismatch(op, lhs, rhs)),
