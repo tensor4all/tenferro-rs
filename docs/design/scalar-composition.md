@@ -444,6 +444,13 @@ So the order in section 5.2 is refined: convert the sites whose arms differ only
 in the variant (measured, landed), and leave the heterogeneous real/complex sites
 for the representation change.
 
+The mechanically convertible set is now exhausted. A scan of the workspace for
+matches whose whole body is a same-variant dispatch finds **two** remaining
+sites, both in the householder-QR factor import path, and they are left alone
+because the dispatched value is a `CompactQrResult` rather than a `Tensor`, so
+they would need a macro of their own for four arms. Every other such site in
+production code is converted.
+
 The same limit applies to the remaining large clusters, which was measured after
 the first conversions. The biggest ones are not whole matches: the
 `tenferro-internal-cpu-kernels` owned-tensor operations (`add_with_pool` and its
