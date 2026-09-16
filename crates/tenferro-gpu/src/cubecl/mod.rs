@@ -4503,8 +4503,11 @@ impl TensorElementwise for CudaBackend {
             PrimitiveOpKind::Select,
             op_descriptor::GpuLaunchKind::SelectBoolFloatInt,
         )?;
-        match (pred, on_true, on_false) {
-            (Tensor::Bool(pred), Tensor::F32(on_true), Tensor::F32(on_false)) => {
+        match (pred.dtype(), on_true.dtype(), on_false.dtype()) {
+            (DType::Bool, DType::F32, DType::F32) => {
+                let pred = typed_or_unsupported::<bool>(pred, op)?;
+                let on_true = typed_or_unsupported::<f32>(on_true, op)?;
+                let on_false = typed_or_unsupported::<f32>(on_false, op)?;
                 launch_select_bool(
                     self.runtime(),
                     pred,
@@ -4520,7 +4523,10 @@ impl TensorElementwise for CudaBackend {
                 )
                 .map(Tensor::F32)
             }
-            (Tensor::Bool(pred), Tensor::F64(on_true), Tensor::F64(on_false)) => {
+            (DType::Bool, DType::F64, DType::F64) => {
+                let pred = typed_or_unsupported::<bool>(pred, op)?;
+                let on_true = typed_or_unsupported::<f64>(on_true, op)?;
+                let on_false = typed_or_unsupported::<f64>(on_false, op)?;
                 launch_select_bool(
                     self.runtime(),
                     pred,
@@ -4536,7 +4542,10 @@ impl TensorElementwise for CudaBackend {
                 )
                 .map(Tensor::F64)
             }
-            (Tensor::Bool(pred), Tensor::I32(on_true), Tensor::I32(on_false)) => {
+            (DType::Bool, DType::I32, DType::I32) => {
+                let pred = typed_or_unsupported::<bool>(pred, op)?;
+                let on_true = typed_or_unsupported::<i32>(on_true, op)?;
+                let on_false = typed_or_unsupported::<i32>(on_false, op)?;
                 launch_select_bool(
                     self.runtime(),
                     pred,
@@ -4552,7 +4561,10 @@ impl TensorElementwise for CudaBackend {
                 )
                 .map(Tensor::I32)
             }
-            (Tensor::Bool(pred), Tensor::I64(on_true), Tensor::I64(on_false)) => {
+            (DType::Bool, DType::I64, DType::I64) => {
+                let pred = typed_or_unsupported::<bool>(pred, op)?;
+                let on_true = typed_or_unsupported::<i64>(on_true, op)?;
+                let on_false = typed_or_unsupported::<i64>(on_false, op)?;
                 launch_select_bool(
                     self.runtime(),
                     pred,
@@ -4568,8 +4580,7 @@ impl TensorElementwise for CudaBackend {
                 )
                 .map(Tensor::I64)
             }
-            (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
-            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => {
+            (DType::C32, DType::C32, DType::C32) | (DType::C64, DType::C64, DType::C64) => {
                 Err(unsupported_dtype(op, pred.dtype()))
             }
             _ => Err(ternary_dtype_mismatch(op, pred, on_true, on_false)),
