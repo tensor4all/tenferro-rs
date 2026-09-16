@@ -8,7 +8,7 @@
 
 use core::any::{Any, TypeId};
 
-use crate::{HostTensor, Scalar};
+use crate::{HostTensor, Scalar, ShapeVec};
 
 /// A host tensor whose element type is recovered at run time.
 ///
@@ -33,6 +33,9 @@ use crate::{HostTensor, Scalar};
 pub struct ErasedHostTensor {
     payload: Box<dyn Any + Send + Sync>,
     type_id: TypeId,
+    element: TypeId,
+    shape: ShapeVec,
+    elements: usize,
 }
 
 impl core::fmt::Debug for ErasedHostTensor {
@@ -56,9 +59,14 @@ impl ErasedHostTensor {
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn new<T: Scalar>(value: HostTensor<T>) -> Self {
+        let shape = value.shape().into();
+        let elements = value.as_slice().len();
         Self {
             payload: Box::new(value),
             type_id: TypeId::of::<HostTensor<T>>(),
+            element: TypeId::of::<T>(),
+            shape,
+            elements,
         }
     }
 
@@ -76,6 +84,56 @@ impl ErasedHostTensor {
     #[must_use]
     pub fn type_id(&self) -> TypeId {
         self.type_id
+    }
+
+    /// Identity of the stored element type, without the tensor wrapper.
+    ///
+    /// This is what a runtime tag reports for an externally defined scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    ///
+    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// assert_eq!(erased.element_type_id(), core::any::TypeId::of::<f64>());
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
+    #[must_use]
+    pub fn element_type_id(&self) -> TypeId {
+        self.element
+    }
+
+    /// Shape of the stored tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    ///
+    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
+    /// assert_eq!(erased.shape(), &[2, 3]);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
+    #[must_use]
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    /// Number of stored elements.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    ///
+    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
+    /// assert_eq!(erased.element_count(), 6);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
+    #[must_use]
+    pub fn element_count(&self) -> usize {
+        self.elements
     }
 
     /// Whether the stored tensor has element type `T`.
