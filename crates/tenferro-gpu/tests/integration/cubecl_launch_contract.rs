@@ -20,13 +20,13 @@ fn rust_sources_under(dir: &Path, sources: &mut Vec<(PathBuf, String)>) {
 fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
     let source = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
     for needle in [
-        "Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool)",
-        "Tensor::Bool(t) => self.broadcast_bool(t, shape, dims).map(Tensor::Bool)",
-        "Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool)",
-        "Tensor::Bool(operand), Tensor::I64(indices)",
-        "Tensor::Bool(input), Tensor::F32(starts)",
-        "Tensor::Bool(input), Tensor::F64(starts)",
-        "Tensor::Bool(input), Tensor::I64(starts)",
+        "typed_or_unsupported::<bool>(input, \"transpose\")?;",
+        "typed_or_unsupported::<bool>(input, \"broadcast_in_dim\")?;",
+        "typed_or_unsupported::<bool>(input, \"slice\")?;",
+        "(DType::Bool, DType::I64)",
+        "(DType::Bool, DType::F32)",
+        "(DType::Bool, DType::F64)",
+        "(DType::Bool, DType::I64)",
     ] {
         assert!(
             source.contains(needle),
@@ -35,7 +35,7 @@ fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
     }
     let scatter = source_section(&source, "    fn scatter(", "    fn slice(");
     assert!(
-        scatter.contains("(Tensor::Bool(_), _, _)")
+        scatter.contains("(DType::Bool, _, _)")
             && scatter.contains("Err(unsupported_operation(")
             && scatter.contains("Bool data tensors are not supported by additive scatter")
     );
@@ -1038,7 +1038,7 @@ fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
         &[
             "if lhs.dtype() != rhs.dtype()",
             "return Err(dtype_mismatch(op, lhs, rhs))",
-            "match (lhs, rhs)",
+            "match (lhs.dtype(), rhs.dtype())",
         ],
     );
     assert!(pow.contains("launch_binary("));
@@ -1087,17 +1087,17 @@ fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
         "fn launch_checked_integer_scalar_binary",
     );
     for accepted in [
-        "Tensor::F32(real), Tensor::C32(complex)",
-        "Tensor::C32(complex), Tensor::F32(real)",
-        "Tensor::F64(real), Tensor::C64(complex)",
-        "Tensor::C64(complex), Tensor::F64(real)",
+        "(DType::F32, DType::C32)",
+        "(DType::C32, DType::F32)",
+        "(DType::F64, DType::C64)",
+        "(DType::C64, DType::F64)",
     ] {
         assert!(
             dispatch.contains(accepted),
             "missing accepted pair {accepted}"
         );
     }
-    assert_eq!(dispatch.matches("if real.shape().is_empty()").count(), 4);
+    assert_eq!(dispatch.matches(".shape().is_empty()").count(), 4);
 
     let kernel_source = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/kernels/elementwise.rs"),
@@ -1421,9 +1421,9 @@ fn cubecl_scatter_reports_unsupported_integer_operand_dtypes() {
     let mod_source = cubecl_source("mod.rs");
     let scatter_source = source_section(&mod_source, "    fn scatter(", "    fn slice(");
     for needle in [
-        "(Tensor::I32(_), _, _)",
-        "(Tensor::I64(_), _, _)",
-        "(Tensor::Bool(_), _, _)",
+        "(DType::I32, _, _)",
+        "(DType::I64, _, _)",
+        "(DType::Bool, _, _)",
     ] {
         assert!(
             scatter_source.contains(needle),
@@ -1850,22 +1850,20 @@ fn cuda_dynamic_slice_dispatch_matches_cpu_supported_dtype_matrix() {
     for data in ["F32", "F64", "C32", "C64", "I32"] {
         for starts in ["F32", "F64", "I32", "I64"] {
             assert!(
-                dispatch.contains(&format!(
-                    "(Tensor::{data}(input), Tensor::{starts}(starts))"
-                )),
+                dispatch.contains(&format!("(DType::{data}, DType::{starts})")),
                 "dynamic_slice must dispatch CPU-supported {data} data with {starts} starts"
             );
         }
     }
     for starts in ["F32", "F64", "I32", "I64"] {
         assert!(
-            dispatch.contains(&format!("(Tensor::Bool(input), Tensor::{starts}(starts))")),
+            dispatch.contains(&format!("(DType::Bool, DType::{starts})")),
             "dynamic_slice must dispatch CPU-supported Bool data with {starts} starts"
         );
     }
-    assert!(dispatch.contains("(_, Tensor::Bool(_))"));
-    assert!(dispatch.contains("(_, Tensor::C32(_) | Tensor::C64(_))"));
-    assert!(dispatch.contains("(Tensor::I64(_), _)"));
+    assert!(dispatch.contains("(_, DType::Bool)"));
+    assert!(dispatch.contains("(_, DType::C32 | DType::C64)"));
+    assert!(dispatch.contains("(DType::I64, _)"));
 }
 
 #[test]
