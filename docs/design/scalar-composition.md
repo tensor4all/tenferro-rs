@@ -1206,6 +1206,40 @@ All four are fixed. One artifact remains outstanding and cannot be produced here
 and cannot be installed without root on this host, so the `docs` profile's dependency-graph test
 fails on the checked-in SVG. The regeneration command is recorded in the work log.
 
+### 5.18 The remaining inputs, each with the evidence behind it
+
+Four requirements outside this branch's control, stated so they can be decided rather than
+re-derived. Everything else in the objective and in the five issues' acceptance is implemented
+and verified, including the three `ad_admission` branches (covered in
+`crates/tenferro-tensor-core/src/scalar/tests.rs` and cross-crate in the proof crate).
+
+**bf16 as a standard scalar.** #1785 asks for `half::bf16` as a *standard* representation, which
+means a preset member rather than a contribution: `DType::Bf16`, the preset declaration, kernels,
+and conversions. The obstacle is not the dependency (`half 2.7.1` is already in the workspace's
+dependency graph through the GPU stack) nor the arithmetic, it is that a preset member is
+*pooled*, and the constraints freeze the sealed `BufferPool`/`PoolScalar` boundary until #1789's
+contract is agreed. #1789's text allows uninitialized storage of equal size and alignment to be
+reused under a full-overwrite contract, and deciding that contract is what unblocks bf16.
+
+**Removing the seven `Tensor` variants.** The objective's Stage 2 line asks for this last, and
+this branch kept the variants and added one erased payload instead, because the measured cost of
+the two shapes is 18 and 59 new arms against 2279 rewritten production sites. Carrying that
+choice into the public contract needs maintainer acceptance, which is why the design records it
+rather than the branch assuming it.
+
+**#1793's einsum with an externally defined scalar.** The issue states that it does not authorize
+a feature implementation PR, so the routing of an external scalar through the ordinary einsum
+surface stays unimplemented by design. The rejection of an externally defined input dtype at that
+boundary is implemented and tested.
+
+**#1789's pool, handoff, and accounting contracts.** The first steps that issue prescribes are
+done and evidenced: the existing caller-output, caller-owned, and session mechanisms are used;
+the storage gap is measured (189 allocations and 174857 bytes for a steady-state 64 by 64
+factorization, 258 and 724668 bytes for the adjoint); a proven acquisition and return path runs
+through the accounted extension cache (one entry, 524288 retained bytes, one hit after two
+executions); and a cross-owner handoff inside one runtime is verified to be accepted, with the
+typed-rejection path asserted for the case where the contract tightens.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing
