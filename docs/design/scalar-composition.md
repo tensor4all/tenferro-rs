@@ -1307,10 +1307,18 @@ arm-dense hold about 1180 of them — 520 in `tenferro-gpu/src/cubecl/mod.rs`, 2
 choice into the public contract needs maintainer acceptance, which is why the design records it
 rather than the branch assuming it.
 
-**#1793's einsum with an externally defined scalar.** The issue states that it does not authorize
-a feature implementation PR, so the routing of an external scalar through the ordinary einsum
-surface stays unimplemented by design. The rejection of an externally defined input dtype at that
-boundary is implemented and tested.
+**#1793's einsum with an externally defined scalar.** The issue's own example now runs: the
+contribution owns a matrix contraction, `einsum("ik,kj->ij", A, B)`, which reproduces #1793's table
+and keeps `2^-80` through the contraction of `[1, 1]` with `[1, 2^-80]`
+(`ext/df64-proof/tests/einsum.rs`). Every other label pattern is refused with a typed error rather
+than approximated, because the general cases need the diagonal, reduction, and permutation stages
+the ordinary lowering plans, and differentiating the contraction fails explicitly with the family's own message that
+it has no Linearize rule for `Einsum`, rather than returning a zero gradient. The narrower rejection of an externally defined
+dtype at the *ordinary* eager einsum boundary is unchanged and tested in
+`crates/tenferro-einsum/src/extension/tests.rs`. Routing an external scalar through that ordinary
+surface rather than through a contribution-owned op remains open: the surface assumes preset dtypes
+in 28 `TensorView` variant matches and 37 `DType` uses, and its owner states that the issue alone
+does not authorize a feature implementation PR.
 
 **#1789's pool, handoff, and accounting contracts.** The first steps that issue prescribes are
 done and evidenced. Its fifth item asks for allocation counts, session and dispatch overhead, preparation, and
@@ -1459,7 +1467,8 @@ are closed on purpose, and the row says which.
 | Core runtime identity tensor for a caller-owned scalar | rejected by design; the declared identity replaces it | `external_dtype_boundaries.rs` (`the_runtime_builds_no_core_identity_tensor_for_a_caller_owned_scalar`); `ProgramValueMetadata::with_scalar_identity` and `ProgramBuildError::ExternalScalarWithoutIdentity` | none: a program names its scalar through the declared identity, which this branch adds |
 | First-order AD through the contribution's rules | present | `extension_ad.rs`, `connected_conversion_ad.rs`, `connected_qr_ad.rs` | none |
 | An AD order other than one, a scalar that is not a field, and an operation outside the contribution's rule set | rejected | `crates/tenferro-tensor-core/src/scalar/tests.rs` (all three `ad_admission` branches) and `ad_rule_boundaries.rs` | none: the contract admits first-order field arithmetic and refuses the rest with a typed error |
-| The ordinary einsum surface | rejected | `crates/tenferro-einsum/src/extension/tests.rs` (`infer_output_meta_rejects_an_externally_defined_scalar`), executed twice per the coverage record | measured below rather than guessed: the surface assumes preset dtypes in 28 `TensorView` variant matches and 37 `DType` uses across its 44 source files, while `tenferro_einsum::lowering` and its `GemmPlan` are already public and generic, which is how `ext/tropical` reaches them. The missing piece is therefore a scalar-generic contraction slot rather than the lowering. Owned by #1793, whose text says the issue alone does not authorize a feature implementation PR |
+| A matrix contraction, which is #1793's example | present | `ext/df64-proof/tests/einsum.rs`: `einsum("ik,kj->ij", A, B)` returns `[[19, 22], [43, 50]]` for #1793's own table, and the contraction of `[1, 1]` with `[1, 2^-80]` keeps `2^-80` after subtracting one | none beyond the contribution: the body is the contribution's own, reached through the runtime's extension module |
+| Any other einsum pattern, and AD through the contraction | rejected | the same file's `the_pattern_validator_refuses_anything_but_a_matrix_contraction` and `the_body_refuses_disagreeing_contracted_dimensions`; `ad.rs` refuses the contraction with the family's message that it has no Linearize rule for `Einsum` | measured below rather than guessed for the general cases: the surface assumes preset dtypes in 28 `TensorView` variant matches and 37 `DType` uses across its 44 source files, while `tenferro_einsum::lowering` and its `GemmPlan` are already public and generic, which is how `ext/tropical` reaches them. The missing piece is therefore a scalar-generic contraction slot rather than the lowering. Owned by #1793, whose text says the issue alone does not authorize a feature implementation PR |
 | Bulk pooled storage for a custom type | missing | the measured gap (189 allocations and 174857 bytes for a steady 64 by 64 factorization; 258 and 724668 for the adjoint) and the preset-only `PoolScalar` boundary | extend the pool boundary for a demonstrated gap, or take scratch from an account the runtime already tracks. Owned by #1789 |
 | Scratch reuse without extending the pool boundary | present | `scratch_allocation.rs` (one extension cache entry, 524288 retained bytes, one hit, and the steady adjoint costing fewer bytes than the first) and `retention_controls.rs` (clear releases the retained bytes and a live value is unchanged) | none: the accounted extension cache is the sanctioned mechanism |
 | GPU and XLA backends | rejected | the sixteen GPU arms in `tenferro-linalg` that reject through `unsupported_linalg_dtype`, and the XLA configuration | a backend-scoped implementation for the contribution, which is out of this issue's scope |

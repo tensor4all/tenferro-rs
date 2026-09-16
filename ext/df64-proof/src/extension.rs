@@ -435,6 +435,183 @@ impl ExtensionOp for Df64QrVjp {
     }
 }
 
+/// A matrix contraction in the external scalar, written in ordinary einsum notation.
+///
+/// #1793's example is `einsum("ik,kj->ij", A, B)` evaluated in the external scalar, where the
+/// contraction of `[1, 1]` with `[1, 2^-80]` has to keep the low component an `f64` accumulator
+/// would drop. The operation accepts exactly that pattern: two rank-2 inputs that share one
+/// contracted label, and an output of the two free labels. Any other pattern is refused with a
+/// typed error rather than approximated, because the general label cases need the diagonal,
+/// reduction, and permutation stages the ordinary lowering plans and this body does not execute.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::extension::ExtensionOp;
+/// use tenferro_df64_proof::extension::Df64Einsum;
+///
+/// let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a matrix contraction");
+/// assert_eq!(<Df64Einsum as ExtensionOp>::input_count(&op), 2);
+/// assert_eq!(<Df64Einsum as ExtensionOp>::output_count(&op), 1);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Df64Einsum {
+    lhs: Vec<u32>,
+    rhs: Vec<u32>,
+    out: Vec<u32>,
+}
+
+impl Df64Einsum {
+    /// Build the matrix-contraction pattern `lhs,rhs->out`.
+    ///
+    /// The labels are the ones an ordinary einsum subscript string names, in order, so
+    /// `"ik,kj->ij"` is `(&[0, 1], &[1, 2], &[0, 2])`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either input is not rank two, when a label repeats within one
+    /// input, when the inputs do not share exactly one contracted label as the second and first
+    /// label respectively, or when the output is not the two free labels in that order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64Einsum;
+    ///
+    /// assert!(Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).is_ok());
+    /// // A repeated label inside one input is not a matrix contraction.
+    /// assert!(Df64Einsum::new(&[0, 0], &[0, 2], &[0, 2]).is_err());
+    /// ```
+    pub fn new(lhs: &[u32], rhs: &[u32], out: &[u32]) -> tenferro_runtime::Result<Self> {
+        let invalid = |message: &str| {
+            tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
+                "df64_einsum",
+                "pattern",
+                message,
+            ))
+        };
+        if lhs.len() != 2 || rhs.len() != 2 || out.len() != 2 {
+            return Err(invalid(
+                "a matrix contraction takes two rank-2 inputs and produces a rank-2 output",
+            ));
+        }
+        if lhs[0] == lhs[1] || rhs[0] == rhs[1] {
+            return Err(invalid("a label repeats within one input"));
+        }
+        if lhs[1] != rhs[0] {
+            return Err(invalid(
+                "the inputs must share one contracted label, as the second and first label",
+            ));
+        }
+        if out != [lhs[0], rhs[1]] {
+            return Err(invalid(
+                "the output must be the two free labels, in the order the inputs name them",
+            ));
+        }
+        Ok(Self {
+            lhs: lhs.to_vec(),
+            rhs: rhs.to_vec(),
+            out: out.to_vec(),
+        })
+    }
+
+    /// The pattern's three label lists.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_df64_proof::extension::Df64Einsum;
+    ///
+    /// let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a matrix contraction");
+    /// assert_eq!(op.labels(), (&[0, 1][..], &[1, 2][..], &[0, 2][..]));
+    /// ```
+    #[must_use]
+    pub fn labels(&self) -> (&[u32], &[u32], &[u32]) {
+        (&self.lhs, &self.rhs, &self.out)
+    }
+}
+
+impl ExtensionOp for Df64Einsum {
+    fn family_id(&self) -> &'static str {
+        DF64_OPS_FAMILY
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        for labels in [&self.lhs, &self.rhs, &self.out] {
+            hasher.write_usize(labels.len());
+            for label in labels {
+                hasher.write_u32(*label);
+            }
+        }
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| other == self)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        2
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
+    fn scalar_identity(&self) -> Option<&'static str> {
+        Some(DF64_SCALAR_IDENTITY)
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        if !matches!(dtype, DType::External(_)) {
+            return Err(tenferro_tensor::Error::unsupported_dtype(
+                "df64_einsum",
+                dtype,
+                "df64_einsum takes an externally defined scalar",
+            ));
+        }
+        if ctx.input_dtype(1)? != dtype {
+            return Err(tenferro_tensor::Error::invalid_argument(
+                "df64_einsum",
+                "inputs",
+                "both inputs must carry the same scalar",
+            ));
+        }
+        let lhs = ctx.input_shape(0)?;
+        let rhs = ctx.input_shape(1)?;
+        if lhs.len() != 2 || rhs.len() != 2 {
+            return Err(tenferro_tensor::Error::invalid_argument(
+                "df64_einsum",
+                "inputs",
+                "a matrix contraction takes two rank-2 inputs",
+            ));
+        }
+        Ok(vec![(dtype, vec![lhs[0].clone(), rhs[1].clone()])])
+    }
+}
+
 /// Forward-mode tangent of the reduced QR factorization.
 ///
 /// # Examples
@@ -1105,6 +1282,37 @@ fn qr_jvp_of(
     Ok(vec![tensor_of(op, q_dot)?, tensor_of(op, r_dot)?])
 }
 
+/// Contract two external matrices, accumulating in the external scalar.
+fn einsum_of(
+    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let op = "df64_einsum";
+    let resolved = inputs_of(op, session, inputs)?;
+    if resolved.len() != 2 {
+        return Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "input",
+                "a matrix contraction takes two inputs",
+            ),
+        ));
+    }
+    let lhs = matrix_of(op, resolved[0].tensor())?;
+    let rhs = matrix_of(op, resolved[1].tensor())?;
+    if lhs.columns() != rhs.rows {
+        return Err(tenferro_runtime::Error::from(
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "inputs",
+                "the contracted dimensions must agree",
+            ),
+        ));
+    }
+    let product = crate::dense::multiply(&lhs, &rhs);
+    Ok(vec![tensor_of(op, product)?])
+}
+
 /// Fill a tensor of `shape` with the scalar input's value.
 fn expand_of(
     shape: &[usize],
@@ -1162,6 +1370,8 @@ enum Df64Body {
     QrVjp((bool, bool)),
     /// The tangent of the factorization.
     QrJvp,
+    /// A matrix contraction of two external matrices.
+    Einsum,
 }
 
 impl Df64Body {
@@ -1179,6 +1389,7 @@ impl Df64Body {
             Self::FromF64 => from_f64_of(session, inputs),
             Self::QrVjp(mask) => qr_vjp_of(*mask, session, caches, inputs),
             Self::QrJvp => qr_jvp_of(session, inputs),
+            Self::Einsum => einsum_of(session, inputs),
         }
     }
 }
@@ -1266,6 +1477,8 @@ impl ExtensionEngine for Df64Engine {
             Df64Body::QrVjp((adjoint.has_q, adjoint.has_r))
         } else if operation.downcast_ref::<Df64QrJvp>().is_some() {
             Df64Body::QrJvp
+        } else if operation.downcast_ref::<Df64Einsum>().is_some() {
+            Df64Body::Einsum
         } else {
             Df64Body::Total
         };

@@ -17,7 +17,8 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_runtime::program::SemanticProgramBuilder;
 
 use crate::extension::{
-    Df64Expand, Df64FromF64, Df64Qr, Df64QrJvp, Df64QrVjp, Df64ToF64, Df64Total, DF64_OPS_FAMILY,
+    Df64Einsum, Df64Expand, Df64FromF64, Df64Qr, Df64QrJvp, Df64QrVjp, Df64ToF64, Df64Total,
+    DF64_OPS_FAMILY,
 };
 
 /// One operation of the contribution's family.
@@ -29,6 +30,8 @@ enum Df64Op {
     Expand,
     /// The reduced QR factorization.
     Qr,
+    /// A matrix contraction.
+    Einsum,
     /// The narrowing conversion to `f64`.
     ToF64,
     /// The widening conversion from `f64`.
@@ -47,6 +50,8 @@ impl Df64Op {
             Some(Self::Total)
         } else if any.downcast_ref::<Df64Expand>().is_some() {
             Some(Self::Expand)
+        } else if any.downcast_ref::<Df64Einsum>().is_some() {
+            Some(Self::Einsum)
         } else if any.downcast_ref::<Df64Qr>().is_some() {
             Some(Self::Qr)
         } else if any.downcast_ref::<Df64ToF64>().is_some() {
@@ -177,7 +182,7 @@ impl SemanticPrimalVjpRule for Df64VjpRule {
                 }
                 builder.add_extension(Arc::new(Df64QrVjp::of(has_q, has_r)), &operands)
             }
-            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp => {
+            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp | Df64Op::Einsum => {
                 return Err(unsupported(op, role));
             }
         }
@@ -278,7 +283,7 @@ impl SemanticLinearizeRule for Df64LinearizeRule {
                     ],
                 )
             }
-            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp => {
+            Df64Op::Expand | Df64Op::QrVjp | Df64Op::QrJvp | Df64Op::Einsum => {
                 return Err(unsupported(op, role));
             }
         };

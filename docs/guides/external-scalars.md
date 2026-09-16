@@ -153,6 +153,33 @@ Narrowing rounds to nearest with ties to even: `1 + 2^-8` is the midpoint above 
 `f32::MAX` narrows to infinity, because its significand is all ones and the rounding carries past
 the largest finite bfloat16. The bottom is, because the exponent ranges agree.
 
+## A matrix contraction in the extended scalar
+
+#1793's example is an ordinary einsum: `einsum("ik,kj->ij", A, B)`. The contribution owns that
+contraction, so it runs through the runtime's extension module with the extended scalar's own
+accumulation:
+
+```rust,ignore
+use tenferro_df64_proof::extension::Df64Einsum;
+use tenferro_runtime::extension::apply;
+
+let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2])?;   // "ik,kj->ij"
+let output = apply(std::sync::Arc::new(op), &[&lhs, &rhs])?;
+```
+
+`ext/df64-proof/tests/einsum.rs` reproduces #1793's table exactly — `A = [[1, 2], [3, 4]]` and
+`B = [[5, 6], [7, 8]]` contract to `[[19, 22], [43, 50]]` — and runs the precision row the issue
+names: contracting the row `[1, 1]` with the column `[1, 2^-80]` keeps `2^-80` after subtracting
+one, which an `f64` accumulator cannot. The contrast is asserted in the same test.
+
+The operation accepts one shape of pattern, a two-matrix contraction whose inputs share a single
+contracted label, and refuses anything else with a typed error: a repeated label inside one input,
+a rank-one input, an output that is not the two free labels in order, and inputs whose contracted
+dimensions disagree at execution. The general label cases need the diagonal, reduction, and
+permutation stages that the ordinary lowering plans, and this body does not execute them, so it
+refuses them rather than approximating. First-order AD through the contraction fails explicitly, with the family's own
+message that it has no Linearize rule for the operation, rather than returning a zero gradient.
+
 ## Unsupported cases
 
 The AD contract admits first-order field arithmetic: an order other than one returns

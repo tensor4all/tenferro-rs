@@ -1055,3 +1055,27 @@ four files the objective names as arm-dense hold about 1180. The numbers belong 
 rather than to the report, so the design doc now carries them beside the hybrid it recommends, and
 anyone weighing removal can see how much surface it touches instead of an estimate from an earlier
 phase.
+
+## #1793's own example, executed
+
+The last unmet acceptance item was einsum with an externally defined scalar, and I had it blocked on
+an authorization question. Reading the issue and #1787's scope note again shifted the reading:
+#1787 calls the deliverable "#1793's einsum/tropical example", and the tropical crate reaches
+ordinary einsum through the *public* lowering, so the shape the issue expects is a contribution-owned
+contraction op rather than a rewrite of the einsum surface.
+
+`ext/df64-proof` now owns a matrix contraction: a payload-carrying `ExtensionOp` holding the three
+label lists, an internal body arm that contracts two external matrices with the extended scalar's
+own accumulation, and the classifier arm the prepared path needs. `tests/einsum.rs` reproduces
+#1793's own table (`A = [[1, 2], [3, 4]]`, `B = [[5, 6], [7, 8]]`, product `[[19, 22], [43, 50]]`)
+and its precision row: contracting the row `[1, 1]` with the column `[1, 2^-80]` keeps `2^-80`
+after subtracting one, with the `f64` control losing it entirely. Writing the test caught my own
+error first — I flattened the expected matrix row-major into a column-major constructor, so the
+first run contracted a transposed input; four of the five tests passed even then, including the
+precision case.
+
+What is not claimed: the general label patterns (traces, outer products, permutations) are refused
+with typed errors rather than approximated, because they need the diagonal, reduction, and
+permutation stages the ordinary lowering plans; AD through the contraction is refused with
+`AdRuleUnavailable`; and the *ordinary* eager einsum surface still rejects an external dtype, which
+its owner reserves for a separately authorized change.
