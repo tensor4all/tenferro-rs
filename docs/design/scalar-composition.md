@@ -912,9 +912,25 @@ the runtime tells two CPU owners apart by *resource domain*
 (`CpuBackend::from_external_managed_domains`), so two engines whose provider is the same
 still have distinct provider/device identities when their domains differ. The first
 attempt failed with `RuntimeConfigError::DuplicateProviderDeviceTarget` only because it
-registered the same default domain twice. The test now builds two external domains from
-the discovered topology and runs both connected programs in one runtime; on a host that
-declares fewer than two nodes it returns early rather than claiming the configuration.
+registered the same default domain twice.
+
+The second version of that test was also weaker than it looked: it took the two domains from
+the discovered topology and returned early when the host declared fewer than two nodes, which
+this host does (one node, 64 CPUs), so the configuration was silently skipped. The test now
+gives each owner its own *disjoint slice of the node's CPUs* under its own domain identity,
+which is the "explicitly separate owners" shape #1789 allows and works on a single-node host.
+Both connected programs therefore run in the cooperating runtime here rather than on a
+machine that happens to have two NUMA nodes.
+
+**Cross-owner handoff.** #1789 requires a value produced under one owner to reach another
+either through a contract that permits the borrow or through an explicit transfer or typed
+rejection, never by relabeling. `a_value_from_one_owner_reaches_the_other_owner_explicitly`
+runs the standard factorization on one owner and reads its factor on the other: the receiving
+owner borrows the produced value, so the two owners share a compatible CPU domain, and the
+test keeps the typed-rejection path asserted in case the contract ever tightens. The same run
+recorded a compatibility fact between the two factorizations: the standard linalg QR does not
+promise a positive diagonal while this contribution's does, so a consumer that needs the
+positive sign has to say so.
 
 The contribution needs one thing for this shape, and it has it:
 `extension::module_for_engine` binds the contribution's operations to a caller-selected

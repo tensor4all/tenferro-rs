@@ -495,3 +495,27 @@ My first attempt at it had a real defect that the suite caught: reading the accu
 asking the scratch for the buffer a second time clears and zero-fills it, so the connected QR
 gradients silently became zero. The fix reads the buffer without touching it. Extending the
 same pattern to the remaining intermediates is mechanical.
+
+## Two owners on one node, and the cross-owner handoff
+
+The cooperating configuration's first version took its two resource domains from the
+discovered CPU topology and returned early when the host declared fewer than two nodes. This
+host declares one node with 64 CPUs, so that test was a silent no-op even though it passed,
+and my earlier report of "all four configurations run" was therefore weaker than it sounded.
+
+The owners now take disjoint slices of the one node's CPUs under distinct domain identities,
+which is the "explicitly separate owners" shape #1789 permits, so both connected programs run
+in the cooperating runtime here.
+
+That made the cross-owner handoff test meaningful too: a factor produced by the standard owner
+is read by the contribution's owner, and the receiving owner borrows it, so the two owners
+share a compatible CPU domain. The test asserts the typed-rejection path as well, in case the
+contract tightens. The run also recorded that the standard linalg QR does not promise a
+positive diagonal while the contribution's does, which is a real compatibility fact for a
+consumer that needs the sign.
+
+Two corrections to earlier reports are worth keeping. `half` is already in the workspace's
+dependency graph through the GPU stack (`t4a-cubecl-*` depend on it), so bf16's gate is not a
+new external package but a new public `DType` variant, which the repository requires
+maintainer acceptance for. And the cooperating configuration was never blocked by a missing
+capability; two earlier readings of a typed rejection were wrong.
