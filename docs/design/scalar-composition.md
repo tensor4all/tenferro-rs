@@ -590,7 +590,18 @@ caller-owned payload has no answer for because it owns no pooled storage.
 reason rather than hiding it, and `cargo test -- --ignored` reproduces the exact
 panic site. Giving a caller-owned payload an ownership slot in the runtime's
 retention model is #1789's decision, so this step waits on it rather than growing a
-private pool.
+private pool. Two candidate shapes were identified and neither is a mechanical
+edit, which is why the choice belongs to a reviewed step:
+
+| Shape | Change | Cost |
+| --- | --- | --- |
+| Retention record | `RetentionContainer` becomes pooled-or-caller-owned, and `AdValueRecord` retains the value directly for the second case | `tensor_read`, `value`, `into_tensor`, and `duplicate_host_tensor` each need a branch; `value` cannot serve a caller-owned payload because there is no `TensorView::External` |
+| Storage root | `RootResourcePin` gains an erased host variant so a group can own the payload | the group's descriptor, read-view, and `into_tensor` paths are typed per preset and would each need the erased case, which spreads the change into `tenferro-tensor` storage rather than `tenferro-ad` retention |
+
+The first shape keeps the ownership boundary where the design puts it - the runtime
+retains a caller-owned value without taking pool ownership, and the value returns
+to its owner when the record drops - so it is the smaller of the two even though it
+is not mechanical.
 
 Session composition is demonstrated without that engine path, and the limit is
 stated where it matters. `ext/df64-proof/tests/session_composition.rs` carries an
