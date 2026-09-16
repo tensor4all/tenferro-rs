@@ -328,19 +328,26 @@ Both variants are public type changes: `DType` gains a variant and `Tensor` gain
 one, which is a semver break and, under this repository's rules, a change that
 needs maintainer acceptance before a feature pull request can carry it.
 
-The value half was attempted twice and is not landed. Adding
-`Tensor::External(payload, placement)` compiles inside `tenferro-tensor`, the CPU
-kernel crate, `tenferro-cpu-fused`, and the runtime, but the remaining sites are
-not uniform: `tenferro-cpu` alone has 32, in `analytic`, `structural`, `indexing`,
-`reduction`, `dot_runtime`, `exec_session`, `backend`, `provider`, and `lib`, and
-some of them sit inside shared dispatch macros that serve many call sites. Each
-site needs a decision rather than a mechanical arm: a typed rejection where the
-function already returns a result, or validation at the crate's public entry
-points with a documented invariant inside. Inserting `unreachable!` everywhere
-would put a panic on a path a caller can reach, which the constraints forbid, so
-the attempt was reverted rather than landed half-checked. The compiler reproduces
-the site list, and the accessors the variant needs are landed:
-`ErasedHostTensor` reports its element identity, shape, and element count.
+The value half landed on the third attempt. `Tensor` carries
+`External(ErasedHostTensor, Placement)`: the value type reports the payload's own
+element identity as its dtype, its shape, its placement, and its element count,
+while views, allocation groups, storage identity, layout offsets, and duplication
+reject it or document an invariant, because a caller-owned payload has none of
+those in this crate.
+
+Every crate gained an explicit arm - about ninety sites the compiler enumerated
+across `tenferro-tensor`, the CPU kernel crate, `tenferro-cpu`,
+`tenferro-cpu-fused`, `tenferro-runtime`, `tenferro-ad`, `tenferro-einsum`,
+`tenferro-linalg`, `tenferro-gpu`, and the FFT and XLA edges. A result-returning
+path rejects with a typed error, a cleanup helper that tags or reclaims pooled
+storage treats a caller-owned payload as a no-op, and `einsum` rejects an
+externally defined input dtype before borrowing a preset-only view, which is what
+makes its internal invariant sound.
+
+The first two attempts failed for a reason worth recording before the next change
+of this shape: the sites are not uniform, several live inside shared dispatch
+macros that the compiler reports at the call site rather than at the match, and a
+blanket `unreachable!` would put a panic on a path a caller can reach.
 
 The tag half is now implemented and measured. `DType` carries
 `External(TypeId)`, 56 sites gained an explicit arm, and the workspace compiles
