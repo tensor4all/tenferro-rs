@@ -2269,10 +2269,41 @@ fn an_external_payload_is_carried_by_the_value_type() {
 
     // The value type answers what it holds, and operations with no externally
     // defined implementation reject it with a typed error instead of guessing.
-    let duplicate = tensor.duplicate().expect_err("duplication is rejected");
-    assert_eq!(
-        duplicate.kind(),
-        tenferro_tensor_core::ErrorKind::Unsupported
-    );
     assert!(tensor.layout_linear_offset(&[0]).is_err());
+
+    // Duplication goes through the payload's own entry point: the copy keeps the
+    // element type, holds its own storage, and leaves the original unchanged.
+    let mut duplicate = tensor.duplicate().expect("duplication copies the payload");
+    assert_eq!(duplicate.dtype(), DType::External(element));
+    assert_eq!(duplicate.shape(), &[2]);
+    match &mut duplicate {
+        Tensor::External(payload, _) => {
+            payload
+                .downcast_mut::<f64>()
+                .expect("payload type")
+                .as_mut_slice()[0] = 9.0;
+            assert_eq!(
+                payload.as_dense::<f64>().expect("dense payload").0,
+                &[9.0, 2.0]
+            );
+        }
+        other => panic!("expected an external payload, found {:?}", other.dtype()),
+    }
+    match &tensor {
+        Tensor::External(payload, _) => {
+            assert_eq!(
+                payload.as_dense::<f64>().expect("dense payload").0,
+                &[1.0, 2.0]
+            );
+        }
+        other => panic!("expected an external payload, found {:?}", other.dtype()),
+    }
+    // A metadata-only clone shares the payload instead of copying it.
+    match &tensor {
+        Tensor::External(original, _) => {
+            assert!(original.clone().shares_payload_with(original));
+            assert!(!original.duplicate().shares_payload_with(original));
+        }
+        other => panic!("expected an external payload, found {:?}", other.dtype()),
+    }
 }

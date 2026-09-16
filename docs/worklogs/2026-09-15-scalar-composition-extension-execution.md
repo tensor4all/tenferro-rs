@@ -94,10 +94,47 @@ Workspace after this: 5215 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy `-D warnings` and the strict `missing_errors_doc` /
 `missing_panics_doc` pass clean, and all thirteen doctests in the proof crate run.
 
+## Follow-on: the erased payload carries its own view layout
+
+#1785's remaining storage requirement was a view over a caller-owned payload. The
+layout lives in the erased value rather than in `TensorView`, so no typed view
+variant was needed:
+
+- `ErasedHostTensor` stores shape, element strides, and an element offset beside
+  the payload. `permuted(axes)` is metadata only and shares the payload;
+  `to_contiguous()` gathers the view into a new dense payload; `duplicate()` copies
+  the payload; `payload_element_count()` reports the storage extent a strided view
+  may not reach in full.
+- The payload became `Arc<dyn ErasedPayload>`, so `Clone` shares storage and
+  `duplicate()` copies it. `Tensor::duplicate` and the CPU contiguous-copy path
+  now copy through the payload's own entry point instead of rejecting or sharing.
+- Typed access applies the layout: `element_at`/`element_at_mut` need the caller to
+  be the only holder for mutation, so two live views never yield two mutable
+  borrows. `downcast_ref`, `downcast_mut`, `into_typed`, and `as_dense` answer
+  `None` for a strided view, which is the "mismatched projection fails safely"
+  boundary.
+- `tensor_layout` uses the payload's own strides and offset, so an erased tensor
+  reports the view it carries instead of assuming a compact layout.
+
+`ext/df64-proof/tests/external_views.rs` covers the requirements: a metadata-only
+permutation that preserves every component through typed reads, a mutable view that
+writes exactly the element it names, a shared payload that refuses a mutable
+borrow, materialization into logical order, a sum reduction whose low-order
+component survives (`1 + 2^-80 + 2^-80 = 1 + 2^-79` exactly), and typed rejection
+of an invalid permutation.
+
+One consumer test changed with the contract:
+`an_external_payload_is_carried_by_the_value_type` asserted that duplication was
+rejected, and it now asserts that duplication copies the payload, keeps the element
+type, and leaves the original unchanged.
+
+Workspace after this: 5231 passed, 3 failed (the same pre-existing `trybuild`
+failures), clippy `-D warnings` clean.
+
 ## What the next step needs
 
-`Tensor` still has no strided or mutable view over a caller-owned payload, so
-#1785's metadata-only permutation and mutable-view requirements are not satisfied
-yet. That is a contract decision rather than a mechanical conversion: the erased
-payload would have to expose layout (strides, offset) and mutable strided access,
-which the erased element type owns.
+#1789's resource decisions (pool reuse for external scratch, cross-owner handoffs,
+and the accounting a caller-owned payload participates in) and the numerical work
+of #1788/#1793 (first-order Df64 AD, QR) remain. Promotion between two distinct
+external tags is still unchecked at the lattice and belongs at the executing entry
+points.

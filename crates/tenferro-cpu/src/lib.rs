@@ -444,10 +444,11 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Te
         Tensor::Bool(tensor) => clone_host!(Bool, tensor),
         Tensor::C32(tensor) => clone_host!(C32, tensor),
         Tensor::C64(tensor) => clone_host!(C64, tensor),
-        // A caller-owned payload is a compact host tensor, so a contiguous copy
-        // is the payload itself, duplicated through its own entry point.
+        // A caller-owned payload is a compact host tensor, so a contiguous copy is
+        // the payload itself, copied into storage this value owns. Sharing the
+        // payload would alias the caller's storage instead of copying it.
         Tensor::External(payload, placement) => {
-            Ok(Tensor::External(payload.clone(), placement.clone()))
+            Ok(Tensor::External(payload.duplicate(), placement.clone()))
         }
     }
 }

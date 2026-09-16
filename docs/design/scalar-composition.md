@@ -567,8 +567,9 @@ and #1790 (external application consumer) are met.
 ## 5.4 What is left, and why it needs its own step
 
 The gaps between the landed foundation and the acceptance criteria of #1785,
-#1788, #1789, #1790, and #1793 are now in the numerical and view layers rather
-than in the boundary: the extension boundary exists and executes.
+#1788, #1789, #1790, and #1793 are now in the numerical layer and in #1789's
+resource decisions rather than in the boundary: the extension boundary exists and
+executes, and a caller-owned payload carries its own view layout.
 
 **Executing an external scalar needs the extension boundary.** The tag and the
 value type can name and carry an external scalar, but every CPU kernel rejects one
@@ -626,14 +627,32 @@ destination, `2^-80` rounds away, and half an ulp rounds to even), the `f64` to
 `Df64` direction is exact with a zero low component, and neither direction coerces
 a source it does not declare.
 
-**What is still missing is a view contract for a caller-owned payload.** `Tensor`
-still needs a strided, mutable, metadata-only view over an external payload for
-#1785's permutation, mutable-view, and materialization requirements, and
-`TensorView`/`TensorViewMut` have no external variant. This is not mechanical: an
-erased payload must expose a layout contract (strides, offset, and mutable
-strided access) that the erased element type determines, which is a public
-contract decision for the adapter, so it belongs to the #1785/#1789 step rather
-than to the representation change.
+**A caller-owned payload carries its own view layout.** #1785's permutation,
+mutable-view, and materialization requirements are met without a variant in the
+typed view types, because the layout lives in the erased value instead:
+
+- `ErasedHostTensor` stores shape, element strides, and an element offset beside
+  the payload. `new` is dense column-major, `permuted(axes)` changes only that
+  metadata and shares the payload, `to_contiguous()` gathers the view into a new
+  dense payload, and `duplicate()` copies the payload.
+- The payload is shared through an `Arc`, so `Clone` means "share the storage" and
+  `duplicate()` means "copy it" — the same distinction the pooled path draws
+  between a view and `Tensor::duplicate`.
+- A typed read applies the layout (`element_at`/`element_at_mut`), and mutable
+  access requires the caller to be the only holder, so two live views cannot
+  produce two mutable borrows of one element.
+- `downcast_ref`, `downcast_mut`, `into_typed`, and `as_dense` answer `None` for a
+  strided view, so no caller reads the payload as if it were the view. That is
+  #1785's "mismatched projection fails safely" boundary.
+- `Tensor::duplicate` now copies the payload through its own entry point instead of
+  rejecting it, and the erased layout feeds `Tensor::shape`/`layout_summary`, so
+  the erased tensor type reports the view it carries.
+
+`ext/df64-proof/tests/external_views.rs` covers the requirements: a permutation
+that shares its payload and preserves every component through typed reads, a
+mutable view that writes exactly the element it names, a shared payload that
+refuses a mutable borrow, materialization into logical order, and a sum reduction
+whose low-order component survives (`1 + 2^-80 + 2^-80 = 1 + 2^-79` exactly).
 
 **Promotion between two distinct external scalars is not checked.**
 `promote(lhs, rhs)` returns the left operand when both are external, even when the

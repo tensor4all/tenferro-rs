@@ -4548,16 +4548,19 @@ impl TensorValue {
 
 fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
     match tensor {
-        // A caller-owned payload is a compact column-major host tensor, so its
-        // layout follows from its shape.
-        Tensor::External(payload, _) => TensorLayout::<DynRank>::compact(
+        // A caller-owned payload carries its own view layout, so strides and offset
+        // come from the payload rather than from a compact assumption.
+        Tensor::External(payload, _) => TensorLayout::<DynRank>::from_parts(
             tenferro_tensor_core::ShapeVec::from_slice(payload.shape()),
+            tenferro_tensor_core::StrideVec::from_slice(payload.strides()),
+            payload.offset(),
+            payload.payload_element_count(),
         )
         .unwrap_or_else(|_| {
-            // INVARIANT: the payload's shape product was validated when the host
-            // tensor it was built from was created, so compact layout construction
-            // cannot overflow here.
-            unreachable!("a validated payload yields a compact column-major layout")
+            // INVARIANT: a payload is built from a validated host tensor, and the
+            // only layout change is a permutation, so its strides stay inside the
+            // payload it was created from and this construction cannot fail.
+            unreachable!("a validated payload yields a layout inside its own storage")
         }),
         Tensor::F32(tensor) => tensor.layout.clone(),
         Tensor::F64(tensor) => tensor.layout.clone(),
@@ -8234,13 +8237,12 @@ impl Tensor {
             Tensor::Bool(t) => t.duplicate().map(Tensor::Bool),
             Tensor::C32(t) => t.duplicate().map(Tensor::C32),
             Tensor::C64(t) => t.duplicate().map(Tensor::C64),
-            // The erased payload cannot be cloned without knowing its element type,
-            // so duplication is rejected instead of copying bytes blindly.
-            Tensor::External(..) => Err(crate::Error::unsupported_dtype(
-                "duplicate",
-                self.dtype(),
-                "an externally defined payload must be duplicated by its owner",
-            )),
+            // A caller-owned payload is copied through its own entry point, which
+            // keeps its element type and its view; sharing the payload instead
+            // would alias the caller's storage.
+            Tensor::External(payload, placement) => {
+                Ok(Tensor::External(payload.duplicate(), placement.clone()))
+            }
         }
     }
 
