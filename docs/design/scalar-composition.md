@@ -1349,6 +1349,14 @@ could not delimit an arm's body, since these bodies nest calls whose parentheses
 pattern matching and a naive depth scan. The lesson is the same one the earlier files taught: the
 mechanical part is the rewrite, not the transcription of it.
 
+**Two shapes the table pass cannot take.** `crates/tenferro-cpu/src/dot_runtime.rs` shows both. Its
+layout validators reach the tensor through `TensorRead::Tensor(tensor) => match tensor { .. }`, so the
+variant arms sit two matches deep and the binding shadows the name the outer arm introduced; and
+`reclaim_temporary` matches a `Tensor` it takes by value, which the borrow-based accessor cannot serve at
+all. A pass converted two of the nested tables and one arm set of the move site before the compiler caught
+the second, and the file was restored rather than half-converted. It needs a per-table hand conversion, and
+the move site is the erased-representation boundary again.
+
 **Where the incremental approach stops.** Converting `reshape` showed the limit. Its dispatch recovers
 each typed tensor and *moves* it into a metadata helper that reuses the buffer, but `Tensor::as_typed`
 borrows, so a tag-dispatched version would have to clone the device tensor and change the operation's
