@@ -2301,19 +2301,49 @@ pub fn neg(input: &Tensor) -> crate::Result<Tensor> {
 
 #[doc(hidden)]
 pub fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_neg_with_pool(buffers, t)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_neg_with_pool(buffers, t)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_neg_with_pool(buffers, t)?)),
-        Tensor::Bool(_) | Tensor::External(..) => Err(unary_dtype_error(
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_neg_with_pool(
+            buffers,
+            input.as_typed::<f32>().ok_or_else(|| {
+                unary_dtype_error("neg", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::F64 => Ok(Tensor::F64(typed_neg_with_pool(
+            buffers,
+            input.as_typed::<f64>().ok_or_else(|| {
+                unary_dtype_error("neg", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::I32 => Ok(Tensor::I32(typed_wrapping_neg_with_pool(
+            buffers,
+            input.as_typed::<i32>().ok_or_else(|| {
+                unary_dtype_error("neg", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::I64 => Ok(Tensor::I64(typed_wrapping_neg_with_pool(
+            buffers,
+            input.as_typed::<i64>().ok_or_else(|| {
+                unary_dtype_error("neg", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::Bool | DType::External(_) => Err(unary_dtype_error(
             "neg",
             input.dtype(),
             "F32/F64/I32/I64/C32/C64",
             false,
         )),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_neg_with_pool(buffers, t)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_neg_with_pool(buffers, t)?)),
+        DType::C32 => Ok(Tensor::C32(typed_neg_with_pool(
+            buffers,
+            input.as_typed::<Complex<f32>>().ok_or_else(|| {
+                unary_dtype_error("neg", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::C64 => Ok(Tensor::C64(typed_neg_with_pool(
+            buffers,
+            input.as_typed::<Complex<f64>>().ok_or_else(|| {
+                unary_dtype_error("neg", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
     }
 }
 
@@ -2380,7 +2410,7 @@ pub fn neg_read_with_pool(
 ///
 /// let input = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)])?;
 /// let out = conj(&input)?;
-/// assert_eq!(out.as_slice::<Complex64>().unwrap(), &[Complex64::new(1.0, -2.0)]);
+/// assert_eq!(out.as_slice::<Complex<f64>>().unwrap(), &[Complex64::new(1.0, -2.0)]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
@@ -2391,14 +2421,37 @@ pub fn conj(input: &Tensor) -> crate::Result<Tensor> {
 
 #[doc(hidden)]
 pub fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_conj_with_pool(buffers, t)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_conj_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::External(..) => Err(
-            unary_dtype_error("conj", input.dtype(), "F32/F64/C32/C64", true),
-        ),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_conj_with_pool(buffers, t)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_conj_with_pool(buffers, t)?)),
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_conj_with_pool(
+            buffers,
+            input
+                .as_typed::<f32>()
+                .ok_or_else(|| unary_dtype_error("conj", input.dtype(), "F32/F64/C32/C64", true))?,
+        )?)),
+        DType::F64 => Ok(Tensor::F64(typed_conj_with_pool(
+            buffers,
+            input
+                .as_typed::<f64>()
+                .ok_or_else(|| unary_dtype_error("conj", input.dtype(), "F32/F64/C32/C64", true))?,
+        )?)),
+        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => Err(unary_dtype_error(
+            "conj",
+            input.dtype(),
+            "F32/F64/C32/C64",
+            true,
+        )),
+        DType::C32 => Ok(Tensor::C32(typed_conj_with_pool(
+            buffers,
+            input
+                .as_typed::<Complex<f32>>()
+                .ok_or_else(|| unary_dtype_error("conj", input.dtype(), "F32/F64/C32/C64", true))?,
+        )?)),
+        DType::C64 => Ok(Tensor::C64(typed_conj_with_pool(
+            buffers,
+            input
+                .as_typed::<Complex<f64>>()
+                .ok_or_else(|| unary_dtype_error("conj", input.dtype(), "F32/F64/C32/C64", true))?,
+        )?)),
     }
 }
 
@@ -2460,19 +2513,49 @@ pub fn abs(input: &Tensor) -> crate::Result<Tensor> {
 
 #[doc(hidden)]
 pub fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_abs_with_pool(buffers, t)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_abs_with_pool(buffers, t)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_abs_with_pool(buffers, t)?)),
-        Tensor::Bool(_) | Tensor::External(..) => Err(unary_dtype_error(
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_abs_with_pool(
+            buffers,
+            input.as_typed::<f32>().ok_or_else(|| {
+                unary_dtype_error("abs", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::F64 => Ok(Tensor::F64(typed_abs_with_pool(
+            buffers,
+            input.as_typed::<f64>().ok_or_else(|| {
+                unary_dtype_error("abs", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::I32 => Ok(Tensor::I32(typed_wrapping_abs_with_pool(
+            buffers,
+            input.as_typed::<i32>().ok_or_else(|| {
+                unary_dtype_error("abs", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::I64 => Ok(Tensor::I64(typed_wrapping_abs_with_pool(
+            buffers,
+            input.as_typed::<i64>().ok_or_else(|| {
+                unary_dtype_error("abs", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::Bool | DType::External(_) => Err(unary_dtype_error(
             "abs",
             input.dtype(),
             "F32/F64/I32/I64/C32/C64",
             false,
         )),
-        Tensor::C32(t) => Ok(Tensor::F32(typed_complex_abs_with_pool(buffers, t)?)),
-        Tensor::C64(t) => Ok(Tensor::F64(typed_complex_abs_with_pool(buffers, t)?)),
+        DType::C32 => Ok(Tensor::F32(typed_complex_abs_with_pool(
+            buffers,
+            input.as_typed::<Complex<f32>>().ok_or_else(|| {
+                unary_dtype_error("abs", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::C64 => Ok(Tensor::F64(typed_complex_abs_with_pool(
+            buffers,
+            input.as_typed::<Complex<f64>>().ok_or_else(|| {
+                unary_dtype_error("abs", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
     }
 }
 
@@ -2539,19 +2622,49 @@ pub fn sign(input: &Tensor) -> crate::Result<Tensor> {
 
 #[doc(hidden)]
 pub fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_sign_with_pool(buffers, t)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_integer_sign_with_pool(buffers, t)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_integer_sign_with_pool(buffers, t)?)),
-        Tensor::Bool(_) | Tensor::External(..) => Err(unary_dtype_error(
+    match input.dtype() {
+        DType::F32 => Ok(Tensor::F32(typed_sign_with_pool(
+            buffers,
+            input.as_typed::<f32>().ok_or_else(|| {
+                unary_dtype_error("sign", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::F64 => Ok(Tensor::F64(typed_sign_with_pool(
+            buffers,
+            input.as_typed::<f64>().ok_or_else(|| {
+                unary_dtype_error("sign", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::I32 => Ok(Tensor::I32(typed_integer_sign_with_pool(
+            buffers,
+            input.as_typed::<i32>().ok_or_else(|| {
+                unary_dtype_error("sign", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::I64 => Ok(Tensor::I64(typed_integer_sign_with_pool(
+            buffers,
+            input.as_typed::<i64>().ok_or_else(|| {
+                unary_dtype_error("sign", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::Bool | DType::External(_) => Err(unary_dtype_error(
             "sign",
             input.dtype(),
             "F32/F64/I32/I64/C32/C64",
             false,
         )),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_sign_with_pool(buffers, t)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_sign_with_pool(buffers, t)?)),
+        DType::C32 => Ok(Tensor::C32(typed_sign_with_pool(
+            buffers,
+            input.as_typed::<Complex<f32>>().ok_or_else(|| {
+                unary_dtype_error("sign", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
+        DType::C64 => Ok(Tensor::C64(typed_sign_with_pool(
+            buffers,
+            input.as_typed::<Complex<f64>>().ok_or_else(|| {
+                unary_dtype_error("sign", input.dtype(), "F32/F64/I32/I64/C32/C64", false)
+            })?,
+        )?)),
     }
 }
 
