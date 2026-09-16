@@ -564,6 +564,31 @@ with two sets sharing compiled kernels evidenced by object or symbol inspection)
 #1788 (Df64 QR with first-order AD), #1789 (resource ownership and lifetimes),
 and #1790 (external application consumer) are met.
 
+## 5.4 What is left, and why it needs its own step
+
+Two gaps remain between the landed foundation and the acceptance criteria of
+#1785, #1788, #1789, #1790, and #1793.
+
+**Executing an external scalar needs the extension boundary.** The tag and the
+value type can name and carry an external scalar, but every CPU kernel rejects one
+with a typed error, because tenferro owns no implementation for it. Running one
+means an extension-owned operation reached through the runtime's `ExtensionOp`,
+`ExtensionModule`, and prepared-execution path, which is what #1785 and #1790 own.
+The pieces that step needs are landed: the payload answers its element identity,
+shape, and element count, `ScalarSet::promote` accepts an external tag, and the
+cache-key identity carries the actual scalar rather than a shared code.
+
+**Promotion between two distinct external scalars is not checked.**
+`promote(lhs, rhs)` returns the left operand when both are external, even when the
+two tags name different Rust types. Tenferro cannot relate an external scalar to
+anything, so returning one of them silently is the wrong answer; it should be a
+typed rejection at the point where a promotion drives execution. The reason it is
+not fixed here is cost rather than doubt: `promote_dtype` and `promote_dtypes`
+have 69 call sites, most of them infallible expressions such as
+`let output_dtype = promote_dtype(lhs, rhs);`, so the fix is a checked promotion at
+the executing entry points rather than a global signature change, and it belongs
+with the extension step above where an external scalar first reaches execution.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

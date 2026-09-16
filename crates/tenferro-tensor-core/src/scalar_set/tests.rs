@@ -111,3 +111,19 @@ fn the_tag_stays_within_its_measured_size() {
     // cache keys, and error types.
     assert!(core::mem::size_of::<crate::DType>() <= 24);
 }
+
+#[test]
+fn promotion_between_two_external_scalars_is_a_known_gap() {
+    use crate::{DType, MemberKind, ScalarSet};
+
+    let first = DType::External(core::any::TypeId::of::<u128>());
+    let second = DType::External(core::any::TypeId::of::<u64>());
+
+    // Two external scalars are two unrelated types, so tenferro cannot relate
+    // them. The current answer returns the left operand, which is recorded here
+    // rather than hidden: the checked rejection belongs at the entry point where a
+    // promotion drives execution, together with the extension boundary. See
+    // docs/design/scalar-composition.md section 5.4.
+    assert_eq!(first.spec().kind, MemberKind::External);
+    assert_eq!(<DefaultScalars as ScalarSet>::promote(first, second), first);
+}
