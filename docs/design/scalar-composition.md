@@ -1240,7 +1240,18 @@ means a preset member rather than a contribution: `DType::Bf16`, the preset decl
 and conversions. The obstacle is not the dependency (`half 2.7.1` is already in the workspace's
 dependency graph through the GPU stack) nor the arithmetic, it is that a preset member is
 *pooled*, and the constraints freeze the sealed `BufferPool`/`PoolScalar` boundary until #1789's
-contract is agreed. #1789's text allows uninitialized storage of equal size and alignment to be
+contract is agreed.
+
+The cost of the frozen part was measured rather than assumed. Declaring one extra member in
+`crates/tenferro-tensor-core/src/lib.rs` and checking the crate produced four non-exhaustive
+matches inside that crate and nothing else, because cargo does not build dependents of a failing
+crate; the pool side is visible statically, where `RootResourcePin`
+(`crates/tenferro-tensor/src/storage/root.rs`) is a hand-written enum with one `Host*` variant per
+preset member and eight references in that file, so a member needs a new variant there. The
+workspace-wide tag cost is calibrated by this branch's own `DType::External` addition, which
+touched 56 arms across 15 crates; a float member needs those arms plus kernels, casts, promotion
+facts, and an accumulation contract, so bf16 is strictly more expensive than that calibration. The
+experiment was reverted and the tree is clean. #1789's text allows uninitialized storage of equal size and alignment to be
 reused under a full-overwrite contract, and deciding that contract is what unblocks bf16.
 
 **Removing the seven `Tensor` variants.** The objective's Stage 2 line asks for this last, and
