@@ -1297,7 +1297,13 @@ reused under a full-overwrite contract, and deciding that contract is what unblo
 
 **Removing the seven `Tensor` variants.** The objective's Stage 2 line asks for this last, and
 this branch kept the variants and added one erased payload instead, because the measured cost of
-the two shapes is 18 and 59 new arms against 2279 rewritten production sites. Carrying that
+the two shapes is 18 and 59 new arms against 2279 rewritten production sites. Re-measured on the
+current head, the conversion the removal needs is larger than that estimate suggested: `Tensor::`
+variant match sites number **2832** across **75** files, and the four files the objective names as
+arm-dense hold about 1180 of them — 520 in `tenferro-gpu/src/cubecl/mod.rs`, 277 in
+`tenferro-linalg/src/cpu/backend.rs`, 206 in
+`tenferro-internal-cpu-kernels/src/elementwise.rs`, and 177 in
+`tenferro-linalg/src/gpu/linalg.rs`. Carrying that
 choice into the public contract needs maintainer acceptance, which is why the design records it
 rather than the branch assuming it.
 

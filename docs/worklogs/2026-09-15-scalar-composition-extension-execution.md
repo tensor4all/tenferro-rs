@@ -1045,3 +1045,13 @@ The rest of the boundary is explicit rejection. `tenferro-xla`'s lowering matche
 `DType::External(_)` beside its unsupported preset types, the program builder returns
 `ExternalScalarWithoutIdentity`, and the snapshot module's only panics are test code. There is no C
 API in this repository, so the public Rust surface is the boundary this branch can and does decide.
+
+## The representation decision, re-measured
+
+The inherited estimate for removing the seven `Tensor` variants was 18 and 59 new arms against 2279
+rewritten production sites. Measuring the current head with one metric — `Tensor::` variant match
+sites, not exhaustive-arm counts — gives a larger picture: 2832 sites across 75 files, of which the
+four files the objective names as arm-dense hold about 1180. The numbers belong to the decision
+rather than to the report, so the design doc now carries them beside the hybrid it recommends, and
+anyone weighing removal can see how much surface it touches instead of an estimate from an earlier
+phase.
