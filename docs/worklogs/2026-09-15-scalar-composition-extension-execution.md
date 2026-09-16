@@ -470,3 +470,19 @@ reuse and releasing storage for reuse, is #1789's pool accounting.
 
 Workspace after this: 5298 passed, 3 failed (the same pre-existing `trybuild` failures),
 clippy clean under `-D warnings` and the strict doc lints.
+
+## The storage gap, measured
+
+#1789 asks for a demonstrated gap before the storage boundary is touched, so
+`ext/df64-proof/tests/scratch_allocation.rs` counts what the contribution's bodies allocate
+per execution with a counting global allocator. For a 64 by 64 matrix (65536 bytes of
+payload): the steady-state factorization allocates 189 times and 174857 bytes, and the
+adjoint 256 times and 1117164 bytes. The steady state matches the first execution, so no
+scratch is reused, which is the gap in numbers.
+
+The measurement also caught a violation of #1789's own rule against hidden tensor-sized
+copies: `matrix_of` copied each input payload before any arithmetic. The dense helpers now
+borrow the caller-owned payload, so the adjoint's bytes fell by exactly the three input
+copies (196608 bytes) and its allocations from 256 to 253. Reusing the *intermediate*
+buffers is the remaining, larger step, and the accounted `ExtensionCacheStore` is where it
+belongs.

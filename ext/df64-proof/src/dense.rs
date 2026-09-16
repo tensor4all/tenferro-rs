@@ -6,17 +6,33 @@
 //! extraction, and a triangular solve. Every helper is column-major and uses the
 //! external scalar's own arithmetic, so nothing here narrows to `f64` on the way.
 
+use std::borrow::Cow;
+
 use crate::Df64;
 
 /// A dense column-major matrix with its row count.
-pub(crate) struct Matrix {
+///
+/// A matrix read from an operation input borrows the caller-owned payload, so no body makes
+/// a tensor-sized copy of its inputs; a computed matrix owns its storage.
+pub(crate) struct Matrix<'a> {
     pub(crate) rows: usize,
-    pub(crate) data: Vec<Df64>,
+    pub(crate) data: Cow<'a, [Df64]>,
 }
 
-impl Matrix {
+impl<'a> Matrix<'a> {
     pub(crate) fn new(rows: usize, data: Vec<Df64>) -> Self {
-        Self { rows, data }
+        Self {
+            rows,
+            data: Cow::Owned(data),
+        }
+    }
+
+    /// Wrap a borrowed payload without copying it.
+    pub(crate) fn borrowed(rows: usize, data: &'a [Df64]) -> Self {
+        Self {
+            rows,
+            data: Cow::Borrowed(data),
+        }
     }
 
     pub(crate) fn columns(&self) -> usize {
@@ -29,7 +45,7 @@ impl Matrix {
 }
 
 /// Product `a b` of two column-major matrices.
-pub(crate) fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
+pub(crate) fn multiply(a: &Matrix<'_>, b: &Matrix<'_>) -> Matrix<'static> {
     let columns = b.columns();
     let mut data = vec![Df64::zero(); a.rows * columns];
     for column in 0..columns {
@@ -45,7 +61,7 @@ pub(crate) fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
 }
 
 /// Transpose of a column-major matrix.
-pub(crate) fn transpose(a: &Matrix) -> Matrix {
+pub(crate) fn transpose(a: &Matrix<'_>) -> Matrix<'static> {
     let columns = a.columns();
     let mut data = vec![Df64::zero(); columns * a.rows];
     for column in 0..columns {
@@ -57,7 +73,7 @@ pub(crate) fn transpose(a: &Matrix) -> Matrix {
 }
 
 /// Elementwise difference `a - b`.
-pub(crate) fn subtract(a: &Matrix, b: &Matrix) -> Matrix {
+pub(crate) fn subtract(a: &Matrix<'_>, b: &Matrix<'_>) -> Matrix<'static> {
     let data = a
         .data
         .iter()
@@ -68,7 +84,7 @@ pub(crate) fn subtract(a: &Matrix, b: &Matrix) -> Matrix {
 }
 
 /// Elementwise sum `a + b`.
-pub(crate) fn add(a: &Matrix, b: &Matrix) -> Matrix {
+pub(crate) fn add(a: &Matrix<'_>, b: &Matrix<'_>) -> Matrix<'static> {
     let data = a
         .data
         .iter()
@@ -79,7 +95,7 @@ pub(crate) fn add(a: &Matrix, b: &Matrix) -> Matrix {
 }
 
 /// Upper triangle including the diagonal, with zeros elsewhere.
-pub(crate) fn upper_triangle(a: &Matrix) -> Matrix {
+pub(crate) fn upper_triangle(a: &Matrix<'_>) -> Matrix<'static> {
     let columns = a.columns();
     let mut data = vec![Df64::zero(); a.data.len()];
     for column in 0..columns {
@@ -91,7 +107,7 @@ pub(crate) fn upper_triangle(a: &Matrix) -> Matrix {
 }
 
 /// Lower triangle including the diagonal.
-pub(crate) fn lower_triangle(a: &Matrix) -> Matrix {
+pub(crate) fn lower_triangle(a: &Matrix<'_>) -> Matrix<'static> {
     let columns = a.columns();
     let mut data = vec![Df64::zero(); a.data.len()];
     for column in 0..columns {
@@ -103,7 +119,7 @@ pub(crate) fn lower_triangle(a: &Matrix) -> Matrix {
 }
 
 /// Lower triangle strictly below the diagonal.
-pub(crate) fn strictly_lower_triangle(a: &Matrix) -> Matrix {
+pub(crate) fn strictly_lower_triangle(a: &Matrix<'_>) -> Matrix<'static> {
     let columns = a.columns();
     let mut data = vec![Df64::zero(); a.data.len()];
     for column in 0..columns {
@@ -119,7 +135,10 @@ pub(crate) fn strictly_lower_triangle(a: &Matrix) -> Matrix {
 /// # Errors
 ///
 /// Returns `None` under the same conditions as [`solve_upper`].
-pub(crate) fn solve_upper_from_the_right(r: &Matrix, b: &Matrix) -> Option<Matrix> {
+pub(crate) fn solve_upper_from_the_right(
+    r: &Matrix<'_>,
+    b: &Matrix<'_>,
+) -> Option<Matrix<'static>> {
     let order = r.rows;
     if r.columns() != order || b.columns() != order {
         return None;
@@ -145,6 +164,6 @@ pub(crate) fn solve_upper_from_the_right(r: &Matrix, b: &Matrix) -> Option<Matri
 }
 
 /// A zero matrix of the given shape.
-pub(crate) fn zeros(rows: usize, columns: usize) -> Matrix {
+pub(crate) fn zeros(rows: usize, columns: usize) -> Matrix<'static> {
     Matrix::new(rows, vec![Df64::zero(); rows * columns])
 }

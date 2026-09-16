@@ -986,6 +986,37 @@ checkpoint that does not need #1789's pool contract:
 What is left of that checkpoint is #1789's own scope: surviving an *intervening scratch
 reuse* and releasing storage so it can be reused need the pool accounting that issue owns.
 
+### 5.13 The storage gap, measured before it is extended
+
+#1789 prescribes trying the existing mechanisms first and extending the owning boundary only
+for a demonstrated gap. `ext/df64-proof/tests/scratch_allocation.rs` measures what the
+contribution's bodies allocate per execution with a counting global allocator, on a 64 by 64
+matrix whose payload is 65536 bytes:
+
+| Execution | Allocations | Bytes |
+| --- | --- | --- |
+| first factorization | 228 | 183381 |
+| steady-state factorization | 189 | 174857 |
+| adjoint | 256 | 1117164 |
+| adjoint, after the copies were removed | 253 | 920556 |
+
+Two findings came out of it, and the second is already fixed:
+
+- **The bodies allocate fresh scratch per execution.** The steady-state factorization costs
+  about the same as the first, so nothing is reused; the adjoint costs roughly seventeen
+  matrix payloads. That is the demonstrated gap a reusable workspace would have to close,
+  and it is now a number rather than an assumption.
+- **The bodies made a hidden tensor-sized copy of every input.** `matrix_of` copied each
+  payload into its own buffer before any arithmetic, which #1789 forbids ("no ... hidden
+  tensor-sized copy"). The dense helpers now borrow the caller-owned payload
+  (`dense::Matrix<'a>` holds a `Cow`), so the adjoint's bytes dropped by exactly the three
+  input copies, 196608 bytes, and 256 allocations became 253.
+
+What remains for #1789 is reuse of the *intermediate* buffers the computing helpers
+allocate, which is a larger change than the copies: it needs a reusable scratch buffer
+carried through the bodies, and the accounted `ExtensionCacheStore` is the sanctioned place
+for one, since it takes a `retained_bytes` figure for each entry.
+
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing

@@ -955,7 +955,10 @@ fn sole_input<'a>(
 }
 
 /// Read one externally defined dense matrix from a tensor.
-fn matrix_of(op: &'static str, tensor: &Tensor) -> tenferro_runtime::Result<crate::dense::Matrix> {
+fn matrix_of<'a>(
+    op: &'static str,
+    tensor: &'a Tensor,
+) -> tenferro_runtime::Result<crate::dense::Matrix<'a>> {
     let invalid = |message: &'static str| {
         tenferro_runtime::Error::from(tenferro_tensor::Error::invalid_argument(
             op, "input", message,
@@ -969,17 +972,21 @@ fn matrix_of(op: &'static str, tensor: &Tensor) -> tenferro_runtime::Result<crat
     if payload.as_slice().len() != rows * columns {
         return Err(invalid("the operation takes a dense column-major matrix"));
     }
-    Ok(crate::dense::Matrix::new(rows, payload.as_slice().to_vec()))
+    // The payload is caller-owned and borrowed for the length of the body, so no
+    // tensor-sized copy is made on the way in.
+    Ok(crate::dense::Matrix::borrowed(rows, payload.as_slice()))
 }
 
 /// Wrap one dense matrix as an externally defined tensor.
-fn tensor_of(op: &'static str, matrix: crate::dense::Matrix) -> tenferro_runtime::Result<Tensor> {
+fn tensor_of(
+    op: &'static str,
+    matrix: crate::dense::Matrix<'_>,
+) -> tenferro_runtime::Result<Tensor> {
     let columns = matrix.columns();
-    let host = HostTensor::from_vec_col_major(vec![matrix.rows, columns], matrix.data).map_err(
-        |source| {
+    let host = HostTensor::from_vec_col_major(vec![matrix.rows, columns], matrix.data.into_owned())
+        .map_err(|source| {
             tenferro_runtime::Error::from(tenferro_tensor::Error::runtime_state_source(op, source))
-        },
-    )?;
+        })?;
     Ok(Tensor::external(ErasedHostTensor::new(host)))
 }
 
