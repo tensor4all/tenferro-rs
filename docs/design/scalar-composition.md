@@ -1279,7 +1279,16 @@ The repository's gate is per file, and 45 of the 64 changed files with coverage 
 because of code that predates this branch. The goal asks for 90% line coverage on *changed* files,
 so the figure that answers it is the coverage of the lines this branch adds: intersecting the
 uncovered lines of the CI-profile report with the line ranges of `git diff -U0 origin/main` gives
-**5627 added lines with coverage data, 279 uncovered, 95.0% covered**.
+**5627 added lines with coverage data, 277 uncovered, 95.1% covered**. The harness reports 221
+files, none of them test files, so the denominator counts source lines only.
+
+Two of those lines were recovered by a test added after the first measurement. The eager einsum
+extension rejected an externally defined input dtype, but the branch had never run: in the report
+the error construction carried a count of zero while the surrounding lines carried 34. The new
+module-local test drives `infer_output_meta` with an externally defined dtype in each input
+position and asserts the typed error, and the branch now reports two executions. Lines 282 and 283
+stay at zero because a closure body is attributed to its own segments; `find` returning `Some` at
+285 twice is what proves the predicate matched.
 
 The remaining groups are the contribution's payload identity bodies (`extension.rs`, 98 lines,
 reached only when the runtime plans two programs whose payloads differ), the derivative rules'
