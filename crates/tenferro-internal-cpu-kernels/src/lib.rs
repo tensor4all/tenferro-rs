@@ -19,6 +19,8 @@ pub mod scalar_ops;
 pub use read_into::elementwise_read_into_with_context;
 
 #[cfg(test)]
+use num_complex::{Complex32, Complex64};
+#[cfg(test)]
 use std::mem::MaybeUninit;
 #[cfg(test)]
 use strided_kernel::{map_into, Identity, StridedView};
@@ -47,22 +49,62 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> Result<Tensor> {
             Ok(Tensor::$variant($tensor.duplicate()?))
         }};
     }
-    match tensor {
-        Tensor::F32(tensor) => clone_host!(F32, tensor),
-        Tensor::F64(tensor) => clone_host!(F64, tensor),
-        Tensor::I32(tensor) => clone_host!(I32, tensor),
-        Tensor::I64(tensor) => clone_host!(I64, tensor),
-        Tensor::Bool(tensor) => clone_host!(Bool, tensor),
-        Tensor::C32(tensor) => clone_host!(C32, tensor),
-        Tensor::C64(tensor) => clone_host!(C64, tensor),
+    match tensor.dtype() {
+        DType::F32 => {
+            let tensor = host_typed::<f32>(op, tensor)?;
+            clone_host!(F32, tensor)
+        }
+        DType::F64 => {
+            let tensor = host_typed::<f64>(op, tensor)?;
+            clone_host!(F64, tensor)
+        }
+        DType::I32 => {
+            let tensor = host_typed::<i32>(op, tensor)?;
+            clone_host!(I32, tensor)
+        }
+        DType::I64 => {
+            let tensor = host_typed::<i64>(op, tensor)?;
+            clone_host!(I64, tensor)
+        }
+        DType::Bool => {
+            let tensor = host_typed::<bool>(op, tensor)?;
+            clone_host!(Bool, tensor)
+        }
+        DType::C32 => {
+            let tensor = host_typed::<Complex32>(op, tensor)?;
+            clone_host!(C32, tensor)
+        }
+        DType::C64 => {
+            let tensor = host_typed::<Complex64>(op, tensor)?;
+            clone_host!(C64, tensor)
+        }
         // A caller-owned payload must be duplicated by its owner, because this
         // crate cannot clone an erased element type.
-        Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
             op,
-            tenferro_tensor::DType::External(payload.element_type_id()),
+            tenferro_tensor::DType::External(type_id),
             "an externally defined payload must be duplicated by its owner",
         )),
     }
+}
+
+#[cfg(test)]
+/// The typed tensor behind `tensor`, or this module's refusal for a dtype it cannot clone.
+///
+/// Callers reach this from a match on `tensor.dtype()`, so `None` means the tag table and the
+/// runtime dtype disagree rather than a caller mistake; the refusal carries the same text the
+/// externally defined arm uses.
+fn host_typed<'a, T: tenferro_tensor::TensorScalar>(
+    op: &'static str,
+    tensor: &'a Tensor,
+) -> Result<&'a TypedTensor<T>> {
+    tensor.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported_dtype(
+            op,
+            tensor.dtype(),
+            "an externally defined payload must be duplicated by its owner",
+        )
+    })
 }
 
 #[cfg(test)]
