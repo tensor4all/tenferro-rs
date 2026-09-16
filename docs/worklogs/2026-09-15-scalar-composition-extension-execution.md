@@ -380,5 +380,9 @@ of `Q_bar^T Q`. Measuring the adjoint *in isolation* first showed a factor of `0
 depended on the data, which localized the fault to the body rather than to the rule or
 the cotangent plumbing; the connected test then verified the whole graph.
 
-Workspace after this: 5277 passed, 3 failed (the same pre-existing `trybuild`
+Both connected graphs #1790 states now run: the Df64-input graph returns its gradient in
+the external scalar, and `f64 input -> widen -> QR -> narrow -> loss` returns `[6, 8]` in
+`f64`, so a gradient crosses the widening and lands in the input's own dtype.
+
+Workspace after this: 5278 passed, 3 failed (the same pre-existing `trybuild`
 failures), clippy clean under `-D warnings` and the strict doc lints.

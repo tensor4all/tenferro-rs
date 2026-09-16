@@ -861,6 +861,9 @@ program end to end:
   (`R = [[5]]`, `L = 25`, `dL/dA = 2 R A / |A|`).
 - The forward tangent of the same graph is `3` for the first unit direction, which is
   `(Q^T A_dot) R = (3/5)(5)`, and it leaves the graph as an ordinary `f64` value.
+- The second connected graph, `f64 input -> widen -> QR -> narrow -> loss`, also
+  differentiates: the gradient crosses the widening and lands in the input's own dtype as
+  `[6, 8]`.
 
 Implementing this found one real bug in my own body: the adjoint subtracted `Q^T Q`
 instead of `Q_bar^T Q`, which scales the gradient by an amount that depends on the

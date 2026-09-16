@@ -171,3 +171,57 @@ fn the_connected_qr_program_forward_tangent_matches_an_independent_derivative() 
         "the forward tangent is {tangent:?}"
     );
 }
+
+#[test]
+fn the_second_connected_graph_returns_a_gradient_in_the_input_dtype() {
+    use tenferro_df64_proof::extension::Df64FromF64;
+
+    let rules = SemanticExtensionRuleSet::new()
+        .with_primal_vjp(Arc::new(Df64VjpRule))
+        .expect("one rule per family");
+    let ad = ad_context(rules);
+
+    // f64 input -> widen -> QR -> narrow -> ordinary f64 loss.
+    let source = Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape");
+    let input = TracedTensor::from_tensor_concrete_shape(source).expect("traced f64 input");
+    let widened = apply(Arc::new(Df64FromF64), &[&input])
+        .expect("traced widening")
+        .remove(0);
+    let outputs = apply(Arc::new(Df64Qr), &[&widened]).expect("traced QR");
+    let factor = outputs[1].clone();
+    let narrowed = apply(Arc::new(Df64ToF64), &[&factor])
+        .expect("traced narrowing")
+        .remove(0);
+    let loss = narrowed.mul(&narrowed).expect("ordinary f64 loss");
+
+    let seed = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).expect("shape matches data"),
+    )
+    .expect("traced seed");
+    let gradients = ad
+        .vjp_many(&loss, &[&input], &seed)
+        .expect("the second connected reverse pass runs");
+    let gradient = gradients[0].as_ref().expect("the input is active");
+
+    let runtime = runtime_with_module();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile(gradient)
+        .expect("compiled reverse program");
+    let results = runtime
+        .run_compiled(&program, &[])
+        .expect("executed reverse program");
+
+    // The gradient crosses the widening and lands in the input's own dtype.
+    assert_eq!(results[0].dtype(), DType::F64);
+    let gradient = results[0].as_slice::<f64>().expect("f64 slice");
+    assert_eq!(gradient.len(), 2);
+    assert!(
+        (gradient[0] - 6.0).abs() < 1e-12,
+        "the gradient is {gradient:?}"
+    );
+    assert!(
+        (gradient[1] - 8.0).abs() < 1e-12,
+        "the gradient is {gradient:?}"
+    );
+}
