@@ -185,43 +185,95 @@ fn unary_operand<T: tenferro_tensor::TensorScalar>(
 }
 
 macro_rules! dispatch_same_dtype_result {
-    ($op:literal, $lhs:expr, $rhs:expr, |$lhs_t:ident, $rhs_t:ident| $body:expr) => {
-        match ($lhs, $rhs) {
-            (Tensor::F32($lhs_t), Tensor::F32($rhs_t)) => Ok(Tensor::F32($body?)),
-            (Tensor::F64($lhs_t), Tensor::F64($rhs_t)) => Ok(Tensor::F64($body?)),
-            (Tensor::I32($lhs_t), Tensor::I32($rhs_t)) => Ok(Tensor::I32($body?)),
-            (Tensor::I64($lhs_t), Tensor::I64($rhs_t)) => Ok(Tensor::I64($body?)),
-            (Tensor::Bool($lhs_t), Tensor::Bool($rhs_t)) => Ok(Tensor::Bool($body?)),
-            (Tensor::C32($lhs_t), Tensor::C32($rhs_t)) => Ok(Tensor::C32($body?)),
-            (Tensor::C64($lhs_t), Tensor::C64($rhs_t)) => Ok(Tensor::C64($body?)),
-            _ => Err(crate::Error::dtype_mismatch(
-                $op,
-                $lhs.dtype(),
-                $rhs.dtype(),
-            )),
+    ($op:literal, $lhs:expr, $rhs:expr, |$lhs_t:ident, $rhs_t:ident| $body:expr) => {{
+        let lhs = $lhs;
+        let rhs = $rhs;
+        match (lhs.dtype(), rhs.dtype()) {
+            (DType::F32, DType::F32) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<f32>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<f32>($body?))
+            }
+            (DType::F64, DType::F64) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<f64>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<f64>($body?))
+            }
+            (DType::I32, DType::I32) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<i32>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<i32>($body?))
+            }
+            (DType::I64, DType::I64) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<i64>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<i64>($body?))
+            }
+            (DType::Bool, DType::Bool) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<bool>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<bool>($body?))
+            }
+            (DType::C32, DType::C32) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<num_complex::Complex32>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<num_complex::Complex32>($body?))
+            }
+            (DType::C64, DType::C64) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<num_complex::Complex64>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<num_complex::Complex64>($body?))
+            }
+            _ => Err(crate::Error::dtype_mismatch($op, lhs.dtype(), rhs.dtype())),
         }
-    };
+    }};
 }
 
 macro_rules! dispatch_same_dtype_without_bool_result {
-    ($op:literal, $lhs:expr, $rhs:expr, $bool_message:literal, |$lhs_t:ident, $rhs_t:ident| $body:expr) => {
-        match ($lhs, $rhs) {
-            (Tensor::F32($lhs_t), Tensor::F32($rhs_t)) => Ok(Tensor::F32($body?)),
-            (Tensor::F64($lhs_t), Tensor::F64($rhs_t)) => Ok(Tensor::F64($body?)),
-            (Tensor::I32($lhs_t), Tensor::I32($rhs_t)) => Ok(Tensor::I32($body?)),
-            (Tensor::I64($lhs_t), Tensor::I64($rhs_t)) => Ok(Tensor::I64($body?)),
-            (Tensor::C32($lhs_t), Tensor::C32($rhs_t)) => Ok(Tensor::C32($body?)),
-            (Tensor::C64($lhs_t), Tensor::C64($rhs_t)) => Ok(Tensor::C64($body?)),
-            (Tensor::Bool(_), Tensor::Bool(_)) => {
-                Err(crate::Error::unsupported($op, $bool_message))
+    ($op:literal, $lhs:expr, $rhs:expr, $bool_message:literal, |$lhs_t:ident, $rhs_t:ident| $body:expr) => {{
+        let lhs = $lhs;
+        let rhs = $rhs;
+        match (lhs.dtype(), rhs.dtype()) {
+            (DType::F32, DType::F32) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<f32>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<f32>($body?))
             }
-            _ => Err(crate::Error::dtype_mismatch(
-                $op,
-                $lhs.dtype(),
-                $rhs.dtype(),
-            )),
+            (DType::F64, DType::F64) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<f64>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<f64>($body?))
+            }
+            (DType::I32, DType::I32) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<i32>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<i32>($body?))
+            }
+            (DType::I64, DType::I64) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<i64>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<i64>($body?))
+            }
+            (DType::C32, DType::C32) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<num_complex::Complex32>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<num_complex::Complex32>($body?))
+            }
+            (DType::C64, DType::C64) => {
+                let ($lhs_t, $rhs_t) = pair_operands::<num_complex::Complex64>($op, lhs, rhs)?;
+                Ok(Tensor::from_typed::<num_complex::Complex64>($body?))
+            }
+            (DType::Bool, DType::Bool) => Err(crate::Error::unsupported($op, $bool_message)),
+
+            _ => Err(crate::Error::dtype_mismatch($op, lhs.dtype(), rhs.dtype())),
         }
-    };
+    }};
+}
+
+/// The typed operands behind a same-dtype pair, or the refusal a mismatched pair reports.
+///
+/// Callers reach this from a match on the pair of dtypes, so `None` means the tags and the runtime
+/// dtypes disagree rather than a caller mistake.
+fn pair_operands<'a, T: tenferro_tensor::TensorScalar>(
+    op: &'static str,
+    lhs: &'a Tensor,
+    rhs: &'a Tensor,
+) -> crate::Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let lhs_t = lhs
+        .as_typed::<T>()
+        .ok_or_else(|| crate::Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()))?;
+    let rhs_t = rhs
+        .as_typed::<T>()
+        .ok_or_else(|| crate::Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()))?;
+    Ok((lhs_t, rhs_t))
 }
 
 #[cfg(test)]
