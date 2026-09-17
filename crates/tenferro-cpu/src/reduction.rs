@@ -369,35 +369,48 @@ pub(crate) fn reduce_sum_squares(
     }
 }
 
+/// The typed tensor behind a read's tensor, or this module's refusal for one.
+fn norm_squared_operand<T: tenferro_tensor::TensorScalar>(
+    tensor: &Tensor,
+) -> crate::Result<&TypedTensor<T>> {
+    tensor.as_typed::<T>().ok_or_else(|| {
+        unsupported_sum_squares_dtype("BackendSession::norm_squared_read", tensor.dtype())
+    })
+}
+
 pub(crate) fn norm_squared_read(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => match input {
-            Tensor::F32(input) => {
+        TensorRead::Tensor(tensor) => match tensor.dtype() {
+            DType::F32 => {
+                let input = norm_squared_operand::<f32>(tensor)?;
                 let view = typed_view("BackendSession::norm_squared_read", input)?;
                 let value = norm_squared_scalar(&view, |x| x * x, 0.0_f32)?;
                 pooled_scalar_f32(buffers, value)
             }
-            Tensor::F64(input) => {
+            DType::F64 => {
+                let input = norm_squared_operand::<f64>(tensor)?;
                 let view = typed_view("BackendSession::norm_squared_read", input)?;
                 let value = norm_squared_scalar(&view, |x| x * x, 0.0_f64)?;
                 pooled_scalar_f64(buffers, value)
             }
-            Tensor::C32(input) => {
+            DType::C32 => {
+                let input = norm_squared_operand::<Complex32>(tensor)?;
                 let view = typed_view("BackendSession::norm_squared_read", input)?;
                 let value = norm_squared_scalar(&view, |x| x.norm_sqr(), 0.0_f32)?;
                 pooled_scalar_f32(buffers, value)
             }
-            Tensor::C64(input) => {
+            DType::C64 => {
+                let input = norm_squared_operand::<Complex64>(tensor)?;
                 let view = typed_view("BackendSession::norm_squared_read", input)?;
                 let value = norm_squared_scalar(&view, |x| x.norm_sqr(), 0.0_f64)?;
                 pooled_scalar_f64(buffers, value)
             }
             _ => Err(unsupported_sum_squares_dtype(
                 "BackendSession::norm_squared_read",
-                input.dtype(),
+                tensor.dtype(),
             )),
         },
         TensorRead::View(input) => match input {

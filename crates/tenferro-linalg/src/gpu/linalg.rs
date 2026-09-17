@@ -925,21 +925,41 @@ fn apply_qr_gauge_device(
         )));
     }
     let (q, r) = outputs.split_at_mut(1);
-    match (&mut q[0], &mut r[0]) {
-        (Tensor::F32(q), Tensor::F32(r)) => {
+    match (q[0].dtype(), r[0].dtype()) {
+        (DType::F32, DType::F32) => {
+            let (q, r) = gauge_pair_mut::<f32>(&mut q[0], &mut r[0], op)?;
             f32::apply_positive_qr_gauge(backend, q, r, q_start, op)
         }
-        (Tensor::F64(q), Tensor::F64(r)) => {
+        (DType::F64, DType::F64) => {
+            let (q, r) = gauge_pair_mut::<f64>(&mut q[0], &mut r[0], op)?;
             f64::apply_positive_qr_gauge(backend, q, r, q_start, op)
         }
-        (Tensor::C32(q), Tensor::C32(r)) => {
+        (DType::C32, DType::C32) => {
+            let (q, r) = gauge_pair_mut::<Complex32>(&mut q[0], &mut r[0], op)?;
             Complex32::apply_positive_qr_gauge(backend, q, r, q_start, op)
         }
-        (Tensor::C64(q), Tensor::C64(r)) => {
+        (DType::C64, DType::C64) => {
+            let (q, r) = gauge_pair_mut::<Complex64>(&mut q[0], &mut r[0], op)?;
             Complex64::apply_positive_qr_gauge(backend, q, r, q_start, op)
         }
-        (q, r) => Err(Error::dtype_mismatch(op, q.dtype(), r.dtype())),
+        _ => Err(Error::dtype_mismatch(op, q[0].dtype(), r[0].dtype())),
     }
+}
+
+/// The typed pair behind a same-dtype pair of mutable tensors, or this module's refusal.
+fn gauge_pair_mut<'a, T: TensorScalar>(
+    q: &'a mut Tensor,
+    r: &'a mut Tensor,
+    op: &'static str,
+) -> Result<(&'a mut TypedTensor<T>, &'a mut TypedTensor<T>)> {
+    let (q_dtype, r_dtype) = (q.dtype(), r.dtype());
+    let q_t = q
+        .as_typed_mut::<T>()
+        .ok_or_else(|| Error::dtype_mismatch(op, q_dtype, r_dtype))?;
+    let r_t = r
+        .as_typed_mut::<T>()
+        .ok_or_else(|| Error::dtype_mismatch(op, q_dtype, r_dtype))?;
+    Ok((q_t, r_t))
 }
 
 pub(super) fn eigh(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
@@ -3667,16 +3687,33 @@ fn complex64_magnitude(
 }
 
 fn host_min_max_magnitudes(host_min: &Tensor, host_max: &Tensor) -> Result<(f64, f64)> {
-    match (host_min, host_max) {
-        (Tensor::F64(min), Tensor::F64(max)) => Ok((min.host_data()?[0], max.host_data()?[0])),
-        (Tensor::F32(min), Tensor::F32(max)) => Ok((
-            f64::from(min.host_data()?[0]),
-            f64::from(max.host_data()?[0]),
-        )),
+    match (host_min.dtype(), host_max.dtype()) {
+        (DType::F64, DType::F64) => {
+            let (min, max) = host_pair::<f64>(host_min, host_max)?;
+            Ok((min.host_data()?[0], max.host_data()?[0]))
+        }
+        (DType::F32, DType::F32) => {
+            let (min, max) = host_pair::<f32>(host_min, host_max)?;
+            Ok((
+                f64::from(min.host_data()?[0]),
+                f64::from(max.host_data()?[0]),
+            ))
+        }
         _ => Err(Error::Internal(
             "solve: unexpected dtype after magnitude reduction".into(),
         )),
     }
+}
+
+/// The typed pair behind a same-dtype pair of host tensors, or this module's refusal.
+fn host_pair<'a, T: TensorScalar>(
+    lhs: &'a Tensor,
+    rhs: &'a Tensor,
+) -> Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let internal = || Error::Internal("solve: unexpected dtype after magnitude reduction".into());
+    let lhs_t = lhs.as_typed::<T>().ok_or_else(internal)?;
+    let rhs_t = rhs.as_typed::<T>().ok_or_else(internal)?;
+    Ok((lhs_t, rhs_t))
 }
 
 fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> Result<f64> {
