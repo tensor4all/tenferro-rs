@@ -1663,6 +1663,12 @@ figure only from 78.3% to 78.6%, and a test for the reduction read table's view 
 lines, because in the full run other crates' tests execute most arms already. The remaining reachable
 uncovered lines are internal refusal arms reached only through a seam's own module, a few lines each.
 
+The distance is measured rather than estimated: 742 added lines are uncovered, 381 of them would have to
+be covered to reach 90%, and the 217-line elementwise remainder established above as unreachable by
+construction is not available. The other 525 are internal refusal arms and outer-scheduling arms that a
+seam's own module can reach, several files of a few dozen lines each, so the target stays arithmetically
+within reach and the work continues file by file rather than being declared capped.
+
 What that means for the audit: the enforced gate and the new-path duty are met and measured, with the cap
 above stated; whole-file 90% on every changed file is not met, and the honest status of that item is partially
 met with the numbers above rather than claimed.
