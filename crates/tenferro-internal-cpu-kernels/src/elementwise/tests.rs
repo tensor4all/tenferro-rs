@@ -1481,3 +1481,68 @@ fn erased_tables_cover_every_preset_dtype() {
     let selected = select(&pred, &on_true, &on_false).expect("f64 select");
     assert_eq!(selected.dtype(), DType::F64);
 }
+
+/// Calls the tables with every ordered pair of preset dtypes, so the promotion arms and the refusal
+/// arms execute rather than only the same-dtype arms the per-dtype test covers.
+#[test]
+fn erased_tables_cover_every_dtype_pair() {
+    macro_rules! tensor {
+        ($scalar:ty, $value:expr) => {
+            Tensor::from_typed(
+                TypedTensor::<$scalar>::from_vec_col_major(vec![2], vec![$value, $value]).unwrap(),
+            )
+        };
+    }
+
+    let scalars = vec![
+        tensor!(f32, 3.0),
+        tensor!(f64, 3.0),
+        tensor!(i32, 3),
+        tensor!(i64, 3),
+        tensor!(bool, true),
+        tensor!(
+            num_complex::Complex32,
+            num_complex::Complex32::new(3.0, 1.0)
+        ),
+        tensor!(
+            num_complex::Complex64,
+            num_complex::Complex64::new(3.0, 1.0)
+        ),
+    ];
+
+    for lhs in &scalars {
+        for rhs in &scalars {
+            for (name, result) in [
+                ("add", add(lhs, rhs)),
+                ("sub", sub(lhs, rhs)),
+                ("mul", mul(lhs, rhs)),
+                ("div", div(lhs, rhs)),
+                ("rem", rem(lhs, rhs)),
+                ("maximum", maximum(lhs, rhs)),
+                ("minimum", minimum(lhs, rhs)),
+                ("compare", compare(lhs, rhs, &CompareDir::Lt)),
+            ] {
+                match result {
+                    Ok(value) => assert_eq!(
+                        value.shape().to_vec(),
+                        lhs.shape().to_vec(),
+                        "{name} on {:?}, {:?} keeps the shape",
+                        lhs.dtype(),
+                        rhs.dtype()
+                    ),
+                    Err(error) => assert!(
+                        !error.to_string().is_empty(),
+                        "{name} on {:?}, {:?} must refuse with a message",
+                        lhs.dtype(),
+                        rhs.dtype()
+                    ),
+                }
+            }
+            let selected = select(lhs, lhs, rhs);
+            match selected {
+                Ok(value) => assert_eq!(value.shape().to_vec(), lhs.shape().to_vec()),
+                Err(error) => assert!(!error.to_string().is_empty()),
+            }
+        }
+    }
+}

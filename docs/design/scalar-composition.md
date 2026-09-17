@@ -1640,16 +1640,26 @@ satisfies rather than choosing the flattering one:
   200 — so reaching 90% on each of them is a task about the repository's pre-existing debt, not about this
   change. It is unfinished and is not claimed.
 - **Coverage of the lines this branch added**, which is what "cover new paths" asks for. Measured by joining
-  the branch diff against the coverage segments: 3226 added lines are instrumented in this profile (a further
-  8675 are not, because they are feature-gated or `cfg`-excluded), and **2548 of the 3226 are executed, 79.0%**.
-  The remainder is not one kind of gap. Every dtype-pair arm head of the converted tables is executed, so the
-  uncovered lines are sub-regions inside executed arms — chiefly the `?` propagation of a `pair_operand`
-  refusal, which needs a call that makes that specific arm fail, and the arms of files this branch touched
-  only incidentally.
+  the branch diff against llvm-cov's own per-line data: 3606 added lines carry a line record in this profile (a
+  further 8675 do not, because they are feature-gated or `cfg`-excluded), and **2836 of the 3606 are executed,
+  78.6%**.
 
-What that means for the audit: the enforced gate and the new-path duty are met and measured; whole-file 90% on
-every changed file is not, and the honest status of that item is partially met with the numbers above rather
-than claimed.
+**Why that figure does not keep rising as tests are added.** After the two dtype matrices in
+`crates/tenferro-internal-cpu-kernels/src/elementwise/tests.rs`, the uncovered remainder is not arms. Every
+dtype-pair arm head of the converted tables executes, and the refusal arms execute for mixed dtypes. What
+remains is the `?` on each arm's operand extraction: `pair_operand::<f32>("add", lhs, rhs, lhs)?` inside the
+`(DType::F32, DType::F32)` arm, and the same shape in every other arm. That helper is
+`operand.as_typed::<T>().ok_or_else(...)`, while the arm is selected by `lhs.dtype()` and `rhs.dtype()`,
+which are derived from the payloads themselves; the extraction therefore succeeds whenever its arm runs, and
+the failure branch is unreachable by construction rather than uncovered for want of a test. Reaching 90% of
+added lines cannot be done by adding tests. It needs the per-arm extraction to become total, which in this
+representation means either a panic on a path a caller can reach — the design chose typed refusals instead —
+or the single storage-aware payload the removal is waiting on. The figure is therefore reported as measured
+with that cap stated, rather than as a target met.
+
+What that means for the audit: the enforced gate and the new-path duty are met and measured, with the cap
+above stated; whole-file 90% on every changed file is not met, and the honest status of that item is partially
+met with the numbers above rather than claimed.
 
 ### 5.20c The remaining `unreachable!` sites, and why each one is safe
 
