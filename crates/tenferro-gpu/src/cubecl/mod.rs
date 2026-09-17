@@ -5026,8 +5026,10 @@ impl TensorStructural for CudaBackend {
         macro_rules! reject_bool_source {
             () => {{
                 match dst {
-                    TensorWrite::Tensor(Tensor::Bool(_))
-                    | TensorWrite::View(TensorViewMut::Bool(_)) => Err(unsupported_dtype(
+                    TensorWrite::Tensor(tensor) if tensor.dtype() == crate::DType::Bool => Err(
+                        unsupported_dtype("CudaBackend::copy_read_into", crate::DType::Bool),
+                    ),
+                    TensorWrite::View(TensorViewMut::Bool(_)) => Err(unsupported_dtype(
                         "CudaBackend::copy_read_into",
                         crate::DType::Bool,
                     )),
