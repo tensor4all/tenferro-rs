@@ -4881,6 +4881,16 @@ fn contiguous_read_typed<T: TensorScalar>(tensor: &Tensor) -> crate::Result<&Typ
     })
 }
 
+/// The typed tensor behind a copy read's tensor, or its refusal.
+fn copy_read_typed<T: TensorScalar>(tensor: &Tensor) -> crate::Result<&TypedTensor<T>> {
+    tensor.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported(
+            "copy_read_into",
+            "an externally defined payload is not supported by this GPU operation",
+        )
+    })
+}
+
 impl TensorStructural for CudaBackend {
     // Borrowed-view entry points. The traced runtime prepares operands as
     // `TensorRead`; a view is materialized before the CUDA kernel runs.
@@ -5031,13 +5041,24 @@ impl TensorStructural for CudaBackend {
         }
 
         match src {
-            TensorRead::Tensor(Tensor::F32(src)) => copy_source_cutensor!(F32, src.as_view()),
-            TensorRead::Tensor(Tensor::F64(src)) => copy_source_cutensor!(F64, src.as_view()),
-            TensorRead::Tensor(Tensor::I32(src)) => copy_source_typed!(I32, src.as_view()),
-            TensorRead::Tensor(Tensor::I64(src)) => copy_source_typed!(I64, src.as_view()),
-            TensorRead::Tensor(Tensor::Bool(_)) => reject_bool_source!(),
-            TensorRead::Tensor(Tensor::C32(src)) => copy_source_cutensor!(C32, src.as_view()),
-            TensorRead::Tensor(Tensor::C64(src)) => copy_source_cutensor!(C64, src.as_view()),
+            TensorRead::Tensor(tensor) => match tensor.dtype() {
+                DType::F32 => copy_source_cutensor!(F32, copy_read_typed::<f32>(tensor)?.as_view()),
+                DType::F64 => copy_source_cutensor!(F64, copy_read_typed::<f64>(tensor)?.as_view()),
+                DType::I32 => copy_source_typed!(I32, copy_read_typed::<i32>(tensor)?.as_view()),
+                DType::I64 => copy_source_typed!(I64, copy_read_typed::<i64>(tensor)?.as_view()),
+                DType::Bool => reject_bool_source!(),
+                DType::C32 => {
+                    copy_source_cutensor!(C32, copy_read_typed::<Complex32>(tensor)?.as_view())
+                }
+                DType::C64 => {
+                    copy_source_cutensor!(C64, copy_read_typed::<Complex64>(tensor)?.as_view())
+                }
+                // A caller-owned payload has no GPU implementation for this operation.
+                DType::External(_) => Err(crate::Error::unsupported(
+                    "copy_read_into",
+                    "an externally defined payload is not supported by this GPU operation",
+                )),
+            },
             TensorRead::View(TensorView::F32(src)) => copy_source_cutensor!(F32, src),
             TensorRead::View(TensorView::F64(src)) => copy_source_cutensor!(F64, src),
             TensorRead::View(TensorView::I32(src)) => copy_source_typed!(I32, src),
@@ -5045,11 +5066,6 @@ impl TensorStructural for CudaBackend {
             TensorRead::View(TensorView::Bool(_)) => reject_bool_source!(),
             TensorRead::View(TensorView::C32(src)) => copy_source_cutensor!(C32, src),
             TensorRead::View(TensorView::C64(src)) => copy_source_cutensor!(C64, src),
-            // A caller-owned payload has no GPU implementation for this operation.
-            TensorRead::Tensor(Tensor::External(..)) => Err(crate::Error::unsupported(
-                "copy_read_into",
-                "an externally defined payload is not supported by this GPU operation",
-            )),
         }
     }
 

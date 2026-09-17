@@ -1682,13 +1682,13 @@ fn cuda_float_permutation_routes_through_cutensor_and_policy_is_recorded() {
             && cuda.contains("permutation::copy_view_into(self, src, dst, op)"),
         "CUDA f32/f64/c32/c64 structural permutation and copy paths should route through cuTENSOR"
     );
-    for dtype in ["Tensor::F32", "Tensor::F64", "Tensor::C32", "Tensor::C64"] {
+    for dtype in ["DType::F32", "DType::F64", "DType::C32", "DType::C64"] {
         assert!(
             cuda.contains(dtype),
             "CUDA structural dispatch should retain explicit {dtype} routing"
         );
     }
-    for dtype in ["Tensor::I32", "Tensor::I64", "Tensor::Bool"] {
+    for dtype in ["DType::I32", "DType::I64", "DType::Bool"] {
         assert!(
             cuda.contains(dtype),
             "CUDA structural dispatch should keep non-cuTENSOR dtype coverage where supported"
