@@ -402,15 +402,69 @@ pub(crate) fn copy_tensor_read_into(
             }
         }};
     }
+    /// The typed tensor behind a read adapter's tensor, or the refusal this adapter reports.
+    fn read_refusal(tensor: &Tensor) -> crate::Error {
+        crate::Error::unsupported_dtype(
+            "copy_tensor_read_into",
+            tensor.dtype(),
+            "an externally defined payload is not a runtime read",
+        )
+    }
 
     match src {
-        TensorRead::Tensor(Tensor::F32(src)) => copy_source!(F32, src.as_view()),
-        TensorRead::Tensor(Tensor::F64(src)) => copy_source!(F64, src.as_view()),
-        TensorRead::Tensor(Tensor::I32(src)) => copy_source!(I32, src.as_view()),
-        TensorRead::Tensor(Tensor::I64(src)) => copy_source!(I64, src.as_view()),
-        TensorRead::Tensor(Tensor::Bool(src)) => copy_source!(Bool, src.as_view()),
-        TensorRead::Tensor(Tensor::C32(src)) => copy_source!(C32, src.as_view()),
-        TensorRead::Tensor(Tensor::C64(src)) => copy_source!(C64, src.as_view()),
+        TensorRead::Tensor(tensor) => match tensor.dtype() {
+            DType::F32 => copy_source!(
+                F32,
+                tensor
+                    .as_typed::<f32>()
+                    .ok_or_else(|| read_refusal(tensor))?
+                    .as_view()
+            ),
+            DType::F64 => copy_source!(
+                F64,
+                tensor
+                    .as_typed::<f64>()
+                    .ok_or_else(|| read_refusal(tensor))?
+                    .as_view()
+            ),
+            DType::I32 => copy_source!(
+                I32,
+                tensor
+                    .as_typed::<i32>()
+                    .ok_or_else(|| read_refusal(tensor))?
+                    .as_view()
+            ),
+            DType::I64 => copy_source!(
+                I64,
+                tensor
+                    .as_typed::<i64>()
+                    .ok_or_else(|| read_refusal(tensor))?
+                    .as_view()
+            ),
+            DType::Bool => copy_source!(
+                Bool,
+                tensor
+                    .as_typed::<bool>()
+                    .ok_or_else(|| read_refusal(tensor))?
+                    .as_view()
+            ),
+            DType::C32 => copy_source!(
+                C32,
+                tensor
+                    .as_typed::<Complex32>()
+                    .ok_or_else(|| read_refusal(tensor))?
+                    .as_view()
+            ),
+            DType::C64 => copy_source!(
+                C64,
+                tensor
+                    .as_typed::<Complex64>()
+                    .ok_or_else(|| read_refusal(tensor))?
+                    .as_view()
+            ),
+            // A caller-owned payload has no compact runtime read.
+            DType::External(_) => Err(read_refusal(tensor)),
+        },
         TensorRead::View(TensorView::F32(src)) => copy_source!(F32, src),
         TensorRead::View(TensorView::F64(src)) => copy_source!(F64, src),
         TensorRead::View(TensorView::I32(src)) => copy_source!(I32, src),
@@ -419,12 +473,6 @@ pub(crate) fn copy_tensor_read_into(
         TensorRead::View(TensorView::C32(src)) => copy_source!(C32, src),
         TensorRead::View(TensorView::C64(src)) => copy_source!(C64, src),
         // A caller-owned payload is opaque here, so it cannot be copied into a
-        // runtime destination.
-        TensorRead::Tensor(Tensor::External(payload, _)) => Err(crate::Error::unsupported_dtype(
-            "copy_tensor_read_into",
-            tenferro_tensor::DType::External(payload.element_type_id()),
-            "an externally defined payload is not a runtime read",
-        )),
     }
 }
 
