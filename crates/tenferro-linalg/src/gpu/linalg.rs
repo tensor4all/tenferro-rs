@@ -261,20 +261,24 @@ pub(super) fn triangular_solve(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> Result<Tensor> {
-    match (a, b) {
-        (Tensor::F32(a), Tensor::F32(b)) => {
+    match (a.dtype(), b.dtype()) {
+        (DType::F32, DType::F32) => {
+            let (a, b) = triangular_solve_operands::<f32>(a, b)?;
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
                 .map(Tensor::from_typed::<f32>)
         }
-        (Tensor::F64(a), Tensor::F64(b)) => {
+        (DType::F64, DType::F64) => {
+            let (a, b) = triangular_solve_operands::<f64>(a, b)?;
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
                 .map(Tensor::from_typed::<f64>)
         }
-        (Tensor::C32(a), Tensor::C32(b)) => {
+        (DType::C32, DType::C32) => {
+            let (a, b) = triangular_solve_operands::<num_complex::Complex32>(a, b)?;
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
                 .map(Tensor::from_typed::<num_complex::Complex32>)
         }
-        (Tensor::C64(a), Tensor::C64(b)) => {
+        (DType::C64, DType::C64) => {
+            let (a, b) = triangular_solve_operands::<num_complex::Complex64>(a, b)?;
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
                 .map(Tensor::from_typed::<num_complex::Complex64>)
         }
@@ -288,6 +292,22 @@ pub(super) fn triangular_solve(
             a.dtype(),
         )),
     }
+}
+/// The typed operands behind a same-dtype pair, or this module's refusal for one.
+///
+/// Callers reach this from a match on the pair of dtypes, so `None` means the tags and the runtime
+/// dtypes disagree rather than a caller mistake.
+fn triangular_solve_operands<'a, T: TensorScalar>(
+    a: &'a Tensor,
+    b: &'a Tensor,
+) -> Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let a_t = a
+        .as_typed::<T>()
+        .ok_or_else(|| crate::error::unsupported_dtype("triangular_solve", a.dtype()))?;
+    let b_t = b
+        .as_typed::<T>()
+        .ok_or_else(|| crate::error::unsupported_dtype("triangular_solve", b.dtype()))?;
+    Ok((a_t, b_t))
 }
 
 pub(super) fn lu(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {

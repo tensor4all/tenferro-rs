@@ -2480,12 +2480,12 @@ fn householder_qr_from_factors_entered(
             }};
         }
         match (q, r) {
-            (Tensor::from_typed::<f32>(q), Tensor::from_typed::<f32>(r)) => import!(q, r, F32),
-            (Tensor::from_typed::<f64>(q), Tensor::from_typed::<f64>(r)) => import!(q, r, F64),
-            (Tensor::from_typed::<Complex32>(q), Tensor::from_typed::<Complex32>(r)) => {
+            (Tensor::F32(q), Tensor::F32(r)) => import!(q, r, F32),
+            (Tensor::F64(q), Tensor::F64(r)) => import!(q, r, F64),
+            (Tensor::C32(q), Tensor::C32(r)) => {
                 import!(q, r, C32)
             }
-            (Tensor::from_typed::<Complex64>(q), Tensor::from_typed::<Complex64>(r)) => {
+            (Tensor::C64(q), Tensor::C64(r)) => {
                 import!(q, r, C64)
             }
             _ => Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
@@ -2557,26 +2557,10 @@ fn householder_qr_append_entered(
             }};
         }
         match (packed, coeff, block) {
-            (
-                Tensor::from_typed::<f32>(p),
-                Tensor::from_typed::<f32>(c),
-                Tensor::from_typed::<f32>(b),
-            ) => append!(p, c, b, F32),
-            (
-                Tensor::from_typed::<f64>(p),
-                Tensor::from_typed::<f64>(c),
-                Tensor::from_typed::<f64>(b),
-            ) => append!(p, c, b, F64),
-            (
-                Tensor::from_typed::<Complex32>(p),
-                Tensor::from_typed::<Complex32>(c),
-                Tensor::from_typed::<Complex32>(b),
-            ) => append!(p, c, b, C32),
-            (
-                Tensor::from_typed::<Complex64>(p),
-                Tensor::from_typed::<Complex64>(c),
-                Tensor::from_typed::<Complex64>(b),
-            ) => append!(p, c, b, C64),
+            (Tensor::F32(p), Tensor::F32(c), Tensor::F32(b)) => append!(p, c, b, F32),
+            (Tensor::F64(p), Tensor::F64(c), Tensor::F64(b)) => append!(p, c, b, F64),
+            (Tensor::C32(p), Tensor::C32(c), Tensor::C32(b)) => append!(p, c, b, C32),
+            (Tensor::C64(p), Tensor::C64(c), Tensor::C64(b)) => append!(p, c, b, C64),
             _ => Err(unsupported_dtype("householder_qr_append", packed.dtype())),
         }
     }
@@ -2720,12 +2704,12 @@ fn householder_qr_q_columns_entered(
             };
         }
         match (packed, coeff) {
-            (Tensor::from_typed::<f32>(p), Tensor::from_typed::<f32>(c)) => columns!(p, c, F32),
-            (Tensor::from_typed::<f64>(p), Tensor::from_typed::<f64>(c)) => columns!(p, c, F64),
-            (Tensor::from_typed::<Complex32>(p), Tensor::from_typed::<Complex32>(c)) => {
+            (Tensor::F32(p), Tensor::F32(c)) => columns!(p, c, F32),
+            (Tensor::F64(p), Tensor::F64(c)) => columns!(p, c, F64),
+            (Tensor::C32(p), Tensor::C32(c)) => {
                 columns!(p, c, C32)
             }
-            (Tensor::from_typed::<Complex64>(p), Tensor::from_typed::<Complex64>(c)) => {
+            (Tensor::C64(p), Tensor::C64(c)) => {
                 columns!(p, c, C64)
             }
             _ => Err(Error::dtype_mismatch(
