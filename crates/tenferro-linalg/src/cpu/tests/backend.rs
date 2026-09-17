@@ -260,3 +260,25 @@ fn test_faer_eig_zero_extent_returns_empty_complex_outputs_per_input_width() {
         assert_eq!(outputs[1].dtype(), DType::C32);
     }
 }
+
+/// The faer value-only entries adapt their result into a typed accessor per precision. The existing tests
+/// drive the double-precision instantiations, so this drives the single-precision ones for both entries.
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn test_faer_value_only_entries_cover_the_single_precision_arms() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let general = Tensor::F32(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 0.0, 0.0, 1.0]).unwrap(),
+    );
+    let symmetric = Tensor::F32(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f32, 0.0, 0.0, 3.0]).unwrap(),
+    );
+
+    let svd = with_cpu_linalg(&mut backend, |backend| backend.svd_values(&general)).unwrap();
+    assert_eq!(svd.dtype(), DType::F32);
+    assert_eq!(svd.shape(), &[2]);
+
+    let eigh = with_cpu_linalg(&mut backend, |backend| backend.eigh_values(&symmetric)).unwrap();
+    assert_eq!(eigh.dtype(), DType::F32);
+    assert_eq!(eigh.shape(), &[2]);
+}

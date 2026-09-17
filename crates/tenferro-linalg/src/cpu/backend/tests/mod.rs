@@ -1,8 +1,10 @@
 //! Module-local tests for the linalg dispatch seams.
 
-use super::{ensure_host_tensor, typed_host, write_view_operand, zeros_like_tensor};
+use super::{
+    ensure_host_tensor, tensor_write_view, typed_host, write_view_operand, zeros_like_tensor,
+};
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::{DType, Tensor, TensorWrite, TypedTensor};
 
 fn cases() -> Vec<Tensor> {
     vec![
@@ -78,4 +80,26 @@ fn typed_host_refuses_a_dtype_the_table_never_produces() {
 fn write_view_operand_unwinds_for_a_dtype_with_no_view() {
     let mut tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     let _ = write_view_operand::<f32>(&mut tensor);
+}
+
+/// `tensor_write_view` carries one arm per preset scalar. The linalg entry points only ever hand it the
+/// floating and complex dtypes they accept, so this drives every arm the `cases` table can build, which is
+/// also the table's completeness check: a dtype with no arm would fail to compile rather than unwind.
+#[test]
+fn tensor_write_view_covers_every_preset_scalar() {
+    let expected = [
+        DType::F32,
+        DType::F64,
+        DType::I32,
+        DType::I64,
+        DType::Bool,
+        DType::C32,
+        DType::C64,
+    ];
+
+    for (mut tensor, expected_dtype) in cases().into_iter().zip(expected) {
+        assert_eq!(tensor.dtype(), expected_dtype, "cases table order");
+        let view = tensor_write_view(TensorWrite::from_tensor(&mut tensor));
+        assert_eq!(view.dtype(), expected_dtype);
+    }
 }
