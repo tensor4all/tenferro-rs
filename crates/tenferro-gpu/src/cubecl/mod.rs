@@ -3659,25 +3659,25 @@ fn promoted_real_complex_scalar_binary(
             let real = typed_or_unsupported::<f32>(lhs, op)?;
             let complex = typed_or_unsupported::<Complex32>(rhs, op)?;
             launch_real_complex_scalar_binary(backend, real, complex, op, true, mode)
-                .map(Tensor::C32)
+                .map(Tensor::from_typed::<num_complex::Complex32>)
         })()),
         (DType::C32, DType::F32) if rhs.shape().is_empty() => Some((|| {
             let complex = typed_or_unsupported::<Complex32>(lhs, op)?;
             let real = typed_or_unsupported::<f32>(rhs, op)?;
             launch_real_complex_scalar_binary(backend, real, complex, op, false, mode)
-                .map(Tensor::C32)
+                .map(Tensor::from_typed::<num_complex::Complex32>)
         })()),
         (DType::F64, DType::C64) if lhs.shape().is_empty() => Some((|| {
             let real = typed_or_unsupported::<f64>(lhs, op)?;
             let complex = typed_or_unsupported::<Complex64>(rhs, op)?;
             launch_real_complex_scalar_binary(backend, real, complex, op, true, mode)
-                .map(Tensor::C64)
+                .map(Tensor::from_typed::<num_complex::Complex64>)
         })()),
         (DType::C64, DType::F64) if rhs.shape().is_empty() => Some((|| {
             let complex = typed_or_unsupported::<Complex64>(lhs, op)?;
             let real = typed_or_unsupported::<f64>(rhs, op)?;
             launch_real_complex_scalar_binary(backend, real, complex, op, false, mode)
-                .map(Tensor::C64)
+                .map(Tensor::from_typed::<num_complex::Complex64>)
         })()),
         _ => None,
     }
@@ -3974,13 +3974,13 @@ impl TensorElementwise for CudaBackend {
                 let tensor = typed_or_unsupported::<f32>(input, op)?;
                 ensure_resident_on_runtime(self.runtime(), tensor, op)?;
                 self.to_contiguous_view_typed(&tensor.as_view(), op)
-                    .map(Tensor::F32)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let tensor = typed_or_unsupported::<f64>(input, op)?;
                 ensure_resident_on_runtime(self.runtime(), tensor, op)?;
                 self.to_contiguous_view_typed(&tensor.as_view(), op)
-                    .map(Tensor::F64)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 | DType::I64 | DType::Bool => Err(unsupported_dtype(op, input.dtype())),
             DType::C32 => {
@@ -3996,7 +3996,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::C32)
+                .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let tensor = typed_or_unsupported::<Complex64>(input, op)?;
@@ -4011,7 +4011,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::C64)
+                .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -4043,7 +4043,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
             (DType::F32, DType::F32) => launch_binary(
                 self.runtime(),
                 typed_or_unsupported::<f32>(lhs, op)?,
@@ -4056,7 +4056,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F64) if lhs.shape() != rhs.shape() => launch_scalar_binary(
                 self,
                 typed_or_unsupported::<f64>(lhs, op)?,
@@ -4068,7 +4068,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
             (DType::F64, DType::F64) => launch_binary(
                 self.runtime(),
                 typed_or_unsupported::<f64>(lhs, op)?,
@@ -4081,7 +4081,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
             (DType::I32, DType::I32) if lhs.shape() != rhs.shape() => {
                 launch_checked_integer_scalar_binary(
                     self,
@@ -4099,7 +4099,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::I32)
+                .map(Tensor::from_typed::<i32>)
             }
             (DType::I32, DType::I32) => launch_checked_integer_binary(
                 self,
@@ -4114,7 +4114,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::I32),
+            .map(Tensor::from_typed::<i32>),
             (DType::I64, DType::I64) if lhs.shape() != rhs.shape() => {
                 launch_checked_integer_scalar_binary(
                     self,
@@ -4132,7 +4132,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::I64)
+                .map(Tensor::from_typed::<i64>)
             }
             (DType::I64, DType::I64) => launch_checked_integer_binary(
                 self,
@@ -4147,7 +4147,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::I64),
+            .map(Tensor::from_typed::<i64>),
             (DType::C32, DType::C32) => launch_binary(
                 self.runtime(),
                 typed_or_unsupported::<Complex32>(lhs, op)?,
@@ -4160,7 +4160,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::C32),
+            .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::C64) => launch_binary(
                 self.runtime(),
                 typed_or_unsupported::<Complex64>(lhs, op)?,
@@ -4173,7 +4173,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::C64),
+            .map(Tensor::from_typed::<num_complex::Complex64>),
             _ => Err(dtype_mismatch(op, lhs, rhs)),
         }
     }
@@ -4195,7 +4195,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
             (DType::F32, DType::F32) => launch_binary(
                 self.runtime(),
                 typed_or_unsupported::<f32>(lhs, op)?,
@@ -4208,7 +4208,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F64) if lhs.shape() != rhs.shape() => launch_scalar_binary(
                 self,
                 typed_or_unsupported::<f64>(lhs, op)?,
@@ -4220,7 +4220,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
             (DType::F64, DType::F64) => launch_binary(
                 self.runtime(),
                 typed_or_unsupported::<f64>(lhs, op)?,
@@ -4233,7 +4233,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
             (DType::I32, DType::I32) if lhs.shape() != rhs.shape() => {
                 launch_checked_integer_scalar_binary(
                     self,
@@ -4251,7 +4251,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::I32)
+                .map(Tensor::from_typed::<i32>)
             }
             (DType::I32, DType::I32) => launch_checked_integer_binary(
                 self,
@@ -4266,7 +4266,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::I32),
+            .map(Tensor::from_typed::<i32>),
             (DType::I64, DType::I64) if lhs.shape() != rhs.shape() => {
                 launch_checked_integer_scalar_binary(
                     self,
@@ -4284,7 +4284,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::I64)
+                .map(Tensor::from_typed::<i64>)
             }
             (DType::I64, DType::I64) => launch_checked_integer_binary(
                 self,
@@ -4299,7 +4299,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::I64),
+            .map(Tensor::from_typed::<i64>),
             (DType::C32, DType::C32) | (DType::C64, DType::C64) => {
                 Err(unsupported_dtype(op, lhs.dtype()))
             }
@@ -4345,7 +4345,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::F32)
+                .map(Tensor::from_typed::<f32>)
             }
             DType::C64 => {
                 let tensor = typed_or_unsupported::<Complex64>(input, op)?;
@@ -4360,7 +4360,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::F64)
+                .map(Tensor::from_typed::<f64>)
             }
             DType::Bool => Err(unsupported_dtype(op, input.dtype())),
             // A caller-owned payload has no GPU implementation for this operation.
@@ -4428,7 +4428,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::Bool),
+            .map(Tensor::from_typed::<bool>),
             (DType::F64, DType::F64) => launch_compare_bool(
                 self.runtime(),
                 typed_or_unsupported::<f64>(lhs, op)?,
@@ -4447,7 +4447,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::Bool),
+            .map(Tensor::from_typed::<bool>),
             (DType::I32, DType::I32) => launch_compare_bool(
                 self.runtime(),
                 typed_or_unsupported::<i32>(lhs, op)?,
@@ -4466,7 +4466,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::Bool),
+            .map(Tensor::from_typed::<bool>),
             (DType::I64, DType::I64) => launch_compare_bool(
                 self.runtime(),
                 typed_or_unsupported::<i64>(lhs, op)?,
@@ -4485,7 +4485,7 @@ impl TensorElementwise for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::Bool),
+            .map(Tensor::from_typed::<bool>),
             (DType::C32, DType::C32) | (DType::C64, DType::C64) => {
                 Err(unsupported_dtype(op, lhs.dtype()))
             }
@@ -4521,7 +4521,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::F32)
+                .map(Tensor::from_typed::<f32>)
             }
             (DType::Bool, DType::F64, DType::F64) => {
                 let pred = typed_or_unsupported::<bool>(pred, op)?;
@@ -4540,7 +4540,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::F64)
+                .map(Tensor::from_typed::<f64>)
             }
             (DType::Bool, DType::I32, DType::I32) => {
                 let pred = typed_or_unsupported::<bool>(pred, op)?;
@@ -4559,7 +4559,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::I32)
+                .map(Tensor::from_typed::<i32>)
             }
             (DType::Bool, DType::I64, DType::I64) => {
                 let pred = typed_or_unsupported::<bool>(pred, op)?;
@@ -4578,7 +4578,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::I64)
+                .map(Tensor::from_typed::<i64>)
             }
             (DType::C32, DType::C32, DType::C32) | (DType::C64, DType::C64, DType::C64) => {
                 Err(unsupported_dtype(op, pred.dtype()))
@@ -4611,7 +4611,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::F32)
+                .map(Tensor::from_typed::<f32>)
             }
             (DType::F64, DType::F64, DType::F64) => {
                 let input = typed_or_unsupported::<f64>(input, op)?;
@@ -4630,7 +4630,7 @@ impl TensorElementwise for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::F64)
+                .map(Tensor::from_typed::<f64>)
             }
             (DType::C32, DType::C32, DType::C32) | (DType::C64, DType::C64, DType::C64) => {
                 Err(unsupported_dtype(op, input.dtype()))
@@ -4742,7 +4742,7 @@ impl TensorAnalytic for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
             (DType::F32, DType::F32) => launch_binary(
                 self.runtime(),
                 typed_or_unsupported::<f32>(lhs, op)?,
@@ -4755,7 +4755,7 @@ impl TensorAnalytic for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F64) if lhs.shape() != rhs.shape() => launch_scalar_binary(
                 self,
                 typed_or_unsupported::<f64>(lhs, op)?,
@@ -4767,7 +4767,7 @@ impl TensorAnalytic for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
             (DType::F64, DType::F64) => launch_binary(
                 self.runtime(),
                 typed_or_unsupported::<f64>(lhs, op)?,
@@ -4780,7 +4780,7 @@ impl TensorAnalytic for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
             (DType::I32, DType::I32) if lhs.shape() != rhs.shape() => {
                 launch_checked_integer_scalar_binary(
                     self,
@@ -4798,7 +4798,7 @@ impl TensorAnalytic for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::I32)
+                .map(Tensor::from_typed::<i32>)
             }
             (DType::I32, DType::I32) => launch_checked_integer_binary(
                 self,
@@ -4813,7 +4813,7 @@ impl TensorAnalytic for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::I32),
+            .map(Tensor::from_typed::<i32>),
             (DType::I64, DType::I64) if lhs.shape() != rhs.shape() => {
                 launch_checked_integer_scalar_binary(
                     self,
@@ -4831,7 +4831,7 @@ impl TensorAnalytic for CudaBackend {
                         );
                     },
                 )
-                .map(Tensor::I64)
+                .map(Tensor::from_typed::<i64>)
             }
             (DType::I64, DType::I64) => launch_checked_integer_binary(
                 self,
@@ -4846,7 +4846,7 @@ impl TensorAnalytic for CudaBackend {
                     );
                 },
             )
-            .map(Tensor::I64),
+            .map(Tensor::from_typed::<i64>),
             (DType::C32, DType::C32) => {
                 dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
                 Err(unsupported_dtype(op, crate::DType::C32))
@@ -5031,31 +5031,33 @@ impl TensorStructural for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "transpose")?;
-                permutation::transpose(self, t, perm).map(Tensor::F32)
+                permutation::transpose(self, t, perm).map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "transpose")?;
-                permutation::transpose(self, t, perm).map(Tensor::F64)
+                permutation::transpose(self, t, perm).map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "transpose")?;
-                self.transpose_typed(t, perm).map(Tensor::I32)
+                self.transpose_typed(t, perm).map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "transpose")?;
-                self.transpose_typed(t, perm).map(Tensor::I64)
+                self.transpose_typed(t, perm).map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "transpose")?;
-                self.transpose_bool(t, perm).map(Tensor::Bool)
+                self.transpose_bool(t, perm).map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "transpose")?;
-                permutation::transpose(self, t, perm).map(Tensor::C32)
+                permutation::transpose(self, t, perm)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "transpose")?;
-                permutation::transpose(self, t, perm).map(Tensor::C64)
+                permutation::transpose(self, t, perm)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -5092,7 +5094,7 @@ impl TensorStructural for CudaBackend {
                     })?,
                     "reshape",
                 )
-                .map(Tensor::Bool)?,
+                .map(Tensor::from_typed::<bool>)?,
             // Every other tag is materialized through the read path, which refuses the
             // externally defined payload itself.
             _ => self.to_contiguous_read(TensorRead::from_tensor(input))?,
@@ -5100,36 +5102,36 @@ impl TensorStructural for CudaBackend {
         match contiguous.dtype() {
             DType::F32 => {
                 cubecl_reshape_metadata(contiguous.into_typed::<f32>()?, shape.to_vec(), "reshape")
-                    .map(Tensor::F32)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 cubecl_reshape_metadata(contiguous.into_typed::<f64>()?, shape.to_vec(), "reshape")
-                    .map(Tensor::F64)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 cubecl_reshape_metadata(contiguous.into_typed::<i32>()?, shape.to_vec(), "reshape")
-                    .map(Tensor::I32)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 cubecl_reshape_metadata(contiguous.into_typed::<i64>()?, shape.to_vec(), "reshape")
-                    .map(Tensor::I64)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 cubecl_reshape_metadata(contiguous.into_typed::<bool>()?, shape.to_vec(), "reshape")
-                    .map(Tensor::Bool)
+                    .map(Tensor::from_typed::<bool>)
             }
             DType::C32 => cubecl_reshape_metadata(
                 contiguous.into_typed::<Complex32>()?,
                 shape.to_vec(),
                 "reshape",
             )
-            .map(Tensor::C32),
+            .map(Tensor::from_typed::<num_complex::Complex32>),
             DType::C64 => cubecl_reshape_metadata(
                 contiguous.into_typed::<Complex64>()?,
                 shape.to_vec(),
                 "reshape",
             )
-            .map(Tensor::C64),
+            .map(Tensor::from_typed::<num_complex::Complex64>),
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
                 "reshape",
@@ -5147,31 +5149,38 @@ impl TensorStructural for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims).map(Tensor::F32)
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims).map(Tensor::F64)
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims).map(Tensor::I32)
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims).map(Tensor::I64)
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "broadcast_in_dim")?;
-                self.broadcast_bool(t, shape, dims).map(Tensor::Bool)
+                self.broadcast_bool(t, shape, dims)
+                    .map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims).map(Tensor::C32)
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims).map(Tensor::C64)
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -5191,28 +5200,28 @@ impl TensorStructural for CudaBackend {
             )),
             (DType::F32, crate::DType::F32) => self
                 .duplicate_typed(typed_or_unsupported::<f32>(input, "cast")?)
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, crate::DType::F64) => self
                 .duplicate_typed(typed_or_unsupported::<f64>(input, "cast")?)
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::I32, crate::DType::I32) => self
                 .duplicate_typed(typed_or_unsupported::<i32>(input, "cast")?)
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::I64, crate::DType::I64) => self
                 .duplicate_typed(typed_or_unsupported::<i64>(input, "cast")?)
-                .map(Tensor::I64),
+                .map(Tensor::from_typed::<i64>),
             (DType::Bool, crate::DType::Bool) => self
                 .duplicate_bool(typed_or_unsupported::<bool>(input, "cast")?, "cast")
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::C32, crate::DType::C32) => self
                 .duplicate_typed(typed_or_unsupported::<Complex32>(input, "cast")?)
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, crate::DType::C64) => self
                 .duplicate_typed(typed_or_unsupported::<Complex64>(input, "cast")?)
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::F32, crate::DType::F64) => self
                 .convert_float_to_float::<f32, f64>(typed_or_unsupported::<f32>(input, "cast")?)
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::F32, crate::DType::I32) => {
                 validate_cuda_real_cast::<f32, f32>(
                     self,
@@ -5221,7 +5230,7 @@ impl TensorStructural for CudaBackend {
                     CastIntegerTarget::I32,
                 )?;
                 self.convert_numeric::<f32, i32>(typed_or_unsupported::<f32>(input, "cast")?)
-                    .map(Tensor::I32)
+                    .map(Tensor::from_typed::<i32>)
             }
             (DType::F32, crate::DType::I64) => {
                 validate_cuda_real_cast::<f32, f32>(
@@ -5231,20 +5240,20 @@ impl TensorStructural for CudaBackend {
                     CastIntegerTarget::I64,
                 )?;
                 self.convert_numeric::<f32, i64>(typed_or_unsupported::<f32>(input, "cast")?)
-                    .map(Tensor::I64)
+                    .map(Tensor::from_typed::<i64>)
             }
             (DType::F32, crate::DType::Bool) => self
                 .convert_numeric_to_bool(typed_or_unsupported::<f32>(input, "cast")?)
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::F32, crate::DType::C32) => self
                 .convert_f32_to_c32(typed_or_unsupported::<f32>(input, "cast")?)
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::F32, crate::DType::C64) => self
                 .convert_f32_to_c64(typed_or_unsupported::<f32>(input, "cast")?)
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::F64, crate::DType::F32) => self
                 .convert_float_to_float::<f64, f32>(typed_or_unsupported::<f64>(input, "cast")?)
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, crate::DType::I32) => {
                 validate_cuda_real_cast::<f64, f64>(
                     self,
@@ -5253,7 +5262,7 @@ impl TensorStructural for CudaBackend {
                     CastIntegerTarget::I32,
                 )?;
                 self.convert_numeric::<f64, i32>(typed_or_unsupported::<f64>(input, "cast")?)
-                    .map(Tensor::I32)
+                    .map(Tensor::from_typed::<i32>)
             }
             (DType::F64, crate::DType::I64) => {
                 validate_cuda_real_cast::<f64, f64>(
@@ -5263,89 +5272,89 @@ impl TensorStructural for CudaBackend {
                     CastIntegerTarget::I64,
                 )?;
                 self.convert_numeric::<f64, i64>(typed_or_unsupported::<f64>(input, "cast")?)
-                    .map(Tensor::I64)
+                    .map(Tensor::from_typed::<i64>)
             }
             (DType::F64, crate::DType::Bool) => self
                 .convert_numeric_to_bool(typed_or_unsupported::<f64>(input, "cast")?)
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::F64, crate::DType::C32) => self
                 .convert_f64_to_c32(typed_or_unsupported::<f64>(input, "cast")?)
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::F64, crate::DType::C64) => self
                 .convert_f64_to_c64(typed_or_unsupported::<f64>(input, "cast")?)
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, crate::DType::F32) => self
                 .convert_numeric::<i32, f32>(typed_or_unsupported::<i32>(input, "cast")?)
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::I32, crate::DType::F64) => self
                 .convert_numeric::<i32, f64>(typed_or_unsupported::<i32>(input, "cast")?)
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::I32, crate::DType::I64) => self
                 .convert_numeric::<i32, i64>(typed_or_unsupported::<i32>(input, "cast")?)
-                .map(Tensor::I64),
+                .map(Tensor::from_typed::<i64>),
             (DType::I32, crate::DType::Bool) => self
                 .convert_numeric_to_bool(typed_or_unsupported::<i32>(input, "cast")?)
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::I32, crate::DType::C32) => self
                 .convert_numeric_to_complex::<i32, Complex32, f32>(typed_or_unsupported::<i32>(
                     input, "cast",
                 )?)
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::I32, crate::DType::C64) => self
                 .convert_numeric_to_complex::<i32, Complex64, f64>(typed_or_unsupported::<i32>(
                     input, "cast",
                 )?)
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I64, crate::DType::F32) => self
                 .convert_numeric::<i64, f32>(typed_or_unsupported::<i64>(input, "cast")?)
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::I64, crate::DType::F64) => self
                 .convert_numeric::<i64, f64>(typed_or_unsupported::<i64>(input, "cast")?)
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::I64, crate::DType::I32) => self
                 .convert_numeric::<i64, i32>(typed_or_unsupported::<i64>(input, "cast")?)
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::I64, crate::DType::Bool) => self
                 .convert_numeric_to_bool(typed_or_unsupported::<i64>(input, "cast")?)
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::I64, crate::DType::C32) => self
                 .convert_numeric_to_complex::<i64, Complex32, f32>(typed_or_unsupported::<i64>(
                     input, "cast",
                 )?)
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::I64, crate::DType::C64) => self
                 .convert_numeric_to_complex::<i64, Complex64, f64>(typed_or_unsupported::<i64>(
                     input, "cast",
                 )?)
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::Bool, crate::DType::F32) => self
                 .convert_bool_to_numeric::<f32>(typed_or_unsupported::<bool>(input, "cast")?)
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::Bool, crate::DType::F64) => self
                 .convert_bool_to_numeric::<f64>(typed_or_unsupported::<bool>(input, "cast")?)
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::Bool, crate::DType::I32) => self
                 .convert_bool_to_numeric::<i32>(typed_or_unsupported::<bool>(input, "cast")?)
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::Bool, crate::DType::I64) => self
                 .convert_bool_to_numeric::<i64>(typed_or_unsupported::<bool>(input, "cast")?)
-                .map(Tensor::I64),
+                .map(Tensor::from_typed::<i64>),
             (DType::Bool, crate::DType::C32) => self
                 .convert_bool_to_complex::<Complex32, f32>(typed_or_unsupported::<bool>(
                     input, "cast",
                 )?)
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::Bool, crate::DType::C64) => self
                 .convert_bool_to_complex::<Complex64, f64>(typed_or_unsupported::<bool>(
                     input, "cast",
                 )?)
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::C32, crate::DType::F32) => self
                 .convert_c32_to_f32(typed_or_unsupported::<Complex32>(input, "cast")?)
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::C32, crate::DType::F64) => self
                 .convert_c32_to_f64(typed_or_unsupported::<Complex32>(input, "cast")?)
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, crate::DType::I32) => {
                 validate_cuda_real_cast::<Complex32, f32>(
                     self,
@@ -5356,7 +5365,7 @@ impl TensorStructural for CudaBackend {
                 self.convert_complex_to_numeric::<Complex32, i32>(
                     typed_or_unsupported::<Complex32>(input, "cast")?,
                 )
-                .map(Tensor::I32)
+                .map(Tensor::from_typed::<i32>)
             }
             (DType::C32, crate::DType::I64) => {
                 validate_cuda_real_cast::<Complex32, f32>(
@@ -5368,24 +5377,24 @@ impl TensorStructural for CudaBackend {
                 self.convert_complex_to_numeric::<Complex32, i64>(
                     typed_or_unsupported::<Complex32>(input, "cast")?,
                 )
-                .map(Tensor::I64)
+                .map(Tensor::from_typed::<i64>)
             }
             (DType::C32, crate::DType::Bool) => self
                 .convert_complex_to_bool::<Complex32, f32>(typed_or_unsupported::<Complex32>(
                     input, "cast",
                 )?)
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::C32, crate::DType::C64) => self
                 .convert_complex_to_complex::<Complex32, Complex64, f32, f64>(
                     typed_or_unsupported::<Complex32>(input, "cast")?,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::C64, crate::DType::F32) => self
                 .convert_c64_to_f32(typed_or_unsupported::<Complex64>(input, "cast")?)
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::C64, crate::DType::F64) => self
                 .convert_c64_to_f64(typed_or_unsupported::<Complex64>(input, "cast")?)
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C64, crate::DType::I32) => {
                 validate_cuda_real_cast::<Complex64, f64>(
                     self,
@@ -5396,7 +5405,7 @@ impl TensorStructural for CudaBackend {
                 self.convert_complex_to_numeric::<Complex64, i32>(
                     typed_or_unsupported::<Complex64>(input, "cast")?,
                 )
-                .map(Tensor::I32)
+                .map(Tensor::from_typed::<i32>)
             }
             (DType::C64, crate::DType::I64) => {
                 validate_cuda_real_cast::<Complex64, f64>(
@@ -5408,18 +5417,18 @@ impl TensorStructural for CudaBackend {
                 self.convert_complex_to_numeric::<Complex64, i64>(
                     typed_or_unsupported::<Complex64>(input, "cast")?,
                 )
-                .map(Tensor::I64)
+                .map(Tensor::from_typed::<i64>)
             }
             (DType::C64, crate::DType::Bool) => self
                 .convert_complex_to_bool::<Complex64, f64>(typed_or_unsupported::<Complex64>(
                     input, "cast",
                 )?)
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::C64, crate::DType::C32) => self
                 .convert_complex_to_complex::<Complex64, Complex32, f64, f32>(
                     typed_or_unsupported::<Complex64>(input, "cast")?,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             // A caller-owned payload has no GPU implementation for this operation.
             (DType::External(_), _) => Err(crate::Error::unsupported(
                 "cast",
@@ -5439,37 +5448,37 @@ impl TensorStructural for CudaBackend {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "extract_diagonal")?;
                 self.extract_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::F32)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "extract_diagonal")?;
                 self.extract_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::F64)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "extract_diagonal")?;
                 self.extract_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::I32)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "extract_diagonal")?;
                 self.extract_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::I64)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "extract_diagonal")?;
                 self.extract_diagonal_bool(t, axis_a, axis_b)
-                    .map(Tensor::Bool)
+                    .map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "extract_diagonal")?;
                 self.extract_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::C32)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "extract_diagonal")?;
                 self.extract_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::C64)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -5490,37 +5499,37 @@ impl TensorStructural for CudaBackend {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "embed_diagonal")?;
                 self.embed_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::F32)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "embed_diagonal")?;
                 self.embed_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::F64)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "embed_diagonal")?;
                 self.embed_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::I32)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "embed_diagonal")?;
                 self.embed_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::I64)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "embed_diagonal")?;
                 self.embed_diagonal_bool(t, axis_a, axis_b)
-                    .map(Tensor::Bool)
+                    .map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "embed_diagonal")?;
                 self.embed_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::C32)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "embed_diagonal")?;
                 self.embed_diagonal_typed(t, axis_a, axis_b)
-                    .map(Tensor::C64)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -5534,31 +5543,33 @@ impl TensorStructural for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "tril")?;
-                self.tril_typed(t, k).map(Tensor::F32)
+                self.tril_typed(t, k).map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "tril")?;
-                self.tril_typed(t, k).map(Tensor::F64)
+                self.tril_typed(t, k).map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "tril")?;
-                self.tril_typed(t, k).map(Tensor::I32)
+                self.tril_typed(t, k).map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "tril")?;
-                self.tril_typed(t, k).map(Tensor::I64)
+                self.tril_typed(t, k).map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "tril")?;
-                self.tril_bool(t, k).map(Tensor::Bool)
+                self.tril_bool(t, k).map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "tril")?;
-                self.tril_typed(t, k).map(Tensor::C32)
+                self.tril_typed(t, k)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "tril")?;
-                self.tril_typed(t, k).map(Tensor::C64)
+                self.tril_typed(t, k)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -5572,31 +5583,33 @@ impl TensorStructural for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "triu")?;
-                self.triu_typed(t, k).map(Tensor::F32)
+                self.triu_typed(t, k).map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "triu")?;
-                self.triu_typed(t, k).map(Tensor::F64)
+                self.triu_typed(t, k).map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "triu")?;
-                self.triu_typed(t, k).map(Tensor::I32)
+                self.triu_typed(t, k).map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "triu")?;
-                self.triu_typed(t, k).map(Tensor::I64)
+                self.triu_typed(t, k).map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "triu")?;
-                self.triu_bool(t, k).map(Tensor::Bool)
+                self.triu_bool(t, k).map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "triu")?;
-                self.triu_typed(t, k).map(Tensor::C32)
+                self.triu_typed(t, k)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "triu")?;
-                self.triu_typed(t, k).map(Tensor::C64)
+                self.triu_typed(t, k)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -5638,28 +5651,34 @@ impl TensorReduction for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, op)?;
-                self.reduce_sum_float_typed(t, axes).map(Tensor::F32)
+                self.reduce_sum_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, op)?;
-                self.reduce_sum_float_typed(t, axes).map(Tensor::F64)
+                self.reduce_sum_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, op)?;
-                self.reduce_sum_int_typed(t, axes).map(Tensor::I32)
+                self.reduce_sum_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, op)?;
-                self.reduce_sum_int_typed(t, axes).map(Tensor::I64)
+                self.reduce_sum_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool => Err(unsupported_dtype(op, input.dtype())),
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, op)?;
-                self.reduce_sum_complex_typed(t, axes).map(Tensor::C32)
+                self.reduce_sum_complex_typed(t, axes)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, op)?;
-                self.reduce_sum_complex_typed(t, axes).map(Tensor::C64)
+                self.reduce_sum_complex_typed(t, axes)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -5701,12 +5720,12 @@ impl TensorReduction for CudaBackend {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, op)?;
                 self.reduce_sum_squares_float_typed(t, axes)
-                    .map(Tensor::F32)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, op)?;
                 self.reduce_sum_squares_float_typed(t, axes)
-                    .map(Tensor::F64)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 | DType::I64 | DType::Bool | DType::C32 | DType::C64 => {
                 Err(unsupported_dtype(op, input.dtype()))
@@ -5726,28 +5745,34 @@ impl TensorReduction for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, op)?;
-                self.reduce_prod_float_typed(t, axes).map(Tensor::F32)
+                self.reduce_prod_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, op)?;
-                self.reduce_prod_float_typed(t, axes).map(Tensor::F64)
+                self.reduce_prod_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, op)?;
-                self.reduce_prod_int_typed(t, axes).map(Tensor::I32)
+                self.reduce_prod_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, op)?;
-                self.reduce_prod_int_typed(t, axes).map(Tensor::I64)
+                self.reduce_prod_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool => Err(unsupported_dtype(op, input.dtype())),
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, op)?;
-                self.reduce_prod_complex_typed(t, axes).map(Tensor::C32)
+                self.reduce_prod_complex_typed(t, axes)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, op)?;
-                self.reduce_prod_complex_typed(t, axes).map(Tensor::C64)
+                self.reduce_prod_complex_typed(t, axes)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -5765,19 +5790,23 @@ impl TensorReduction for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, op)?;
-                self.reduce_max_float_typed(t, axes).map(Tensor::F32)
+                self.reduce_max_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, op)?;
-                self.reduce_max_float_typed(t, axes).map(Tensor::F64)
+                self.reduce_max_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, op)?;
-                self.reduce_max_int_typed(t, axes).map(Tensor::I32)
+                self.reduce_max_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, op)?;
-                self.reduce_max_int_typed(t, axes).map(Tensor::I64)
+                self.reduce_max_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool | DType::C32 | DType::C64 => Err(unsupported_dtype(op, input.dtype())),
             // A caller-owned payload has no GPU implementation for this operation.
@@ -5796,19 +5825,23 @@ impl TensorReduction for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, op)?;
-                self.reduce_min_float_typed(t, axes).map(Tensor::F32)
+                self.reduce_min_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, op)?;
-                self.reduce_min_float_typed(t, axes).map(Tensor::F64)
+                self.reduce_min_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, op)?;
-                self.reduce_min_int_typed(t, axes).map(Tensor::I32)
+                self.reduce_min_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, op)?;
-                self.reduce_min_int_typed(t, axes).map(Tensor::I64)
+                self.reduce_min_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool | DType::C32 | DType::C64 => Err(unsupported_dtype(op, input.dtype())),
             // A caller-owned payload has no GPU implementation for this operation.
@@ -5880,168 +5913,168 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F32) => self
                 .gather_typed(
                     typed_or_unsupported::<f64>(operand, "gather")?,
                     typed_or_unsupported::<f32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::F32) => self
                 .gather_typed(
                     typed_or_unsupported::<Complex32>(operand, "gather")?,
                     typed_or_unsupported::<f32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::F32) => self
                 .gather_typed(
                     typed_or_unsupported::<Complex64>(operand, "gather")?,
                     typed_or_unsupported::<f32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, DType::F32) => self
                 .gather_typed(
                     typed_or_unsupported::<i32>(operand, "gather")?,
                     typed_or_unsupported::<f32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::F32, DType::F64) => self
                 .gather_typed(
                     typed_or_unsupported::<f32>(operand, "gather")?,
                     typed_or_unsupported::<f64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F64) => self
                 .gather_typed(
                     typed_or_unsupported::<f64>(operand, "gather")?,
                     typed_or_unsupported::<f64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::F64) => self
                 .gather_typed(
                     typed_or_unsupported::<Complex32>(operand, "gather")?,
                     typed_or_unsupported::<f64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::F64) => self
                 .gather_typed(
                     typed_or_unsupported::<Complex64>(operand, "gather")?,
                     typed_or_unsupported::<f64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, DType::F64) => self
                 .gather_typed(
                     typed_or_unsupported::<i32>(operand, "gather")?,
                     typed_or_unsupported::<f64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::F32, DType::I32) => self
                 .gather_typed(
                     typed_or_unsupported::<f32>(operand, "gather")?,
                     typed_or_unsupported::<i32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::I32) => self
                 .gather_typed(
                     typed_or_unsupported::<f64>(operand, "gather")?,
                     typed_or_unsupported::<i32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::I32) => self
                 .gather_typed(
                     typed_or_unsupported::<Complex32>(operand, "gather")?,
                     typed_or_unsupported::<i32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::I32) => self
                 .gather_typed(
                     typed_or_unsupported::<Complex64>(operand, "gather")?,
                     typed_or_unsupported::<i32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, DType::I32) => self
                 .gather_typed(
                     typed_or_unsupported::<i32>(operand, "gather")?,
                     typed_or_unsupported::<i32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::F32, DType::I64) => self
                 .gather_typed(
                     typed_or_unsupported::<f32>(operand, "gather")?,
                     typed_or_unsupported::<i64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::I64) => self
                 .gather_typed(
                     typed_or_unsupported::<f64>(operand, "gather")?,
                     typed_or_unsupported::<i64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::I64) => self
                 .gather_typed(
                     typed_or_unsupported::<Complex32>(operand, "gather")?,
                     typed_or_unsupported::<i64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::I64) => self
                 .gather_typed(
                     typed_or_unsupported::<Complex64>(operand, "gather")?,
                     typed_or_unsupported::<i64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, DType::I64) => self
                 .gather_typed(
                     typed_or_unsupported::<i32>(operand, "gather")?,
                     typed_or_unsupported::<i64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::Bool, DType::F32) => self
                 .gather_bool(
                     typed_or_unsupported::<bool>(operand, "gather")?,
                     typed_or_unsupported::<f32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::Bool, DType::F64) => self
                 .gather_bool(
                     typed_or_unsupported::<bool>(operand, "gather")?,
                     typed_or_unsupported::<f64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::Bool, DType::I32) => self
                 .gather_bool(
                     typed_or_unsupported::<bool>(operand, "gather")?,
                     typed_or_unsupported::<i32>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::Bool, DType::I64) => self
                 .gather_bool(
                     typed_or_unsupported::<bool>(operand, "gather")?,
                     typed_or_unsupported::<i64>(start_indices, "gather")?,
                     config,
                 )
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (_, DType::Bool) => Err(unsupported_dtype("gather", start_indices.dtype())),
             (_, DType::C32 | DType::C64) => Err(unsupported_dtype("gather", start_indices.dtype())),
             (DType::I64, _) => Err(unsupported_dtype("gather", operand.dtype())),
@@ -6068,7 +6101,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f32>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F32, DType::F64) => self
                 .scatter_float_typed(
                     typed_or_unsupported::<f64>(operand, "scatter")?,
@@ -6076,7 +6109,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f64>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::F32, DType::C32) => self
                 .scatter_complex_typed::<_, f32, _>(
                     typed_or_unsupported::<Complex32>(operand, "scatter")?,
@@ -6084,7 +6117,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<Complex32>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::F32, DType::C64) => self
                 .scatter_complex_typed::<_, f64, _>(
                     typed_or_unsupported::<Complex64>(operand, "scatter")?,
@@ -6092,7 +6125,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<Complex64>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::F32, DType::F64, DType::F32) => self
                 .scatter_float_typed(
                     typed_or_unsupported::<f32>(operand, "scatter")?,
@@ -6100,7 +6133,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f32>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F64, DType::F64) => self
                 .scatter_float_typed(
                     typed_or_unsupported::<f64>(operand, "scatter")?,
@@ -6108,7 +6141,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f64>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::F64, DType::C32) => self
                 .scatter_complex_typed::<_, f32, _>(
                     typed_or_unsupported::<Complex32>(operand, "scatter")?,
@@ -6116,7 +6149,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<Complex32>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::F64, DType::C64) => self
                 .scatter_complex_typed::<_, f64, _>(
                     typed_or_unsupported::<Complex64>(operand, "scatter")?,
@@ -6124,7 +6157,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<Complex64>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::F32, DType::I32, DType::F32) => self
                 .scatter_float_typed(
                     typed_or_unsupported::<f32>(operand, "scatter")?,
@@ -6132,7 +6165,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f32>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::I32, DType::F64) => self
                 .scatter_float_typed(
                     typed_or_unsupported::<f64>(operand, "scatter")?,
@@ -6140,7 +6173,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f64>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::I32, DType::C32) => self
                 .scatter_complex_typed::<_, f32, _>(
                     typed_or_unsupported::<Complex32>(operand, "scatter")?,
@@ -6148,7 +6181,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<Complex32>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::I32, DType::C64) => self
                 .scatter_complex_typed::<_, f64, _>(
                     typed_or_unsupported::<Complex64>(operand, "scatter")?,
@@ -6156,7 +6189,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<Complex64>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::F32, DType::I64, DType::F32) => self
                 .scatter_float_typed(
                     typed_or_unsupported::<f32>(operand, "scatter")?,
@@ -6164,7 +6197,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f32>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::I64, DType::F64) => self
                 .scatter_float_typed(
                     typed_or_unsupported::<f64>(operand, "scatter")?,
@@ -6172,7 +6205,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f64>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::I64, DType::C32) => self
                 .scatter_complex_typed::<_, f32, _>(
                     typed_or_unsupported::<Complex32>(operand, "scatter")?,
@@ -6180,7 +6213,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<Complex32>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::I64, DType::C64) => self
                 .scatter_complex_typed::<_, f64, _>(
                     typed_or_unsupported::<Complex64>(operand, "scatter")?,
@@ -6188,7 +6221,7 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<Complex64>(updates, "scatter")?,
                     config,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (_, DType::Bool, _) => Err(unsupported_dtype("scatter", scatter_indices.dtype())),
             (_, DType::C32 | DType::C64, _) => {
                 Err(unsupported_dtype("scatter", scatter_indices.dtype()))
@@ -6213,31 +6246,33 @@ impl TensorIndexing for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "slice")?;
-                self.slice_typed(t, config).map(Tensor::F32)
+                self.slice_typed(t, config).map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "slice")?;
-                self.slice_typed(t, config).map(Tensor::F64)
+                self.slice_typed(t, config).map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "slice")?;
-                self.slice_typed(t, config).map(Tensor::I32)
+                self.slice_typed(t, config).map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "slice")?;
-                self.slice_typed(t, config).map(Tensor::I64)
+                self.slice_typed(t, config).map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "slice")?;
-                self.slice_bool(t, config).map(Tensor::Bool)
+                self.slice_bool(t, config).map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "slice")?;
-                self.slice_typed(t, config).map(Tensor::C32)
+                self.slice_typed(t, config)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "slice")?;
-                self.slice_typed(t, config).map(Tensor::C64)
+                self.slice_typed(t, config)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -6260,168 +6295,168 @@ impl TensorIndexing for CudaBackend {
                     typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<f64>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::F32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<Complex32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::F32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<Complex64>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, DType::F32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<i32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::F32, DType::F64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<f32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::F64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<f64>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::F64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<Complex32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::F64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<Complex64>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, DType::F64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<i32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::F32, DType::I32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<f32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::I32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<f64>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::I32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<Complex32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::I32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<Complex64>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, DType::I32) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<i32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::F32, DType::I64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<f32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::F32),
+                .map(Tensor::from_typed::<f32>),
             (DType::F64, DType::I64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<f64>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::F64),
+                .map(Tensor::from_typed::<f64>),
             (DType::C32, DType::I64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<Complex32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::C32),
+                .map(Tensor::from_typed::<num_complex::Complex32>),
             (DType::C64, DType::I64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<Complex64>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::C64),
+                .map(Tensor::from_typed::<num_complex::Complex64>),
             (DType::I32, DType::I64) => self
                 .dynamic_slice_typed(
                     typed_or_unsupported::<i32>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::I32),
+                .map(Tensor::from_typed::<i32>),
             (DType::Bool, DType::I32) => self
                 .dynamic_slice_bool(
                     typed_or_unsupported::<bool>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::Bool, DType::I64) => self
                 .dynamic_slice_bool(
                     typed_or_unsupported::<bool>(input, "dynamic_slice")?,
                     typed_or_unsupported::<i64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::Bool, DType::F32) => self
                 .dynamic_slice_bool(
                     typed_or_unsupported::<bool>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f32>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (DType::Bool, DType::F64) => self
                 .dynamic_slice_bool(
                     typed_or_unsupported::<bool>(input, "dynamic_slice")?,
                     typed_or_unsupported::<f64>(starts, "dynamic_slice")?,
                     slice_sizes,
                 )
-                .map(Tensor::Bool),
+                .map(Tensor::from_typed::<bool>),
             (_, DType::Bool) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
             (_, DType::C32 | DType::C64) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
             (DType::I64, _) => Err(unsupported_dtype("dynamic_slice", input.dtype())),
@@ -6449,31 +6484,33 @@ impl TensorIndexing for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "pad")?;
-                self.pad_typed(t, config).map(Tensor::F32)
+                self.pad_typed(t, config).map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "pad")?;
-                self.pad_typed(t, config).map(Tensor::F64)
+                self.pad_typed(t, config).map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "pad")?;
-                self.pad_typed(t, config).map(Tensor::I32)
+                self.pad_typed(t, config).map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "pad")?;
-                self.pad_typed(t, config).map(Tensor::I64)
+                self.pad_typed(t, config).map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "pad")?;
-                self.pad_bool(t, config).map(Tensor::Bool)
+                self.pad_bool(t, config).map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "pad")?;
-                self.pad_typed(t, config).map(Tensor::C32)
+                self.pad_typed(t, config)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "pad")?;
-                self.pad_typed(t, config).map(Tensor::C64)
+                self.pad_typed(t, config)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -6501,7 +6538,8 @@ impl TensorIndexing for CudaBackend {
                             .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
-                self.concatenate_typed(&typed?, axis).map(Tensor::F32)
+                self.concatenate_typed(&typed?, axis)
+                    .map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let typed: crate::Result<Vec<&TypedTensor<f64>>> = inputs
@@ -6512,7 +6550,8 @@ impl TensorIndexing for CudaBackend {
                             .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
-                self.concatenate_typed(&typed?, axis).map(Tensor::F64)
+                self.concatenate_typed(&typed?, axis)
+                    .map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let typed: crate::Result<Vec<&TypedTensor<i32>>> = inputs
@@ -6523,7 +6562,8 @@ impl TensorIndexing for CudaBackend {
                             .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
-                self.concatenate_typed(&typed?, axis).map(Tensor::I32)
+                self.concatenate_typed(&typed?, axis)
+                    .map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let typed: crate::Result<Vec<&TypedTensor<i64>>> = inputs
@@ -6534,7 +6574,8 @@ impl TensorIndexing for CudaBackend {
                             .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
-                self.concatenate_typed(&typed?, axis).map(Tensor::I64)
+                self.concatenate_typed(&typed?, axis)
+                    .map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let typed: crate::Result<Vec<&TypedTensor<bool>>> = inputs
@@ -6545,7 +6586,8 @@ impl TensorIndexing for CudaBackend {
                             .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
-                self.concatenate_bool(&typed?, axis).map(Tensor::Bool)
+                self.concatenate_bool(&typed?, axis)
+                    .map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let typed: crate::Result<Vec<&TypedTensor<Complex32>>> = inputs
@@ -6556,7 +6598,8 @@ impl TensorIndexing for CudaBackend {
                             .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
-                self.concatenate_typed(&typed?, axis).map(Tensor::C32)
+                self.concatenate_typed(&typed?, axis)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let typed: crate::Result<Vec<&TypedTensor<Complex64>>> = inputs
@@ -6567,7 +6610,8 @@ impl TensorIndexing for CudaBackend {
                             .ok_or_else(|| dtype_mismatch("concatenate", first, tensor))
                     })
                     .collect();
-                self.concatenate_typed(&typed?, axis).map(Tensor::C64)
+                self.concatenate_typed(&typed?, axis)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -6581,31 +6625,33 @@ impl TensorIndexing for CudaBackend {
         match input.dtype() {
             DType::F32 => {
                 let t = typed_or_unsupported::<f32>(input, "reverse")?;
-                self.reverse_typed(t, axes).map(Tensor::F32)
+                self.reverse_typed(t, axes).map(Tensor::from_typed::<f32>)
             }
             DType::F64 => {
                 let t = typed_or_unsupported::<f64>(input, "reverse")?;
-                self.reverse_typed(t, axes).map(Tensor::F64)
+                self.reverse_typed(t, axes).map(Tensor::from_typed::<f64>)
             }
             DType::I32 => {
                 let t = typed_or_unsupported::<i32>(input, "reverse")?;
-                self.reverse_typed(t, axes).map(Tensor::I32)
+                self.reverse_typed(t, axes).map(Tensor::from_typed::<i32>)
             }
             DType::I64 => {
                 let t = typed_or_unsupported::<i64>(input, "reverse")?;
-                self.reverse_typed(t, axes).map(Tensor::I64)
+                self.reverse_typed(t, axes).map(Tensor::from_typed::<i64>)
             }
             DType::Bool => {
                 let t = typed_or_unsupported::<bool>(input, "reverse")?;
-                self.reverse_bool(t, axes).map(Tensor::Bool)
+                self.reverse_bool(t, axes).map(Tensor::from_typed::<bool>)
             }
             DType::C32 => {
                 let t = typed_or_unsupported::<Complex32>(input, "reverse")?;
-                self.reverse_typed(t, axes).map(Tensor::C32)
+                self.reverse_typed(t, axes)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
             }
             DType::C64 => {
                 let t = typed_or_unsupported::<Complex64>(input, "reverse")?;
-                self.reverse_typed(t, axes).map(Tensor::C64)
+                self.reverse_typed(t, axes)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
@@ -6748,7 +6794,7 @@ impl TensorFusion for CudaBackend {
                 launch_broadcast_multiply_typed(
                     self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
                 )
-                .map(Tensor::F32)
+                .map(Tensor::from_typed::<f32>)
                 .map(Some)
             }
             (DType::F64, DType::F64) => {
@@ -6757,7 +6803,7 @@ impl TensorFusion for CudaBackend {
                 launch_broadcast_multiply_typed(
                     self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
                 )
-                .map(Tensor::F64)
+                .map(Tensor::from_typed::<f64>)
                 .map(Some)
             }
             (DType::I32, DType::I32) => {
@@ -6766,7 +6812,7 @@ impl TensorFusion for CudaBackend {
                 launch_broadcast_multiply_int_typed(
                     self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
                 )
-                .map(Tensor::I32)
+                .map(Tensor::from_typed::<i32>)
                 .map(Some)
             }
             (DType::I64, DType::I64) => {
@@ -6775,7 +6821,7 @@ impl TensorFusion for CudaBackend {
                 launch_broadcast_multiply_int_typed(
                     self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
                 )
-                .map(Tensor::I64)
+                .map(Tensor::from_typed::<i64>)
                 .map(Some)
             }
             (DType::C32, DType::C32) => {
@@ -6784,7 +6830,7 @@ impl TensorFusion for CudaBackend {
                 launch_broadcast_multiply_complex_typed(
                     self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
                 )
-                .map(Tensor::C32)
+                .map(Tensor::from_typed::<num_complex::Complex32>)
                 .map(Some)
             }
             (DType::C64, DType::C64) => {
@@ -6793,7 +6839,7 @@ impl TensorFusion for CudaBackend {
                 launch_broadcast_multiply_complex_typed(
                     self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
                 )
-                .map(Tensor::C64)
+                .map(Tensor::from_typed::<num_complex::Complex64>)
                 .map(Some)
             }
             (DType::Bool, DType::Bool) => Ok(None),
