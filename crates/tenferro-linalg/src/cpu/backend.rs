@@ -2453,11 +2453,43 @@ fn householder_qr_from_factors_entered(
                     });
                 }};
             }
-            match (q, r) {
-                (Tensor::F32(q), Tensor::F32(r)) => import!(q, r, F32),
-                (Tensor::F64(q), Tensor::F64(r)) => import!(q, r, F64),
-                (Tensor::C32(q), Tensor::C32(r)) => import!(q, r, C32),
-                (Tensor::C64(q), Tensor::C64(r)) => import!(q, r, C64),
+            match (q.dtype(), r.dtype()) {
+                (DType::F32, DType::F32) => {
+                    let q_t = q.as_typed::<f32>().ok_or_else(|| {
+                        unsupported_dtype("householder_qr_from_factors", q.dtype())
+                    })?;
+                    let r_t = r.as_typed::<f32>().ok_or_else(|| {
+                        unsupported_dtype("householder_qr_from_factors", r.dtype())
+                    })?;
+                    import!(q_t, r_t, F32)
+                }
+                (DType::F64, DType::F64) => {
+                    let q_t = q.as_typed::<f64>().ok_or_else(|| {
+                        unsupported_dtype("householder_qr_from_factors", q.dtype())
+                    })?;
+                    let r_t = r.as_typed::<f64>().ok_or_else(|| {
+                        unsupported_dtype("householder_qr_from_factors", r.dtype())
+                    })?;
+                    import!(q_t, r_t, F64)
+                }
+                (DType::C32, DType::C32) => {
+                    let q_t = q.as_typed::<Complex32>().ok_or_else(|| {
+                        unsupported_dtype("householder_qr_from_factors", q.dtype())
+                    })?;
+                    let r_t = r.as_typed::<Complex32>().ok_or_else(|| {
+                        unsupported_dtype("householder_qr_from_factors", r.dtype())
+                    })?;
+                    import!(q_t, r_t, C32)
+                }
+                (DType::C64, DType::C64) => {
+                    let q_t = q.as_typed::<Complex64>().ok_or_else(|| {
+                        unsupported_dtype("householder_qr_from_factors", q.dtype())
+                    })?;
+                    let r_t = r.as_typed::<Complex64>().ok_or_else(|| {
+                        unsupported_dtype("householder_qr_from_factors", r.dtype())
+                    })?;
+                    import!(q_t, r_t, C64)
+                }
                 _ => return Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
             }
         }
