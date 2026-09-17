@@ -2306,3 +2306,49 @@ fn opted_in_layout_provider_unsupported_falls_back_to_zeroed_materialization() {
     // falling back to the zeroed materialization.
     assert_eq!(*uninit_calls.lock().unwrap(), 2);
 }
+
+/// The outer-scheduled grouped table carries an arm per floating and complex preset scalar. The existing
+/// test drives f64, so this drives f32 and c32, whose arms the other grouped tests never take, through the
+/// spy gemm provider that reports execution without doing the arithmetic.
+#[test]
+fn engine_outer_grouped_execution_covers_float_and_complex_arms() {
+    macro_rules! run {
+        ($scalar:ty, $values:expr, $dtype:expr) => {{
+            let values: Vec<$scalar> = $values;
+            let job_count = values.len();
+            let bundle = route_bundle(Arc::new(GemmSpy::new(CpuProviderOutcome::Executed)), None);
+            let lhs = Tensor::from_vec_col_major(vec![job_count], values.clone()).unwrap();
+            let rhs = Tensor::from_vec_col_major(vec![job_count], values.clone()).unwrap();
+            let mut output = Tensor::from_vec_col_major(vec![job_count], values).unwrap();
+            let jobs = (0..job_count)
+                .map(|index| GroupedGemmJob::new(index, index, index, 1, 1, 1))
+                .collect::<Vec<_>>();
+            let fixture = external_execution_context_fixture(
+                Arc::new(CountingExecutor {
+                    submits: Arc::new(AtomicUsize::new(0)),
+                    installs: Arc::new(AtomicUsize::new(0)),
+                }),
+                NonZeroUsize::new(4).unwrap(),
+            );
+            bundle
+                .execute_grouped_gemm(
+                    &fixture.entry(),
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &GroupedGemmConfig::new(
+                        &jobs,
+                        DotGeneralAccumulation::overwrite($dtype).unwrap(),
+                    ),
+                    TensorWrite::from_tensor(&mut output),
+                )
+                .expect("the spy gemm provider executes without arithmetic");
+        }};
+    }
+
+    run!(f32, vec![2.0_f32; 2], DType::F32);
+    run!(
+        num_complex::Complex32,
+        vec![num_complex::Complex32::new(2.0, 0.0); 2],
+        DType::C32
+    );
+}
