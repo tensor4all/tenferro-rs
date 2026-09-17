@@ -2316,7 +2316,8 @@ fn engine_outer_grouped_execution_covers_float_and_complex_arms() {
         ($scalar:ty, $values:expr, $dtype:expr) => {{
             let values: Vec<$scalar> = $values;
             let job_count = values.len();
-            let bundle = route_bundle(Arc::new(GemmSpy::new(CpuProviderOutcome::Executed)), None);
+            let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+            let bundle = route_bundle(gemm.clone(), None);
             let lhs = Tensor::from_vec_col_major(vec![job_count], values.clone()).unwrap();
             let rhs = Tensor::from_vec_col_major(vec![job_count], values.clone()).unwrap();
             let mut output = Tensor::from_vec_col_major(vec![job_count], values).unwrap();
@@ -2342,6 +2343,17 @@ fn engine_outer_grouped_execution_covers_float_and_complex_arms() {
                     TensorWrite::from_tensor(&mut output),
                 )
                 .expect("the spy gemm provider executes without arithmetic");
+            // The spy only records execution, so the call count is the evidence that the
+            // outer-scheduled dispatch reached this scalar's arm rather than falling back.
+            assert_eq!(*gemm.grouped_calls.lock().unwrap(), job_count);
+            assert_eq!(
+                gemm.grouped_job_counts.lock().unwrap().clone(),
+                vec![1; job_count]
+            );
+            assert_eq!(
+                gemm.parallelism.lock().unwrap().clone(),
+                vec![ParallelMode::Sequential; job_count]
+            );
         }};
     }
 
@@ -2360,7 +2372,8 @@ fn engine_outer_grouped_execution_covers_float_and_complex_arms() {
 fn engine_outer_grouped_execution_covers_the_complex64_arm() {
     let values = vec![num_complex::Complex64::new(2.0, 0.0); 2];
     let job_count = values.len();
-    let bundle = route_bundle(Arc::new(GemmSpy::new(CpuProviderOutcome::Executed)), None);
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
     let lhs = Tensor::from_vec_col_major(vec![job_count], values.clone()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![job_count], values.clone()).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![job_count], values).unwrap();
@@ -2387,6 +2400,15 @@ fn engine_outer_grouped_execution_covers_the_complex64_arm() {
             TensorWrite::from_tensor(&mut output),
         )
         .expect("the spy gemm provider executes without arithmetic");
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), job_count);
+    assert_eq!(
+        gemm.grouped_job_counts.lock().unwrap().clone(),
+        vec![1; job_count]
+    );
+    assert_eq!(
+        gemm.parallelism.lock().unwrap().clone(),
+        vec![ParallelMode::Sequential; job_count]
+    );
 
     // An integer contraction has no scalar identity, so its operand-layout arms in the validators are
     // reachable only through a gate that refuses first; this records that rather than leaving it implied.

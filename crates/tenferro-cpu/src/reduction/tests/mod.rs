@@ -120,32 +120,51 @@ fn reduction_read_tables_cover_views_and_sum_squares_refusals() {
     let mut buffers = crate::buffer_pool::BufferPool::new();
 
     macro_rules! prod_view {
-        ($variant:ident, $scalar:ty, $values:expr) => {{
+        ($variant:ident, $scalar:ty, $values:expr, $expected:expr) => {{
             let owned = tensor::<$scalar>($values);
             let typed = owned
                 .as_typed::<$scalar>()
                 .expect("the tensor was built from this scalar")
                 .as_view();
             let read = TensorRead::from_view(TensorView::$variant(typed));
-            let result = reduce_prod_read(&mut buffers, read, &[0], &context);
-            let _ = result;
+            let result = reduce_prod_read(&mut buffers, read, &[0], &context)
+                .expect("the product view arm admits this scalar");
+            assert_eq!(result.as_slice::<$scalar>().unwrap(), &[$expected],);
         }};
     }
 
-    prod_view!(F32, f32, vec![1.0_f32, 2.0]);
-    prod_view!(F64, f64, vec![1.0_f64, 2.0]);
-    prod_view!(I32, i32, vec![1_i32, 2]);
-    prod_view!(I64, i64, vec![1_i64, 2]);
-    prod_view!(Bool, bool, vec![false, true]);
+    prod_view!(F32, f32, vec![2.0_f32, 3.0], 6.0_f32);
+    prod_view!(F64, f64, vec![2.0_f64, 3.0], 6.0_f64);
+    prod_view!(I32, i32, vec![2_i32, 3], 6_i32);
+    prod_view!(I64, i64, vec![2_i64, 3], 6_i64);
+    // The boolean view arm is an explicit refusal rather than a product, so it is asserted as one.
+    let bools = tensor(vec![false, true]);
+    let bool_view = bools.as_typed::<bool>().unwrap().as_view();
+    let error = reduce_prod_read(
+        &mut buffers,
+        TensorRead::from_view(TensorView::Bool(bool_view)),
+        &[0],
+        &context,
+    )
+    .expect_err("reduce_prod refuses boolean views");
+    assert!(matches!(
+        error,
+        tenferro_tensor::Error::Unsupported {
+            op: "reduce_prod",
+            ..
+        }
+    ));
     prod_view!(
         C32,
         Complex32,
-        vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, 2.0)]
+        vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, 2.0)],
+        Complex32::new(0.0, 4.0)
     );
     prod_view!(
         C64,
         Complex64,
-        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 2.0)]
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 2.0)],
+        Complex64::new(0.0, 4.0)
     );
 
     for unsupported in [tensor(vec![1_i32, 2]), tensor(vec![false, true])] {
