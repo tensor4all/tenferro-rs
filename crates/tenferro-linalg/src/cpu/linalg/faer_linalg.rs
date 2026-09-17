@@ -4720,12 +4720,24 @@ pub(crate) fn eig(
         let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
         return match input.dtype() {
             DType::F32 | DType::C32 => Ok(vec![
-                Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
-                Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
+                Tensor::from_typed::<num_complex::Complex32>(TypedTensor::from_vec_col_major(
+                    value_shape,
+                    Vec::new(),
+                )?),
+                Tensor::from_typed::<num_complex::Complex32>(TypedTensor::from_vec_col_major(
+                    vector_shape,
+                    Vec::new(),
+                )?),
             ]),
             DType::F64 | DType::C64 => Ok(vec![
-                Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
-                Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
+                Tensor::from_typed::<num_complex::Complex64>(TypedTensor::from_vec_col_major(
+                    value_shape,
+                    Vec::new(),
+                )?),
+                Tensor::from_typed::<num_complex::Complex64>(TypedTensor::from_vec_col_major(
+                    vector_shape,
+                    Vec::new(),
+                )?),
             ]),
             _ => Err(crate::error::unsupported_dtype("eig", input.dtype())),
         };
@@ -4742,7 +4754,7 @@ pub(crate) fn eig(
             |buffers, batch| eig_real32_2d(ctx, buffers, batch),
         )?
         .into_iter()
-        .map(Tensor::C32)
+        .map(Tensor::from_typed::<num_complex::Complex32>)
         .collect()),
         DType::F64 => Ok(batched_multi_convert_result(
             "eig",
@@ -4754,7 +4766,7 @@ pub(crate) fn eig(
             |buffers, batch| eig_real64_2d(ctx, buffers, batch),
         )?
         .into_iter()
-        .map(Tensor::C64)
+        .map(Tensor::from_typed::<num_complex::Complex64>)
         .collect()),
         DType::C32 => Ok(batched_multi_convert_result(
             "eig",
@@ -4766,7 +4778,7 @@ pub(crate) fn eig(
             |buffers, batch| eig_complex32_2d(ctx, buffers, batch),
         )?
         .into_iter()
-        .map(Tensor::C32)
+        .map(Tensor::from_typed::<num_complex::Complex32>)
         .collect()),
         DType::C64 => Ok(batched_multi_convert_result(
             "eig",
@@ -4778,7 +4790,7 @@ pub(crate) fn eig(
             |buffers, batch| eig_complex64_2d(ctx, buffers, batch),
         )?
         .into_iter()
-        .map(Tensor::C64)
+        .map(Tensor::from_typed::<num_complex::Complex64>)
         .collect()),
         _ => Err(crate::error::unsupported_dtype("eig", input.dtype())),
     }
@@ -4802,14 +4814,12 @@ pub(crate) fn eig_values(
         }
         let value_shape = vector_with_batch_shape(n, batch_shape);
         return match input.dtype() {
-            DType::F32 | DType::C32 => Ok(Tensor::C32(TypedTensor::from_vec_col_major(
-                value_shape,
-                Vec::new(),
-            )?)),
-            DType::F64 | DType::C64 => Ok(Tensor::C64(TypedTensor::from_vec_col_major(
-                value_shape,
-                Vec::new(),
-            )?)),
+            DType::F32 | DType::C32 => Ok(Tensor::from_typed::<num_complex::Complex32>(
+                TypedTensor::from_vec_col_major(value_shape, Vec::new())?,
+            )),
+            DType::F64 | DType::C64 => Ok(Tensor::from_typed::<num_complex::Complex64>(
+                TypedTensor::from_vec_col_major(value_shape, Vec::new())?,
+            )),
             _ => Err(crate::error::unsupported_dtype("eig_values", input.dtype())),
         };
     }
@@ -4827,7 +4837,9 @@ pub(crate) fn eig_values(
                     eig_values_real32_2d(ctx, buffers, batch).map(|values| vec![values])
                 },
             )?;
-            Ok(Tensor::C32(outputs.remove(0)))
+            Ok(Tensor::from_typed::<num_complex::Complex32>(
+                outputs.remove(0),
+            ))
         }
         DType::F64 => {
             let mut outputs = batched_multi_convert_result(
@@ -4841,7 +4853,9 @@ pub(crate) fn eig_values(
                     eig_values_real64_2d(ctx, buffers, batch).map(|values| vec![values])
                 },
             )?;
-            Ok(Tensor::C64(outputs.remove(0)))
+            Ok(Tensor::from_typed::<num_complex::Complex64>(
+                outputs.remove(0),
+            ))
         }
         DType::C32 => {
             let mut outputs = batched_multi_convert_result(
@@ -4855,7 +4869,9 @@ pub(crate) fn eig_values(
                     eig_values_complex32_2d(ctx, buffers, batch).map(|values| vec![values])
                 },
             )?;
-            Ok(Tensor::C32(outputs.remove(0)))
+            Ok(Tensor::from_typed::<num_complex::Complex32>(
+                outputs.remove(0),
+            ))
         }
         DType::C64 => {
             let mut outputs = batched_multi_convert_result(
@@ -4869,7 +4885,9 @@ pub(crate) fn eig_values(
                     eig_values_complex64_2d(ctx, buffers, batch).map(|values| vec![values])
                 },
             )?;
-            Ok(Tensor::C64(outputs.remove(0)))
+            Ok(Tensor::from_typed::<num_complex::Complex64>(
+                outputs.remove(0),
+            ))
         }
         _ => Err(crate::error::unsupported_dtype("eig_values", input.dtype())),
     }

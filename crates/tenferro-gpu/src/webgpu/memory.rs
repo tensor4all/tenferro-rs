@@ -43,26 +43,25 @@ fn webgpu_typed<'a, T: tenferro_tensor::TensorScalar>(
 pub fn upload_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     match tensor.dtype() {
         DType::F64 => upload_typed::<f64>(rt, webgpu_typed::<f64>("upload_webgpu_tensor", tensor)?)
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
         DType::F32 => upload_typed::<f32>(rt, webgpu_typed::<f32>("upload_webgpu_tensor", tensor)?)
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
         DType::I32 => upload_typed::<i32>(rt, webgpu_typed::<i32>("upload_webgpu_tensor", tensor)?)
-            .map(Tensor::I32),
+            .map(Tensor::from_typed::<i32>),
         DType::I64 => upload_typed::<i64>(rt, webgpu_typed::<i64>("upload_webgpu_tensor", tensor)?)
-            .map(Tensor::I64),
-        DType::Bool => {
-            upload_bool(rt, webgpu_typed::<bool>("upload_webgpu_tensor", tensor)?).map(Tensor::Bool)
-        }
+            .map(Tensor::from_typed::<i64>),
+        DType::Bool => upload_bool(rt, webgpu_typed::<bool>("upload_webgpu_tensor", tensor)?)
+            .map(Tensor::from_typed::<bool>),
         DType::C64 => upload_typed::<Complex64>(
             rt,
             webgpu_typed::<Complex64>("upload_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::C64),
+        .map(Tensor::from_typed::<num_complex::Complex64>),
         DType::C32 => upload_typed::<Complex32>(
             rt,
             webgpu_typed::<Complex32>("upload_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::C32),
+        .map(Tensor::from_typed::<num_complex::Complex32>),
         // A caller-owned payload has no GPU implementation for this operation.
         DType::External(_) => Err(crate::Error::unsupported(
             "upload_webgpu_tensor",
@@ -95,43 +94,43 @@ pub fn download_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Res
             client,
             webgpu_typed::<f64>("download_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::F64),
+        .map(Tensor::from_typed::<f64>),
         DType::F32 => download_typed::<f32>(
             rt,
             client,
             webgpu_typed::<f32>("download_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::F32),
+        .map(Tensor::from_typed::<f32>),
         DType::I32 => download_typed::<i32>(
             rt,
             client,
             webgpu_typed::<i32>("download_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::I32),
+        .map(Tensor::from_typed::<i32>),
         DType::I64 => download_typed::<i64>(
             rt,
             client,
             webgpu_typed::<i64>("download_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::I64),
+        .map(Tensor::from_typed::<i64>),
         DType::Bool => download_bool(
             rt,
             client,
             webgpu_typed::<bool>("download_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::Bool),
+        .map(Tensor::from_typed::<bool>),
         DType::C64 => download_typed::<Complex64>(
             rt,
             client,
             webgpu_typed::<Complex64>("download_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::C64),
+        .map(Tensor::from_typed::<num_complex::Complex64>),
         DType::C32 => download_typed::<Complex32>(
             rt,
             client,
             webgpu_typed::<Complex32>("download_webgpu_tensor", tensor)?,
         )
-        .map(Tensor::C32),
+        .map(Tensor::from_typed::<num_complex::Complex32>),
         // A caller-owned payload has no GPU implementation for this operation.
         DType::External(_) => Err(crate::Error::unsupported(
             "download_webgpu_tensor",
