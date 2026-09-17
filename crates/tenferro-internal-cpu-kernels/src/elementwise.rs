@@ -20,16 +20,36 @@ use tenferro_cpu_basic::{
 };
 
 macro_rules! dispatch_ternary_result_with_pool {
-    ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {
-        match ($a, $b, $c) {
-            (Tensor::F32($x), Tensor::F32($y), Tensor::F32($z)) => Ok(Tensor::F32($body?)),
-            (Tensor::F64($x), Tensor::F64($y), Tensor::F64($z)) => Ok(Tensor::F64($body?)),
+    ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {{
+        match $a.dtype() {
+            DType::F32 => {
+                let ($x, $y, $z) = ternary_operands::<f32>($op, $a, $b, $c)?;
+                Ok(Tensor::from_typed::<f32>($body?))
+            }
+            DType::F64 => {
+                let ($x, $y, $z) = ternary_operands::<f64>($op, $a, $b, $c)?;
+                Ok(Tensor::from_typed::<f64>($body?))
+            }
             _ => Err(ternary_dtype_error(
                 $op,
                 [$a.dtype(), $b.dtype(), $c.dtype()],
             )),
         }
-    };
+    }};
+}
+
+/// The typed operands behind a same-dtype triple, or this module's refusal for one.
+fn ternary_operands<'a, T: TensorScalar>(
+    op: &'static str,
+    a: &'a Tensor,
+    b: &'a Tensor,
+    c: &'a Tensor,
+) -> crate::Result<(&'a TypedTensor<T>, &'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let mismatch = || ternary_dtype_error(op, [a.dtype(), b.dtype(), c.dtype()]);
+    let a_t = a.as_typed::<T>().ok_or_else(mismatch)?;
+    let b_t = b.as_typed::<T>().ok_or_else(mismatch)?;
+    let c_t = c.as_typed::<T>().ok_or_else(mismatch)?;
+    Ok((a_t, b_t, c_t))
 }
 
 fn ternary_dtype_error(op: &'static str, dtypes: [DType; 3]) -> crate::Error {
