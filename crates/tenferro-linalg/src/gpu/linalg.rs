@@ -699,6 +699,18 @@ pub(super) fn householder_qr_from_factors(
     };
     Ok(CompactQrResult { packed, coeff })
 }
+/// The typed operands behind a same-dtype triple, or this entry point's refusal for one.
+fn qr_append_operands<'a, T: TensorScalar>(
+    packed: &'a Tensor,
+    coeff: &'a Tensor,
+    block: &'a Tensor,
+) -> Result<(&'a TypedTensor<T>, &'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let mismatch = || Error::dtype_mismatch("householder_qr_append", packed.dtype(), block.dtype());
+    let packed_t = packed.as_typed::<T>().ok_or_else(mismatch)?;
+    let coeff_t = coeff.as_typed::<T>().ok_or_else(mismatch)?;
+    let block_t = block.as_typed::<T>().ok_or_else(mismatch)?;
+    Ok((packed_t, coeff_t, block_t))
+}
 
 pub(super) fn householder_qr_append(
     backend: &mut CudaExecSession<'_>,
@@ -708,8 +720,9 @@ pub(super) fn householder_qr_append(
 ) -> Result<CompactQrResult> {
     ensure_supported_linalg_pair("householder_qr_append", packed, coeff)?;
     ensure_supported_linalg_pair("householder_qr_append", packed, block)?;
-    let (packed, coeff) = match (packed, coeff, block) {
-        (Tensor::F32(packed), Tensor::F32(coeff), Tensor::F32(block)) => {
+    let (packed, coeff) = match (packed.dtype(), coeff.dtype(), block.dtype()) {
+        (DType::F32, DType::F32, DType::F32) => {
+            let (packed, coeff, block) = qr_append_operands::<f32>(packed, coeff, block)?;
             let (packed, coeff) =
                 compact_qr_append_typed(backend, packed, coeff, block, "householder_qr_append")?;
             (
@@ -717,7 +730,8 @@ pub(super) fn householder_qr_append(
                 Tensor::from_typed::<f32>(coeff),
             )
         }
-        (Tensor::F64(packed), Tensor::F64(coeff), Tensor::F64(block)) => {
+        (DType::F64, DType::F64, DType::F64) => {
+            let (packed, coeff, block) = qr_append_operands::<f64>(packed, coeff, block)?;
             let (packed, coeff) =
                 compact_qr_append_typed(backend, packed, coeff, block, "householder_qr_append")?;
             (
@@ -725,7 +739,8 @@ pub(super) fn householder_qr_append(
                 Tensor::from_typed::<f64>(coeff),
             )
         }
-        (Tensor::C32(packed), Tensor::C32(coeff), Tensor::C32(block)) => {
+        (DType::C32, DType::C32, DType::C32) => {
+            let (packed, coeff, block) = qr_append_operands::<Complex32>(packed, coeff, block)?;
             let (packed, coeff) =
                 compact_qr_append_typed(backend, packed, coeff, block, "householder_qr_append")?;
             (
@@ -733,7 +748,8 @@ pub(super) fn householder_qr_append(
                 Tensor::from_typed::<Complex32>(coeff),
             )
         }
-        (Tensor::C64(packed), Tensor::C64(coeff), Tensor::C64(block)) => {
+        (DType::C64, DType::C64, DType::C64) => {
+            let (packed, coeff, block) = qr_append_operands::<Complex64>(packed, coeff, block)?;
             let (packed, coeff) =
                 compact_qr_append_typed(backend, packed, coeff, block, "householder_qr_append")?;
             (
