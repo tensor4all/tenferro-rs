@@ -1048,6 +1048,17 @@ fn dot_write_operand<T: tenferro_tensor::TensorScalar>(
     })
 }
 
+/// The typed tensor behind a read or write adapter's tensor, or the refusal this module reports.
+fn validated_operand<'a, T: tenferro_tensor::TensorScalar>(
+    tensor: &'a Tensor,
+    op: &'static str,
+    message: &'static str,
+) -> crate::Result<&'a TypedTensor<T>> {
+    tensor
+        .as_typed::<T>()
+        .ok_or_else(|| crate::Error::unsupported_dtype(op, tensor.dtype(), message))
+}
+
 fn reclaim_temporary(buffers: &mut BufferPool, tensor: Tensor) {
     match tensor.dtype() {
         // A caller-owned payload owns no pooled storage, and a tag the conversion cannot
@@ -1903,20 +1914,69 @@ macro_rules! validate_write_view_layout {
 
 fn validate_read_layout(tensor: &TensorRead<'_>, role: &'static str) -> Result<usize> {
     match tensor {
-        TensorRead::Tensor(tensor) => match tensor {
+        TensorRead::Tensor(tensor) => match tensor.dtype() {
             // A caller-owned payload is not a runtime operand.
-            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            DType::External(type_id) => Err(crate::Error::unsupported_dtype(
                 "validate_read_layout",
-                tenferro_tensor::DType::External(payload.element_type_id()),
+                DType::External(type_id),
                 "an externally defined payload is not a runtime operand",
             )),
-            Tensor::F32(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::F64(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::I32(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::I64(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::Bool(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::C32(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::C64(tensor) => validate_owned_layout!(tensor, role),
+            DType::F32 => validate_owned_layout!(
+                validated_operand::<f32>(
+                    tensor,
+                    "validate_read_layout",
+                    "an externally defined payload is not a runtime operand"
+                )?,
+                role
+            ),
+            DType::F64 => validate_owned_layout!(
+                validated_operand::<f64>(
+                    tensor,
+                    "validate_read_layout",
+                    "an externally defined payload is not a runtime operand"
+                )?,
+                role
+            ),
+            DType::I32 => validate_owned_layout!(
+                validated_operand::<i32>(
+                    tensor,
+                    "validate_read_layout",
+                    "an externally defined payload is not a runtime operand"
+                )?,
+                role
+            ),
+            DType::I64 => validate_owned_layout!(
+                validated_operand::<i64>(
+                    tensor,
+                    "validate_read_layout",
+                    "an externally defined payload is not a runtime operand"
+                )?,
+                role
+            ),
+            DType::Bool => validate_owned_layout!(
+                validated_operand::<bool>(
+                    tensor,
+                    "validate_read_layout",
+                    "an externally defined payload is not a runtime operand"
+                )?,
+                role
+            ),
+            DType::C32 => validate_owned_layout!(
+                validated_operand::<Complex32>(
+                    tensor,
+                    "validate_read_layout",
+                    "an externally defined payload is not a runtime operand"
+                )?,
+                role
+            ),
+            DType::C64 => validate_owned_layout!(
+                validated_operand::<Complex64>(
+                    tensor,
+                    "validate_read_layout",
+                    "an externally defined payload is not a runtime operand"
+                )?,
+                role
+            ),
         },
         TensorRead::View(view) => match view {
             TensorView::F32(view) => validate_read_view_layout!(view, role),
@@ -1932,20 +1992,69 @@ fn validate_read_layout(tensor: &TensorRead<'_>, role: &'static str) -> Result<u
 
 fn validate_write_layout(tensor: &TensorWrite<'_>, role: &'static str) -> Result<usize> {
     match tensor {
-        TensorWrite::Tensor(tensor) => match tensor {
+        TensorWrite::Tensor(tensor) => match tensor.dtype() {
             // A caller-owned payload is not a runtime destination.
-            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            DType::External(type_id) => Err(crate::Error::unsupported_dtype(
                 "validate_write_layout",
-                tenferro_tensor::DType::External(payload.element_type_id()),
+                DType::External(type_id),
                 "an externally defined payload is not a runtime destination",
             )),
-            Tensor::F32(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::F64(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::I32(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::I64(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::Bool(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::C32(tensor) => validate_owned_layout!(tensor, role),
-            Tensor::C64(tensor) => validate_owned_layout!(tensor, role),
+            DType::F32 => validate_owned_layout!(
+                validated_operand::<f32>(
+                    tensor,
+                    "validate_write_layout",
+                    "an externally defined payload is not a runtime destination",
+                )?,
+                role
+            ),
+            DType::F64 => validate_owned_layout!(
+                validated_operand::<f64>(
+                    tensor,
+                    "validate_write_layout",
+                    "an externally defined payload is not a runtime destination",
+                )?,
+                role
+            ),
+            DType::I32 => validate_owned_layout!(
+                validated_operand::<i32>(
+                    tensor,
+                    "validate_write_layout",
+                    "an externally defined payload is not a runtime destination",
+                )?,
+                role
+            ),
+            DType::I64 => validate_owned_layout!(
+                validated_operand::<i64>(
+                    tensor,
+                    "validate_write_layout",
+                    "an externally defined payload is not a runtime destination",
+                )?,
+                role
+            ),
+            DType::Bool => validate_owned_layout!(
+                validated_operand::<bool>(
+                    tensor,
+                    "validate_write_layout",
+                    "an externally defined payload is not a runtime destination",
+                )?,
+                role
+            ),
+            DType::C32 => validate_owned_layout!(
+                validated_operand::<Complex32>(
+                    tensor,
+                    "validate_write_layout",
+                    "an externally defined payload is not a runtime destination",
+                )?,
+                role
+            ),
+            DType::C64 => validate_owned_layout!(
+                validated_operand::<Complex64>(
+                    tensor,
+                    "validate_write_layout",
+                    "an externally defined payload is not a runtime destination",
+                )?,
+                role
+            ),
         },
         TensorWrite::View(view) => match view {
             TensorViewMut::F32(view) => validate_write_view_layout!(view, role),
