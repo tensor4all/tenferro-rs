@@ -1206,6 +1206,20 @@ fn typed_host<'a, T: TensorScalar>(
         .ok_or_else(|| unsupported_dtype(op, input.dtype()))
 }
 
+/// The typed operands behind a same-dtype pair, or this entry point's refusal.
+fn q_columns_operands<'a, T: TensorScalar>(
+    packed: &'a Tensor,
+    coeff: &'a Tensor,
+) -> Result<TypedOperandPair<'a, T>, tenferro_tensor::Error> {
+    let p = packed.as_typed::<T>().ok_or_else(|| {
+        Error::dtype_mismatch("householder_qr_q_columns", packed.dtype(), coeff.dtype())
+    })?;
+    let c = coeff.as_typed::<T>().ok_or_else(|| {
+        Error::dtype_mismatch("householder_qr_q_columns", packed.dtype(), coeff.dtype())
+    })?;
+    Ok((p, c))
+}
+
 /// A pair of borrowed typed operands that share one scalar.
 type TypedOperandPair<'a, T> = (
     &'a TypedTensor<T, tenferro_tensor::DynRank>,
@@ -2731,47 +2745,59 @@ fn householder_qr_q_columns_entered(
     let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
     if provider == CpuLinalgProvider::Faer {
         #[cfg(feature = "cpu-faer")]
-        return match (packed, coeff) {
-            (Tensor::F32(p), Tensor::F32(c)) => linalg::faer::q_columns_2d(
-                _context,
-                _buffers,
-                p,
-                c,
-                columns.start,
-                columns.end,
-                positive,
-            )
-            .map(Tensor::from_typed::<f32>),
-            (Tensor::F64(p), Tensor::F64(c)) => linalg::faer::q_columns_2d(
-                _context,
-                _buffers,
-                p,
-                c,
-                columns.start,
-                columns.end,
-                positive,
-            )
-            .map(Tensor::from_typed::<f64>),
-            (Tensor::C32(p), Tensor::C32(c)) => linalg::faer::q_columns_2d(
-                _context,
-                _buffers,
-                p,
-                c,
-                columns.start,
-                columns.end,
-                positive,
-            )
-            .map(Tensor::from_typed::<Complex32>),
-            (Tensor::C64(p), Tensor::C64(c)) => linalg::faer::q_columns_2d(
-                _context,
-                _buffers,
-                p,
-                c,
-                columns.start,
-                columns.end,
-                positive,
-            )
-            .map(Tensor::from_typed::<Complex64>),
+        return match (packed.dtype(), coeff.dtype()) {
+            (DType::F32, DType::F32) => {
+                let (p, c) = q_columns_operands::<f32>(packed, coeff)?;
+                linalg::faer::q_columns_2d(
+                    _context,
+                    _buffers,
+                    p,
+                    c,
+                    columns.start,
+                    columns.end,
+                    positive,
+                )
+                .map(Tensor::from_typed::<f32>)
+            }
+            (DType::F64, DType::F64) => {
+                let (p, c) = q_columns_operands::<f64>(packed, coeff)?;
+                linalg::faer::q_columns_2d(
+                    _context,
+                    _buffers,
+                    p,
+                    c,
+                    columns.start,
+                    columns.end,
+                    positive,
+                )
+                .map(Tensor::from_typed::<f64>)
+            }
+            (DType::C32, DType::C32) => {
+                let (p, c) = q_columns_operands::<Complex32>(packed, coeff)?;
+                linalg::faer::q_columns_2d(
+                    _context,
+                    _buffers,
+                    p,
+                    c,
+                    columns.start,
+                    columns.end,
+                    positive,
+                )
+                .map(Tensor::from_typed::<Complex32>)
+            }
+            (DType::C64, DType::C64) => {
+                let (p, c) = q_columns_operands::<Complex64>(packed, coeff)?;
+                linalg::faer::q_columns_2d(
+                    _context,
+                    _buffers,
+                    p,
+                    c,
+                    columns.start,
+                    columns.end,
+                    positive,
+                )
+                .map(Tensor::from_typed::<Complex64>)
+            }
             _ => Err(Error::dtype_mismatch(
                 "householder_qr_q_columns",
                 packed.dtype(),
@@ -2798,13 +2824,21 @@ fn householder_qr_q_columns_entered(
                 .map(Tensor::$variant)
             };
         }
-        match (packed, coeff) {
-            (Tensor::F32(p), Tensor::F32(c)) => columns!(p, c, F32),
-            (Tensor::F64(p), Tensor::F64(c)) => columns!(p, c, F64),
-            (Tensor::C32(p), Tensor::C32(c)) => {
+        match (packed.dtype(), coeff.dtype()) {
+            (DType::F32, DType::F32) => {
+                let (p, c) = q_columns_operands::<f32>(packed, coeff)?;
+                columns!(p, c, F32)
+            }
+            (DType::F64, DType::F64) => {
+                let (p, c) = q_columns_operands::<f64>(packed, coeff)?;
+                columns!(p, c, F64)
+            }
+            (DType::C32, DType::C32) => {
+                let (p, c) = q_columns_operands::<Complex32>(packed, coeff)?;
                 columns!(p, c, C32)
             }
-            (Tensor::C64(p), Tensor::C64(c)) => {
+            (DType::C64, DType::C64) => {
+                let (p, c) = q_columns_operands::<Complex64>(packed, coeff)?;
                 columns!(p, c, C64)
             }
             _ => Err(Error::dtype_mismatch(

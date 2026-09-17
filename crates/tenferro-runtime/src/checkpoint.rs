@@ -76,7 +76,7 @@ impl RetainedValue {
                         "a TensorValue could not be transferred into its retention group",
                     )
                 })?;
-                if !matches!(tensor, Tensor::External(..)) {
+                if !matches!(tensor.dtype(), DType::External(_)) {
                     return Err(Error::runtime_state(
                         "RetainedValue::from_tensor_value",
                         ErrorPhase::Execution,
