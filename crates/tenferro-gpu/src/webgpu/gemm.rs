@@ -545,21 +545,38 @@ pub(super) fn dot_general_with_conj(
     lhs_conj: bool,
     rhs_conj: bool,
 ) -> crate::Result<Tensor> {
-    match (lhs, rhs) {
-        (Tensor::F32(lhs), Tensor::F32(rhs)) => {
-            dot_general_f32(backend, lhs, rhs, config).map(Tensor::F32)
+    match (lhs.dtype(), rhs.dtype()) {
+        (crate::DType::F32, crate::DType::F32) => {
+            let (lhs, rhs) = webgpu_gemm_operands::<f32>(lhs, rhs)?;
+            dot_general_f32(backend, lhs, rhs, config).map(Tensor::from_typed::<f32>)
         }
-        (Tensor::F64(_), Tensor::F64(_)) => {
+        (crate::DType::F64, crate::DType::F64) => {
             Err(unsupported_dtype(DOT_GENERAL_OP, crate::DType::F64))
         }
-        (Tensor::C32(lhs), Tensor::C32(rhs)) => {
-            dot_general_c32(backend, lhs, rhs, config, lhs_conj, rhs_conj).map(Tensor::C32)
+        (crate::DType::C32, crate::DType::C32) => {
+            let (lhs, rhs) = webgpu_gemm_operands::<Complex32>(lhs, rhs)?;
+            dot_general_c32(backend, lhs, rhs, config, lhs_conj, rhs_conj)
+                .map(Tensor::from_typed::<Complex32>)
         }
-        (Tensor::C64(_), Tensor::C64(_)) => {
+        (crate::DType::C64, crate::DType::C64) => {
             Err(unsupported_dtype(DOT_GENERAL_OP, crate::DType::C64))
         }
         _ => Err(dtype_mismatch(DOT_GENERAL_OP, lhs, rhs)),
     }
+}
+
+/// The typed operands behind a same-dtype pair, or this entry point's refusal for one.
+fn webgpu_gemm_operands<'a, T: crate::TensorScalar>(
+    lhs: &'a Tensor,
+    rhs: &'a Tensor,
+) -> crate::Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let lhs_t = lhs
+        .as_typed::<T>()
+        .ok_or_else(|| dtype_mismatch(DOT_GENERAL_OP, lhs, rhs))?;
+    let rhs_t = rhs
+        .as_typed::<T>()
+        .ok_or_else(|| dtype_mismatch(DOT_GENERAL_OP, lhs, rhs))?;
+    Ok((lhs_t, rhs_t))
 }
 
 pub(super) fn dot_general(

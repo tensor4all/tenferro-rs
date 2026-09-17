@@ -561,22 +561,26 @@ pub(super) fn dot_general_with_conj(
     lhs_conj: bool,
     rhs_conj: bool,
 ) -> crate::Result<Tensor> {
-    match (lhs, rhs) {
-        (Tensor::F32(lhs), Tensor::F32(rhs)) => {
+    match (lhs.dtype(), rhs.dtype()) {
+        (DType::F32, DType::F32) => {
+            let (lhs, rhs) = gemm_pair_operands::<f32>(OP, lhs, rhs)?;
             dot_general_typed_with_conj(backend, lhs, rhs, config, lhs_conj, rhs_conj)
-                .map(Tensor::F32)
+                .map(Tensor::from_typed::<f32>)
         }
-        (Tensor::F64(lhs), Tensor::F64(rhs)) => {
+        (DType::F64, DType::F64) => {
+            let (lhs, rhs) = gemm_pair_operands::<f64>(OP, lhs, rhs)?;
             dot_general_typed_with_conj(backend, lhs, rhs, config, lhs_conj, rhs_conj)
-                .map(Tensor::F64)
+                .map(Tensor::from_typed::<f64>)
         }
-        (Tensor::C32(lhs), Tensor::C32(rhs)) => {
+        (DType::C32, DType::C32) => {
+            let (lhs, rhs) = gemm_pair_operands::<Complex32>(OP, lhs, rhs)?;
             dot_general_typed_with_conj(backend, lhs, rhs, config, lhs_conj, rhs_conj)
-                .map(Tensor::C32)
+                .map(Tensor::from_typed::<Complex32>)
         }
-        (Tensor::C64(lhs), Tensor::C64(rhs)) => {
+        (DType::C64, DType::C64) => {
+            let (lhs, rhs) = gemm_pair_operands::<Complex64>(OP, lhs, rhs)?;
             dot_general_typed_with_conj(backend, lhs, rhs, config, lhs_conj, rhs_conj)
-                .map(Tensor::C64)
+                .map(Tensor::from_typed::<Complex64>)
         }
         _ => Err(dtype_mismatch(OP, lhs, rhs)),
     }
