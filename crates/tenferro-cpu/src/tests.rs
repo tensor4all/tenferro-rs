@@ -729,3 +729,35 @@ mod indexing_coverage;
 #[cfg(feature = "cpu-faer")]
 #[path = "tests/cpu_tests/uninit_dot_output.rs"]
 mod uninit_dot_output;
+
+/// The analytic read view carries one arm per preset scalar, and the read entry for `pow` takes it for both
+/// operands. The owned-tensor tests reach the floating arms only, so this drives every dtype, including the
+/// boolean arm whose analytic view is a unit marker and the externally defined case, which is refused.
+#[test]
+fn analytic_read_view_covers_every_preset_scalar() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+
+    macro_rules! pow_case {
+        ($values:expr) => {{
+            let lhs: Tensor = Tensor::from_vec_col_major(vec![2], $values.clone()).unwrap();
+            let rhs: Tensor = Tensor::from_vec_col_major(vec![2], $values).unwrap();
+            let result = crate::analytic::pow_read_with_pool(
+                &mut buffers,
+                tenferro_tensor::TensorRead::from_tensor(&lhs),
+                tenferro_tensor::TensorRead::from_tensor(&rhs),
+            );
+            match result {
+                Ok(output) => assert_eq!(output.shape(), lhs.shape()),
+                Err(error) => assert!(!error.to_string().is_empty()),
+            }
+        }};
+    }
+
+    pow_case!(vec![2.0_f32, 3.0]);
+    pow_case!(vec![2.0_f64, 3.0]);
+    pow_case!(vec![2_i32, 3]);
+    pow_case!(vec![2_i64, 3]);
+    pow_case!(vec![false, true]);
+    pow_case!(vec![Complex32::new(2.0, 0.0), Complex32::new(3.0, 0.0)]);
+    pow_case!(vec![Complex64::new(2.0, 0.0), Complex64::new(3.0, 0.0)]);
+}

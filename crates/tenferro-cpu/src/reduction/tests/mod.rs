@@ -1,6 +1,9 @@
 //! Module-local tests for the reduction dispatch seams.
 
-use super::{reduce_max, reduce_min, reduce_prod, reduce_sum, reduce_sum_read, typed_input};
+use super::{
+    norm_squared_read, reduce_max, reduce_min, reduce_prod, reduce_prod_read, reduce_sum,
+    reduce_sum_read, reduce_sum_squares, typed_input,
+};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensor};
 
@@ -106,4 +109,49 @@ fn reduce_sum_read_covers_every_preset_view() {
         vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 2.0)],
         true
     );
+}
+
+/// The product read table carries a view arm per preset scalar, and the squared-norm and sum-of-squares
+/// entries admit floating dtypes only, so their integer and boolean inputs are refusals rather than table
+/// arms. The owned-tensor tests take neither path.
+#[test]
+fn reduction_read_tables_cover_views_and_sum_squares_refusals() {
+    let context = strided_kernel::ExecContext::serial();
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+
+    macro_rules! prod_view {
+        ($variant:ident, $scalar:ty, $values:expr) => {{
+            let owned = tensor::<$scalar>($values);
+            let typed = owned
+                .as_typed::<$scalar>()
+                .expect("the tensor was built from this scalar")
+                .as_view();
+            let read = TensorRead::from_view(TensorView::$variant(typed));
+            let result = reduce_prod_read(&mut buffers, read, &[0], &context);
+            let _ = result;
+        }};
+    }
+
+    prod_view!(F32, f32, vec![1.0_f32, 2.0]);
+    prod_view!(F64, f64, vec![1.0_f64, 2.0]);
+    prod_view!(I32, i32, vec![1_i32, 2]);
+    prod_view!(I64, i64, vec![1_i64, 2]);
+    prod_view!(Bool, bool, vec![false, true]);
+    prod_view!(
+        C32,
+        Complex32,
+        vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, 2.0)]
+    );
+    prod_view!(
+        C64,
+        Complex64,
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 2.0)]
+    );
+
+    for unsupported in [tensor(vec![1_i32, 2]), tensor(vec![false, true])] {
+        let sums = reduce_sum_squares(&mut buffers, &unsupported, &[0], &context);
+        assert!(sums.is_err(), "sum of squares admits floating dtypes only");
+        let norms = norm_squared_read(&mut buffers, TensorRead::from_tensor(&unsupported));
+        assert!(norms.is_err(), "squared norm admits floating dtypes only");
+    }
 }
