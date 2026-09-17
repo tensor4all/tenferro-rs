@@ -236,3 +236,27 @@ fn test_eig_returns_complex_outputs_for_real_input() {
     assert_eq!(outputs[0].shape(), &[2]);
     assert_eq!(outputs[1].shape(), &[2, 2]);
 }
+
+/// `eig` on a zero-extent input returns empty complex outputs whose precision follows the input: a real
+/// input widens to the complex type of the same width. The f64 path is exercised elsewhere, so this drives
+/// the f32 and c32 arms.
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn test_faer_eig_zero_extent_returns_empty_complex_outputs_per_input_width() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let cases = [
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![0, 0], Vec::<f32>::new()).unwrap()),
+        Tensor::C32(TypedTensor::from_vec_col_major(vec![0, 0], Vec::<Complex32>::new()).unwrap()),
+    ];
+
+    for input in &cases {
+        let outputs = with_cpu_linalg(&mut backend, |backend| {
+            backend.with_linalg_pool(|context, buffers| faer_linalg::eig(context, buffers, input))
+        })
+        .unwrap();
+
+        assert_eq!(outputs.len(), 2, "eig returns values and vectors");
+        assert_eq!(outputs[0].dtype(), DType::C32);
+        assert_eq!(outputs[1].dtype(), DType::C32);
+    }
+}
