@@ -1410,7 +1410,10 @@ jobs:
       !cancelled() &&
       (
         github.event_name == 'workflow_dispatch' ||
-        github.event.workflow_run.event == 'pull_request'
+        (
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'pull_request'
+        )
       )
 
     runs-on: ubuntu-latest
