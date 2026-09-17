@@ -296,11 +296,31 @@ pub(super) fn to_contiguous_read(
     }
 
     match input {
-        TensorRead::Tensor(Tensor::F32(input)) => materialize!(F32, input.as_view()),
-        TensorRead::Tensor(Tensor::I32(input)) => materialize!(I32, input.as_view()),
+        TensorRead::Tensor(tensor) => match tensor.dtype() {
+            crate::DType::F32 => materialize!(
+                F32,
+                webgpu_read_operand::<f32>(tensor, MATERIALIZE_OP)?.as_view()
+            ),
+            crate::DType::I32 => materialize!(
+                I32,
+                webgpu_read_operand::<i32>(tensor, MATERIALIZE_OP)?.as_view()
+            ),
+            // Reject unsupported WGSL element types before asynchronous codegen.
+            other => Err(unsupported_dtype(MATERIALIZE_OP, other)),
+        },
         TensorRead::View(TensorView::F32(input)) => materialize!(F32, input),
         TensorRead::View(TensorView::I32(input)) => materialize!(I32, input),
         // Reject unsupported WGSL element types before asynchronous codegen.
         other => Err(unsupported_dtype(MATERIALIZE_OP, other.dtype())),
     }
+}
+
+/// The typed tensor behind a read adapter's tensor, or the refusal this op reports for one.
+fn webgpu_read_operand<'a, T: crate::TensorScalar>(
+    tensor: &'a Tensor,
+    op: &'static str,
+) -> crate::Result<&'a TypedTensor<T>> {
+    tensor
+        .as_typed::<T>()
+        .ok_or_else(|| unsupported_dtype(op, tensor.dtype()))
 }
