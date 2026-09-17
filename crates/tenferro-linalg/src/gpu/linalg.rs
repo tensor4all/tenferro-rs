@@ -639,6 +639,21 @@ fn validate_upper_trapezoidal_gpu(
     }
 }
 
+/// The typed operands behind a same-dtype pair, or the refusal this entry point reports.
+fn compact_qr_operands<'a, T: TensorScalar>(
+    q: &'a Tensor,
+    r: &'a Tensor,
+    op: &'static str,
+) -> Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let q_t = q
+        .as_typed::<T>()
+        .ok_or_else(|| Error::dtype_mismatch(op, q.dtype(), r.dtype()))?;
+    let r_t = r
+        .as_typed::<T>()
+        .ok_or_else(|| Error::dtype_mismatch(op, q.dtype(), r.dtype()))?;
+    Ok((q_t, r_t))
+}
+
 pub(super) fn householder_qr_from_factors(
     backend: &mut CudaExecSession<'_>,
     q: &Tensor,
@@ -647,29 +662,33 @@ pub(super) fn householder_qr_from_factors(
     const OP: &str = "householder_qr_from_factors";
     ensure_supported_linalg_pair(OP, q, r)?;
     validate_upper_trapezoidal_gpu(backend, r, OP)?;
-    let (packed, coeff) = match (q, r) {
-        (Tensor::F32(q), Tensor::F32(r)) => {
+    let (packed, coeff) = match (q.dtype(), r.dtype()) {
+        (DType::F32, DType::F32) => {
+            let (q, r) = compact_qr_operands::<f32>(q, r, OP)?;
             let (packed, coeff) = compact_qr_from_factors_typed(backend, q, r, OP)?;
             (
                 Tensor::from_typed::<f32>(packed),
                 Tensor::from_typed::<f32>(coeff),
             )
         }
-        (Tensor::F64(q), Tensor::F64(r)) => {
+        (DType::F64, DType::F64) => {
+            let (q, r) = compact_qr_operands::<f64>(q, r, OP)?;
             let (packed, coeff) = compact_qr_from_factors_typed(backend, q, r, OP)?;
             (
                 Tensor::from_typed::<f64>(packed),
                 Tensor::from_typed::<f64>(coeff),
             )
         }
-        (Tensor::C32(q), Tensor::C32(r)) => {
+        (DType::C32, DType::C32) => {
+            let (q, r) = compact_qr_operands::<Complex32>(q, r, OP)?;
             let (packed, coeff) = compact_qr_from_factors_typed(backend, q, r, OP)?;
             (
                 Tensor::from_typed::<Complex32>(packed),
                 Tensor::from_typed::<Complex32>(coeff),
             )
         }
-        (Tensor::C64(q), Tensor::C64(r)) => {
+        (DType::C64, DType::C64) => {
+            let (q, r) = compact_qr_operands::<Complex64>(q, r, OP)?;
             let (packed, coeff) = compact_qr_from_factors_typed(backend, q, r, OP)?;
             (
                 Tensor::from_typed::<Complex64>(packed),
