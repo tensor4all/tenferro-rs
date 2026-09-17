@@ -1565,23 +1565,37 @@ fn typed_view_storage_identity<T: crate::TensorScalar + 'static>(
     }
 }
 
+/// The typed tensor behind `value`, or the refusal this module reports for one.
+///
+/// Callers reach this from a match on the dtype, so `None` means the tag and the runtime dtype
+/// disagree rather than a caller mistake.
+fn identity_operand<T: TensorScalar>(value: &Tensor) -> crate::Result<&TypedTensor<T>> {
+    value.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported_dtype(
+            "storage_identity",
+            value.dtype(),
+            "an externally defined payload has no storage identity",
+        )
+    })
+}
+
 fn tensor_read_storage_identity(input: &TensorRead<'_>) -> crate::Result<StorageIdentity> {
     macro_rules! typed_identity {
         ($value:expr) => {
-            match $value {
-                Tensor::F32(value) => typed_tensor_storage_identity(value),
-                Tensor::F64(value) => typed_tensor_storage_identity(value),
-                Tensor::I32(value) => typed_tensor_storage_identity(value),
-                Tensor::I64(value) => typed_tensor_storage_identity(value),
-                Tensor::Bool(value) => typed_tensor_storage_identity(value),
-                Tensor::C32(value) => typed_tensor_storage_identity(value),
-                Tensor::C64(value) => typed_tensor_storage_identity(value),
+            match $value.dtype() {
+                DType::F32 => typed_tensor_storage_identity(identity_operand::<f32>($value)?),
+                DType::F64 => typed_tensor_storage_identity(identity_operand::<f64>($value)?),
+                DType::I32 => typed_tensor_storage_identity(identity_operand::<i32>($value)?),
+                DType::I64 => typed_tensor_storage_identity(identity_operand::<i64>($value)?),
+                DType::Bool => typed_tensor_storage_identity(identity_operand::<bool>($value)?),
+                DType::C32 => typed_tensor_storage_identity(identity_operand::<Complex32>($value)?),
+                DType::C64 => typed_tensor_storage_identity(identity_operand::<Complex64>($value)?),
                 // A caller-owned payload has no allocation identity, so it cannot
                 // take part in an aliasing check.
-                Tensor::External(payload, _) => {
+                DType::External(_) => {
                     return Err(crate::Error::unsupported_dtype(
                         "storage_identity",
-                        DType::External(payload.element_type_id()),
+                        $value.dtype(),
                         "an externally defined payload has no storage identity",
                     ));
                 }
