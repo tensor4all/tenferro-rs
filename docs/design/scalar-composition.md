@@ -1317,6 +1317,18 @@ second kind, which is exactly the sealed pool boundary the objective keeps in pl
 a resource boundary owned by #1789 until that issue's contract is agreed". The removal is consequently gated by
 the objective's own constraint and by #1789's contract, not by its size alone.
 
+**The trade-off is measured rather than argued** (`ext/df64-proof/tests/scratch_allocation.rs`,
+`report_erased_payload_allocation_cost`). The seven variants hold the typed tensor inline, so wrapping one is a
+move and costs nothing: `size_of::<Tensor>()` is 1464 bytes, and adapting a prepared `TypedTensor<f64>` through
+`Tensor::from_typed` allocates zero times and moves zero bytes. The single payload the removal names can be
+expressed on this head as `(DType, Box<dyn Any + Send + Sync>)`, and that shape measures one allocation of
+1456 bytes per erased tensor: the whole typed tensor, owned group and placement included, relocated to the
+heap outside every pool the erased layer accounts for. A 36-fold smaller wrapper is therefore reachable today,
+and it is not free — it moves each tensor's storage out of the accounted path. Choosing between the two is the
+resource-boundary decision #1789 owns, which is why this section calls the removal gated rather than merely
+large. The test also pins the property the pool boundary depends on: the erased wrapper adds no allocation, so
+a change that starts allocating there fails a test instead of passing review unnoticed.
+
 ### 5.17a What the removal still needs, measured
 
 The three accessors tag-based dispatch was missing now exist — `Tensor::as_typed_mut`,
@@ -1487,7 +1499,13 @@ names — needs that seam added before its first function can dispatch on a tag.
 therefore a dispatch-and-representation refactor rather than a rename of 2832 arms, and the first step
 is the seam, not an arm edit.
 
-**Corrected after re-reading the objective:** the removal is not gated on a decision, it is stated in the objective itself, so the honest status is mandated and unattempted rather than awaiting approval. Re-measured on the current head, the conversion it needs is 2832 `Tensor::` variant match sites across 75 files, with the four files the objective names as arm-dense holding 1180 of them; the ordering the objective gives is descending arm density, so the first bounded step is the most arm-dense file, whose conversion is self-contained because it is feature-gated.
+**Corrected after re-reading the objective:** the removal is not optional, because the objective states it,
+so its status is mandated rather than awaiting authorization to start. What the objective states is also that
+the sealed pool stays a resource boundary until #1789's contract is agreed, and the measurement above shows
+the single payload trades the inline 1464-byte wrapper for an unaccounted 1456-byte heap allocation per
+tensor. That trade is that boundary, so the honest status is mandated and unattempted, blocked on the
+resource-boundary contract rather than on permission to begin: the arm conversion that does not need the
+trade is finished, and the representation change that does need it is the part that waits. Re-measured on the current head, the conversion it needs is 2832 `Tensor::` variant match sites across 75 files, with the four files the objective names as arm-dense holding 1180 of them; the ordering the objective gives is descending arm density, so the first bounded step is the most arm-dense file, whose conversion is self-contained because it is feature-gated.
 
 **#1793's einsum with an externally defined scalar.** The issue's own example now runs: the
 contribution owns a matrix contraction, `einsum("ik,kj->ij", A, B)`, which reproduces #1793's table
