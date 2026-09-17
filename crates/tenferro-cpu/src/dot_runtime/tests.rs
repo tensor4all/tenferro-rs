@@ -2352,3 +2352,43 @@ fn engine_outer_grouped_execution_covers_float_and_complex_arms() {
         DType::C32
     );
 }
+
+/// The outer-scheduled grouped table carries a complex64 arm beside the floating ones. The other grouped
+/// tests drive f64, f32 and c32, so this drives complex64 through the same spy provider, which reports
+/// execution without doing the arithmetic.
+#[test]
+fn engine_outer_grouped_execution_covers_the_complex64_arm() {
+    let values = vec![num_complex::Complex64::new(2.0, 0.0); 2];
+    let job_count = values.len();
+    let bundle = route_bundle(Arc::new(GemmSpy::new(CpuProviderOutcome::Executed)), None);
+    let lhs = Tensor::from_vec_col_major(vec![job_count], values.clone()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![job_count], values.clone()).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![job_count], values).unwrap();
+    let jobs = (0..job_count)
+        .map(|index| GroupedGemmJob::new(index, index, index, 1, 1, 1))
+        .collect::<Vec<_>>();
+    let fixture = external_execution_context_fixture(
+        Arc::new(CountingExecutor {
+            submits: Arc::new(AtomicUsize::new(0)),
+            installs: Arc::new(AtomicUsize::new(0)),
+        }),
+        NonZeroUsize::new(4).unwrap(),
+    );
+
+    bundle
+        .execute_grouped_gemm(
+            &fixture.entry(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::C64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .expect("the spy gemm provider executes without arithmetic");
+
+    // An integer contraction has no scalar identity, so its operand-layout arms in the validators are
+    // reachable only through a gate that refuses first; this records that rather than leaving it implied.
+    assert!(DotGeneralAccumulation::overwrite(DType::I32).is_err());
+}
