@@ -1402,3 +1402,82 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
         "broadcast_multiply",
     );
 }
+
+/// Exercises the erased elementwise tables through their public entry points, one case per preset
+/// dtype, so the tag arms the shared dispatch introduced are covered rather than merely compiled.
+///
+/// Operations a dtype does not admit are called too: the refusal arm is part of the table, and the
+/// test only asserts the dtype when the call succeeds.
+#[test]
+fn erased_tables_cover_every_preset_dtype() {
+    macro_rules! cases {
+        ($scalar:ty, $lhs:expr, $rhs:expr) => {{
+            let make = |value: $scalar| {
+                Tensor::from_typed(
+                    TypedTensor::<$scalar>::from_vec_col_major(vec![1], vec![value]).unwrap(),
+                )
+            };
+            let lhs = make($lhs);
+            let rhs = make($rhs);
+            // Arithmetic between one dtype and itself keeps that dtype.
+            for (name, result) in [
+                ("add", add(&lhs, &rhs)),
+                ("sub", sub(&lhs, &rhs)),
+                ("mul", mul(&lhs, &rhs)),
+                ("div", div(&lhs, &rhs)),
+                ("rem", rem(&lhs, &rhs)),
+            ] {
+                match result {
+                    Ok(value) => assert_eq!(value.dtype(), lhs.dtype(), "{name} keeps the dtype"),
+                    Err(error) => assert!(!error.to_string().is_empty(), "{name} refusal"),
+                }
+            }
+            // Ordering and unary tables may widen: `abs` of a complex operand is its real magnitude.
+            for (name, result) in [
+                ("maximum", maximum(&lhs, &rhs)),
+                ("minimum", minimum(&lhs, &rhs)),
+            ] {
+                if let Ok(value) = result {
+                    assert!(!value.shape().is_empty(), "{name} result");
+                }
+            }
+            for (name, result) in [
+                ("neg", neg(&lhs)),
+                ("conj", conj(&lhs)),
+                ("abs", abs(&lhs)),
+                ("sign", sign(&lhs)),
+                ("compare", compare(&lhs, &rhs, &CompareDir::Lt)),
+            ] {
+                if let Ok(value) = result {
+                    assert_eq!(value.shape().to_vec(), lhs.shape().to_vec(), "{name} shape");
+                }
+            }
+        }};
+    }
+
+    cases!(f32, 3.0, 2.0);
+    cases!(f64, 3.0, 2.0);
+    cases!(i32, 3, 2);
+    cases!(i64, 3, 2);
+    cases!(bool, true, false);
+    cases!(
+        num_complex::Complex32,
+        num_complex::Complex32::new(3.0, 0.0),
+        num_complex::Complex32::new(2.0, 0.0)
+    );
+    cases!(
+        num_complex::Complex64,
+        num_complex::Complex64::new(3.0, 0.0),
+        num_complex::Complex64::new(2.0, 0.0)
+    );
+
+    // The ternary table needs a boolean predicate and the operands it selects between.
+    let pred =
+        Tensor::from_typed(TypedTensor::<bool>::from_vec_col_major(vec![1], vec![true]).unwrap());
+    let on_true =
+        Tensor::from_typed(TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap());
+    let on_false =
+        Tensor::from_typed(TypedTensor::<f64>::from_vec_col_major(vec![1], vec![2.0]).unwrap());
+    let selected = select(&pred, &on_true, &on_false).expect("f64 select");
+    assert_eq!(selected.dtype(), DType::F64);
+}

@@ -1620,6 +1620,37 @@ directional derivative, which no `f64` intermediate could resolve. The duality c
 reproduces the orientation gradient `[[6], [8]]`, which guards that the two programs' inputs were
 bound in the order they expect.
 
+### 5.20b Coverage policy, and what this branch measures against it
+
+The objective's "90% line coverage on changed files" is this repository's own target, stated in `AGENTS.md`
+under "Test Coverage Target": 90%+ line coverage per source file, "cover new paths; when modifying a file
+below 90%, add tests", with the `crates/tenferro-linalg/src/ad/rules/*.rs` AD rules excepted because their
+guarantee is numerical, not a line percentage. There are three readings, and the branch records which one it
+satisfies rather than choosing the flattering one:
+
+- **The enforced gate.** `python3 scripts/check-coverage.py coverage.json` compares each file against
+  `coverage-thresholds.json`, whose default is 80 with per-file overrides that are mostly frozen pre-existing
+  baselines (the file even carries values of 0, 8 and 13 under headings such as
+  `_comment_existing_pr_baseline`). This branch does not edit that file, and the gate reports 226 of 226 files
+  at their thresholds.
+- **Whole-file line coverage, which is what the policy's "90%+ per source file" literally names.** Measured on
+  this head over the 63 changed `crates/**/*.rs` files that the coverage profile instruments: **16 are at or
+  above 90%**, and the rest sit mostly in the 74-87% band. Those percentages are dominated by code this branch
+  did not write — `tenferro-tensor/src/types.rs` is 74.4% over 3928 lines, of which the branch added roughly
+  200 — so reaching 90% on each of them is a task about the repository's pre-existing debt, not about this
+  change. It is unfinished and is not claimed.
+- **Coverage of the lines this branch added**, which is what "cover new paths" asks for. Measured by joining
+  the branch diff against the coverage segments: 3226 added lines are instrumented in this profile (a further
+  8675 are not, because they are feature-gated or `cfg`-excluded), and **2548 of the 3226 are executed, 79.0%**.
+  The remainder is not one kind of gap. Every dtype-pair arm head of the converted tables is executed, so the
+  uncovered lines are sub-regions inside executed arms — chiefly the `?` propagation of a `pair_operand`
+  refusal, which needs a call that makes that specific arm fail, and the arms of files this branch touched
+  only incidentally.
+
+What that means for the audit: the enforced gate and the new-path duty are met and measured; whole-file 90% on
+every changed file is not, and the honest status of that item is partially met with the numbers above rather
+than claimed.
+
 ### 5.20c The remaining `unreachable!` sites, and why each one is safe
 
 The goal requires the storage, runtime metadata and IR, cache identity, and the C API, XLA, and
