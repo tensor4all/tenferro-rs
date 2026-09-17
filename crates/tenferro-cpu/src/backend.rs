@@ -3715,6 +3715,13 @@ impl BackendSessionHost for CpuBackend {
     }
 }
 
+/// Hand the typed tensor back to the pool when the tag table reached the matching tag.
+fn reclaim_preset<T: tenferro_cpu_basic::PoolScalar>(buffers: &mut BufferPool, tensor: Tensor) {
+    if let Ok(typed) = tensor.into_typed::<T>() {
+        reclaim_typed(buffers, typed);
+    }
+}
+
 impl TensorBuffer for CpuBackend {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
         let admission = self.infallible_execution_admission();
@@ -3722,16 +3729,17 @@ impl TensorBuffer for CpuBackend {
         with_execution_owner(permit.owner(), || {
             self.with_execution_resources(permit, |resources| {
                 let buffers = &mut resources.buffers;
-                match tensor {
-                    Tensor::F32(t) => reclaim_typed(buffers, t),
-                    Tensor::F64(t) => reclaim_typed(buffers, t),
-                    Tensor::I32(t) => reclaim_typed(buffers, t),
-                    Tensor::I64(t) => reclaim_typed(buffers, t),
-                    Tensor::Bool(t) => reclaim_typed(buffers, t),
-                    Tensor::C32(t) => reclaim_typed(buffers, t),
-                    Tensor::C64(t) => reclaim_typed(buffers, t),
-                    // A caller-owned payload owns no pooled storage.
-                    Tensor::External(..) => {}
+                match tensor.dtype() {
+                    DType::F32 => reclaim_preset::<f32>(buffers, tensor),
+                    DType::F64 => reclaim_preset::<f64>(buffers, tensor),
+                    DType::I32 => reclaim_preset::<i32>(buffers, tensor),
+                    DType::I64 => reclaim_preset::<i64>(buffers, tensor),
+                    DType::Bool => reclaim_preset::<bool>(buffers, tensor),
+                    DType::C32 => reclaim_preset::<Complex32>(buffers, tensor),
+                    DType::C64 => reclaim_preset::<Complex64>(buffers, tensor),
+                    // A caller-owned payload owns no pooled storage, and a tag the
+                    // conversion cannot recover behaves the same way rather than guessing.
+                    DType::External(_) => {}
                 }
             })
         })
