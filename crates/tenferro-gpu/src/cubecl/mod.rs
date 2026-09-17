@@ -4871,6 +4871,16 @@ impl TensorAnalytic for CudaBackend {
     }
 }
 
+/// The typed tensor behind a contiguous-read adapter's tensor, or its refusal.
+fn contiguous_read_typed<T: TensorScalar>(tensor: &Tensor) -> crate::Result<&TypedTensor<T>> {
+    tensor.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported(
+            "CudaBackend::to_contiguous_read",
+            "an externally defined payload is not supported by this GPU operation",
+        )
+    })
+}
+
 impl TensorStructural for CudaBackend {
     // Borrowed-view entry points. The traced runtime prepares operands as
     // `TensorRead`; a view is materialized before the CUDA kernel runs.
@@ -4911,16 +4921,37 @@ impl TensorStructural for CudaBackend {
         }
 
         match input {
-            TensorRead::Tensor(Tensor::F32(input)) => materialize_cutensor!(F32, input.as_view()),
-            TensorRead::Tensor(Tensor::F64(input)) => materialize_cutensor!(F64, input.as_view()),
-            TensorRead::Tensor(Tensor::I32(input)) => materialize_cubecl!(I32, input.as_view()),
-            TensorRead::Tensor(Tensor::I64(input)) => materialize_cubecl!(I64, input.as_view()),
-            TensorRead::Tensor(Tensor::Bool(_)) => Err(unsupported_dtype(
-                "CudaBackend::to_contiguous_read",
-                crate::DType::Bool,
-            )),
-            TensorRead::Tensor(Tensor::C32(input)) => materialize_cutensor!(C32, input.as_view()),
-            TensorRead::Tensor(Tensor::C64(input)) => materialize_cutensor!(C64, input.as_view()),
+            TensorRead::Tensor(tensor) => match tensor.dtype() {
+                DType::F32 => {
+                    materialize_cutensor!(F32, contiguous_read_typed::<f32>(tensor)?.as_view())
+                }
+                DType::F64 => {
+                    materialize_cutensor!(F64, contiguous_read_typed::<f64>(tensor)?.as_view())
+                }
+                DType::I32 => {
+                    materialize_cubecl!(I32, contiguous_read_typed::<i32>(tensor)?.as_view())
+                }
+                DType::I64 => {
+                    materialize_cubecl!(I64, contiguous_read_typed::<i64>(tensor)?.as_view())
+                }
+                DType::Bool => Err(unsupported_dtype(
+                    "CudaBackend::to_contiguous_read",
+                    crate::DType::Bool,
+                )),
+                DType::C32 => materialize_cutensor!(
+                    C32,
+                    contiguous_read_typed::<Complex32>(tensor)?.as_view()
+                ),
+                DType::C64 => materialize_cutensor!(
+                    C64,
+                    contiguous_read_typed::<Complex64>(tensor)?.as_view()
+                ),
+                // A caller-owned payload has no GPU implementation for this operation.
+                DType::External(_) => Err(crate::Error::unsupported(
+                    "CudaBackend::to_contiguous_read",
+                    "an externally defined payload is not supported by this GPU operation",
+                )),
+            },
             TensorRead::View(TensorView::F32(input)) => materialize_cutensor!(F32, input),
             TensorRead::View(TensorView::F64(input)) => materialize_cutensor!(F64, input),
             TensorRead::View(TensorView::I32(input)) => materialize_cubecl!(I32, input),
@@ -4931,11 +4962,6 @@ impl TensorStructural for CudaBackend {
             )),
             TensorRead::View(TensorView::C32(input)) => materialize_cutensor!(C32, input),
             TensorRead::View(TensorView::C64(input)) => materialize_cutensor!(C64, input),
-            // A caller-owned payload has no GPU implementation for this operation.
-            TensorRead::Tensor(Tensor::External(..)) => Err(crate::Error::unsupported(
-                "CudaBackend::to_contiguous_read",
-                "an externally defined payload is not supported by this GPU operation",
-            )),
         }
     }
 
