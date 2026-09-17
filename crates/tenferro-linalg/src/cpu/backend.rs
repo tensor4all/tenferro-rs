@@ -1553,24 +1553,30 @@ fn solve_read_into_entered(
 
 fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {
     match out {
-        // INVARIANT: linalg rejects an externally defined dtype before adapting a
-        // write target, and `TensorViewMut` has no externally defined variant.
-        TensorWrite::Tensor(Tensor::External(..)) => {
-            unreachable!("linalg validates its input dtypes first")
-        }
-        TensorWrite::Tensor(tensor) => match tensor {
-            Tensor::F32(tensor) => TensorViewMut::F32(tensor.as_view_mut()),
-            Tensor::F64(tensor) => TensorViewMut::F64(tensor.as_view_mut()),
-            Tensor::I32(tensor) => TensorViewMut::I32(tensor.as_view_mut()),
-            Tensor::I64(tensor) => TensorViewMut::I64(tensor.as_view_mut()),
-            Tensor::Bool(tensor) => TensorViewMut::Bool(tensor.as_view_mut()),
-            Tensor::C32(tensor) => TensorViewMut::C32(tensor.as_view_mut()),
-            Tensor::C64(tensor) => TensorViewMut::C64(tensor.as_view_mut()),
-            // Handled by the outer arm before the typed write-view dispatch.
-            Tensor::External(..) => unreachable!("handled before the typed write view"),
+        TensorWrite::Tensor(tensor) => match tensor.dtype() {
+            DType::F32 => TensorViewMut::F32(write_view_operand::<f32>(tensor).as_view_mut()),
+            DType::F64 => TensorViewMut::F64(write_view_operand::<f64>(tensor).as_view_mut()),
+            DType::I32 => TensorViewMut::I32(write_view_operand::<i32>(tensor).as_view_mut()),
+            DType::I64 => TensorViewMut::I64(write_view_operand::<i64>(tensor).as_view_mut()),
+            DType::Bool => TensorViewMut::Bool(write_view_operand::<bool>(tensor).as_view_mut()),
+            DType::C32 => TensorViewMut::C32(write_view_operand::<Complex32>(tensor).as_view_mut()),
+            DType::C64 => TensorViewMut::C64(write_view_operand::<Complex64>(tensor).as_view_mut()),
+            // INVARIANT: linalg rejects an externally defined dtype before adapting a
+            // write target, and `TensorViewMut` has no externally defined variant.
+            DType::External(_) => unreachable!("linalg validates its input dtypes first"),
         },
         TensorWrite::View(view) => view,
     }
+}
+
+/// The typed write target behind a tensor, or the unwind site this module documents.
+///
+/// INVARIANT: linalg rejects a dtype it cannot adapt before it borrows a write target, and
+/// `TensorViewMut` has no externally defined variant, so this cannot be reached.
+fn write_view_operand<T: TensorScalar>(tensor: &mut Tensor) -> &mut TypedTensor<T> {
+    tensor
+        .as_typed_mut::<T>()
+        .unwrap_or_else(|| unreachable!("linalg validates its input dtypes first"))
 }
 
 fn cholesky_entered(
