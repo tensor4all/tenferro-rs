@@ -148,23 +148,45 @@ macro_rules! dispatch_tensor_view_unary_result {
 }
 
 macro_rules! dispatch_tensor_unary_with_bool_special_result {
-    ($input:expr, |$tensor:ident| $body:expr, bool |$bool_tensor:ident| $bool_body:expr) => {
-        match $input {
-            Tensor::F32($tensor) => Ok(Tensor::F32($body?)),
-            Tensor::F64($tensor) => Ok(Tensor::F64($body?)),
-            Tensor::I32($tensor) => Ok(Tensor::I32($body?)),
-            Tensor::I64($tensor) => Ok(Tensor::I64($body?)),
-            Tensor::Bool($bool_tensor) => Ok(Tensor::Bool($bool_body?)),
-            Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
-            Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
+    ($input:expr, |$tensor:ident| $body:expr, bool |$bool_tensor:ident| $bool_body:expr) => {{
+        let input = $input;
+        match input.dtype() {
+            DType::Bool => {
+                let $bool_tensor = structural_operand::<bool>(input)?;
+                Ok(Tensor::from_typed::<bool>($bool_body?))
+            }
+            DType::F32 => {
+                let $tensor = structural_operand::<f32>(input)?;
+                Ok(Tensor::from_typed::<f32>($body?))
+            }
+            DType::F64 => {
+                let $tensor = structural_operand::<f64>(input)?;
+                Ok(Tensor::from_typed::<f64>($body?))
+            }
+            DType::I32 => {
+                let $tensor = structural_operand::<i32>(input)?;
+                Ok(Tensor::from_typed::<i32>($body?))
+            }
+            DType::I64 => {
+                let $tensor = structural_operand::<i64>(input)?;
+                Ok(Tensor::from_typed::<i64>($body?))
+            }
+            DType::C32 => {
+                let $tensor = structural_operand::<Complex32>(input)?;
+                Ok(Tensor::from_typed::<Complex32>($body?))
+            }
+            DType::C64 => {
+                let $tensor = structural_operand::<Complex64>(input)?;
+                Ok(Tensor::from_typed::<Complex64>($body?))
+            }
             // A caller-owned payload has no CPU implementation for this operation.
-            Tensor::External(payload, _) => Err(crate::Error::unsupported_dtype(
+            DType::External(type_id) => Err(crate::Error::unsupported_dtype(
                 "structural",
-                tenferro_tensor::DType::External(payload.element_type_id()),
+                DType::External(type_id),
                 "an externally defined payload is not supported by this CPU operation",
             )),
         }
-    };
+    }};
 }
 
 fn host_view<'a, T: Copy + TensorScalar>(

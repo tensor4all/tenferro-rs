@@ -1155,8 +1155,14 @@ macro_rules! dispatch_binary_float_complex_int {
             $crate::cubecl::op_descriptor::GpuLaunchKind::BinaryFloatComplexInt,
         )?;
         let op = descriptor.name;
-        match ($lhs, $rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
+        match ($lhs.dtype(), $rhs.dtype()) {
+            (DType::F32, DType::F32) => {
+                let lhs = $lhs.as_typed::<f32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<f32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1167,7 +1173,13 @@ macro_rules! dispatch_binary_float_complex_int {
                     F32
                 )
             }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
+            (DType::F64, DType::F64) => {
+                let lhs = $lhs.as_typed::<f64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<f64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1178,7 +1190,13 @@ macro_rules! dispatch_binary_float_complex_int {
                     F64
                 )
             }
-            (Tensor::I32(lhs), Tensor::I32(rhs)) => {
+            (DType::I32, DType::I32) => {
+                let lhs = $lhs.as_typed::<i32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<i32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1189,7 +1207,13 @@ macro_rules! dispatch_binary_float_complex_int {
                     I32
                 )
             }
-            (Tensor::I64(lhs), Tensor::I64(rhs)) => {
+            (DType::I64, DType::I64) => {
+                let lhs = $lhs.as_typed::<i64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<i64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1200,7 +1224,13 @@ macro_rules! dispatch_binary_float_complex_int {
                     I64
                 )
             }
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => {
+            (DType::C32, DType::C32) => {
+                let lhs = $lhs.as_typed::<Complex32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<Complex32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1211,7 +1241,13 @@ macro_rules! dispatch_binary_float_complex_int {
                     C32
                 )
             }
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => {
+            (DType::C64, DType::C64) => {
+                let lhs = $lhs.as_typed::<Complex64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<Complex64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1234,8 +1270,14 @@ macro_rules! dispatch_binary_float_int {
             $crate::cubecl::op_descriptor::GpuLaunchKind::BinaryFloatInt,
         )?;
         let op = descriptor.name;
-        match ($lhs, $rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
+        match ($lhs.dtype(), $rhs.dtype()) {
+            (DType::F32, DType::F32) => {
+                let lhs = $lhs.as_typed::<f32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<f32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1246,7 +1288,13 @@ macro_rules! dispatch_binary_float_int {
                     F32
                 )
             }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
+            (DType::F64, DType::F64) => {
+                let lhs = $lhs.as_typed::<f64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<f64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1257,7 +1305,13 @@ macro_rules! dispatch_binary_float_int {
                     F64
                 )
             }
-            (Tensor::I32(lhs), Tensor::I32(rhs)) => {
+            (DType::I32, DType::I32) => {
+                let lhs = $lhs.as_typed::<i32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<i32>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1268,7 +1322,13 @@ macro_rules! dispatch_binary_float_int {
                     I32
                 )
             }
-            (Tensor::I64(lhs), Tensor::I64(rhs)) => {
+            (DType::I64, DType::I64) => {
+                let lhs = $lhs.as_typed::<i64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
+                let rhs = $rhs.as_typed::<i64>().ok_or_else(|| {
+                    crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
+                })?;
                 $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
                     $backend,
                     lhs,
@@ -1279,7 +1339,7 @@ macro_rules! dispatch_binary_float_int {
                     I64
                 )
             }
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
+            (DType::C32, DType::C32) | (DType::C64, DType::C64) => {
                 Err($crate::cubecl::unsupported_dtype(op, $lhs.dtype()))
             }
             _ => Err(dtype_mismatch(op, $lhs, $rhs)),
