@@ -940,27 +940,53 @@ enum CpuReadView<'a> {
     C64(TypedTensorView<'a, Complex<f64>>),
 }
 
-fn read_as_cpu_view(input: TensorRead<'_>) -> CpuReadView<'_> {
+/// The typed tensor behind `input`, or this module's refusal when the dtype is a caller-owned payload.
+///
+/// The read view has no externally defined variant, so a payload the caller owns is reported instead of
+/// being unwrapped.
+fn read_typed<'a, T: tenferro_tensor::TensorScalar>(
+    input: &'a Tensor,
+) -> crate::Result<TypedTensorView<'a, T>> {
+    let dtype = input.dtype();
+    input
+        .as_typed::<T>()
+        .map(|tensor| tensor.as_view())
+        .ok_or_else(|| {
+            crate::Error::unsupported_dtype(
+                "read_as_cpu_view",
+                dtype,
+                "the CPU read view covers the preset scalars",
+            )
+        })
+}
+
+fn read_as_cpu_view(input: TensorRead<'_>) -> crate::Result<CpuReadView<'_>> {
     match input {
-        TensorRead::Tensor(Tensor::F32(tensor)) => CpuReadView::F32(tensor.as_view()),
-        TensorRead::Tensor(Tensor::F64(tensor)) => CpuReadView::F64(tensor.as_view()),
-        TensorRead::Tensor(Tensor::I32(tensor)) => CpuReadView::I32(tensor.as_view()),
-        TensorRead::Tensor(Tensor::I64(tensor)) => CpuReadView::I64(tensor.as_view()),
-        TensorRead::Tensor(Tensor::Bool(tensor)) => CpuReadView::Bool(tensor.as_view()),
-        TensorRead::Tensor(Tensor::C32(tensor)) => CpuReadView::C32(tensor.as_view()),
-        TensorRead::Tensor(Tensor::C64(tensor)) => CpuReadView::C64(tensor.as_view()),
-        // INVARIANT: callers reject an unsupported dtype before adapting a read
-        // target, and `CpuReadView` has no externally defined variant.
-        TensorRead::Tensor(Tensor::External(..)) => {
-            unreachable!("the CPU read view covers the preset scalars")
-        }
-        TensorRead::View(TensorView::F32(view)) => CpuReadView::F32(view),
-        TensorRead::View(TensorView::F64(view)) => CpuReadView::F64(view),
-        TensorRead::View(TensorView::I32(view)) => CpuReadView::I32(view),
-        TensorRead::View(TensorView::I64(view)) => CpuReadView::I64(view),
-        TensorRead::View(TensorView::Bool(view)) => CpuReadView::Bool(view),
-        TensorRead::View(TensorView::C32(view)) => CpuReadView::C32(view),
-        TensorRead::View(TensorView::C64(view)) => CpuReadView::C64(view),
+        TensorRead::Tensor(tensor) => match tensor.dtype() {
+            DType::F32 => Ok(CpuReadView::F32(read_typed::<f32>(tensor)?)),
+            DType::F64 => Ok(CpuReadView::F64(read_typed::<f64>(tensor)?)),
+            DType::I32 => Ok(CpuReadView::I32(read_typed::<i32>(tensor)?)),
+            DType::I64 => Ok(CpuReadView::I64(read_typed::<i64>(tensor)?)),
+            DType::Bool => Ok(CpuReadView::Bool(read_typed::<bool>(tensor)?)),
+            DType::C32 => Ok(CpuReadView::C32(read_typed::<tenferro_tensor::Complex32>(
+                tensor,
+            )?)),
+            DType::C64 => Ok(CpuReadView::C64(read_typed::<tenferro_tensor::Complex64>(
+                tensor,
+            )?)),
+            DType::External(..) => Err(crate::Error::unsupported_dtype(
+                "read_as_cpu_view",
+                tensor.dtype(),
+                "the CPU read view covers the preset scalars",
+            )),
+        },
+        TensorRead::View(TensorView::F32(view)) => Ok(CpuReadView::F32(view)),
+        TensorRead::View(TensorView::F64(view)) => Ok(CpuReadView::F64(view)),
+        TensorRead::View(TensorView::I32(view)) => Ok(CpuReadView::I32(view)),
+        TensorRead::View(TensorView::I64(view)) => Ok(CpuReadView::I64(view)),
+        TensorRead::View(TensorView::Bool(view)) => Ok(CpuReadView::Bool(view)),
+        TensorRead::View(TensorView::C32(view)) => Ok(CpuReadView::C32(view)),
+        TensorRead::View(TensorView::C64(view)) => Ok(CpuReadView::C64(view)),
     }
 }
 
@@ -1885,8 +1911,8 @@ pub fn broadcast_multiply_read_with_pool(
     rhs_shape: &[usize],
     rhs_dims: &[usize],
 ) -> crate::Result<Option<Tensor>> {
-    let lhs = read_as_cpu_view(lhs);
-    let rhs = read_as_cpu_view(rhs);
+    let lhs = read_as_cpu_view(lhs)?;
+    let rhs = read_as_cpu_view(rhs)?;
 
     macro_rules! dispatch {
         ($variant:ident, $lhs:expr, $rhs:expr, $mul:expr) => {{
@@ -1951,8 +1977,8 @@ pub fn broadcast_multiply_value_with_pool_and_tag(
     rhs_dims: &[usize],
     mut tag_output: impl FnMut(&mut Tensor),
 ) -> crate::Result<Option<TensorValue>> {
-    let lhs_view = read_as_cpu_view(lhs.clone());
-    let rhs_view = read_as_cpu_view(rhs.clone());
+    let lhs_view = read_as_cpu_view(lhs.clone())?;
+    let rhs_view = read_as_cpu_view(rhs.clone())?;
 
     macro_rules! dispatch_lazy {
         ($variant:ident, $lhs:expr, $rhs:expr) => {{
@@ -2130,7 +2156,7 @@ pub fn div_read_with_pool(
 ) -> crate::Result<Tensor> {
     let lhs_dtype = lhs.dtype();
     let rhs_dtype = rhs.dtype();
-    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+    match (read_as_cpu_view(lhs)?, read_as_cpu_view(rhs)?) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::from_typed::<f32>(
             typed_binary_view_with_pool("div", buffers, &a, &b, Div::div)?,
         )),
@@ -2243,7 +2269,7 @@ pub fn rem_read_with_pool(
 ) -> crate::Result<Tensor> {
     let lhs_dtype = lhs.dtype();
     let rhs_dtype = rhs.dtype();
-    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+    match (read_as_cpu_view(lhs)?, read_as_cpu_view(rhs)?) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::from_typed::<f32>(
             typed_binary_view_with_pool("rem", buffers, &a, &b, StdRem::rem)?,
         )),
@@ -2333,7 +2359,7 @@ pub fn neg_read_with_pool(
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     let dtype = input.dtype();
-    match read_as_cpu_view(input) {
+    match read_as_cpu_view(input)? {
         CpuReadView::F32(t) => Ok(Tensor::from_typed::<f32>(typed_unary_view_with_pool(
             "neg",
             buffers,
@@ -2435,7 +2461,7 @@ pub fn conj_read_with_pool(
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     let dtype = input.dtype();
-    match read_as_cpu_view(input) {
+    match read_as_cpu_view(input)? {
         CpuReadView::F32(t) => Ok(Tensor::from_typed::<f32>(typed_unary_view_with_pool(
             "conj",
             buffers,
@@ -2533,7 +2559,7 @@ pub fn abs_read_with_pool(
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     let dtype = input.dtype();
-    match read_as_cpu_view(input) {
+    match read_as_cpu_view(input)? {
         CpuReadView::F32(t) => Ok(Tensor::from_typed::<f32>(typed_unary_view_with_pool(
             "abs",
             buffers,
@@ -2646,7 +2672,7 @@ pub fn sign_read_with_pool(
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     let dtype = input.dtype();
-    match read_as_cpu_view(input) {
+    match read_as_cpu_view(input)? {
         CpuReadView::F32(t) => Ok(Tensor::from_typed::<f32>(typed_unary_view_with_pool(
             "sign",
             buffers,
@@ -2749,7 +2775,7 @@ pub fn maximum_read_with_pool(
     let rhs_dtype = rhs.dtype();
     reject_complex_ordered_dtypes("maximum", &[lhs_dtype, rhs_dtype])?;
 
-    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+    match (read_as_cpu_view(lhs)?, read_as_cpu_view(rhs)?) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::from_typed::<f32>(
             typed_same_shape_binary_view_with_pool(
                 "maximum",
@@ -2853,7 +2879,7 @@ pub fn minimum_read_with_pool(
     let rhs_dtype = rhs.dtype();
     reject_complex_ordered_dtypes("minimum", &[lhs_dtype, rhs_dtype])?;
 
-    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+    match (read_as_cpu_view(lhs)?, read_as_cpu_view(rhs)?) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::from_typed::<f32>(
             typed_same_shape_binary_view_with_pool(
                 "minimum",
@@ -2995,7 +3021,7 @@ pub fn compare_read_with_pool(
     let rhs_dtype = rhs.dtype();
     reject_complex_unsupported_compare_dtypes(dir, &[lhs_dtype, rhs_dtype])?;
 
-    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+    match (read_as_cpu_view(lhs)?, read_as_cpu_view(rhs)?) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::from_typed::<bool>(
             typed_ordered_compare_view_with_pool(buffers, &a, &b, dir)?,
         )),
@@ -3163,9 +3189,9 @@ pub fn select_read_with_pool(
     let true_dtype = on_true.dtype();
     let false_dtype = on_false.dtype();
     match (
-        read_as_cpu_view(pred),
-        read_as_cpu_view(on_true),
-        read_as_cpu_view(on_false),
+        read_as_cpu_view(pred)?,
+        read_as_cpu_view(on_true)?,
+        read_as_cpu_view(on_false)?,
     ) {
         (CpuReadView::Bool(p), CpuReadView::F32(t), CpuReadView::F32(f)) => Ok(
             Tensor::from_typed::<f32>(typed_select_view_with_pool(buffers, &p, &t, &f)?),
@@ -3249,9 +3275,9 @@ pub fn clamp_read_with_pool(
     reject_complex_ordered_dtypes("clamp", &[input_dtype, lower_dtype, upper_dtype])?;
 
     match (
-        read_as_cpu_view(input),
-        read_as_cpu_view(lower),
-        read_as_cpu_view(upper),
+        read_as_cpu_view(input)?,
+        read_as_cpu_view(lower)?,
+        read_as_cpu_view(upper)?,
     ) {
         (CpuReadView::F32(input), CpuReadView::F32(lower), CpuReadView::F32(upper)) => Ok(
             Tensor::from_typed::<f32>(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),

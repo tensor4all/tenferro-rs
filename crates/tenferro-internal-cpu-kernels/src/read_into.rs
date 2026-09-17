@@ -67,21 +67,57 @@ fn one_shot_eligible(
         })
 }
 
-fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {
+/// The typed tensor behind `tensor`, or this module's refusal when the dtype is a caller-owned payload.
+///
+/// The write view has no externally defined variant, so a payload the caller owns is reported instead of
+/// being unwrapped.
+fn write_typed<T: tenferro_tensor::TensorScalar>(
+    tensor: &mut Tensor,
+) -> crate::Result<&mut tenferro_tensor::TypedTensor<T>> {
+    let dtype = tensor.dtype();
+    tensor.as_typed_mut::<T>().ok_or_else(|| {
+        crate::Error::unsupported_dtype(
+            "tensor_write_view",
+            dtype,
+            "the write view covers the preset scalars",
+        )
+    })
+}
+
+fn tensor_write_view(out: TensorWrite<'_>) -> crate::Result<TensorViewMut<'_>> {
     match out {
-        TensorWrite::Tensor(tensor) => match tensor {
-            Tensor::F32(tensor) => TensorViewMut::F32(tensor.as_view_mut()),
-            Tensor::F64(tensor) => TensorViewMut::F64(tensor.as_view_mut()),
-            Tensor::I32(tensor) => TensorViewMut::I32(tensor.as_view_mut()),
-            Tensor::I64(tensor) => TensorViewMut::I64(tensor.as_view_mut()),
-            Tensor::Bool(tensor) => TensorViewMut::Bool(tensor.as_view_mut()),
-            Tensor::C32(tensor) => TensorViewMut::C32(tensor.as_view_mut()),
-            Tensor::C64(tensor) => TensorViewMut::C64(tensor.as_view_mut()),
-            // INVARIANT: callers reject an unsupported dtype before adapting a write
-            // target, and `TensorViewMut` has no externally defined variant.
-            Tensor::External(..) => unreachable!("the write view covers the preset scalars"),
-        },
-        TensorWrite::View(view) => view,
+        TensorWrite::Tensor(tensor) => {
+            let dtype = tensor.dtype();
+            match dtype {
+                DType::F32 => Ok(TensorViewMut::F32(
+                    write_typed::<f32>(tensor)?.as_view_mut(),
+                )),
+                DType::F64 => Ok(TensorViewMut::F64(
+                    write_typed::<f64>(tensor)?.as_view_mut(),
+                )),
+                DType::I32 => Ok(TensorViewMut::I32(
+                    write_typed::<i32>(tensor)?.as_view_mut(),
+                )),
+                DType::I64 => Ok(TensorViewMut::I64(
+                    write_typed::<i64>(tensor)?.as_view_mut(),
+                )),
+                DType::Bool => Ok(TensorViewMut::Bool(
+                    write_typed::<bool>(tensor)?.as_view_mut(),
+                )),
+                DType::C32 => Ok(TensorViewMut::C32(
+                    write_typed::<tenferro_tensor::Complex32>(tensor)?.as_view_mut(),
+                )),
+                DType::C64 => Ok(TensorViewMut::C64(
+                    write_typed::<tenferro_tensor::Complex64>(tensor)?.as_view_mut(),
+                )),
+                DType::External(..) => Err(crate::Error::unsupported_dtype(
+                    "tensor_write_view",
+                    dtype,
+                    "the write view covers the preset scalars",
+                )),
+            }
+        }
+        TensorWrite::View(view) => Ok(view),
     }
 }
 
@@ -215,7 +251,7 @@ fn execute_one_shot_elementwise(
     out: TensorWrite<'_>,
     ctx: &ExecContext,
 ) -> crate::Result<()> {
-    let out = tensor_write_view(out);
+    let out = tensor_write_view(out)?;
     macro_rules! dispatch_map {
         ($map_op:expr) => {{
             let input = inputs[0].clone().tensor_view();

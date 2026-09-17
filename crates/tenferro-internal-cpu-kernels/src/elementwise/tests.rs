@@ -697,31 +697,45 @@ fn read_as_cpu_view_covers_tensor_and_view_variants() {
         TypedTensor::from_vec_col_major(vec![2], vec![c64(1.0, 0.0), c64(0.0, 1.0)]).unwrap(),
     );
 
-    match read_as_cpu_view(TensorRead::from_tensor(&f32_tensor)) {
+    match read_as_cpu_view(TensorRead::from_tensor(&f32_tensor))
+        .expect("tests exercise preset scalars")
+    {
         CpuReadView::F32(view) => assert_eq!(view.shape(), &[2]),
         _ => panic!("expected f32 tensor read view"),
     }
-    match read_as_cpu_view(TensorRead::from_tensor(&f64_tensor)) {
+    match read_as_cpu_view(TensorRead::from_tensor(&f64_tensor))
+        .expect("tests exercise preset scalars")
+    {
         CpuReadView::F64(view) => assert_eq!(view.shape(), &[2]),
         _ => panic!("expected f64 tensor read view"),
     }
-    match read_as_cpu_view(TensorRead::from_tensor(&i32_tensor)) {
+    match read_as_cpu_view(TensorRead::from_tensor(&i32_tensor))
+        .expect("tests exercise preset scalars")
+    {
         CpuReadView::I32(view) => assert_eq!(view.shape(), &[2]),
         _ => panic!("expected i32 tensor read view"),
     }
-    match read_as_cpu_view(TensorRead::from_tensor(&i64_tensor)) {
+    match read_as_cpu_view(TensorRead::from_tensor(&i64_tensor))
+        .expect("tests exercise preset scalars")
+    {
         CpuReadView::I64(view) => assert_eq!(view.shape(), &[2]),
         _ => panic!("expected i64 tensor read view"),
     }
-    match read_as_cpu_view(TensorRead::from_tensor(&bool_tensor)) {
+    match read_as_cpu_view(TensorRead::from_tensor(&bool_tensor))
+        .expect("tests exercise preset scalars")
+    {
         CpuReadView::Bool(view) => assert_eq!(view.shape(), &[2]),
         _ => panic!("expected bool tensor read view"),
     }
-    match read_as_cpu_view(TensorRead::from_tensor(&c32_tensor)) {
+    match read_as_cpu_view(TensorRead::from_tensor(&c32_tensor))
+        .expect("tests exercise preset scalars")
+    {
         CpuReadView::C32(view) => assert_eq!(view.shape(), &[2]),
         _ => panic!("expected c32 tensor read view"),
     }
-    match read_as_cpu_view(TensorRead::from_tensor(&c64_tensor)) {
+    match read_as_cpu_view(TensorRead::from_tensor(&c64_tensor))
+        .expect("tests exercise preset scalars")
+    {
         CpuReadView::C64(view) => assert_eq!(view.shape(), &[2]),
         _ => panic!("expected c64 tensor read view"),
     }
@@ -738,43 +752,57 @@ fn read_as_cpu_view_covers_tensor_and_view_variants() {
 
     match read_as_cpu_view(TensorRead::from_view(TensorView::F32(
         f32_view_source.as_view(),
-    ))) {
+    )))
+    .expect("tests exercise preset scalars")
+    {
         CpuReadView::F32(view) => assert_eq!(view.shape(), &[1]),
         _ => panic!("expected f32 borrowed read view"),
     }
     match read_as_cpu_view(TensorRead::from_view(TensorView::F64(
         f64_view_source.as_view(),
-    ))) {
+    )))
+    .expect("tests exercise preset scalars")
+    {
         CpuReadView::F64(view) => assert_eq!(view.shape(), &[1]),
         _ => panic!("expected f64 borrowed read view"),
     }
     match read_as_cpu_view(TensorRead::from_view(TensorView::I32(
         i32_view_source.as_view(),
-    ))) {
+    )))
+    .expect("tests exercise preset scalars")
+    {
         CpuReadView::I32(view) => assert_eq!(view.shape(), &[1]),
         _ => panic!("expected i32 borrowed read view"),
     }
     match read_as_cpu_view(TensorRead::from_view(TensorView::I64(
         i64_view_source.as_view(),
-    ))) {
+    )))
+    .expect("tests exercise preset scalars")
+    {
         CpuReadView::I64(view) => assert_eq!(view.shape(), &[1]),
         _ => panic!("expected i64 borrowed read view"),
     }
     match read_as_cpu_view(TensorRead::from_view(TensorView::Bool(
         bool_view_source.as_view(),
-    ))) {
+    )))
+    .expect("tests exercise preset scalars")
+    {
         CpuReadView::Bool(view) => assert_eq!(view.shape(), &[1]),
         _ => panic!("expected bool borrowed read view"),
     }
     match read_as_cpu_view(TensorRead::from_view(TensorView::C32(
         c32_view_source.as_view(),
-    ))) {
+    )))
+    .expect("tests exercise preset scalars")
+    {
         CpuReadView::C32(view) => assert_eq!(view.shape(), &[1]),
         _ => panic!("expected c32 borrowed read view"),
     }
     match read_as_cpu_view(TensorRead::from_view(TensorView::C64(
         c64_view_source.as_view(),
-    ))) {
+    )))
+    .expect("tests exercise preset scalars")
+    {
         CpuReadView::C64(view) => assert_eq!(view.shape(), &[1]),
         _ => panic!("expected c64 borrowed read view"),
     }

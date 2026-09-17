@@ -55,18 +55,18 @@ impl<'a> TensorValue<'a> {
         }
     }
 
-    fn borrowed_tensor_view(&self) -> Option<TensorView<'a>> {
+    fn borrowed_tensor_view(&self) -> Result<Option<TensorView<'a>>> {
         match self {
-            Self::Borrowed(tensor) => Some(tensor_as_view(tensor)),
-            Self::View(view) => Some(view.clone()),
-            Self::Owned(_) => None,
+            Self::Borrowed(tensor) => tensor_as_view(tensor).map(Some),
+            Self::View(view) => Ok(Some(view.clone())),
+            Self::Owned(_) => Ok(None),
         }
     }
 
-    fn tensor_view(&self) -> TensorView<'_> {
+    fn tensor_view(&self) -> Result<TensorView<'_>> {
         match self {
             Self::Borrowed(tensor) => tensor_as_view(tensor),
-            Self::View(view) => view.clone(),
+            Self::View(view) => Ok(view.clone()),
             Self::Owned(tensor) => tensor_as_view(tensor),
         }
     }
@@ -78,18 +78,45 @@ impl<'a> TensorValue<'a> {
     }
 }
 
-fn tensor_as_view(tensor: &Tensor) -> TensorView<'_> {
-    match tensor {
-        // INVARIANT: einsum rejects an externally defined dtype before it borrows
-        // a runtime view, and `TensorView` has no externally defined variant.
-        Tensor::External(..) => unreachable!("einsum validates its input dtypes first"),
-        Tensor::F32(tensor) => TensorView::F32(tensor.as_view()),
-        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
-        Tensor::I32(tensor) => TensorView::I32(tensor.as_view()),
-        Tensor::I64(tensor) => TensorView::I64(tensor.as_view()),
-        Tensor::Bool(tensor) => TensorView::Bool(tensor.as_view()),
-        Tensor::C32(tensor) => TensorView::C32(tensor.as_view()),
-        Tensor::C64(tensor) => TensorView::C64(tensor.as_view()),
+/// The typed view behind `tensor`, or einsum's refusal for a dtype it cannot borrow.
+///
+/// [`TensorView`] has no externally defined variant, so a caller-owned payload is reported instead of
+/// being unwrapped.
+fn typed_view<'a, T: tenferro_tensor::TensorScalar>(
+    tensor: &'a Tensor,
+    dtype: tenferro_tensor::DType,
+) -> Result<TypedTensorView<'a, T>> {
+    tensor
+        .as_typed::<T>()
+        .map(|tensor| tensor.as_view())
+        .ok_or_else(|| {
+            Error::unsupported_dtype(
+                "tensor_as_view",
+                dtype,
+                "einsum takes preset scalars only; an externally defined scalar is not supported",
+            )
+        })
+}
+
+fn tensor_as_view(tensor: &Tensor) -> Result<TensorView<'_>> {
+    let dtype = tensor.dtype();
+    match dtype {
+        tenferro_tensor::DType::F32 => Ok(TensorView::F32(typed_view::<f32>(tensor, dtype)?)),
+        tenferro_tensor::DType::F64 => Ok(TensorView::F64(typed_view::<f64>(tensor, dtype)?)),
+        tenferro_tensor::DType::I32 => Ok(TensorView::I32(typed_view::<i32>(tensor, dtype)?)),
+        tenferro_tensor::DType::I64 => Ok(TensorView::I64(typed_view::<i64>(tensor, dtype)?)),
+        tenferro_tensor::DType::Bool => Ok(TensorView::Bool(typed_view::<bool>(tensor, dtype)?)),
+        tenferro_tensor::DType::C32 => Ok(TensorView::C32(
+            typed_view::<tenferro_tensor::Complex32>(tensor, dtype)?,
+        )),
+        tenferro_tensor::DType::C64 => Ok(TensorView::C64(
+            typed_view::<tenferro_tensor::Complex64>(tensor, dtype)?,
+        )),
+        tenferro_tensor::DType::External(..) => Err(Error::unsupported_dtype(
+            "tensor_as_view",
+            dtype,
+            "einsum takes preset scalars only; an externally defined scalar is not supported",
+        )),
     }
 }
 
@@ -180,7 +207,10 @@ fn try_broadcast_tensor_read<'a>(
     shape: &[usize],
     dims: &[usize],
 ) -> Option<Result<TensorRead<'a>>> {
-    let view = value.tensor_view();
+    let view = match value.tensor_view() {
+        Ok(view) => view,
+        Err(error) => return Some(Err(error)),
+    };
     if tensor_view_has_backend_buffer(&view) {
         return None;
     }
@@ -354,7 +384,7 @@ fn broadcast_to_tree_sizes<'a>(
         return Ok(operand);
     }
     let dims: Vec<usize> = (0..operand.labels.len()).collect();
-    if let Some(view) = operand.tensor.borrowed_tensor_view() {
+    if let Some(view) = operand.tensor.borrowed_tensor_view()? {
         if !tensor_view_has_backend_buffer(&view) {
             let view = broadcast_tensor_view(view, &target_shape, &dims)?;
             return Ok(LabeledTensor {

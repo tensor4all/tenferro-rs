@@ -155,14 +155,14 @@ pub(crate) fn execute_in_place(
     }
     let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
     session.with_linalg_pool(|context, _| match input.dtype() {
-        DType::C64 => in_place_typed(
-            fft_operand::<Complex<f64>>(input, "fft_in_place", "C32 or C64")?,
+        tenferro_tensor::DType::C64 => in_place_typed(
+            in_place_operand::<f64>(&mut *input)?,
             spec,
             &mut plans,
             context.native_thread_count(),
         ),
-        DType::C32 => in_place_typed(
-            fft_operand::<Complex<f32>>(input, "fft_in_place", "C32 or C64")?,
+        tenferro_tensor::DType::C32 => in_place_typed(
+            in_place_operand::<f32>(&mut *input)?,
             spec,
             &mut plans,
             context.native_thread_count(),
@@ -173,6 +173,23 @@ pub(crate) fn execute_in_place(
             "C32 or C64",
         )),
     })
+}
+
+/// The typed tensor behind an in-place FFT operand, which the plan writes through.
+///
+/// The arms that call this match on the payload's dtype first, so the refusal reports a dtype the plan
+/// cannot write rather than a caller mistake.
+#[cfg(feature = "autodiff")]
+fn in_place_operand<T: tenferro_tensor::TensorScalar>(
+    input: &mut Tensor,
+) -> tenferro_tensor::Result<&mut TypedTensor<Complex<T>>>
+where
+    Complex<T>: tenferro_tensor::TensorScalar,
+{
+    let dtype = input.dtype();
+    input
+        .as_typed_mut::<Complex<T>>()
+        .ok_or_else(|| crate::tensor_unsupported_dtype("fft_in_place", dtype, "C32 or C64"))
 }
 
 #[cfg(feature = "autodiff")]

@@ -1331,7 +1331,7 @@ What remains splits into three groups, measured on this head:
 | Group | Count | In the objective's end state? |
 | --- | --- | --- |
 | `Tensor` variant constructions | 1290, in 58 files | Yes — they must all produce the single payload |
-| `Tensor` variant pattern arms | 197, in 58 files | Yes — the two seams and one deliberate exception |
+| `Tensor` variant pattern arms | 197, in 58 files | Yes — the enum definition alone |
 | view, read, and write type arms | 236 | No: the end state names the seven `Tensor` variants, and these are different types |
 
 The third row is not a work item. No typed accessor exists on those types — `as_typed`, `as_typed_mut`,
@@ -1607,8 +1607,8 @@ bound in the order they expect.
 The goal requires the storage, runtime metadata and IR, cache identity, and the C API, XLA, and
 serialization boundaries to carry explicit conversion-or-rejection decisions rather than a blanket
 `unreachable!` on a path a caller can reach. Sweeping the final head for panic-shaped paths that
-could meet an externally defined value finds four `unreachable!` sites, and each one is justified
-rather than assumed:
+could meet an externally defined value finds three `unreachable!` sites, all of the same kind, and
+each one is justified rather than assumed:
 
 - `tenferro-cpu/src/indexing.rs`, `tenferro-cpu/src/reduction.rs`, and
   `tenferro-cpu-fused/src/lib.rs` call a private `kernel_dtype` with `T::dtype()` inside functions
@@ -1617,11 +1617,13 @@ rather than assumed:
   validation order. The fused path additionally rejects an external dtype explicitly, because
   `dtype_supports_erased_fusion` returns `false` for `DType::External(_)` and its caller checks that
   before reaching `kernel_dtype`.
-- `tenferro-einsum/src/eager.rs` matches a concrete `Tensor`, so its arm is not protected by the
-  sealed trait. It is protected by the surface: the eager entry points take traced values rather
-  than `&Tensor`, and the extension path rejects an externally defined input dtype with a typed
-  error, which `crates/tenferro-einsum/src/extension/tests.rs` executes and the coverage record
-  counts.
+
+The three view adapters that used to match a concrete `Tensor` and assert an external dtype was
+unreachable no longer do so. `tenferro-einsum/src/eager.rs`, `tenferro-internal-cpu-kernels/src/elementwise.rs`,
+and `tenferro-internal-cpu-kernels/src/read_into.rs` now match on the dtype and report
+`Error::UnsupportedDType` for a caller-owned payload, mirroring the refusals the surrounding tables
+already produce, so the panic is gone rather than argued away. Two of them changed their return type to
+carry the refusal, and their callers — one in the same crate and two in `tenferro-einsum` — propagate it.
 
 The other boundaries are explicit rejections rather than assertions: `tenferro-xla`'s lowering
 matches `DType::External(_)` beside the unsupported preset types, the runtime's program builder
