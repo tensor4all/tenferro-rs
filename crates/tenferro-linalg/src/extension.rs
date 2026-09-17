@@ -1065,25 +1065,47 @@ fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::R
     }
     let layout = canonical_svd_gauge_layout(m, k, n, &u_shape[2..])?;
 
-    match (u, vt) {
-        (Tensor::F64(u), Tensor::F64(vt)) => {
+    match (u.dtype(), vt.dtype()) {
+        (tenferro_tensor::DType::F64, tenferro_tensor::DType::F64) => {
+            let (u, vt) = svd_gauge_pair_mut::<f64>(u, vt)?;
             canonicalize_svd_gauge_f64(u.host_data_mut()?, vt.host_data_mut()?, layout)
         }
-        (Tensor::F32(u), Tensor::F32(vt)) => {
+        (tenferro_tensor::DType::F32, tenferro_tensor::DType::F32) => {
+            let (u, vt) = svd_gauge_pair_mut::<f32>(u, vt)?;
             canonicalize_svd_gauge_f32(u.host_data_mut()?, vt.host_data_mut()?, layout)
         }
-        (Tensor::C64(u), Tensor::C64(vt)) => {
+        (tenferro_tensor::DType::C64, tenferro_tensor::DType::C64) => {
+            let (u, vt) = svd_gauge_pair_mut::<Complex64>(u, vt)?;
             canonicalize_svd_gauge_c64(u.host_data_mut()?, vt.host_data_mut()?, layout)
         }
-        (Tensor::C32(u), Tensor::C32(vt)) => {
+        (tenferro_tensor::DType::C32, tenferro_tensor::DType::C32) => {
+            let (u, vt) = svd_gauge_pair_mut::<Complex32>(u, vt)?;
             canonicalize_svd_gauge_c32(u.host_data_mut()?, vt.host_data_mut()?, layout)
         }
-        (u, vt) => Err(Error::dtype_mismatch(
+        (u_dtype, vt_dtype) => Err(Error::dtype_mismatch(
             "tenferro-linalg.svd",
-            u.dtype(),
-            vt.dtype(),
+            u_dtype,
+            vt_dtype,
         )),
     }
+}
+
+/// The typed pair behind a same-dtype pair of mutable tensors, or this module's refusal.
+fn svd_gauge_pair_mut<'a, T: tenferro_tensor::TensorScalar>(
+    u: &'a mut Tensor,
+    vt: &'a mut Tensor,
+) -> tenferro_tensor::Result<(
+    &'a mut tenferro_tensor::TypedTensor<T>,
+    &'a mut tenferro_tensor::TypedTensor<T>,
+)> {
+    let (u_dtype, vt_dtype) = (u.dtype(), vt.dtype());
+    let u_t = u
+        .as_typed_mut::<T>()
+        .ok_or_else(|| Error::dtype_mismatch("tenferro-linalg.svd", u_dtype, vt_dtype))?;
+    let vt_t = vt
+        .as_typed_mut::<T>()
+        .ok_or_else(|| Error::dtype_mismatch("tenferro-linalg.svd", u_dtype, vt_dtype))?;
+    Ok((u_t, vt_t))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -67,10 +67,7 @@ impl FusionElement for f32 {
     const DTYPE: DType = DType::F32;
 
     fn tensor_ref(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
-        match tensor {
-            Tensor::F32(tensor) => Some(tensor),
-            _ => None,
-        }
+        tensor.as_typed::<Self>()
     }
 
     fn supports_op(op: &ElementwiseFusionOp) -> bool {
@@ -102,10 +99,7 @@ impl FusionElement for f64 {
     const DTYPE: DType = DType::F64;
 
     fn tensor_ref(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
-        match tensor {
-            Tensor::F64(tensor) => Some(tensor),
-            _ => None,
-        }
+        tensor.as_typed::<Self>()
     }
 
     fn supports_op(op: &ElementwiseFusionOp) -> bool {
@@ -117,10 +111,7 @@ impl FusionElement for num_complex::Complex32 {
     const DTYPE: DType = DType::C32;
 
     fn tensor_ref(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
-        match tensor {
-            Tensor::C32(tensor) => Some(tensor),
-            _ => None,
-        }
+        tensor.as_typed::<Self>()
     }
 
     fn supports_op(op: &ElementwiseFusionOp) -> bool {
@@ -139,10 +130,7 @@ impl FusionElement for num_complex::Complex64 {
     const DTYPE: DType = DType::C64;
 
     fn tensor_ref(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
-        match tensor {
-            Tensor::C64(tensor) => Some(tensor),
-            _ => None,
-        }
+        tensor.as_typed::<Self>()
     }
 
     fn supports_op(op: &ElementwiseFusionOp) -> bool {
