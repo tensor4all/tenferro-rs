@@ -47,6 +47,11 @@ pub mod core {
     };
 }
 
+// Re-exported so the exported dispatch macros can name them with `$crate` paths.
+pub use num_complex::Complex;
+pub type Complex32 = Complex<f32>;
+pub type Complex64 = Complex<f64>;
+
 pub use tenferro_tensor_core::{
     ErrorKind, IntoRankShape, IntoShapeVec, ShapeMismatch, ShapeVec, SliceSpec, StrideVec,
     TensorRef, ValidationError, ValidationKind,
