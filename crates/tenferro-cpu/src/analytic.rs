@@ -184,15 +184,42 @@ enum AnalyticReadView<'a> {
     C64(TypedTensorView<'a, Complex64>),
 }
 
+/// The typed tensor behind a read adapter's tensor, or the refusal this view reports for one.
+fn analytic_read_operand<T: tenferro_tensor::TensorScalar>(
+    tensor: &Tensor,
+) -> crate::Result<&TypedTensor<T>> {
+    tensor.as_typed::<T>().ok_or_else(|| {
+        crate::Error::unsupported_dtype(
+            "read_as_analytic_view",
+            tensor.dtype(),
+            "an externally defined payload has no analytic read view",
+        )
+    })
+}
+
 fn read_as_analytic_view(input: TensorRead<'_>) -> crate::Result<AnalyticReadView<'_>> {
     Ok(match input {
-        TensorRead::Tensor(Tensor::F32(tensor)) => AnalyticReadView::F32(tensor.as_view()),
-        TensorRead::Tensor(Tensor::F64(tensor)) => AnalyticReadView::F64(tensor.as_view()),
-        TensorRead::Tensor(Tensor::I32(tensor)) => AnalyticReadView::I32(tensor.as_view()),
-        TensorRead::Tensor(Tensor::I64(tensor)) => AnalyticReadView::I64(tensor.as_view()),
-        TensorRead::Tensor(Tensor::Bool(_)) => AnalyticReadView::Bool,
-        TensorRead::Tensor(Tensor::C32(tensor)) => AnalyticReadView::C32(tensor.as_view()),
-        TensorRead::Tensor(Tensor::C64(tensor)) => AnalyticReadView::C64(tensor.as_view()),
+        TensorRead::Tensor(tensor) => match tensor.dtype() {
+            DType::F32 => AnalyticReadView::F32(analytic_read_operand::<f32>(tensor)?.as_view()),
+            DType::F64 => AnalyticReadView::F64(analytic_read_operand::<f64>(tensor)?.as_view()),
+            DType::I32 => AnalyticReadView::I32(analytic_read_operand::<i32>(tensor)?.as_view()),
+            DType::I64 => AnalyticReadView::I64(analytic_read_operand::<i64>(tensor)?.as_view()),
+            DType::C32 => {
+                AnalyticReadView::C32(analytic_read_operand::<Complex32>(tensor)?.as_view())
+            }
+            DType::C64 => {
+                AnalyticReadView::C64(analytic_read_operand::<Complex64>(tensor)?.as_view())
+            }
+            DType::Bool => AnalyticReadView::Bool,
+            // A caller-owned payload has no analytic read view.
+            DType::External(type_id) => {
+                return Err(crate::Error::unsupported_dtype(
+                    "read_as_analytic_view",
+                    DType::External(type_id),
+                    "an externally defined payload has no analytic read view",
+                ));
+            }
+        },
         TensorRead::View(TensorView::F32(view)) => AnalyticReadView::F32(view),
         TensorRead::View(TensorView::F64(view)) => AnalyticReadView::F64(view),
         TensorRead::View(TensorView::I32(view)) => AnalyticReadView::I32(view),
@@ -200,14 +227,6 @@ fn read_as_analytic_view(input: TensorRead<'_>) -> crate::Result<AnalyticReadVie
         TensorRead::View(TensorView::Bool(_)) => AnalyticReadView::Bool,
         TensorRead::View(TensorView::C32(view)) => AnalyticReadView::C32(view),
         TensorRead::View(TensorView::C64(view)) => AnalyticReadView::C64(view),
-        // A caller-owned payload has no analytic read view.
-        TensorRead::Tensor(Tensor::External(payload, _)) => {
-            return Err(crate::Error::unsupported_dtype(
-                "read_as_analytic_view",
-                tenferro_tensor::DType::External(payload.element_type_id()),
-                "an externally defined payload has no analytic read view",
-            ));
-        }
     })
 }
 
@@ -529,31 +548,62 @@ pub(crate) fn pow_with_pool(
     lhs: &Tensor,
     rhs: &Tensor,
 ) -> crate::Result<Tensor> {
-    match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::from_typed::<f32>(typed_pow_with_pool(
-            buffers, a, b,
-        )?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::from_typed::<f64>(typed_pow_with_pool(
-            buffers, a, b,
-        )?)),
-        (Tensor::I32(a), Tensor::I32(b)) => Ok(Tensor::from_typed::<i32>(
-            typed_integer_pow_with_pool(buffers, a, b)?,
-        )),
-        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::from_typed::<i64>(
-            typed_integer_pow_with_pool(buffers, a, b)?,
-        )),
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::from_typed::<Complex32>(
-            typed_pow_with_pool(buffers, a, b)?,
-        )),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::from_typed::<Complex64>(
-            typed_pow_with_pool(buffers, a, b)?,
-        )),
+    match (lhs.dtype(), rhs.dtype()) {
+        (DType::F32, DType::F32) => {
+            let (a, b) = analytic_pair_operands::<f32>(lhs, rhs)?;
+            Ok(Tensor::from_typed::<f32>(typed_pow_with_pool(
+                buffers, a, b,
+            )?))
+        }
+        (DType::F64, DType::F64) => {
+            let (a, b) = analytic_pair_operands::<f64>(lhs, rhs)?;
+            Ok(Tensor::from_typed::<f64>(typed_pow_with_pool(
+                buffers, a, b,
+            )?))
+        }
+        (DType::I32, DType::I32) => {
+            let (a, b) = analytic_pair_operands::<i32>(lhs, rhs)?;
+            Ok(Tensor::from_typed::<i32>(typed_integer_pow_with_pool(
+                buffers, a, b,
+            )?))
+        }
+        (DType::I64, DType::I64) => {
+            let (a, b) = analytic_pair_operands::<i64>(lhs, rhs)?;
+            Ok(Tensor::from_typed::<i64>(typed_integer_pow_with_pool(
+                buffers, a, b,
+            )?))
+        }
+        (DType::C32, DType::C32) => {
+            let (a, b) = analytic_pair_operands::<Complex32>(lhs, rhs)?;
+            Ok(Tensor::from_typed::<Complex32>(typed_pow_with_pool(
+                buffers, a, b,
+            )?))
+        }
+        (DType::C64, DType::C64) => {
+            let (a, b) = analytic_pair_operands::<Complex64>(lhs, rhs)?;
+            Ok(Tensor::from_typed::<Complex64>(typed_pow_with_pool(
+                buffers, a, b,
+            )?))
+        }
         _ => Err(crate::Error::dtype_mismatch(
             "pow",
             lhs.dtype(),
             rhs.dtype(),
         )),
     }
+}
+/// The typed operands behind a same-dtype pair, or the refusal a mismatched pair reports.
+fn analytic_pair_operands<'a, T: tenferro_tensor::TensorScalar>(
+    lhs: &'a Tensor,
+    rhs: &'a Tensor,
+) -> crate::Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let a = lhs
+        .as_typed::<T>()
+        .ok_or_else(|| crate::Error::dtype_mismatch("pow", lhs.dtype(), rhs.dtype()))?;
+    let b = rhs
+        .as_typed::<T>()
+        .ok_or_else(|| crate::Error::dtype_mismatch("pow", lhs.dtype(), rhs.dtype()))?;
+    Ok((a, b))
 }
 
 pub(crate) fn pow_read_with_pool(
