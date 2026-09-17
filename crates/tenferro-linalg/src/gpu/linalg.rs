@@ -1027,6 +1027,22 @@ pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -
         Ok(x)
     }
 }
+/// The typed operands behind a prepared LU solve, or this entry point's refusal for one.
+fn lu_solve_operands<'a, T: TensorScalar>(
+    lu: &'a Tensor,
+    pivots: &'a Tensor,
+    rhs: &'a Tensor,
+) -> Result<(&'a TypedTensor<T>, &'a TypedTensor<i32>, &'a TypedTensor<T>)> {
+    let inconsistent = || {
+        Error::Internal(
+            "lu_solve_prepared: packed LU, pivots, and rhs dtypes are inconsistent".into(),
+        )
+    };
+    let lu_t = lu.as_typed::<T>().ok_or_else(inconsistent)?;
+    let pivots_t = pivots.as_typed::<i32>().ok_or_else(inconsistent)?;
+    let rhs_t = rhs.as_typed::<T>().ok_or_else(inconsistent)?;
+    Ok((lu_t, pivots_t, rhs_t))
+}
 
 pub(super) fn lu_solve_prepared(
     backend: &mut CudaExecSession<'_>,
@@ -1065,20 +1081,26 @@ pub(super) fn lu_solve_prepared(
     };
 
     validate_nonsingular_gpu(backend, packed_lu)?;
-    let result = match (packed_lu, pivots, &rhs) {
-        (Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(rhs)) => {
+    let result = match (packed_lu.dtype(), pivots.dtype(), rhs.dtype()) {
+        (DType::F32, DType::I32, DType::F32) => {
+            let (lu, pivots, rhs) = lu_solve_operands::<f32>(packed_lu, pivots, &rhs)?;
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
                 .map(Tensor::from_typed::<f32>)
         }
-        (Tensor::F64(lu), Tensor::I32(pivots), Tensor::F64(rhs)) => {
+        (DType::F64, DType::I32, DType::F64) => {
+            let (lu, pivots, rhs) = lu_solve_operands::<f64>(packed_lu, pivots, &rhs)?;
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
                 .map(Tensor::from_typed::<f64>)
         }
-        (Tensor::C32(lu), Tensor::I32(pivots), Tensor::C32(rhs)) => {
+        (DType::C32, DType::I32, DType::C32) => {
+            let (lu, pivots, rhs) =
+                lu_solve_operands::<num_complex::Complex32>(packed_lu, pivots, &rhs)?;
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
                 .map(Tensor::from_typed::<num_complex::Complex32>)
         }
-        (Tensor::C64(lu), Tensor::I32(pivots), Tensor::C64(rhs)) => {
+        (DType::C64, DType::I32, DType::C64) => {
+            let (lu, pivots, rhs) =
+                lu_solve_operands::<num_complex::Complex64>(packed_lu, pivots, &rhs)?;
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
                 .map(Tensor::from_typed::<num_complex::Complex64>)
         }
