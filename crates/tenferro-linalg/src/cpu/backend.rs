@@ -1229,6 +1229,26 @@ fn qr_import_operands<'a, T: TensorScalar>(
     Ok((q_t, r_t))
 }
 
+/// A triple of borrowed typed operands that share one scalar.
+type TypedOperandTriple<'a, T> = (
+    &'a TypedTensor<T, tenferro_tensor::DynRank>,
+    &'a TypedTensor<T, tenferro_tensor::DynRank>,
+    &'a TypedTensor<T, tenferro_tensor::DynRank>,
+);
+
+/// The typed operands behind a same-dtype triple, or the refusal this entry point reports.
+fn append_operands<'a, T: TensorScalar>(
+    packed: &'a Tensor,
+    coeff: &'a Tensor,
+    block: &'a Tensor,
+) -> Result<TypedOperandTriple<'a, T>, tenferro_tensor::Error> {
+    let mismatch = || unsupported_dtype("householder_qr_append", packed.dtype());
+    let packed_t = packed.as_typed::<T>().ok_or_else(mismatch)?;
+    let coeff_t = coeff.as_typed::<T>().ok_or_else(mismatch)?;
+    let block_t = block.as_typed::<T>().ok_or_else(mismatch)?;
+    Ok((packed_t, coeff_t, block_t))
+}
+
 fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
     match input.dtype() {
         // A caller-owned payload is not a linalg operand.
@@ -2514,13 +2534,21 @@ fn householder_qr_from_factors_entered(
                 })
             }};
         }
-        match (q, r) {
-            (Tensor::F32(q), Tensor::F32(r)) => import!(q, r, F32),
-            (Tensor::F64(q), Tensor::F64(r)) => import!(q, r, F64),
-            (Tensor::C32(q), Tensor::C32(r)) => {
+        match (q.dtype(), r.dtype()) {
+            (DType::F32, DType::F32) => {
+                let (q, r) = qr_import_operands::<f32>(q, r)?;
+                import!(q, r, F32)
+            }
+            (DType::F64, DType::F64) => {
+                let (q, r) = qr_import_operands::<f64>(q, r)?;
+                import!(q, r, F64)
+            }
+            (DType::C32, DType::C32) => {
+                let (q, r) = qr_import_operands::<Complex32>(q, r)?;
                 import!(q, r, C32)
             }
-            (Tensor::C64(q), Tensor::C64(r)) => {
+            (DType::C64, DType::C64) => {
+                let (q, r) = qr_import_operands::<Complex64>(q, r)?;
                 import!(q, r, C64)
             }
             _ => Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
@@ -2564,11 +2592,27 @@ fn householder_qr_append_entered(
                     });
                 }};
             }
-            match (packed, coeff, block) {
-                (Tensor::F32(p), Tensor::F32(c), Tensor::F32(b)) => append!(p, c, b, F32),
-                (Tensor::F64(p), Tensor::F64(c), Tensor::F64(b)) => append!(p, c, b, F64),
-                (Tensor::C32(p), Tensor::C32(c), Tensor::C32(b)) => append!(p, c, b, C32),
-                (Tensor::C64(p), Tensor::C64(c), Tensor::C64(b)) => append!(p, c, b, C64),
+            match (packed.dtype(), coeff.dtype(), block.dtype()) {
+                (DType::F32, DType::F32, DType::F32) => {
+                    let (p, c, b) = append_operands::<f32>(packed, coeff, block)?;
+
+                    append!(p, c, b, F32)
+                }
+                (DType::F64, DType::F64, DType::F64) => {
+                    let (p, c, b) = append_operands::<f64>(packed, coeff, block)?;
+
+                    append!(p, c, b, F64)
+                }
+                (DType::C32, DType::C32, DType::C32) => {
+                    let (p, c, b) = append_operands::<Complex32>(packed, coeff, block)?;
+
+                    append!(p, c, b, C32)
+                }
+                (DType::C64, DType::C64, DType::C64) => {
+                    let (p, c, b) = append_operands::<Complex64>(packed, coeff, block)?;
+
+                    append!(p, c, b, C64)
+                }
                 _ => return Err(unsupported_dtype("householder_qr_append", packed.dtype())),
             }
         }
@@ -2591,11 +2635,27 @@ fn householder_qr_append_entered(
                 })
             }};
         }
-        match (packed, coeff, block) {
-            (Tensor::F32(p), Tensor::F32(c), Tensor::F32(b)) => append!(p, c, b, F32),
-            (Tensor::F64(p), Tensor::F64(c), Tensor::F64(b)) => append!(p, c, b, F64),
-            (Tensor::C32(p), Tensor::C32(c), Tensor::C32(b)) => append!(p, c, b, C32),
-            (Tensor::C64(p), Tensor::C64(c), Tensor::C64(b)) => append!(p, c, b, C64),
+        match (packed.dtype(), coeff.dtype(), block.dtype()) {
+            (DType::F32, DType::F32, DType::F32) => {
+                let (p, c, b) = append_operands::<f32>(packed, coeff, block)?;
+
+                append!(p, c, b, F32)
+            }
+            (DType::F64, DType::F64, DType::F64) => {
+                let (p, c, b) = append_operands::<f64>(packed, coeff, block)?;
+
+                append!(p, c, b, F64)
+            }
+            (DType::C32, DType::C32, DType::C32) => {
+                let (p, c, b) = append_operands::<Complex32>(packed, coeff, block)?;
+
+                append!(p, c, b, C32)
+            }
+            (DType::C64, DType::C64, DType::C64) => {
+                let (p, c, b) = append_operands::<Complex64>(packed, coeff, block)?;
+
+                append!(p, c, b, C64)
+            }
             _ => Err(unsupported_dtype("householder_qr_append", packed.dtype())),
         }
     }
