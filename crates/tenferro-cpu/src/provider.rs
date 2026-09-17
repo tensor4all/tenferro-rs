@@ -929,7 +929,10 @@ pub struct CpuGemmUninitRequest<'request, 'input> {
     accumulation: DotGeneralAccumulation,
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(any(
+    feature = "cpu-faer",
+    all(feature = "cpu-blas", not(feature = "provider-inject"))
+))]
 pub(crate) struct CpuGemmUninitRequestParts<'request, 'input> {
     pub(crate) lhs: &'request TensorRead<'input>,
     pub(crate) rhs: &'request TensorRead<'input>,
@@ -1111,7 +1114,10 @@ impl<'request, 'input> CpuGemmUninitRequest<'request, 'input> {
         self.accumulation
     }
 
-    #[cfg(feature = "cpu-faer")]
+    #[cfg(any(
+        feature = "cpu-faer",
+        all(feature = "cpu-blas", not(feature = "provider-inject"))
+    ))]
     pub(crate) fn into_parts(self) -> CpuGemmUninitRequestParts<'request, 'input> {
         CpuGemmUninitRequestParts {
             lhs: self.lhs,
@@ -1927,6 +1933,44 @@ impl CpuGemmProvider for BlasGemmProvider {
         #[cfg(not(feature = "cpu-blas"))]
         {
             let _ = (context, request);
+            Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ))
+        }
+    }
+
+    fn uninit_provider(&self) -> Option<&dyn CpuUninitGemmProvider> {
+        // Injected pointers currently promise ABI compatibility, not the
+        // stronger full-overwrite witness. Preserve their initialized path.
+        #[cfg(feature = "provider-inject")]
+        {
+            None
+        }
+        #[cfg(not(feature = "provider-inject"))]
+        {
+            Some(self)
+        }
+    }
+}
+
+// SAFETY: the implementation rejects nonzero beta, validates destination byte
+// length/alignment, and uses BLAS's beta=0 full-overwrite contract through raw
+// pointers. Empty contractions explicitly initialize their output to zero.
+#[cfg(not(feature = "provider-inject"))]
+unsafe impl CpuUninitGemmProvider for BlasGemmProvider {
+    unsafe fn gemm_into_uninit(
+        &self,
+        context: &CpuExecutionContext<'_>,
+        request: CpuGemmUninitRequest<'_, '_>,
+        output_bytes: &mut [MaybeUninit<u8>],
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        #[cfg(feature = "cpu-blas")]
+        {
+            crate::gemm::execute_blas_gemm_request_into_uninit(context, request, output_bytes)
+        }
+        #[cfg(not(feature = "cpu-blas"))]
+        {
+            let _ = (context, request, output_bytes);
             Ok(CpuProviderOutcome::Unsupported(
                 CpuProviderUnsupported::RuntimeUnavailable,
             ))

@@ -7,7 +7,7 @@ use strided_kernel::{
 
 use crate::{
     buffer_pool::{BufferPool, PoolScalar},
-    flat_to_multi, ConjElem,
+    ConjElem,
 };
 use tenferro_tensor::{
     DType, MemoryKind, Placement, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
@@ -429,7 +429,7 @@ where
         })
         .map_err(|err| crate::Error::backend_source(op, err))?;
     } else {
-        map_into(&mut dst_view, &src_view, MaybeUninit::new)
+        strided_kernel::copy_into_uninit(&mut dst_view, &src_view)
             .map_err(|err| crate::Error::backend_source(op, err))?;
     }
     Ok(())
@@ -453,57 +453,6 @@ pub(crate) fn validate_cpu_host_placement(
             placement.memory_kind
         ),
     ))
-}
-
-fn zeroed_tensor_from_pool<T>(
-    buffers: &mut BufferPool,
-    op: &'static str,
-    shape: Vec<usize>,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Zero + PoolScalar + 'static,
-{
-    filled_tensor_from_pool(buffers, op, shape, T::zero())
-}
-
-fn filled_tensor_from_pool<T>(
-    buffers: &mut BufferPool,
-    op: &'static str,
-    shape: Vec<usize>,
-    fill: T,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: PoolScalar + 'static,
-{
-    // Preserve operation-specific shape-product error attribution, then fill
-    // the pooled full-overwrite destination exactly once.
-    checked_shape_product(op, "output shape", &shape)?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, shape)?;
-    // INVARIANT: the pooled destination is fully overwritten by the fill pass
-    // below before the completion handoff, so no uninitialized element is
-    // ever read or dropped.
-    out.as_uninit_slice_mut().fill(MaybeUninit::new(fill));
-    // SAFETY: the fill pass writes every logical destination element.
-    unsafe { out.assume_init() }
-}
-
-fn clone_host_tensor_from_pool<T>(
-    buffers: &mut BufferPool,
-    op: &'static str,
-    tensor: &TypedTensor<T>,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + PoolScalar + 'static,
-{
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    let input = tensor.host_data()?;
-    let mut data = buffers.acquire_with_capacity::<T>(input.len());
-    data.extend_from_slice(input);
-    let mut output = TypedTensor::from_vec_col_major(tensor.shape().to_vec(), data)?;
-    output.set_placement(tensor.placement().clone());
-    Ok(output)
 }
 
 #[cfg(test)]
@@ -905,10 +854,7 @@ pub(crate) fn embed_diagonal_with_pool(
     dispatch_tensor_unary_with_bool_special_result!(
         input,
         |t| typed_embed_diagonal_with_pool(buffers, t, axis_a, axis_b),
-        bool | t
-            | typed_embed_diagonal_impl(t, axis_a, axis_b, |shape| {
-                filled_tensor_from_pool(buffers, "embed_diagonal", shape, false)
-            })
+        bool | t | typed_embed_diagonal_impl(buffers, t, axis_a, axis_b, false)
     )
 }
 
@@ -1270,12 +1216,12 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn typed_embed_diagonal<T: Copy + Zero + Clone + TensorScalar>(
+pub(crate) fn typed_embed_diagonal<T: Copy + Zero + Clone + PoolScalar + 'static>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    typed_embed_diagonal_impl(tensor, axis_a, axis_b, TypedTensor::zeros)
+    with_test_pool(|buffers| typed_embed_diagonal_impl(buffers, tensor, axis_a, axis_b, T::zero()))
 }
 
 pub(crate) fn typed_embed_diagonal_with_pool<T>(
@@ -1287,19 +1233,18 @@ pub(crate) fn typed_embed_diagonal_with_pool<T>(
 where
     T: Copy + Zero + Clone + PoolScalar + 'static,
 {
-    typed_embed_diagonal_impl(tensor, axis_a, axis_b, |shape| {
-        zeroed_tensor_from_pool(buffers, "embed_diagonal", shape)
-    })
+    typed_embed_diagonal_impl(buffers, tensor, axis_a, axis_b, T::zero())
 }
 
 fn typed_embed_diagonal_impl<T>(
+    buffers: &mut BufferPool,
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
-    make_zeroed: impl FnOnce(Vec<usize>) -> crate::Result<TypedTensor<T>>,
+    zero: T,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + TensorScalar,
+    T: Copy + Clone + PoolScalar + 'static,
 {
     validate_axis("embed_diagonal", axis_a, tensor.shape().len())?;
     if axis_b > tensor.shape().len() {
@@ -1313,40 +1258,20 @@ where
     let n = tensor.shape()[axis_a];
     let mut out_shape = tensor.shape().to_vec();
     out_shape.insert(axis_b, n);
-    let mut out = make_zeroed(out_shape)?;
-
-    let in_rank = tensor.shape().len();
-    let out_rank = out.shape().len();
-    let mut in_idx = vec![0usize; in_rank];
-    let mut out_idx = vec![0usize; out_rank];
-
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error("embed_diagonal"));
-    }
-    let input_data = tensor.host_data()?;
-
-    // Intentionally sequential: embed_diagonal writes a sparse diagonal subset
-    // into a zeroed output and has no current strided-kernel parallel primitive.
-    for (flat, value) in input_data
-        .iter()
-        .copied()
-        .enumerate()
-        .take(tensor.n_elements())
-    {
-        flat_to_multi(flat, tensor.shape(), &mut in_idx);
-        let diag_val = in_idx[axis_a];
-        let mut src_axis = 0usize;
-        for (out_axis, out_slot) in out_idx.iter_mut().enumerate().take(out_rank) {
-            if out_axis == axis_b {
-                *out_slot = diag_val;
-            } else {
-                *out_slot = in_idx[src_axis];
-                src_axis += 1;
-            }
-        }
-        *out.get_mut(&out_idx)? = value;
-    }
-    Ok(out)
+    checked_shape_product("embed_diagonal", "output shape", &out_shape)?;
+    let input_data = typed_host_data("embed_diagonal", tensor)?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, out_shape)?;
+    strided_kernel::embed_diagonal_into_uninit(
+        out.as_uninit_slice_mut(),
+        input_data,
+        tensor.shape(),
+        axis_a,
+        axis_b,
+        zero,
+    )
+    .map_err(|err| crate::Error::backend_source("embed_diagonal", err))?;
+    // SAFETY: strided initialized the whole output, including off-diagonal zeros.
+    unsafe { out.assume_init() }
 }
 
 #[cfg(test)]
@@ -1447,40 +1372,28 @@ where
     if tensor.shape().len() < 2 {
         return Err(crate::Error::rank_mismatch(op, 2, tensor.shape().len()));
     }
-
-    let rows = tensor.shape()[0];
-    let cols = tensor.shape()[1];
     if tensor.shape().contains(&0) {
         return tensor.duplicate();
     }
 
-    let (batch_count, block_size) = checked_triangular_extent(op, tensor.shape(), rows, cols)?;
-    let mut out = clone_host_tensor_from_pool(buffers, op, tensor)?;
-    let data = out.host_data_mut()?;
-
-    // Column-major matrices make each column contiguous. Clone once, then fill
-    // only the masked run instead of repeating per-element index arithmetic.
-    for batch_idx in 0..batch_count {
-        for col in 0..cols {
-            let boundary = col as i128 - k as i128;
-            let (masked_start, masked_end) = if upper {
-                (
-                    boundary.saturating_add(1).clamp(0, rows as i128) as usize,
-                    rows,
-                )
-            } else {
-                (0, boundary.clamp(0, rows as i128) as usize)
-            };
-            let start =
-                checked_triangular_offset(op, batch_idx, block_size, col, rows, masked_start)?;
-            let end = checked_triangular_offset(op, batch_idx, block_size, col, rows, masked_end)?;
-            data[start..end].fill(fill);
-        }
-    }
-
+    let input = typed_host_data(op, tensor)?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape().to_vec())?;
+    strided_kernel::triangular_mask_into_uninit(
+        out.as_uninit_slice_mut(),
+        input,
+        tensor.shape(),
+        k,
+        upper,
+        fill,
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    // SAFETY: strided wrote every kept and masked output element.
+    let mut out = unsafe { out.assume_init()? };
+    out.set_placement(tensor.placement().clone());
     Ok(out)
 }
 
+#[cfg(test)]
 fn checked_triangular_extent(
     op: &'static str,
     shape: &[usize],
@@ -1506,6 +1419,7 @@ fn checked_triangular_extent(
     Ok((batch_count, block_size))
 }
 
+#[cfg(test)]
 fn checked_triangular_offset(
     op: &'static str,
     batch_idx: usize,

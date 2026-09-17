@@ -245,9 +245,11 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
         .expect("pooled triangular kernel should remain discoverable");
     assert!(
         !pooled_triangular.contains("for row in 0..rows")
-            && pooled_triangular.contains("data[start..end].fill(fill)"),
-        "CPU pooled triangular masks should operate on contiguous column runs"
+            && pooled_triangular.contains("strided_kernel::triangular_mask_into_uninit"),
+        "CPU pooled triangular masks should delegate traversal to strided"
     );
+    assert!(structural.contains("strided_kernel::embed_diagonal_into_uninit"));
+    assert!(include_str!("../blas1.rs").contains("strided_kernel::axpby_accum"));
 }
 
 #[test]

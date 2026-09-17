@@ -1,8 +1,14 @@
+#[cfg(all(test, feature = "cpu-blas", not(feature = "provider-inject")))]
+mod blas_uninit_tests;
+
 use num_traits::Zero;
 use smallvec::{Array, SmallVec};
 use std::fmt;
 use std::mem::size_of;
-#[cfg(feature = "cpu-faer")]
+#[cfg(any(
+    feature = "cpu-faer",
+    all(feature = "cpu-blas", not(feature = "provider-inject"))
+))]
 use std::mem::{align_of, MaybeUninit};
 use std::sync::{Arc, Weak};
 
@@ -1629,7 +1635,10 @@ impl ProviderGemmDescriptor {
         }
     }
 
-    #[cfg(feature = "cpu-faer")]
+    #[cfg(any(
+        feature = "cpu-faer",
+        all(feature = "cpu-blas", not(feature = "provider-inject"))
+    ))]
     fn from_uninit_parts(parts: &crate::provider::CpuGemmUninitRequestParts<'_, '_>) -> Self {
         Self {
             rows: parts.rows,
@@ -1898,7 +1907,10 @@ pub(crate) fn execute_faer_gemm_request(
 /// Validate that `output_bytes` is exactly the byte representation of
 /// `element_count` `T`-sized elements, aligned for `T`, and return the
 /// destination pointer.
-#[cfg(feature = "cpu-faer")]
+#[cfg(any(
+    feature = "cpu-faer",
+    all(feature = "cpu-blas", not(feature = "provider-inject"))
+))]
 fn checked_uninit_output_ptr<T>(
     output_bytes: &mut [MaybeUninit<u8>],
     element_count: usize,
@@ -1937,7 +1949,10 @@ fn checked_uninit_output_ptr<T>(
 /// Write zero into every destination element for an empty-contraction GEMM
 /// (beta == 0 semantics overwrite without reading). Zero-element destinations
 /// (rows, columns, or batch count zero) write nothing and are satisfied.
-#[cfg(feature = "cpu-faer")]
+#[cfg(any(
+    feature = "cpu-faer",
+    all(feature = "cpu-blas", not(feature = "provider-inject"))
+))]
 fn write_empty_contract_zeros_into_uninit<T>(
     output_data: *mut T,
     descriptor: &ProviderGemmDescriptor,
@@ -2022,96 +2037,111 @@ where
     Ok(CpuProviderOutcome::Executed)
 }
 
-/// Execute one validated full-overwrite GEMM (beta == 0) into uninitialized
-/// bytes. The destination is written through `MaybeUninit` storage only; every
-/// logical element is initialized before `Executed` (faer `Accum::Replace`;
-/// empty contractions write zeros).
-#[cfg(feature = "cpu-faer")]
-pub(crate) fn execute_faer_gemm_request_into_uninit(
-    context: &CpuExecutionContext<'_>,
-    request: crate::provider::CpuGemmUninitRequest<'_, '_>,
-    output_bytes: &mut [MaybeUninit<u8>],
-) -> Result<CpuProviderOutcome> {
-    let parts = request.into_parts();
-    let descriptor = ProviderGemmDescriptor::from_uninit_parts(&parts);
-    let lhs = parts.lhs;
-    let rhs = parts.rhs;
-    let dtype = lhs.dtype();
-    macro_rules! dispatch {
-        ($owned:ident, $view:ident) => {
-            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
-                (descriptor.accumulation.alpha, descriptor.accumulation.beta)
-            {
-                match (lhs, rhs) {
-                    (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                    ) => {
-                        return execute_faer_request_typed_into_uninit(
-                            context,
-                            descriptor,
-                            lhs,
-                            rhs,
-                            output_bytes,
-                            alpha,
-                            beta,
-                        );
+// Share dtype/owned/view dispatch without creating initialized output references.
+#[cfg(any(
+    feature = "cpu-faer",
+    all(feature = "cpu-blas", not(feature = "provider-inject"))
+))]
+macro_rules! define_uninit_gemm_dispatch {
+    ($name:ident, $execute:ident) => {
+        pub(crate) fn $name(
+            context: &CpuExecutionContext<'_>,
+            request: crate::provider::CpuGemmUninitRequest<'_, '_>,
+            output_bytes: &mut [MaybeUninit<u8>],
+        ) -> Result<CpuProviderOutcome> {
+            let parts = request.into_parts();
+            let descriptor = ProviderGemmDescriptor::from_uninit_parts(&parts);
+            let lhs = parts.lhs;
+            let rhs = parts.rhs;
+            let dtype = lhs.dtype();
+            macro_rules! dispatch {
+                ($owned:ident, $view:ident) => {
+                    if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                        (descriptor.accumulation.alpha, descriptor.accumulation.beta)
+                    {
+                        match (lhs, rhs) {
+                            (
+                                TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                                TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                            ) => {
+                                return $execute(
+                                    context,
+                                    descriptor,
+                                    lhs,
+                                    rhs,
+                                    output_bytes,
+                                    alpha,
+                                    beta,
+                                );
+                            }
+                            (
+                                TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                                TensorRead::View(TensorView::$view(rhs)),
+                            ) => {
+                                return $execute(
+                                    context,
+                                    descriptor,
+                                    lhs,
+                                    rhs,
+                                    output_bytes,
+                                    alpha,
+                                    beta,
+                                );
+                            }
+                            (
+                                TensorRead::View(TensorView::$view(lhs)),
+                                TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                            ) => {
+                                return $execute(
+                                    context,
+                                    descriptor,
+                                    lhs,
+                                    rhs,
+                                    output_bytes,
+                                    alpha,
+                                    beta,
+                                );
+                            }
+                            (
+                                TensorRead::View(TensorView::$view(lhs)),
+                                TensorRead::View(TensorView::$view(rhs)),
+                            ) => {
+                                return $execute(
+                                    context,
+                                    descriptor,
+                                    lhs,
+                                    rhs,
+                                    output_bytes,
+                                    alpha,
+                                    beta,
+                                );
+                            }
+                            _ => {}
+                        }
                     }
-                    (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::View(TensorView::$view(rhs)),
-                    ) => {
-                        return execute_faer_request_typed_into_uninit(
-                            context,
-                            descriptor,
-                            lhs,
-                            rhs,
-                            output_bytes,
-                            alpha,
-                            beta,
-                        );
-                    }
-                    (
-                        TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                    ) => {
-                        return execute_faer_request_typed_into_uninit(
-                            context,
-                            descriptor,
-                            lhs,
-                            rhs,
-                            output_bytes,
-                            alpha,
-                            beta,
-                        );
-                    }
-                    (
-                        TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::View(TensorView::$view(rhs)),
-                    ) => {
-                        return execute_faer_request_typed_into_uninit(
-                            context,
-                            descriptor,
-                            lhs,
-                            rhs,
-                            output_bytes,
-                            alpha,
-                            beta,
-                        );
-                    }
-                    _ => {}
-                }
+                };
             }
-        };
-    }
-    dispatch!(F32, F32);
-    dispatch!(F64, F64);
-    dispatch!(C32, C32);
-    dispatch!(C64, C64);
-    Ok(CpuProviderOutcome::Unsupported(
-        CpuProviderUnsupported::DType(dtype),
-    ))
+            dispatch!(F32, F32);
+            dispatch!(F64, F64);
+            dispatch!(C32, C32);
+            dispatch!(C64, C64);
+            Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::DType(dtype),
+            ))
+        }
+    };
 }
+
+#[cfg(feature = "cpu-faer")]
+define_uninit_gemm_dispatch!(
+    execute_faer_gemm_request_into_uninit,
+    execute_faer_request_typed_into_uninit
+);
+#[cfg(all(feature = "cpu-blas", not(feature = "provider-inject")))]
+define_uninit_gemm_dispatch!(
+    execute_blas_gemm_request_into_uninit,
+    execute_blas_request_typed_into_uninit
+);
 
 #[cfg(feature = "cpu-blas")]
 fn blas_descriptor_unsupported(
@@ -2171,6 +2201,65 @@ where
         scale_empty_contract_output(output, beta)?;
         return Ok(CpuProviderOutcome::Executed);
     }
+    let output_data = output.host_storage_mut()?.as_mut_ptr();
+    execute_blas_request_typed_with_output(descriptor, lhs, rhs, output_data, alpha, beta)
+}
+
+#[cfg(all(feature = "cpu-blas", not(feature = "provider-inject")))]
+fn execute_blas_request_typed_into_uninit<L, R, T>(
+    _context: &CpuExecutionContext<'_>,
+    descriptor: ProviderGemmDescriptor,
+    lhs: &L,
+    rhs: &R,
+    output_bytes: &mut [MaybeUninit<u8>],
+    alpha: T,
+    beta: T,
+) -> Result<CpuProviderOutcome>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: BlasGemm + Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    if beta != T::zero() {
+        return Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::Accumulation,
+        ));
+    }
+    let count = descriptor
+        .rows
+        .checked_mul(descriptor.columns)
+        .and_then(|n| n.checked_mul(descriptor.batch_count))
+        .ok_or_else(|| {
+            Error::invalid_argument(OP, "output", "uninitialized output element count overflow")
+        })?;
+    let output_data = checked_uninit_output_ptr::<T>(output_bytes, count, OP)?;
+    if descriptor.rows == 0
+        || descriptor.columns == 0
+        || descriptor.contracted == 0
+        || descriptor.batch_count == 0
+    {
+        write_empty_contract_zeros_into_uninit(output_data, &descriptor)?;
+        return Ok(CpuProviderOutcome::Executed);
+    }
+    // INVARIANT: BLAS beta=0 fully overwrites C. Only a raw pointer crosses
+    // the FFI boundary; no initialized Rust reference is created here.
+    execute_blas_request_typed_with_output(descriptor, lhs, rhs, output_data, alpha, beta)
+}
+
+#[cfg(feature = "cpu-blas")]
+fn execute_blas_request_typed_with_output<L, R, T>(
+    descriptor: ProviderGemmDescriptor,
+    lhs: &L,
+    rhs: &R,
+    output_data: *mut T,
+    alpha: T,
+    beta: T,
+) -> Result<CpuProviderOutcome>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: BlasGemm + Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
     if let Some(reason) = blas_descriptor_unsupported(descriptor) {
         return Ok(CpuProviderOutcome::Unsupported(reason));
     }
@@ -2187,7 +2276,6 @@ where
     let Some(rhs_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Err(crate::cpu_backend_buffer_error(OP));
     };
-    let output_data = output.host_storage_mut()?.as_mut_ptr();
     for batch in 0..descriptor.batch_count {
         checked_view_batch_offset(
             descriptor.lhs_layout.offset(),

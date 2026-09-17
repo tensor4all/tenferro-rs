@@ -6809,6 +6809,76 @@ where
     }
 }
 
+/// Operand of a fused CUDA kernel: an owned tensor or a compact borrowed view.
+///
+/// The eager einsum path prepares operands as borrowed views over already
+/// allocated device storage, so fused entry points accept both forms, the way
+/// the traced runtime already hands them.
+// INVARIANT: the view variant carries the provider descriptor inline so a
+// fused launch never allocates; the enum only lives for one kernel launch.
+#[allow(clippy::large_enum_variant)]
+enum CompactOperand<'a, T> {
+    Tensor(&'a TypedTensor<T>),
+    View(TypedTensorView<'a, T>),
+}
+
+impl<T: TensorScalar + Clone + 'static> CompactOperand<'_, T> {
+    fn shape(&self) -> &[usize] {
+        match self {
+            Self::Tensor(tensor) => tensor.shape(),
+            Self::View(view) => view.shape(),
+        }
+    }
+
+    fn ensure_resident(&self, rt: &CudaRuntime, op: &'static str) -> crate::Result<()> {
+        match self {
+            Self::Tensor(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+            Self::View(view) => dispatch::ensure_view_resident_on_runtime(rt, view, op),
+        }
+    }
+
+    fn binding(&self, op: &'static str) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
+        match self {
+            Self::Tensor(tensor) => dispatch::typed_tensor_binding(tensor, op),
+            Self::View(view) => dispatch::typed_view_binding(view, op),
+        }
+    }
+}
+
+/// Dtype-erased borrowed view of the operands accepted by
+/// [`CudaBackend::execute_broadcast_multiply`].
+enum BroadcastMultiplyView<'a> {
+    F32(TypedTensorView<'a, f32>),
+    F64(TypedTensorView<'a, f64>),
+    I32(TypedTensorView<'a, i32>),
+    I64(TypedTensorView<'a, i64>),
+    C32(TypedTensorView<'a, Complex32>),
+    C64(TypedTensorView<'a, Complex64>),
+}
+
+/// Accept a view only when the fused kernel can index it directly.
+///
+/// The kernel reads each operand in compact column-major order, which is the
+/// same requirement [`dispatch::typed_view_binding`] enforces; other view
+/// forms keep the caller's materializing fallback.
+fn compact_view(view: TensorView<'_>) -> crate::Result<Option<BroadcastMultiplyView<'_>>> {
+    fn usable<T: TensorScalar + Clone + 'static>(
+        view: TypedTensorView<'_, T>,
+    ) -> crate::Result<Option<TypedTensorView<'_, T>>> {
+        Ok((view.offset() == 0 && view.is_col_major_contiguous()?).then_some(view))
+    }
+
+    Ok(match view {
+        TensorView::F32(view) => usable(view)?.map(BroadcastMultiplyView::F32),
+        TensorView::F64(view) => usable(view)?.map(BroadcastMultiplyView::F64),
+        TensorView::I32(view) => usable(view)?.map(BroadcastMultiplyView::I32),
+        TensorView::I64(view) => usable(view)?.map(BroadcastMultiplyView::I64),
+        TensorView::C32(view) => usable(view)?.map(BroadcastMultiplyView::C32),
+        TensorView::C64(view) => usable(view)?.map(BroadcastMultiplyView::C64),
+        TensorView::Bool(_) => None,
+    })
+}
+
 impl TensorFusion for CudaBackend {
     fn execute_elementwise_fusion(
         &mut self,
@@ -6827,67 +6897,198 @@ impl TensorFusion for CudaBackend {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<Tensor>> {
-        let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (lhs, rhs) else {
-            return Ok(None);
-        };
-        // Dispatch on the tags and recover the typed tensors, which is what `as_typed` exists for.
-        match (lhs.dtype(), rhs.dtype()) {
-            (DType::F32, DType::F32) => {
-                let lhs = typed_or_unsupported::<f32>(lhs, "broadcast_multiply")?;
-                let rhs = typed_or_unsupported::<f32>(rhs, "broadcast_multiply")?;
-                launch_broadcast_multiply_typed(
-                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-                )
-                .map(Tensor::from_typed::<f32>)
-                .map(Some)
+        match (lhs, rhs) {
+            // Owned operands dispatch on the runtime tags, which is what `as_typed` exists for.
+            (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) => {
+                match (lhs.dtype(), rhs.dtype()) {
+                    (DType::F32, DType::F32) => {
+                        let lhs = typed_or_unsupported::<f32>(lhs, "broadcast_multiply")?;
+                        let rhs = typed_or_unsupported::<f32>(rhs, "broadcast_multiply")?;
+                        launch_broadcast_multiply_typed(
+                            self,
+                            &CompactOperand::Tensor(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::Tensor(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<f32>)
+                        .map(Some)
+                    }
+                    (DType::F64, DType::F64) => {
+                        let lhs = typed_or_unsupported::<f64>(lhs, "broadcast_multiply")?;
+                        let rhs = typed_or_unsupported::<f64>(rhs, "broadcast_multiply")?;
+                        launch_broadcast_multiply_typed(
+                            self,
+                            &CompactOperand::Tensor(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::Tensor(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<f64>)
+                        .map(Some)
+                    }
+                    (DType::I32, DType::I32) => {
+                        let lhs = typed_or_unsupported::<i32>(lhs, "broadcast_multiply")?;
+                        let rhs = typed_or_unsupported::<i32>(rhs, "broadcast_multiply")?;
+                        launch_broadcast_multiply_int_typed(
+                            self,
+                            &CompactOperand::Tensor(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::Tensor(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<i32>)
+                        .map(Some)
+                    }
+                    (DType::I64, DType::I64) => {
+                        let lhs = typed_or_unsupported::<i64>(lhs, "broadcast_multiply")?;
+                        let rhs = typed_or_unsupported::<i64>(rhs, "broadcast_multiply")?;
+                        launch_broadcast_multiply_int_typed(
+                            self,
+                            &CompactOperand::Tensor(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::Tensor(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<i64>)
+                        .map(Some)
+                    }
+                    (DType::C32, DType::C32) => {
+                        let lhs = typed_or_unsupported::<Complex32>(lhs, "broadcast_multiply")?;
+                        let rhs = typed_or_unsupported::<Complex32>(rhs, "broadcast_multiply")?;
+                        launch_broadcast_multiply_complex_typed(
+                            self,
+                            &CompactOperand::Tensor(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::Tensor(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<Complex32>)
+                        .map(Some)
+                    }
+                    (DType::C64, DType::C64) => {
+                        let lhs = typed_or_unsupported::<Complex64>(lhs, "broadcast_multiply")?;
+                        let rhs = typed_or_unsupported::<Complex64>(rhs, "broadcast_multiply")?;
+                        launch_broadcast_multiply_complex_typed(
+                            self,
+                            &CompactOperand::Tensor(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::Tensor(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<Complex64>)
+                        .map(Some)
+                    }
+                    (DType::Bool, DType::Bool) => Ok(None),
+                    _ => Err(dtype_mismatch("broadcast_multiply", lhs, rhs)),
+                }
             }
-            (DType::F64, DType::F64) => {
-                let lhs = typed_or_unsupported::<f64>(lhs, "broadcast_multiply")?;
-                let rhs = typed_or_unsupported::<f64>(rhs, "broadcast_multiply")?;
-                launch_broadcast_multiply_typed(
-                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-                )
-                .map(Tensor::from_typed::<f64>)
-                .map(Some)
+            // The eager einsum path prepares operands as borrowed views over
+            // already allocated device storage. A compact view is consumed
+            // directly; other read forms keep the caller's fallback.
+            (TensorRead::View(lhs), TensorRead::View(rhs)) => {
+                let (Some(lhs), Some(rhs)) = (compact_view(lhs)?, compact_view(rhs)?) else {
+                    return Ok(None);
+                };
+                match (lhs, rhs) {
+                    (BroadcastMultiplyView::F32(lhs), BroadcastMultiplyView::F32(rhs)) => {
+                        launch_broadcast_multiply_typed(
+                            self,
+                            &CompactOperand::View(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::View(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<f32>)
+                        .map(Some)
+                    }
+                    (BroadcastMultiplyView::F64(lhs), BroadcastMultiplyView::F64(rhs)) => {
+                        launch_broadcast_multiply_typed(
+                            self,
+                            &CompactOperand::View(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::View(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<f64>)
+                        .map(Some)
+                    }
+                    (BroadcastMultiplyView::I32(lhs), BroadcastMultiplyView::I32(rhs)) => {
+                        launch_broadcast_multiply_int_typed(
+                            self,
+                            &CompactOperand::View(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::View(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<i32>)
+                        .map(Some)
+                    }
+                    (BroadcastMultiplyView::I64(lhs), BroadcastMultiplyView::I64(rhs)) => {
+                        launch_broadcast_multiply_int_typed(
+                            self,
+                            &CompactOperand::View(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::View(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<i64>)
+                        .map(Some)
+                    }
+                    (BroadcastMultiplyView::C32(lhs), BroadcastMultiplyView::C32(rhs)) => {
+                        launch_broadcast_multiply_complex_typed(
+                            self,
+                            &CompactOperand::View(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::View(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<Complex32>)
+                        .map(Some)
+                    }
+                    (BroadcastMultiplyView::C64(lhs), BroadcastMultiplyView::C64(rhs)) => {
+                        launch_broadcast_multiply_complex_typed(
+                            self,
+                            &CompactOperand::View(lhs),
+                            lhs_shape,
+                            lhs_dims,
+                            &CompactOperand::View(rhs),
+                            rhs_shape,
+                            rhs_dims,
+                        )
+                        .map(Tensor::from_typed::<Complex64>)
+                        .map(Some)
+                    }
+                    // Mismatched dtypes keep the caller's fallback, which
+                    // reports the mismatch on the owned path.
+                    _ => Ok(None),
+                }
             }
-            (DType::I32, DType::I32) => {
-                let lhs = typed_or_unsupported::<i32>(lhs, "broadcast_multiply")?;
-                let rhs = typed_or_unsupported::<i32>(rhs, "broadcast_multiply")?;
-                launch_broadcast_multiply_int_typed(
-                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-                )
-                .map(Tensor::from_typed::<i32>)
-                .map(Some)
-            }
-            (DType::I64, DType::I64) => {
-                let lhs = typed_or_unsupported::<i64>(lhs, "broadcast_multiply")?;
-                let rhs = typed_or_unsupported::<i64>(rhs, "broadcast_multiply")?;
-                launch_broadcast_multiply_int_typed(
-                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-                )
-                .map(Tensor::from_typed::<i64>)
-                .map(Some)
-            }
-            (DType::C32, DType::C32) => {
-                let lhs = typed_or_unsupported::<Complex32>(lhs, "broadcast_multiply")?;
-                let rhs = typed_or_unsupported::<Complex32>(rhs, "broadcast_multiply")?;
-                launch_broadcast_multiply_complex_typed(
-                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-                )
-                .map(Tensor::from_typed::<num_complex::Complex32>)
-                .map(Some)
-            }
-            (DType::C64, DType::C64) => {
-                let lhs = typed_or_unsupported::<Complex64>(lhs, "broadcast_multiply")?;
-                let rhs = typed_or_unsupported::<Complex64>(rhs, "broadcast_multiply")?;
-                launch_broadcast_multiply_complex_typed(
-                    self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
-                )
-                .map(Tensor::from_typed::<num_complex::Complex64>)
-                .map(Some)
-            }
-            (DType::Bool, DType::Bool) => Ok(None),
-            _ => Err(dtype_mismatch("broadcast_multiply", lhs, rhs)),
+            // Mixed owned and borrowed operands keep the caller's fallback:
+            // the traced runtime hands both operands in the same form.
+            _ => Ok(None),
         }
     }
 }
@@ -6947,10 +7148,10 @@ fn ensure_same_shape_for_broadcast_multiply(
 
 fn launch_broadcast_multiply_typed<T>(
     backend: &CudaBackend,
-    lhs: &TypedTensor<T>,
+    lhs: &CompactOperand<'_, T>,
     lhs_shape: &[usize],
     lhs_dims: &[usize],
-    rhs: &TypedTensor<T>,
+    rhs: &CompactOperand<'_, T>,
     rhs_shape: &[usize],
     rhs_dims: &[usize],
 ) -> crate::Result<TypedTensor<T>>
@@ -6960,10 +7161,12 @@ where
     ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
     validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
     validate_broadcast_in_dim(rhs.shape(), rhs_shape, rhs_dims)?;
-    launch_binary_tensor(
+    lhs.ensure_resident(backend.runtime(), "broadcast_multiply")?;
+    rhs.ensure_resident(backend.runtime(), "broadcast_multiply")?;
+    dispatch::launch_binary_bindings(
         backend.runtime(),
-        lhs,
-        rhs,
+        lhs.binding("broadcast_multiply")?,
+        rhs.binding("broadcast_multiply")?,
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -6984,10 +7187,10 @@ where
 
 fn launch_broadcast_multiply_int_typed<T>(
     backend: &CudaBackend,
-    lhs: &TypedTensor<T>,
+    lhs: &CompactOperand<'_, T>,
     lhs_shape: &[usize],
     lhs_dims: &[usize],
-    rhs: &TypedTensor<T>,
+    rhs: &CompactOperand<'_, T>,
     rhs_shape: &[usize],
     rhs_dims: &[usize],
 ) -> crate::Result<TypedTensor<T>>
@@ -6997,10 +7200,12 @@ where
     ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
     validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
     validate_broadcast_in_dim(rhs.shape(), rhs_shape, rhs_dims)?;
-    launch_binary_tensor(
+    lhs.ensure_resident(backend.runtime(), "broadcast_multiply")?;
+    rhs.ensure_resident(backend.runtime(), "broadcast_multiply")?;
+    dispatch::launch_binary_bindings(
         backend.runtime(),
-        lhs,
-        rhs,
+        lhs.binding("broadcast_multiply")?,
+        rhs.binding("broadcast_multiply")?,
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
@@ -7021,10 +7226,10 @@ where
 
 fn launch_broadcast_multiply_complex_typed<T>(
     backend: &CudaBackend,
-    lhs: &TypedTensor<T>,
+    lhs: &CompactOperand<'_, T>,
     lhs_shape: &[usize],
     lhs_dims: &[usize],
-    rhs: &TypedTensor<T>,
+    rhs: &CompactOperand<'_, T>,
     rhs_shape: &[usize],
     rhs_dims: &[usize],
 ) -> crate::Result<TypedTensor<T>>
@@ -7034,10 +7239,12 @@ where
     ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
     validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
     validate_broadcast_in_dim(rhs.shape(), rhs_shape, rhs_dims)?;
-    launch_binary_tensor(
+    lhs.ensure_resident(backend.runtime(), "broadcast_multiply")?;
+    rhs.ensure_resident(backend.runtime(), "broadcast_multiply")?;
+    dispatch::launch_binary_bindings(
         backend.runtime(),
-        lhs,
-        rhs,
+        lhs.binding("broadcast_multiply")?,
+        rhs.binding("broadcast_multiply")?,
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {

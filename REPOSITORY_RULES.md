@@ -525,7 +525,8 @@ Tests follow implementation ownership.
   |---|---|
   | Elementwise (`add`, `mul`, `neg`, `exp`, fused eager replay, ...) | `strided-kernel` (`map_into`, `zip_map2_into`, `ErasedFusedPlan`, etc.) |
   | Reduction (`reduce_sum`, `reduce_prod`) | `strided-kernel` (`ErasedReducePlan::compile_axes`) |
-  | Structural (`transpose`, `broadcast`, `extract_diag`) | `strided-kernel` (`permute` + `copy_into`, `broadcast`, `diagonal_view`) |
+  | Structural (`transpose`, `broadcast`, `extract_diag`, `embed_diagonal`, `tril`/`triu`) | `strided-kernel` (view/copy and dense full-overwrite kernels) |
+  | AXPBY (`y = alpha*x + beta*y`) | `strided-kernel::axpby_accum` |
   | Gather | `strided-kernel` (`ErasedGatherPlan`) |
   | Additive scatter | `strided-kernel` (`ErasedScatterPlan`) |
   | Fixed-window dynamic slice/update | `strided-kernel` (`ErasedDynamicSlicePlan`, `ErasedDynamicUpdateSlicePlan`) |
@@ -577,8 +578,7 @@ Tests follow implementation ownership.
   Memory reuse and thread policy are execution resources, not tensor metadata;
   backend-neutral tensor/view types expose metadata-only layout transforms and
   do not own data-moving convenience methods.
-- Exceptions with dedicated implementations: `reshape` (metadata-only),
-  `embed_diagonal`, index-dependent triangular masks (`tril`/`triu`), max/min
+- Exceptions with dedicated implementations: `reshape` (metadata-only), max/min
   reductions until strided exposes matching NaN semantics, and indexing ops
   without a matching strided plan such as static slice, pad, concatenate, and
   reverse.

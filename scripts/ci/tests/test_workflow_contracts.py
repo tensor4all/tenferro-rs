@@ -541,6 +541,42 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("WORKFLOW_RUN_PULL_REQUESTS", gate)
 
+    def test_runpod_gate_only_runs_for_eligible_trigger(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        gate = text[text.index("  ci-gpu-gate:") :]
+        condition = re.search(r"    if: >-\n(.*?)\n\n", gate, re.DOTALL)
+        self.assertIsNotNone(condition)
+        assert condition is not None
+        expression = " ".join(condition.group(1).split())
+        # Evaluate the actual workflow condition across upstream outcomes.
+        # Failed authorization must still reach the aggregate failure check.
+        for event in ("workflow_dispatch", "workflow_run"):
+            for source in ("pull_request", "push"):
+                for conclusion in ("success", "failure", "cancelled", "skipped"):
+                    for cancelled in (False, True):
+                        with self.subTest(
+                            event=event, source=source,
+                            conclusion=conclusion, cancelled=cancelled,
+                        ):
+                            translated = expression
+                            for key, value in {
+                                "github.event_name": event,
+                                "github.event.workflow_run.event": source,
+                                "github.event.workflow_run.conclusion": conclusion,
+                                "always()": True,
+                                "cancelled()": cancelled,
+                            }.items():
+                                translated = translated.replace(key, repr(value))
+                            translated = translated.replace("&&", " and ")
+                            translated = translated.replace("||", " or ")
+                            translated = translated.replace("!", " not ")
+                            actual = eval(translated, {"__builtins__": {}})
+                            expected = not cancelled and (
+                                event == "workflow_dispatch"
+                                or (source == "pull_request" and conclusion == "success")
+                            )
+                            self.assertEqual(actual, expected)
+
     def test_runpod_workflow_is_cache_reader_only(self) -> None:
         """No job that builds PR code or runs on the pod may write caches (#1403)."""
 

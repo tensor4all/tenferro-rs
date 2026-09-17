@@ -41,6 +41,68 @@ fn planned_input_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Vec<DType> 
 }
 
 #[test]
+fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
+    use super::exec_standard_op_on_tensor_reads_in_session as execute;
+    use crate::eager_backend::EagerBackend;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tenferro_tensor::{TensorRead, TensorView};
+
+    let copies = Arc::new(AtomicUsize::new(0));
+    let mut backend = EagerBackend::recording_cpu(Arc::clone(&copies));
+    let input = f64t(vec![2, 3], vec![1., 2., 3., 4., 5., 6.]);
+    let TensorView::F64(view) = TensorRead::from_tensor(&input).tensor_view() else {
+        panic!("f64 view")
+    };
+    let read = TensorRead::from_view(TensorView::F64(view.transpose_view([1, 0]).unwrap()));
+    let result = execute(
+        &StdTensorOp::Mul,
+        &[read.clone(), read.clone()],
+        &mut backend,
+    )
+    .unwrap();
+    assert_eq!(data(&result[0]), vec![1., 9., 25., 4., 16., 36.]);
+    assert_eq!(
+        copies.load(Ordering::Relaxed),
+        0,
+        "same-dtype read-capable operation must borrow inputs"
+    );
+    assert_eq!(data(&input), vec![1., 2., 3., 4., 5., 6.]);
+
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f32; 6]).unwrap();
+    let rhs = TensorRead::from_view(TensorRead::from_tensor(&rhs).tensor_view());
+    let result = execute(&StdTensorOp::Mul, &[read.clone(), rhs], &mut backend).unwrap();
+    assert_eq!(data(&result[0]), vec![2., 6., 10., 4., 8., 12.]);
+    assert_eq!(
+        copies.swap(0, Ordering::Relaxed),
+        1,
+        "only the promoted input needs conversion storage"
+    );
+
+    // Owned-only operations retain their explicit materialization boundary.
+    let result = execute(
+        &StdTensorOp::Tril { k: 0 },
+        std::slice::from_ref(&read),
+        &mut backend,
+    )
+    .unwrap();
+    assert_eq!(data(&result[0]), vec![1., 3., 5., 0., 4., 6.]);
+    assert_eq!(copies.swap(0, Ordering::Relaxed), 1);
+
+    // Default read hooks reject views; never conceal unsupported capabilities
+    // with an implicit eager copy. Production CPU sessions override exp_read.
+    let error = execute(&StdTensorOp::Exp, &[read], &mut backend).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
+    assert_eq!(copies.load(Ordering::Relaxed), 0);
+
+    let empty = f64t(vec![0, 3], vec![]);
+    let read = TensorRead::from_view(TensorRead::from_tensor(&empty).tensor_view());
+    let result = execute(&StdTensorOp::Mul, &[read.clone(), read], &mut backend).unwrap();
+    assert_eq!(result[0].shape(), &[0, 3]);
+    assert!(data(&result[0]).is_empty());
+    assert_eq!(copies.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn eager_input_promotion_plan_covers_all_promoted_families() {
     let binary_ops = [
         StdTensorOp::Add,

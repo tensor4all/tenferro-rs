@@ -107,16 +107,17 @@ fn cpu_linalg_dispatch_does_not_use_panic_catching_as_error_handling() {
 }
 
 #[test]
-fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
+fn cpu_diagonal_pooled_outputs_use_checked_shape_product() {
     let structural = include_str!("../../src/structural.rs");
     let filled_section = source_section(
         structural,
-        "fn filled_tensor_from_pool",
-        "fn clone_host_tensor_from_pool",
+        "fn typed_embed_diagonal_impl",
+        "pub(crate) fn typed_tril",
     );
 
     assert!(
-        filled_section.contains("checked_shape_product(op, \"output shape\", &shape)?"),
+        filled_section
+            .contains("checked_shape_product(\"embed_diagonal\", \"output shape\", &out_shape)?"),
         "CPU zero/fill pooled output allocation must reject shape-product overflow"
     );
     assert!(
@@ -124,14 +125,13 @@ fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
         "CPU zero/fill pooled output allocation must not use unchecked shape.iter().product()"
     );
     assert!(
-        filled_section.contains("PooledUninitOutput::<T>::new(buffers, shape)?"),
+        filled_section.contains("PooledUninitOutput::<T>::new(buffers, out_shape)?"),
         "CPU fill pooled outputs must use the full-overwrite uninit guard"
     );
     assert!(
-        filled_section.contains(".fill(MaybeUninit::new(fill))")
-            && filled_section.contains("// INVARIANT:")
+        filled_section.contains("strided_kernel::embed_diagonal_into_uninit")
             && filled_section.contains("// SAFETY:"),
-        "CPU fill pooled outputs must fill the entire destination before the completion handoff and record the invariant markers"
+        "CPU diagonal outputs must use strided full-overwrite before the documented completion handoff"
     );
     assert!(
         !filled_section.contains("acquire_zeroed"),

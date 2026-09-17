@@ -600,18 +600,6 @@ pub(crate) fn tensor_from_array<T: Clone + tenferro_tensor::TensorScalar>(
         .expect("strided array dimensions match owned data length")
 }
 
-pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize]) {
-    assert_eq!(shape.len(), out.len());
-    for (axis, &dim) in shape.iter().enumerate() {
-        if dim == 0 {
-            out[axis] = 0;
-        } else {
-            out[axis] = flat % dim;
-            flat /= dim;
-        }
-    }
-}
-
 // `provider-inject` owns call-through coverage in the serialized integration
 // fixture, which registers every BLAS symbol before the first operation.  The
 // broad unit suite selects the compiled default backend and therefore must not

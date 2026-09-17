@@ -251,6 +251,7 @@ impl TensorElementwise for RecordingBackend {
         fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn sub(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
+        fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn neg(input: &Tensor) -> TensorResult<Tensor>;
         fn conj(input: &Tensor) -> TensorResult<Tensor>;
         fn div(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;

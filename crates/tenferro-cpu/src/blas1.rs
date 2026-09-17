@@ -3,7 +3,6 @@ use std::ops::{Add, Mul};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use num_complex::{Complex32, Complex64};
-use rayon::prelude::*;
 use tenferro_tensor::{
     ContractionScalar, DType, MemoryKind, Tensor, TensorRead, TensorViewMut, TensorWrite,
 };
@@ -92,30 +91,10 @@ fn axpby_typed<T>(
 where
     T: Copy + Send + Sync + Add<Output = T> + Mul<Output = T>,
 {
-    debug_assert_eq!(x_data.len(), y_data.len());
-    let len = y_data.len();
-
-    // INVARIANT: shared validation proves compact, injective y and conservative
-    // x/y non-overlap before this single read-modify-write pass begins. The
-    // accepted tenferro-owned exception is necessary because strided-rs has no
-    // primitive for reading and updating one caller-owned destination.
-    if context.thread_budget().get() > 1 && len > 1 {
-        let chunks = context.thread_budget().get();
-        let chunk_len = len.div_ceil(chunks).max(1);
-        y_data
-            .par_chunks_mut(chunk_len)
-            .zip(x_data.par_chunks(chunk_len))
-            .for_each(|(ys, xs)| {
-                for (dst, src) in ys.iter_mut().zip(xs.iter()) {
-                    *dst = alpha * *src + beta * *dst;
-                }
-            });
-    } else {
-        for (dst, src) in y_data.iter_mut().zip(x_data.iter()) {
-            *dst = alpha * *src + beta * *dst;
-        }
-    }
-    Ok(())
+    context.with_native_parallelism(|| {
+        strided_kernel::axpby_accum(y_data, x_data, alpha, beta)
+            .map_err(|err| crate::Error::backend_source("axpby", err))
+    })
 }
 
 macro_rules! axpby_write {

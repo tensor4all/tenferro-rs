@@ -1,6 +1,6 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
-use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorFusion};
+use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorFusion, TensorRead, TensorView};
 
 use super::{
     assert_tensor_close, assert_validation_kind, cpu_backend, download, gpu_backend, tensor_c32,
@@ -66,6 +66,73 @@ fn assert_f64_extrema_match(actual: &[f64], expected: &[f64]) {
     }
 }
 
+/// The eager einsum path prepares operands of the fused broadcast multiply as
+/// borrowed views over already allocated device storage. A compact view must
+/// take the fused kernel instead of the caller's materializing fallback.
+#[test]
+#[ignore]
+fn broadcast_multiply_consumes_compact_borrowed_views_and_rejects_strided_ones() {
+    let target = vec![2usize, 3];
+    let lhs_dims = vec![0usize, 1];
+    let rhs_dims = vec![1usize];
+
+    let lhs = tensor_f32(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = tensor_f32(vec![3], vec![10.0, 20.0, 30.0]);
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_rhs = upload(&gpu, &rhs);
+
+    let expected = cpu
+        .execute_broadcast_multiply(
+            TensorRead::from_tensor(&lhs),
+            &target,
+            &lhs_dims,
+            TensorRead::from_tensor(&rhs),
+            &target,
+            &rhs_dims,
+        )
+        .unwrap()
+        .expect("the CPU backend executes broadcast multiply");
+
+    let crate::Tensor::F32(lhs_typed) = &gpu_lhs else {
+        unreachable!("f32 upload preserves the dtype")
+    };
+    let crate::Tensor::F32(rhs_typed) = &gpu_rhs else {
+        unreachable!("f32 upload preserves the dtype")
+    };
+
+    let fused = gpu
+        .execute_broadcast_multiply(
+            TensorRead::from_view(TensorView::F32(lhs_typed.as_view())),
+            &target,
+            &lhs_dims,
+            TensorRead::from_view(TensorView::F32(rhs_typed.as_view())),
+            &target,
+            &rhs_dims,
+        )
+        .unwrap()
+        .expect("a compact borrowed view must take the fused path");
+    assert_tensor_close(&download(&gpu, &fused), &expected, 1.0e-6);
+
+    // A strided view cannot be indexed by the compact fused kernel, so the
+    // entry point keeps the caller's fallback instead of reporting an error.
+    let strided = lhs_typed
+        .as_view()
+        .transpose_view([1, 0])
+        .expect("transpose_view builds a strided rank-2 view");
+    let fallback = gpu
+        .execute_broadcast_multiply(
+            TensorRead::from_view(TensorView::F32(strided)),
+            &target,
+            &lhs_dims,
+            TensorRead::from_view(TensorView::F32(rhs_typed.as_view())),
+            &target,
+            &rhs_dims,
+        )
+        .unwrap();
+    assert!(fallback.is_none(), "a strided view must keep the fallback");
+}
 #[test]
 #[ignore]
 fn test_fused_f32_max_min_propagate_nan_in_both_operand_orders() {
