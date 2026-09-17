@@ -751,6 +751,19 @@ pub(super) fn householder_qr_append(
     };
     Ok(CompactQrResult { packed, coeff })
 }
+/// The typed operands behind a same-dtype pair, or this entry point's refusal for one.
+fn qr_q_columns_operands<'a, T: TensorScalar>(
+    packed: &'a Tensor,
+    coeff: &'a Tensor,
+) -> Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let packed_t = packed.as_typed::<T>().ok_or_else(|| {
+        Error::dtype_mismatch("householder_qr_q_columns", packed.dtype(), coeff.dtype())
+    })?;
+    let coeff_t = coeff.as_typed::<T>().ok_or_else(|| {
+        Error::dtype_mismatch("householder_qr_q_columns", packed.dtype(), coeff.dtype())
+    })?;
+    Ok((packed_t, coeff_t))
+}
 
 pub(super) fn householder_qr_q_columns(
     backend: &mut CudaExecSession<'_>,
@@ -761,53 +774,78 @@ pub(super) fn householder_qr_q_columns(
     options: QrOptions,
 ) -> Result<Tensor> {
     ensure_supported_linalg_pair("householder_qr_q_columns", packed, coeff)?;
-    match (packed, coeff) {
-        (Tensor::F32(packed), Tensor::F32(coeff)) => compact_qr_q_columns_typed(
-            backend,
-            packed,
-            coeff,
-            start,
-            end,
-            options,
-            "householder_qr_q_columns",
-        )
-        .map(Tensor::from_typed::<f32>),
-        (Tensor::F64(packed), Tensor::F64(coeff)) => compact_qr_q_columns_typed(
-            backend,
-            packed,
-            coeff,
-            start,
-            end,
-            options,
-            "householder_qr_q_columns",
-        )
-        .map(Tensor::from_typed::<f64>),
-        (Tensor::C32(packed), Tensor::C32(coeff)) => compact_qr_q_columns_typed(
-            backend,
-            packed,
-            coeff,
-            start,
-            end,
-            options,
-            "householder_qr_q_columns",
-        )
-        .map(Tensor::from_typed::<num_complex::Complex32>),
-        (Tensor::C64(packed), Tensor::C64(coeff)) => compact_qr_q_columns_typed(
-            backend,
-            packed,
-            coeff,
-            start,
-            end,
-            options,
-            "householder_qr_q_columns",
-        )
-        .map(Tensor::from_typed::<num_complex::Complex64>),
+    match (packed.dtype(), coeff.dtype()) {
+        (DType::F32, DType::F32) => {
+            let (packed, coeff) = qr_q_columns_operands::<f32>(packed, coeff)?;
+            compact_qr_q_columns_typed(
+                backend,
+                packed,
+                coeff,
+                start,
+                end,
+                options,
+                "householder_qr_q_columns",
+            )
+            .map(Tensor::from_typed::<f32>)
+        }
+        (DType::F64, DType::F64) => {
+            let (packed, coeff) = qr_q_columns_operands::<f64>(packed, coeff)?;
+            compact_qr_q_columns_typed(
+                backend,
+                packed,
+                coeff,
+                start,
+                end,
+                options,
+                "householder_qr_q_columns",
+            )
+            .map(Tensor::from_typed::<f64>)
+        }
+        (DType::C32, DType::C32) => {
+            let (packed, coeff) = qr_q_columns_operands::<num_complex::Complex32>(packed, coeff)?;
+            compact_qr_q_columns_typed(
+                backend,
+                packed,
+                coeff,
+                start,
+                end,
+                options,
+                "householder_qr_q_columns",
+            )
+            .map(Tensor::from_typed::<num_complex::Complex32>)
+        }
+        (DType::C64, DType::C64) => {
+            let (packed, coeff) = qr_q_columns_operands::<num_complex::Complex64>(packed, coeff)?;
+            compact_qr_q_columns_typed(
+                backend,
+                packed,
+                coeff,
+                start,
+                end,
+                options,
+                "householder_qr_q_columns",
+            )
+            .map(Tensor::from_typed::<num_complex::Complex64>)
+        }
         _ => Err(Error::dtype_mismatch(
             "householder_qr_q_columns",
             packed.dtype(),
             coeff.dtype(),
         )),
     }
+}
+/// The typed operands behind a same-dtype pair, or this entry point's refusal for one.
+fn qr_r_operands<'a, T: TensorScalar>(
+    packed: &'a Tensor,
+    coeff: &'a Tensor,
+) -> Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
+    let packed_t = packed
+        .as_typed::<T>()
+        .ok_or_else(|| Error::dtype_mismatch("householder_qr_r", packed.dtype(), coeff.dtype()))?;
+    let coeff_t = coeff
+        .as_typed::<T>()
+        .ok_or_else(|| Error::dtype_mismatch("householder_qr_r", packed.dtype(), coeff.dtype()))?;
+    Ok((packed_t, coeff_t))
 }
 
 pub(super) fn householder_qr_r(
@@ -817,20 +855,24 @@ pub(super) fn householder_qr_r(
     options: QrOptions,
 ) -> Result<Tensor> {
     ensure_supported_linalg_pair("householder_qr_r", packed, coeff)?;
-    match (packed, coeff) {
-        (Tensor::F32(packed), Tensor::F32(coeff)) => {
+    match (packed.dtype(), coeff.dtype()) {
+        (DType::F32, DType::F32) => {
+            let (packed, coeff) = qr_r_operands::<f32>(packed, coeff)?;
             compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r")
                 .map(Tensor::from_typed::<f32>)
         }
-        (Tensor::F64(packed), Tensor::F64(coeff)) => {
+        (DType::F64, DType::F64) => {
+            let (packed, coeff) = qr_r_operands::<f64>(packed, coeff)?;
             compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r")
                 .map(Tensor::from_typed::<f64>)
         }
-        (Tensor::C32(packed), Tensor::C32(coeff)) => {
+        (DType::C32, DType::C32) => {
+            let (packed, coeff) = qr_r_operands::<num_complex::Complex32>(packed, coeff)?;
             compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r")
                 .map(Tensor::from_typed::<num_complex::Complex32>)
         }
-        (Tensor::C64(packed), Tensor::C64(coeff)) => {
+        (DType::C64, DType::C64) => {
+            let (packed, coeff) = qr_r_operands::<num_complex::Complex64>(packed, coeff)?;
             compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r")
                 .map(Tensor::from_typed::<num_complex::Complex64>)
         }
