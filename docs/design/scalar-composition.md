@@ -1657,6 +1657,12 @@ representation means either a panic on a path a caller can reach — the design 
 or the single storage-aware payload the removal is waiting on. The figure is therefore reported as measured
 with that cap stated, rather than as a target met.
 
+The yield of this work is bounded by what the full run already covers: the same two matrices moved the
+kernel crate's own narrow line coverage of `elementwise.rs` from 68.03% to 70.34%, but the workspace
+figure only from 78.3% to 78.6%, and a test for the reduction read table's view arms added four more
+lines, because in the full run other crates' tests execute most arms already. The remaining reachable
+uncovered lines are internal refusal arms reached only through a seam's own module, a few lines each.
+
 What that means for the audit: the enforced gate and the new-path duty are met and measured, with the cap
 above stated; whole-file 90% on every changed file is not met, and the honest status of that item is partially
 met with the numbers above rather than claimed.

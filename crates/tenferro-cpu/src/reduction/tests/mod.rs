@@ -1,8 +1,8 @@
 //! Module-local tests for the reduction dispatch seams.
 
-use super::{reduce_max, reduce_min, reduce_prod, reduce_sum, typed_input};
+use super::{reduce_max, reduce_min, reduce_prod, reduce_sum, reduce_sum_read, typed_input};
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensor};
 
 fn tensor<T: tenferro_tensor::TensorScalar + Copy>(values: Vec<T>) -> Tensor {
     Tensor::from_vec_col_major(vec![values.len()], values).unwrap()
@@ -62,4 +62,48 @@ fn reduce_sum_and_prod_cover_every_preset_scalar() {
         let _ = reduce_sum(input, &[0], &context);
         let _ = reduce_prod(input, &[0], &context);
     }
+}
+
+/// The read table carries one view arm per preset scalar. Passing a view-backed operand reaches those
+/// arms without materializing, and the boolean view is refused with a typed refusal rather than a panic.
+#[test]
+fn reduce_sum_read_covers_every_preset_view() {
+    let context = strided_kernel::ExecContext::serial();
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+
+    macro_rules! check {
+        ($variant:ident, $scalar:ty, $values:expr, $supported:expr) => {{
+            let owned = tensor::<$scalar>($values);
+            let typed = owned
+                .as_typed::<$scalar>()
+                .expect("the tensor was built from this scalar")
+                .as_view();
+            let read = TensorRead::from_view(TensorView::$variant(typed));
+            let result = reduce_sum_read(&mut buffers, read, &[0], &context);
+            if $supported {
+                assert!(result.is_ok(), "{} view must reduce", stringify!($scalar));
+            } else {
+                let error = result.expect_err("an unsupported view must be refused");
+                assert!(!error.to_string().is_empty());
+            }
+        }};
+    }
+
+    check!(F32, f32, vec![1.0_f32, 2.0], true);
+    check!(F64, f64, vec![1.0_f64, 2.0], true);
+    check!(I32, i32, vec![1_i32, 2], true);
+    check!(I64, i64, vec![1_i64, 2], true);
+    check!(Bool, bool, vec![false, true], false);
+    check!(
+        C32,
+        Complex32,
+        vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, 2.0)],
+        true
+    );
+    check!(
+        C64,
+        Complex64,
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 2.0)],
+        true
+    );
 }
