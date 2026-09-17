@@ -18,8 +18,8 @@ pub mod read_into;
 pub mod scalar_ops;
 pub use read_into::elementwise_read_into_with_context;
 
-#[cfg(test)]
-use num_complex::{Complex32, Complex64};
+// Re-exported so the exported dispatch macros can name them with `$crate` paths.
+pub use num_complex::{Complex32, Complex64};
 #[cfg(test)]
 use std::mem::MaybeUninit;
 #[cfg(test)]

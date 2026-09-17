@@ -45,15 +45,38 @@
 #[macro_export]
 macro_rules! same_variant_pair {
     ($lhs:expr, $rhs:expr, |$a:ident, $b:ident| $call:expr, $fallback:expr) => {
-        match ($lhs, $rhs) {
-            (Tensor::F32($a), Tensor::F32($b)) => $call.map(Tensor::F32),
-            (Tensor::F64($a), Tensor::F64($b)) => $call.map(Tensor::F64),
-            (Tensor::C32($a), Tensor::C32($b)) => $call.map(Tensor::C32),
-            (Tensor::C64($a), Tensor::C64($b)) => $call.map(Tensor::C64),
-            ($a, $b) => {
-                let _ = (&$a, &$b);
-                $fallback
+        match ($lhs.dtype(), $rhs.dtype()) {
+            ($crate::DType::F32, $crate::DType::F32) => {
+                match ($lhs.as_typed::<f32>(), $rhs.as_typed::<f32>()) {
+                    (Some($a), Some($b)) => $call.map(Tensor::from_typed::<f32>),
+                    _ => $fallback,
+                }
             }
+            ($crate::DType::F64, $crate::DType::F64) => {
+                match ($lhs.as_typed::<f64>(), $rhs.as_typed::<f64>()) {
+                    (Some($a), Some($b)) => $call.map(Tensor::from_typed::<f64>),
+                    _ => $fallback,
+                }
+            }
+            ($crate::DType::C32, $crate::DType::C32) => {
+                match (
+                    $lhs.as_typed::<$crate::Complex32>(),
+                    $rhs.as_typed::<$crate::Complex32>(),
+                ) {
+                    (Some($a), Some($b)) => $call.map(Tensor::from_typed::<$crate::Complex32>),
+                    _ => $fallback,
+                }
+            }
+            ($crate::DType::C64, $crate::DType::C64) => {
+                match (
+                    $lhs.as_typed::<$crate::Complex64>(),
+                    $rhs.as_typed::<$crate::Complex64>(),
+                ) {
+                    (Some($a), Some($b)) => $call.map(Tensor::from_typed::<$crate::Complex64>),
+                    _ => $fallback,
+                }
+            }
+            _ => $fallback,
         }
     };
 }
@@ -86,11 +109,23 @@ macro_rules! same_variant_pair {
 #[macro_export]
 macro_rules! same_variant_unary {
     ($input:expr, |$t:ident| $call:expr, |$value:ident| $wrap:expr, $fallback:expr) => {
-        match $input {
-            Tensor::F32($t) => $call.map(|$value| $wrap),
-            Tensor::F64($t) => $call.map(|$value| $wrap),
-            Tensor::C32($t) => $call.map(|$value| $wrap),
-            Tensor::C64($t) => $call.map(|$value| $wrap),
+        match $input.dtype() {
+            $crate::DType::F32 => match $input.as_typed::<f32>() {
+                Some($t) => $call.map(|$value| $wrap),
+                None => $fallback,
+            },
+            $crate::DType::F64 => match $input.as_typed::<f64>() {
+                Some($t) => $call.map(|$value| $wrap),
+                None => $fallback,
+            },
+            $crate::DType::C32 => match $input.as_typed::<$crate::Complex32>() {
+                Some($t) => $call.map(|$value| $wrap),
+                None => $fallback,
+            },
+            $crate::DType::C64 => match $input.as_typed::<$crate::Complex64>() {
+                Some($t) => $call.map(|$value| $wrap),
+                None => $fallback,
+            },
             _ => $fallback,
         }
     };
