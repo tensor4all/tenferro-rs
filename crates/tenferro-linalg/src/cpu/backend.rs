@@ -1206,6 +1206,29 @@ fn typed_host<'a, T: TensorScalar>(
         .ok_or_else(|| unsupported_dtype(op, input.dtype()))
 }
 
+/// A pair of borrowed typed operands that share one scalar.
+type TypedOperandPair<'a, T> = (
+    &'a TypedTensor<T, tenferro_tensor::DynRank>,
+    &'a TypedTensor<T, tenferro_tensor::DynRank>,
+);
+
+/// The typed operands behind a same-dtype pair, or the refusal this entry point reports.
+///
+/// The result type is spelled out because this module's imports resolve `TypedTensor` to its
+/// two-parameter form and `Result` to the standard one at file scope.
+fn qr_import_operands<'a, T: TensorScalar>(
+    q: &'a Tensor,
+    r: &'a Tensor,
+) -> Result<TypedOperandPair<'a, T>, tenferro_tensor::Error> {
+    let q_t = q
+        .as_typed::<T>()
+        .ok_or_else(|| unsupported_dtype("householder_qr_from_factors", q.dtype()))?;
+    let r_t = r
+        .as_typed::<T>()
+        .ok_or_else(|| unsupported_dtype("householder_qr_from_factors", r.dtype()))?;
+    Ok((q_t, r_t))
+}
+
 fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
     match input.dtype() {
         // A caller-owned payload is not a linalg operand.
@@ -2455,39 +2478,19 @@ fn householder_qr_from_factors_entered(
             }
             match (q.dtype(), r.dtype()) {
                 (DType::F32, DType::F32) => {
-                    let q_t = q.as_typed::<f32>().ok_or_else(|| {
-                        unsupported_dtype("householder_qr_from_factors", q.dtype())
-                    })?;
-                    let r_t = r.as_typed::<f32>().ok_or_else(|| {
-                        unsupported_dtype("householder_qr_from_factors", r.dtype())
-                    })?;
+                    let (q_t, r_t) = qr_import_operands::<f32>(q, r)?;
                     import!(q_t, r_t, F32)
                 }
                 (DType::F64, DType::F64) => {
-                    let q_t = q.as_typed::<f64>().ok_or_else(|| {
-                        unsupported_dtype("householder_qr_from_factors", q.dtype())
-                    })?;
-                    let r_t = r.as_typed::<f64>().ok_or_else(|| {
-                        unsupported_dtype("householder_qr_from_factors", r.dtype())
-                    })?;
+                    let (q_t, r_t) = qr_import_operands::<f64>(q, r)?;
                     import!(q_t, r_t, F64)
                 }
                 (DType::C32, DType::C32) => {
-                    let q_t = q.as_typed::<Complex32>().ok_or_else(|| {
-                        unsupported_dtype("householder_qr_from_factors", q.dtype())
-                    })?;
-                    let r_t = r.as_typed::<Complex32>().ok_or_else(|| {
-                        unsupported_dtype("householder_qr_from_factors", r.dtype())
-                    })?;
+                    let (q_t, r_t) = qr_import_operands::<Complex32>(q, r)?;
                     import!(q_t, r_t, C32)
                 }
                 (DType::C64, DType::C64) => {
-                    let q_t = q.as_typed::<Complex64>().ok_or_else(|| {
-                        unsupported_dtype("householder_qr_from_factors", q.dtype())
-                    })?;
-                    let r_t = r.as_typed::<Complex64>().ok_or_else(|| {
-                        unsupported_dtype("householder_qr_from_factors", r.dtype())
-                    })?;
+                    let (q_t, r_t) = qr_import_operands::<Complex64>(q, r)?;
                     import!(q_t, r_t, C64)
                 }
                 _ => return Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),

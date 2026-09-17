@@ -1,6 +1,6 @@
 //! Module-local tests for the linalg dispatch seams.
 
-use super::{ensure_host_tensor, typed_host, zeros_like_tensor};
+use super::{ensure_host_tensor, typed_host, write_view_operand, zeros_like_tensor};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{Tensor, TypedTensor};
 
@@ -62,4 +62,20 @@ fn host_check_and_zero_like_cover_every_preset_scalar() {
 fn typed_host_refuses_a_dtype_the_dispatch_never_produces() {
     let tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     assert!(typed_host::<f32>(&tensor, "lu_factor").is_err());
+}
+
+/// The accessor reports the module's refusal when the tag and the runtime dtype disagree.
+#[test]
+fn typed_host_refuses_a_dtype_the_table_never_produces() {
+    let tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
+    assert!(typed_host::<f32>(&tensor, "zeros_like_tensor").is_err());
+}
+
+/// The write-view accessor's unwind site is the module's documented invariant, so a test states it rather
+/// than leaving it assumed: a dtype with no mutable view cannot be adapted.
+#[test]
+#[should_panic(expected = "linalg validates its input dtypes first")]
+fn write_view_operand_unwinds_for_a_dtype_with_no_view() {
+    let mut tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
+    let _ = write_view_operand::<f32>(&mut tensor);
 }

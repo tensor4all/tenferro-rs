@@ -703,3 +703,29 @@ fn linalg_provider_panic_allows_next_operation_without_clearing_stats_poison() {
     assert_eq!(installs.load(Ordering::Relaxed), 2);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 }
+
+/// The full-SVD path for the float and complex tags as well as the one the test above uses, so each
+/// tag's arms build their outputs rather than leaving those lines unvisited.
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn faer_full_svd_covers_the_float_and_complex_tags() {
+    let (mut backend, _, _) = external_no_inner_backend();
+    let inputs = [
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0_f32, 4.0]).unwrap()),
+        Tensor::C32(
+            TypedTensor::from_vec_col_major(
+                vec![2, 1],
+                vec![
+                    num_complex::Complex32::new(3.0, 0.0),
+                    num_complex::Complex32::new(4.0, 0.0),
+                ],
+            )
+            .unwrap(),
+        ),
+    ];
+    for input in inputs {
+        let outputs = with_cpu_linalg(&mut backend, |backend| backend.svd_full(&input))
+            .expect("the faer provider implements full SVD for both tags");
+        assert_eq!(outputs.len(), 3);
+    }
+}
