@@ -396,6 +396,24 @@ pub(crate) fn with_cufft_plan_for_batch<T>(
     }
 }
 
+/// The typed input behind a CUDA FFT pair, or this module's dtype refusal.
+fn fft_input<T: tenferro_tensor::TensorScalar>(
+    input: &Tensor,
+) -> Result<&TypedTensor<T>, CudaFftError> {
+    input
+        .as_typed::<T>()
+        .ok_or(CudaFftError::InvalidConfiguration { field: "dtype" })
+}
+
+/// The typed output behind a CUDA FFT pair, or this module's dtype refusal.
+fn fft_output<T: tenferro_tensor::TensorScalar>(
+    output: &mut Tensor,
+) -> Result<&mut TypedTensor<T>, CudaFftError> {
+    output
+        .as_typed_mut::<T>()
+        .ok_or(CudaFftError::InvalidConfiguration { field: "dtype" })
+}
+
 impl CufftPlanEntry {
     /// Create a cached cuFFT plan entry on the exact retained runtime.
     pub(crate) fn create(
@@ -447,11 +465,11 @@ impl CufftPlanEntry {
         output: &mut Tensor,
     ) -> Result<(), CudaFftError> {
         match self.key.kind {
-            CufftTransformKind::C2c32 => match (input, output) {
-                (Tensor::C32(input), Tensor::C32(output)) => self.execute_pair(
+            CufftTransformKind::C2c32 => match (input.dtype(), output.dtype()) {
+                (crate::DType::C32, crate::DType::C32) => self.execute_pair(
                     session,
-                    input,
-                    output,
+                    fft_input::<num_complex::Complex32>(input)?,
+                    fft_output::<num_complex::Complex32>(output)?,
                     |api, plan, input, output| {
                         // SAFETY: the raw-session tensor refs validate exact
                         // runtime residency and keep both buffers borrowed.
@@ -463,11 +481,11 @@ impl CufftPlanEntry {
                 ),
                 _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
             },
-            CufftTransformKind::C2c64 => match (input, output) {
-                (Tensor::C64(input), Tensor::C64(output)) => self.execute_pair(
+            CufftTransformKind::C2c64 => match (input.dtype(), output.dtype()) {
+                (crate::DType::C64, crate::DType::C64) => self.execute_pair(
                     session,
-                    input,
-                    output,
+                    fft_input::<num_complex::Complex64>(input)?,
+                    fft_output::<num_complex::Complex64>(output)?,
                     |api, plan, input, output| {
                         // SAFETY: the raw-session tensor refs validate exact
                         // runtime residency and keep both buffers borrowed.
@@ -479,11 +497,11 @@ impl CufftPlanEntry {
                 ),
                 _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
             },
-            CufftTransformKind::R2c32 => match (input, output) {
-                (Tensor::F32(input), Tensor::C32(output)) => self.execute_pair(
+            CufftTransformKind::R2c32 => match (input.dtype(), output.dtype()) {
+                (crate::DType::F32, crate::DType::C32) => self.execute_pair(
                     session,
-                    input,
-                    output,
+                    fft_input::<f32>(input)?,
+                    fft_output::<num_complex::Complex32>(output)?,
                     |api, plan, input, output| {
                         // SAFETY: the raw-session tensor refs validate exact
                         // runtime residency and keep both buffers borrowed.
@@ -493,11 +511,11 @@ impl CufftPlanEntry {
                 ),
                 _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
             },
-            CufftTransformKind::R2c64 => match (input, output) {
-                (Tensor::F64(input), Tensor::C64(output)) => self.execute_pair(
+            CufftTransformKind::R2c64 => match (input.dtype(), output.dtype()) {
+                (crate::DType::F64, crate::DType::C64) => self.execute_pair(
                     session,
-                    input,
-                    output,
+                    fft_input::<f64>(input)?,
+                    fft_output::<num_complex::Complex64>(output)?,
                     |api, plan, input, output| {
                         // SAFETY: the raw-session tensor refs validate exact
                         // runtime residency and keep both buffers borrowed.
@@ -507,11 +525,11 @@ impl CufftPlanEntry {
                 ),
                 _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
             },
-            CufftTransformKind::C2r32 => match (input, output) {
-                (Tensor::C32(input), Tensor::F32(output)) => self.execute_pair(
+            CufftTransformKind::C2r32 => match (input.dtype(), output.dtype()) {
+                (crate::DType::C32, crate::DType::F32) => self.execute_pair(
                     session,
-                    input,
-                    output,
+                    fft_input::<num_complex::Complex32>(input)?,
+                    fft_output::<f32>(output)?,
                     |api, plan, input, output| {
                         // SAFETY: the raw-session tensor refs validate exact
                         // runtime residency and keep both buffers borrowed.
@@ -521,11 +539,11 @@ impl CufftPlanEntry {
                 ),
                 _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
             },
-            CufftTransformKind::C2r64 => match (input, output) {
-                (Tensor::C64(input), Tensor::F64(output)) => self.execute_pair(
+            CufftTransformKind::C2r64 => match (input.dtype(), output.dtype()) {
+                (crate::DType::C64, crate::DType::F64) => self.execute_pair(
                     session,
-                    input,
-                    output,
+                    fft_input::<num_complex::Complex64>(input)?,
+                    fft_output::<f64>(output)?,
                     |api, plan, input, output| {
                         // SAFETY: the raw-session tensor refs validate exact
                         // runtime residency and keep both buffers borrowed.
