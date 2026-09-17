@@ -820,46 +820,52 @@ impl DotGeneralRuntime {
                 ));
             }
             return match &mut output {
-                TensorWrite::Tensor(Tensor::F32(output)) => execute_grouped_outer_typed(
-                    self.gemm.as_ref(),
-                    entry,
-                    &lhs,
-                    &rhs,
-                    config,
-                    output.host_data_mut()?,
-                    0,
-                    |view| TensorViewMut::F32(view),
-                ),
-                TensorWrite::Tensor(Tensor::F64(output)) => execute_grouped_outer_typed(
-                    self.gemm.as_ref(),
-                    entry,
-                    &lhs,
-                    &rhs,
-                    config,
-                    output.host_data_mut()?,
-                    0,
-                    |view| TensorViewMut::F64(view),
-                ),
-                TensorWrite::Tensor(Tensor::C32(output)) => execute_grouped_outer_typed(
-                    self.gemm.as_ref(),
-                    entry,
-                    &lhs,
-                    &rhs,
-                    config,
-                    output.host_data_mut()?,
-                    0,
-                    |view| TensorViewMut::C32(view),
-                ),
-                TensorWrite::Tensor(Tensor::C64(output)) => execute_grouped_outer_typed(
-                    self.gemm.as_ref(),
-                    entry,
-                    &lhs,
-                    &rhs,
-                    config,
-                    output.host_data_mut()?,
-                    0,
-                    |view| TensorViewMut::C64(view),
-                ),
+                TensorWrite::Tensor(tensor) => match tensor.dtype() {
+                    DType::F32 => execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        entry,
+                        &lhs,
+                        &rhs,
+                        config,
+                        dot_write_operand::<f32>(tensor)?.host_data_mut()?,
+                        0,
+                        |view| TensorViewMut::F32(view),
+                    ),
+                    DType::F64 => execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        entry,
+                        &lhs,
+                        &rhs,
+                        config,
+                        dot_write_operand::<f64>(tensor)?.host_data_mut()?,
+                        0,
+                        |view| TensorViewMut::F64(view),
+                    ),
+                    DType::C32 => execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        entry,
+                        &lhs,
+                        &rhs,
+                        config,
+                        dot_write_operand::<Complex32>(tensor)?.host_data_mut()?,
+                        0,
+                        |view| TensorViewMut::C32(view),
+                    ),
+                    DType::C64 => execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        entry,
+                        &lhs,
+                        &rhs,
+                        config,
+                        dot_write_operand::<Complex64>(tensor)?.host_data_mut()?,
+                        0,
+                        |view| TensorViewMut::C64(view),
+                    ),
+                    _ => Err(unsupported_provider_error(
+                        "grouped-GEMM",
+                        CpuProviderUnsupported::DType(tensor.dtype()),
+                    )),
+                },
                 TensorWrite::View(TensorViewMut::F32(output)) => {
                     let base = output.offset();
                     execute_grouped_outer_typed(
@@ -1030,6 +1036,16 @@ fn allocate_canonical_operand(
             crate::cpu_contraction_unsupported_dtype_message(dtype),
         )),
     }
+}
+
+/// The typed tensor behind a write adapter's tensor, or the refusal this provider reports.
+fn dot_write_operand<T: tenferro_tensor::TensorScalar>(
+    tensor: &mut Tensor,
+) -> crate::Result<&mut TypedTensor<T>> {
+    let dtype = tensor.dtype();
+    tensor.as_typed_mut::<T>().ok_or_else(|| {
+        unsupported_provider_error("grouped-GEMM", CpuProviderUnsupported::DType(dtype))
+    })
 }
 
 fn reclaim_temporary(buffers: &mut BufferPool, tensor: Tensor) {
