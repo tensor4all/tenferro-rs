@@ -670,7 +670,7 @@ impl DotGeneralRuntime {
         ) {
             Ok(tensor) => tensor,
             Err(error) => {
-                reclaim_temporary(buffers, lhs_canonical);
+                crate::backend::reclaim_tensor(buffers, lhs_canonical);
                 return Err(error);
             }
         };
@@ -713,8 +713,8 @@ impl DotGeneralRuntime {
                 Err(error) => Err(error),
             }
         };
-        reclaim_temporary(buffers, lhs_canonical);
-        reclaim_temporary(buffers, rhs_canonical);
+        crate::backend::reclaim_tensor(buffers, lhs_canonical);
+        crate::backend::reclaim_tensor(buffers, rhs_canonical);
         result
     }
 
@@ -819,47 +819,41 @@ impl DotGeneralRuntime {
                     },
                 ));
             }
+            // The outer-scheduled grouped path only carries the four floating and complex
+            // presets; the table is kept in one macro so its per-dtype invocation is one line
+            // rather than the full argument list, and the definition is covered once.
+            macro_rules! outer_typed {
+                ($variant:ident, $storage:expr, $base:expr) => {
+                    execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        entry,
+                        &lhs,
+                        &rhs,
+                        config,
+                        $storage,
+                        $base,
+                        |view| TensorViewMut::$variant(view),
+                    )
+                };
+            }
+
             return match &mut output {
                 TensorWrite::Tensor(tensor) => match tensor.dtype() {
-                    DType::F32 => execute_grouped_outer_typed(
-                        self.gemm.as_ref(),
-                        entry,
-                        &lhs,
-                        &rhs,
-                        config,
-                        dot_write_operand::<f32>(tensor)?.host_data_mut()?,
-                        0,
-                        |view| TensorViewMut::F32(view),
-                    ),
-                    DType::F64 => execute_grouped_outer_typed(
-                        self.gemm.as_ref(),
-                        entry,
-                        &lhs,
-                        &rhs,
-                        config,
-                        dot_write_operand::<f64>(tensor)?.host_data_mut()?,
-                        0,
-                        |view| TensorViewMut::F64(view),
-                    ),
-                    DType::C32 => execute_grouped_outer_typed(
-                        self.gemm.as_ref(),
-                        entry,
-                        &lhs,
-                        &rhs,
-                        config,
+                    DType::F32 => {
+                        outer_typed!(F32, dot_write_operand::<f32>(tensor)?.host_data_mut()?, 0)
+                    }
+                    DType::F64 => {
+                        outer_typed!(F64, dot_write_operand::<f64>(tensor)?.host_data_mut()?, 0)
+                    }
+                    DType::C32 => outer_typed!(
+                        C32,
                         dot_write_operand::<Complex32>(tensor)?.host_data_mut()?,
-                        0,
-                        |view| TensorViewMut::C32(view),
+                        0
                     ),
-                    DType::C64 => execute_grouped_outer_typed(
-                        self.gemm.as_ref(),
-                        entry,
-                        &lhs,
-                        &rhs,
-                        config,
+                    DType::C64 => outer_typed!(
+                        C64,
                         dot_write_operand::<Complex64>(tensor)?.host_data_mut()?,
-                        0,
-                        |view| TensorViewMut::C64(view),
+                        0
                     ),
                     _ => Err(unsupported_provider_error(
                         "grouped-GEMM",
@@ -868,55 +862,19 @@ impl DotGeneralRuntime {
                 },
                 TensorWrite::View(TensorViewMut::F32(output)) => {
                     let base = output.offset();
-                    execute_grouped_outer_typed(
-                        self.gemm.as_ref(),
-                        entry,
-                        &lhs,
-                        &rhs,
-                        config,
-                        output.host_storage_mut()?,
-                        base,
-                        |view| TensorViewMut::F32(view),
-                    )
+                    outer_typed!(F32, output.host_storage_mut()?, base)
                 }
                 TensorWrite::View(TensorViewMut::F64(output)) => {
                     let base = output.offset();
-                    execute_grouped_outer_typed(
-                        self.gemm.as_ref(),
-                        entry,
-                        &lhs,
-                        &rhs,
-                        config,
-                        output.host_storage_mut()?,
-                        base,
-                        |view| TensorViewMut::F64(view),
-                    )
+                    outer_typed!(F64, output.host_storage_mut()?, base)
                 }
                 TensorWrite::View(TensorViewMut::C32(output)) => {
                     let base = output.offset();
-                    execute_grouped_outer_typed(
-                        self.gemm.as_ref(),
-                        entry,
-                        &lhs,
-                        &rhs,
-                        config,
-                        output.host_storage_mut()?,
-                        base,
-                        |view| TensorViewMut::C32(view),
-                    )
+                    outer_typed!(C32, output.host_storage_mut()?, base)
                 }
                 TensorWrite::View(TensorViewMut::C64(output)) => {
                     let base = output.offset();
-                    execute_grouped_outer_typed(
-                        self.gemm.as_ref(),
-                        entry,
-                        &lhs,
-                        &rhs,
-                        config,
-                        output.host_storage_mut()?,
-                        base,
-                        |view| TensorViewMut::C64(view),
-                    )
+                    outer_typed!(C64, output.host_storage_mut()?, base)
                 }
                 _ => Err(unsupported_provider_error(
                     "grouped-GEMM",
@@ -1059,31 +1017,6 @@ fn validated_operand<'a, T: tenferro_tensor::TensorScalar>(
         .ok_or_else(|| crate::Error::unsupported_dtype(op, tensor.dtype(), message))
 }
 
-fn reclaim_temporary(buffers: &mut BufferPool, tensor: Tensor) {
-    match tensor.dtype() {
-        // A caller-owned payload owns no pooled storage, and a tag the conversion cannot
-        // recover behaves the same way rather than guessing.
-        DType::External(_) => {}
-        DType::F32 => reclaim_typed_dispatch::<f32>(buffers, tensor),
-        DType::F64 => reclaim_typed_dispatch::<f64>(buffers, tensor),
-        DType::I32 => reclaim_typed_dispatch::<i32>(buffers, tensor),
-        DType::I64 => reclaim_typed_dispatch::<i64>(buffers, tensor),
-        DType::Bool => reclaim_typed_dispatch::<bool>(buffers, tensor),
-        DType::C32 => reclaim_typed_dispatch::<Complex32>(buffers, tensor),
-        DType::C64 => reclaim_typed_dispatch::<Complex64>(buffers, tensor),
-    }
-}
-
-/// Hand the typed tensor back to the pool when the tag table reached the matching tag.
-fn reclaim_typed_dispatch<T: tenferro_cpu_basic::PoolScalar>(
-    buffers: &mut BufferPool,
-    tensor: Tensor,
-) {
-    if let Ok(typed) = tensor.into_typed::<T>() {
-        crate::backend::reclaim_typed(buffers, typed);
-    }
-}
-
 fn materialize_canonical_operand(
     provider: &dyn CpuLayoutTransformProvider,
     context: &CpuExecutionContext<'_>,
@@ -1152,11 +1085,11 @@ fn materialize_canonical_operand_zeroed(
     match outcome {
         Ok(CpuProviderOutcome::Executed) => Ok(output),
         Ok(CpuProviderOutcome::Unsupported(reason)) => {
-            reclaim_temporary(buffers, output);
+            crate::backend::reclaim_tensor(buffers, output);
             Err(unsupported_provider_error("layout-transform", reason))
         }
         Err(error) => {
-            reclaim_temporary(buffers, output);
+            crate::backend::reclaim_tensor(buffers, output);
             Err(error)
         }
     }
@@ -1912,72 +1845,56 @@ macro_rules! validate_write_view_layout {
     }};
 }
 
-fn validate_read_layout(tensor: &TensorRead<'_>, role: &'static str) -> Result<usize> {
-    match tensor {
-        TensorRead::Tensor(tensor) => match tensor.dtype() {
+/// The owned-operand layout table shared by the read and write validators.
+///
+/// Each arm reads the typed tensor its own dtype guard already selected, so
+/// `validated_operand`'s refusal cannot fire from inside an arm. Keeping the table in one
+/// macro means both validators share one covered definition instead of two hand-written
+/// tables whose per-dtype lines differ only by the operation name and message.
+macro_rules! validate_owned_layout_table {
+    ($tensor:expr, $op:expr, $message:expr, $role:expr) => {
+        match $tensor.dtype() {
             // A caller-owned payload is not a runtime operand.
             DType::External(type_id) => Err(crate::Error::unsupported_dtype(
-                "validate_read_layout",
+                $op,
                 DType::External(type_id),
-                "an externally defined payload is not a runtime operand",
+                $message,
             )),
-            DType::F32 => validate_owned_layout!(
-                validated_operand::<f32>(
-                    tensor,
-                    "validate_read_layout",
-                    "an externally defined payload is not a runtime operand"
-                )?,
-                role
-            ),
-            DType::F64 => validate_owned_layout!(
-                validated_operand::<f64>(
-                    tensor,
-                    "validate_read_layout",
-                    "an externally defined payload is not a runtime operand"
-                )?,
-                role
-            ),
-            DType::I32 => validate_owned_layout!(
-                validated_operand::<i32>(
-                    tensor,
-                    "validate_read_layout",
-                    "an externally defined payload is not a runtime operand"
-                )?,
-                role
-            ),
-            DType::I64 => validate_owned_layout!(
-                validated_operand::<i64>(
-                    tensor,
-                    "validate_read_layout",
-                    "an externally defined payload is not a runtime operand"
-                )?,
-                role
-            ),
-            DType::Bool => validate_owned_layout!(
-                validated_operand::<bool>(
-                    tensor,
-                    "validate_read_layout",
-                    "an externally defined payload is not a runtime operand"
-                )?,
-                role
-            ),
+            DType::F32 => {
+                validate_owned_layout!(validated_operand::<f32>($tensor, $op, $message)?, $role)
+            }
+            DType::F64 => {
+                validate_owned_layout!(validated_operand::<f64>($tensor, $op, $message)?, $role)
+            }
+            DType::I32 => {
+                validate_owned_layout!(validated_operand::<i32>($tensor, $op, $message)?, $role)
+            }
+            DType::I64 => {
+                validate_owned_layout!(validated_operand::<i64>($tensor, $op, $message)?, $role)
+            }
+            DType::Bool => {
+                validate_owned_layout!(validated_operand::<bool>($tensor, $op, $message)?, $role)
+            }
             DType::C32 => validate_owned_layout!(
-                validated_operand::<Complex32>(
-                    tensor,
-                    "validate_read_layout",
-                    "an externally defined payload is not a runtime operand"
-                )?,
-                role
+                validated_operand::<Complex32>($tensor, $op, $message)?,
+                $role
             ),
             DType::C64 => validate_owned_layout!(
-                validated_operand::<Complex64>(
-                    tensor,
-                    "validate_read_layout",
-                    "an externally defined payload is not a runtime operand"
-                )?,
-                role
+                validated_operand::<Complex64>($tensor, $op, $message)?,
+                $role
             ),
-        },
+        }
+    };
+}
+
+fn validate_read_layout(tensor: &TensorRead<'_>, role: &'static str) -> Result<usize> {
+    match tensor {
+        TensorRead::Tensor(tensor) => validate_owned_layout_table!(
+            tensor,
+            "validate_read_layout",
+            "an externally defined payload is not a runtime operand",
+            role
+        ),
         TensorRead::View(view) => match view {
             TensorView::F32(view) => validate_read_view_layout!(view, role),
             TensorView::F64(view) => validate_read_view_layout!(view, role),
@@ -1992,70 +1909,12 @@ fn validate_read_layout(tensor: &TensorRead<'_>, role: &'static str) -> Result<u
 
 fn validate_write_layout(tensor: &TensorWrite<'_>, role: &'static str) -> Result<usize> {
     match tensor {
-        TensorWrite::Tensor(tensor) => match tensor.dtype() {
-            // A caller-owned payload is not a runtime destination.
-            DType::External(type_id) => Err(crate::Error::unsupported_dtype(
-                "validate_write_layout",
-                DType::External(type_id),
-                "an externally defined payload is not a runtime destination",
-            )),
-            DType::F32 => validate_owned_layout!(
-                validated_operand::<f32>(
-                    tensor,
-                    "validate_write_layout",
-                    "an externally defined payload is not a runtime destination",
-                )?,
-                role
-            ),
-            DType::F64 => validate_owned_layout!(
-                validated_operand::<f64>(
-                    tensor,
-                    "validate_write_layout",
-                    "an externally defined payload is not a runtime destination",
-                )?,
-                role
-            ),
-            DType::I32 => validate_owned_layout!(
-                validated_operand::<i32>(
-                    tensor,
-                    "validate_write_layout",
-                    "an externally defined payload is not a runtime destination",
-                )?,
-                role
-            ),
-            DType::I64 => validate_owned_layout!(
-                validated_operand::<i64>(
-                    tensor,
-                    "validate_write_layout",
-                    "an externally defined payload is not a runtime destination",
-                )?,
-                role
-            ),
-            DType::Bool => validate_owned_layout!(
-                validated_operand::<bool>(
-                    tensor,
-                    "validate_write_layout",
-                    "an externally defined payload is not a runtime destination",
-                )?,
-                role
-            ),
-            DType::C32 => validate_owned_layout!(
-                validated_operand::<Complex32>(
-                    tensor,
-                    "validate_write_layout",
-                    "an externally defined payload is not a runtime destination",
-                )?,
-                role
-            ),
-            DType::C64 => validate_owned_layout!(
-                validated_operand::<Complex64>(
-                    tensor,
-                    "validate_write_layout",
-                    "an externally defined payload is not a runtime destination",
-                )?,
-                role
-            ),
-        },
+        TensorWrite::Tensor(tensor) => validate_owned_layout_table!(
+            tensor,
+            "validate_write_layout",
+            "an externally defined payload is not a runtime destination",
+            role
+        ),
         TensorWrite::View(view) => match view {
             TensorViewMut::F32(view) => validate_write_view_layout!(view, role),
             TensorViewMut::F64(view) => validate_write_view_layout!(view, role),

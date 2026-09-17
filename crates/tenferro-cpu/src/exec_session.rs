@@ -13,9 +13,7 @@ use tenferro_tensor::{
     TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 
-use super::backend::{
-    elementwise_read_into_fallback_with_pool, reclaim_typed, tag_fresh_output, FreshCpuOutput,
-};
+use super::backend::{elementwise_read_into_fallback_with_pool, tag_fresh_output, FreshCpuOutput};
 use super::indexed_plan_cache::IndexedPlanCache;
 use super::provider::{CpuExecutionContext, CpuOperationEntry, CpuProviderOutcome};
 use super::CpuProviderBundle;
@@ -889,18 +887,7 @@ impl TensorIndexing for CpuExecSession<'_> {
 
 impl TensorBuffer for CpuExecSession<'_> {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
-        match tensor.dtype() {
-            DType::F32 => reclaim_buffer_typed::<f32>(self.buffers, tensor),
-            DType::F64 => reclaim_buffer_typed::<f64>(self.buffers, tensor),
-            DType::I32 => reclaim_buffer_typed::<i32>(self.buffers, tensor),
-            DType::I64 => reclaim_buffer_typed::<i64>(self.buffers, tensor),
-            DType::Bool => reclaim_buffer_typed::<bool>(self.buffers, tensor),
-            DType::C32 => reclaim_buffer_typed::<Complex32>(self.buffers, tensor),
-            DType::C64 => reclaim_buffer_typed::<Complex64>(self.buffers, tensor),
-            // A caller-owned payload owns no pooled storage, and a tag the conversion
-            // cannot recover behaves the same way rather than guessing.
-            DType::External(_) => {}
-        }
+        crate::backend::reclaim_tensor(self.buffers, tensor);
     }
 }
 
@@ -1020,13 +1007,3 @@ impl BackendSession for CpuExecSession<'_> {
 
 #[cfg(test)]
 mod tests;
-
-/// Hand the typed tensor back to the pool when the tag table reached the matching tag.
-fn reclaim_buffer_typed<T: tenferro_cpu_basic::PoolScalar>(
-    buffers: &mut BufferPool,
-    tensor: Tensor,
-) {
-    if let Ok(typed) = tensor.into_typed::<T>() {
-        reclaim_typed(buffers, typed);
-    }
-}

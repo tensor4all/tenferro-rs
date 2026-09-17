@@ -5,7 +5,6 @@
 //! tensor metadata and reachable ranges have already been validated.
 
 use core::fmt;
-use num_complex::{Complex32, Complex64};
 use std::mem::MaybeUninit;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -315,7 +314,7 @@ impl<'a> CpuExecutionContext<'a> {
                     crate::materialize_tensor_read(buffers, op, TensorRead::View(view))
                 })?;
                 let result = operation(&materialized, buffers);
-                reclaim_tensor(buffers, materialized);
+                crate::backend::reclaim_tensor(buffers, materialized);
                 result
             }
         }
@@ -439,31 +438,6 @@ impl<'a> CpuExecutionContext<'a> {
             _ => strided_kernel::ExecutionPolicy::Sequential,
         };
         strided_kernel::with_execution_policy(policy, operation)
-    }
-}
-
-fn reclaim_tensor(buffers: &mut BufferPool, tensor: Tensor) {
-    match tensor.dtype() {
-        DType::F32 => reclaim_typed_dispatch::<f32>(buffers, tensor),
-        DType::F64 => reclaim_typed_dispatch::<f64>(buffers, tensor),
-        DType::I32 => reclaim_typed_dispatch::<i32>(buffers, tensor),
-        DType::I64 => reclaim_typed_dispatch::<i64>(buffers, tensor),
-        DType::Bool => reclaim_typed_dispatch::<bool>(buffers, tensor),
-        DType::C32 => reclaim_typed_dispatch::<Complex32>(buffers, tensor),
-        DType::C64 => reclaim_typed_dispatch::<Complex64>(buffers, tensor),
-        // A caller-owned payload owns no pooled storage, and a tag the conversion
-        // cannot recover behaves the same way rather than guessing.
-        DType::External(_) => {}
-    }
-}
-
-/// Hand the typed tensor back to the pool when the tag table reached the matching tag.
-fn reclaim_typed_dispatch<T: tenferro_cpu_basic::PoolScalar>(
-    buffers: &mut BufferPool,
-    tensor: Tensor,
-) {
-    if let Ok(typed) = tensor.into_typed::<T>() {
-        crate::backend::reclaim_typed(buffers, typed);
     }
 }
 

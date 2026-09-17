@@ -3715,8 +3715,28 @@ impl BackendSessionHost for CpuBackend {
     }
 }
 
+/// Hand a tensor back to the pool's typed free list, keyed by its runtime tag.
+///
+/// A caller-owned payload owns no pooled storage, and a tag the conversion cannot recover
+/// behaves the same way rather than guessing. Every reclaim entry point shares this one table.
+pub(crate) fn reclaim_tensor(buffers: &mut BufferPool, tensor: Tensor) {
+    match tensor.dtype() {
+        DType::F32 => reclaim_tensor_typed::<f32>(buffers, tensor),
+        DType::F64 => reclaim_tensor_typed::<f64>(buffers, tensor),
+        DType::I32 => reclaim_tensor_typed::<i32>(buffers, tensor),
+        DType::I64 => reclaim_tensor_typed::<i64>(buffers, tensor),
+        DType::Bool => reclaim_tensor_typed::<bool>(buffers, tensor),
+        DType::C32 => reclaim_tensor_typed::<Complex32>(buffers, tensor),
+        DType::C64 => reclaim_tensor_typed::<Complex64>(buffers, tensor),
+        DType::External(_) => {}
+    }
+}
+
 /// Hand the typed tensor back to the pool when the tag table reached the matching tag.
-fn reclaim_preset<T: tenferro_cpu_basic::PoolScalar>(buffers: &mut BufferPool, tensor: Tensor) {
+fn reclaim_tensor_typed<T: tenferro_cpu_basic::PoolScalar>(
+    buffers: &mut BufferPool,
+    tensor: Tensor,
+) {
     if let Ok(typed) = tensor.into_typed::<T>() {
         reclaim_typed(buffers, typed);
     }
@@ -3728,19 +3748,7 @@ impl TensorBuffer for CpuBackend {
         let permit = admission.permit();
         with_execution_owner(permit.owner(), || {
             self.with_execution_resources(permit, |resources| {
-                let buffers = &mut resources.buffers;
-                match tensor.dtype() {
-                    DType::F32 => reclaim_preset::<f32>(buffers, tensor),
-                    DType::F64 => reclaim_preset::<f64>(buffers, tensor),
-                    DType::I32 => reclaim_preset::<i32>(buffers, tensor),
-                    DType::I64 => reclaim_preset::<i64>(buffers, tensor),
-                    DType::Bool => reclaim_preset::<bool>(buffers, tensor),
-                    DType::C32 => reclaim_preset::<Complex32>(buffers, tensor),
-                    DType::C64 => reclaim_preset::<Complex64>(buffers, tensor),
-                    // A caller-owned payload owns no pooled storage, and a tag the
-                    // conversion cannot recover behaves the same way rather than guessing.
-                    DType::External(_) => {}
-                }
+                reclaim_tensor(&mut resources.buffers, tensor);
             })
         })
     }
