@@ -785,7 +785,7 @@ impl AdValueRecord {
     fn from_tensor(tensor: Tensor, op: &'static str) -> Result<Arc<Self>> {
         let dtype = tensor.dtype();
         let shape = tensor.shape().to_vec();
-        if matches!(tensor, Tensor::External(..)) {
+        if matches!(dtype, DType::External(_)) {
             // A caller-owned payload is retained directly: it owns no pooled
             // storage, so there is no group to build and nothing to return to a
             // pool when the record drops.

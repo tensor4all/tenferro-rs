@@ -276,13 +276,33 @@ pub(super) fn transpose(
     input: &Tensor,
     perm: &[usize],
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(input) => transpose_typed(backend, input, perm).map(Tensor::F32),
-        Tensor::I32(input) => transpose_typed(backend, input, perm).map(Tensor::I32),
+    match input.dtype() {
+        crate::DType::F32 => transpose_typed(
+            backend,
+            webgpu_transpose_operand::<f32>(input, TRANSPOSE_OP)?,
+            perm,
+        )
+        .map(Tensor::from_typed::<f32>),
+        crate::DType::I32 => transpose_typed(
+            backend,
+            webgpu_transpose_operand::<i32>(input, TRANSPOSE_OP)?,
+            perm,
+        )
+        .map(Tensor::from_typed::<i32>),
         // CubeK has a dedicated complex WebGPU representation, but CubeCL's
         // generic WGSL compiler cannot lower CubePrimitive Complex32.
-        other => Err(unsupported_dtype(TRANSPOSE_OP, other.dtype())),
+        other => Err(unsupported_dtype(TRANSPOSE_OP, other)),
     }
+}
+
+/// The typed tensor behind a transpose operand, or this module's refusal for one.
+fn webgpu_transpose_operand<'a, T: crate::TensorScalar>(
+    input: &'a Tensor,
+    op: &'static str,
+) -> crate::Result<&'a TypedTensor<T>> {
+    input
+        .as_typed::<T>()
+        .ok_or_else(|| unsupported_dtype(op, input.dtype()))
 }
 
 pub(super) fn to_contiguous_read(

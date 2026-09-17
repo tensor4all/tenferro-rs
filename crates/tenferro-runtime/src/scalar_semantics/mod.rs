@@ -85,7 +85,7 @@ pub fn dynamic_truncate_size(size_tensor: &Tensor, axis_extent: usize) -> Result
             format!("size must be scalar, got shape {:?}", size_tensor.shape()),
         ));
     }
-    if let Tensor::I64(inner) = size_tensor {
+    if let Some(inner) = size_tensor.as_typed::<i64>() {
         let value = scalar_host_value(inner.host_data()?, DType::I64)?;
         return Ok(truncate_i64_size(value, axis_extent));
     }
@@ -111,9 +111,15 @@ fn scalar_size_value(size_tensor: &Tensor) -> Result<f64> {
         ));
     }
 
-    match size_tensor {
-        Tensor::F64(inner) => scalar_host_value(inner.host_data()?, DType::F64),
-        Tensor::F32(inner) => Ok(scalar_host_value(inner.host_data()?, DType::F32)? as f64),
+    match size_tensor.dtype() {
+        DType::F64 => scalar_host_value(
+            scalar_size_operand::<f64>(size_tensor)?.host_data()?,
+            DType::F64,
+        ),
+        DType::F32 => Ok(scalar_host_value(
+            scalar_size_operand::<f32>(size_tensor)?.host_data()?,
+            DType::F32,
+        )? as f64),
         _ => Err(Error::unsupported(
             "dynamic_truncate",
             ErrorPhase::Execution,
@@ -123,6 +129,22 @@ fn scalar_size_value(size_tensor: &Tensor) -> Result<f64> {
             ),
         )),
     }
+}
+
+/// The typed tensor behind a size scalar, or this module's refusal for one.
+fn scalar_size_operand<T: tenferro_tensor::TensorScalar>(
+    size_tensor: &Tensor,
+) -> Result<&tenferro_tensor::TypedTensor<T>> {
+    size_tensor.as_typed::<T>().ok_or_else(|| {
+        Error::unsupported(
+            "dynamic_truncate",
+            ErrorPhase::Execution,
+            format!(
+                "dtype {:?} is not accepted for the size scalar",
+                size_tensor.dtype()
+            ),
+        )
+    })
 }
 
 fn scalar_host_value<T: Copy>(data: &[T], dtype: DType) -> Result<T> {
