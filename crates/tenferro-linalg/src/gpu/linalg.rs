@@ -239,18 +239,14 @@ fn ensure_cubecl_resident_typed<T: 'static>(
 
 pub(super) fn cholesky(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Tensor> {
     match input.dtype() {
-        DType::F32 => {
-            cholesky_typed(backend, typed_host::<f32>("cholesky", input)?).map(Tensor::F32)
-        }
-        DType::F64 => {
-            cholesky_typed(backend, typed_host::<f64>("cholesky", input)?).map(Tensor::F64)
-        }
-        DType::C32 => {
-            cholesky_typed(backend, typed_host::<Complex32>("cholesky", input)?).map(Tensor::C32)
-        }
-        DType::C64 => {
-            cholesky_typed(backend, typed_host::<Complex64>("cholesky", input)?).map(Tensor::C64)
-        }
+        DType::F32 => cholesky_typed(backend, typed_host::<f32>("cholesky", input)?)
+            .map(Tensor::from_typed::<f32>),
+        DType::F64 => cholesky_typed(backend, typed_host::<f64>("cholesky", input)?)
+            .map(Tensor::from_typed::<f64>),
+        DType::C32 => cholesky_typed(backend, typed_host::<Complex32>("cholesky", input)?)
+            .map(Tensor::from_typed::<num_complex::Complex32>),
+        DType::C64 => cholesky_typed(backend, typed_host::<Complex64>("cholesky", input)?)
+            .map(Tensor::from_typed::<num_complex::Complex64>),
         DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype("cholesky", input)),
         DType::External(_) => Err(unsupported_linalg_dtype("cholesky", input)),
     }
@@ -268,19 +264,19 @@ pub(super) fn triangular_solve(
     match (a, b) {
         (Tensor::F32(a), Tensor::F32(b)) => {
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
-                .map(Tensor::F32)
+                .map(Tensor::from_typed::<f32>)
         }
         (Tensor::F64(a), Tensor::F64(b)) => {
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
-                .map(Tensor::F64)
+                .map(Tensor::from_typed::<f64>)
         }
         (Tensor::C32(a), Tensor::C32(b)) => {
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
-                .map(Tensor::C32)
+                .map(Tensor::from_typed::<num_complex::Complex32>)
         }
         (Tensor::C64(a), Tensor::C64(b)) => {
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
-                .map(Tensor::C64)
+                .map(Tensor::from_typed::<num_complex::Complex64>)
         }
         _ if a.dtype() != b.dtype() => Err(Error::dtype_mismatch(
             "triangular_solve",
@@ -447,16 +443,14 @@ pub(super) fn svd(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<V
 
 pub(super) fn svd_values(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Tensor> {
     match input.dtype() {
-        DType::F32 => {
-            svd_values_typed(backend, typed_host::<f32>("svd_values", input)?).map(Tensor::F32)
-        }
-        DType::F64 => {
-            svd_values_typed(backend, typed_host::<f64>("svd_values", input)?).map(Tensor::F64)
-        }
+        DType::F32 => svd_values_typed(backend, typed_host::<f32>("svd_values", input)?)
+            .map(Tensor::from_typed::<f32>),
+        DType::F64 => svd_values_typed(backend, typed_host::<f64>("svd_values", input)?)
+            .map(Tensor::from_typed::<f64>),
         DType::C32 => svd_values_typed(backend, typed_host::<Complex32>("svd_values", input)?)
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
         DType::C64 => svd_values_typed(backend, typed_host::<Complex64>("svd_values", input)?)
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
         DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype("svd_values", input)),
         DType::External(_) => Err(unsupported_linalg_dtype("svd_values", input)),
     }
@@ -738,7 +732,7 @@ pub(super) fn householder_qr_q_columns(
             options,
             "householder_qr_q_columns",
         )
-        .map(Tensor::F32),
+        .map(Tensor::from_typed::<f32>),
         (Tensor::F64(packed), Tensor::F64(coeff)) => compact_qr_q_columns_typed(
             backend,
             packed,
@@ -748,7 +742,7 @@ pub(super) fn householder_qr_q_columns(
             options,
             "householder_qr_q_columns",
         )
-        .map(Tensor::F64),
+        .map(Tensor::from_typed::<f64>),
         (Tensor::C32(packed), Tensor::C32(coeff)) => compact_qr_q_columns_typed(
             backend,
             packed,
@@ -758,7 +752,7 @@ pub(super) fn householder_qr_q_columns(
             options,
             "householder_qr_q_columns",
         )
-        .map(Tensor::C32),
+        .map(Tensor::from_typed::<num_complex::Complex32>),
         (Tensor::C64(packed), Tensor::C64(coeff)) => compact_qr_q_columns_typed(
             backend,
             packed,
@@ -768,7 +762,7 @@ pub(super) fn householder_qr_q_columns(
             options,
             "householder_qr_q_columns",
         )
-        .map(Tensor::C64),
+        .map(Tensor::from_typed::<num_complex::Complex64>),
         _ => Err(Error::dtype_mismatch(
             "householder_qr_q_columns",
             packed.dtype(),
@@ -786,16 +780,20 @@ pub(super) fn householder_qr_r(
     ensure_supported_linalg_pair("householder_qr_r", packed, coeff)?;
     match (packed, coeff) {
         (Tensor::F32(packed), Tensor::F32(coeff)) => {
-            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r").map(Tensor::F32)
+            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r")
+                .map(Tensor::from_typed::<f32>)
         }
         (Tensor::F64(packed), Tensor::F64(coeff)) => {
-            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r").map(Tensor::F64)
+            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r")
+                .map(Tensor::from_typed::<f64>)
         }
         (Tensor::C32(packed), Tensor::C32(coeff)) => {
-            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r").map(Tensor::C32)
+            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r")
+                .map(Tensor::from_typed::<num_complex::Complex32>)
         }
         (Tensor::C64(packed), Tensor::C64(coeff)) => {
-            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r").map(Tensor::C64)
+            compact_qr_r_typed(backend, packed, coeff, options, "householder_qr_r")
+                .map(Tensor::from_typed::<num_complex::Complex64>)
         }
         _ => Err(Error::dtype_mismatch(
             "householder_qr_r",
@@ -872,16 +870,14 @@ pub(super) fn eigh(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<
 
 pub(super) fn eigh_values(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Tensor> {
     match input.dtype() {
-        DType::F32 => {
-            eigh_values_typed(backend, typed_host::<f32>("eigh_values", input)?).map(Tensor::F32)
-        }
-        DType::F64 => {
-            eigh_values_typed(backend, typed_host::<f64>("eigh_values", input)?).map(Tensor::F64)
-        }
+        DType::F32 => eigh_values_typed(backend, typed_host::<f32>("eigh_values", input)?)
+            .map(Tensor::from_typed::<f32>),
+        DType::F64 => eigh_values_typed(backend, typed_host::<f64>("eigh_values", input)?)
+            .map(Tensor::from_typed::<f64>),
         DType::C32 => eigh_values_typed(backend, typed_host::<Complex32>("eigh_values", input)?)
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
         DType::C64 => eigh_values_typed(backend, typed_host::<Complex64>("eigh_values", input)?)
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
         DType::I32 | DType::I64 | DType::Bool => {
             Err(unsupported_linalg_dtype("eigh_values", input))
         }
@@ -975,19 +971,19 @@ pub(super) fn lu_solve_prepared(
     let result = match (packed_lu, pivots, &rhs) {
         (Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(rhs)) => {
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
-                .map(Tensor::F32)
+                .map(Tensor::from_typed::<f32>)
         }
         (Tensor::F64(lu), Tensor::I32(pivots), Tensor::F64(rhs)) => {
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
-                .map(Tensor::F64)
+                .map(Tensor::from_typed::<f64>)
         }
         (Tensor::C32(lu), Tensor::I32(pivots), Tensor::C32(rhs)) => {
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
-                .map(Tensor::C32)
+                .map(Tensor::from_typed::<num_complex::Complex32>)
         }
         (Tensor::C64(lu), Tensor::I32(pivots), Tensor::C64(rhs)) => {
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
-                .map(Tensor::C64)
+                .map(Tensor::from_typed::<num_complex::Complex64>)
         }
         _ => Err(Error::Internal(
             "lu_solve_prepared: packed LU, pivots, and rhs dtypes are inconsistent".into(),
@@ -3484,12 +3480,12 @@ fn diagonal_magnitude(backend: &mut CudaExecSession<'_>, diag: &Tensor) -> Resul
             backend,
             typed_host::<Complex32>("validate_nonsingular_gpu", diag)?,
         )
-        .map(Tensor::F32),
+        .map(Tensor::from_typed::<f32>),
         DType::C64 => complex64_magnitude(
             backend,
             typed_host::<Complex64>("validate_nonsingular_gpu", diag)?,
         )
-        .map(Tensor::F64),
+        .map(Tensor::from_typed::<f64>),
         DType::I32 | DType::I64 | DType::Bool => {
             Err(unsupported_linalg_dtype("validate_nonsingular_gpu", diag))
         }

@@ -1016,10 +1016,14 @@ fn allocate_canonical_operand(
     shape: Vec<usize>,
 ) -> Result<Tensor> {
     match dtype {
-        DType::F32 => pooled_zero_tensor(buffers, shape).map(Tensor::F32),
-        DType::F64 => pooled_zero_tensor(buffers, shape).map(Tensor::F64),
-        DType::C32 => pooled_zero_tensor(buffers, shape).map(Tensor::C32),
-        DType::C64 => pooled_zero_tensor(buffers, shape).map(Tensor::C64),
+        DType::F32 => pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<f32>),
+        DType::F64 => pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<f64>),
+        DType::C32 => {
+            pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<num_complex::Complex32>)
+        }
+        DType::C64 => {
+            pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<num_complex::Complex64>)
+        }
         dtype => Err(Error::unsupported_dtype(
             OP,
             dtype,
@@ -1182,10 +1186,14 @@ impl<'pool> UninitTensor<'pool> {
         // written before `Executed` by the unsafe provider impl.
         unsafe {
             match self {
-                Self::F32(output) => output.assume_init().map(Tensor::F32),
-                Self::F64(output) => output.assume_init().map(Tensor::F64),
-                Self::C32(output) => output.assume_init().map(Tensor::C32),
-                Self::C64(output) => output.assume_init().map(Tensor::C64),
+                Self::F32(output) => output.assume_init().map(Tensor::from_typed::<f32>),
+                Self::F64(output) => output.assume_init().map(Tensor::from_typed::<f64>),
+                Self::C32(output) => output
+                    .assume_init()
+                    .map(Tensor::from_typed::<num_complex::Complex32>),
+                Self::C64(output) => output
+                    .assume_init()
+                    .map(Tensor::from_typed::<num_complex::Complex64>),
             }
         }
     }
