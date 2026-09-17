@@ -454,56 +454,44 @@ pub fn add_with_pool(
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("add", pair_operand::<f32>("add", lhs, rhs, lhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f32>>(typed_add_with_pool(
-                buffers,
-                &scalar,
-                pair_operand::<Complex<f32>>("add", lhs, rhs, rhs)?,
-            )?))
+            let value = typed_host_data("add", pair_operand::<f32>("add", lhs, rhs, lhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let other = pair_operand::<Complex<f32>>("add", lhs, rhs, rhs)?;
+            let out = typed_add_with_pool(buffers, &scalar, other)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(out))
         }
         (DType::C32, DType::F32)
             if pair_operand::<f32>("add", lhs, rhs, rhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("add", pair_operand::<f32>("add", lhs, rhs, rhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f32>>(typed_add_with_pool(
-                buffers,
-                pair_operand::<Complex<f32>>("add", lhs, rhs, lhs)?,
-                &scalar,
-            )?))
+            let value = typed_host_data("add", pair_operand::<f32>("add", lhs, rhs, rhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let first = pair_operand::<Complex<f32>>("add", lhs, rhs, lhs)?;
+            let out = typed_add_with_pool(buffers, first, &scalar)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(out))
         }
         (DType::F64, DType::C64)
             if pair_operand::<f64>("add", lhs, rhs, lhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("add", pair_operand::<f64>("add", lhs, rhs, lhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f64>>(typed_add_with_pool(
-                buffers,
-                &scalar,
-                pair_operand::<Complex<f64>>("add", lhs, rhs, rhs)?,
-            )?))
+            let value = typed_host_data("add", pair_operand::<f64>("add", lhs, rhs, lhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let other = pair_operand::<Complex<f64>>("add", lhs, rhs, rhs)?;
+            let out = typed_add_with_pool(buffers, &scalar, other)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(out))
         }
         (DType::C64, DType::F64)
             if pair_operand::<f64>("add", lhs, rhs, rhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("add", pair_operand::<f64>("add", lhs, rhs, rhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f64>>(typed_add_with_pool(
-                buffers,
-                pair_operand::<Complex<f64>>("add", lhs, rhs, lhs)?,
-                &scalar,
-            )?))
+            let value = typed_host_data("add", pair_operand::<f64>("add", lhs, rhs, rhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let first = pair_operand::<Complex<f64>>("add", lhs, rhs, lhs)?;
+            let out = typed_add_with_pool(buffers, first, &scalar)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(out))
         }
         _ => Err(tensor_pair_error("add", lhs, rhs)),
     }
@@ -694,56 +682,44 @@ pub fn sub_with_pool(
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("sub", pair_operand::<f32>("sub", lhs, rhs, lhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f32>>(typed_sub_with_pool(
-                buffers,
-                &scalar,
-                pair_operand::<Complex<f32>>("sub", lhs, rhs, rhs)?,
-            )?))
+            let value = typed_host_data("sub", pair_operand::<f32>("sub", lhs, rhs, lhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let other = pair_operand::<Complex<f32>>("sub", lhs, rhs, rhs)?;
+            let out = typed_sub_with_pool(buffers, &scalar, other)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(out))
         }
         (DType::C32, DType::F32)
             if pair_operand::<f32>("sub", lhs, rhs, rhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("sub", pair_operand::<f32>("sub", lhs, rhs, rhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f32>>(typed_sub_with_pool(
-                buffers,
-                pair_operand::<Complex<f32>>("sub", lhs, rhs, lhs)?,
-                &scalar,
-            )?))
+            let value = typed_host_data("sub", pair_operand::<f32>("sub", lhs, rhs, rhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let first = pair_operand::<Complex<f32>>("sub", lhs, rhs, lhs)?;
+            let out = typed_sub_with_pool(buffers, first, &scalar)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(out))
         }
         (DType::F64, DType::C64)
             if pair_operand::<f64>("sub", lhs, rhs, lhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("sub", pair_operand::<f64>("sub", lhs, rhs, lhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f64>>(typed_sub_with_pool(
-                buffers,
-                &scalar,
-                pair_operand::<Complex<f64>>("sub", lhs, rhs, rhs)?,
-            )?))
+            let value = typed_host_data("sub", pair_operand::<f64>("sub", lhs, rhs, lhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let other = pair_operand::<Complex<f64>>("sub", lhs, rhs, rhs)?;
+            let out = typed_sub_with_pool(buffers, &scalar, other)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(out))
         }
         (DType::C64, DType::F64)
             if pair_operand::<f64>("sub", lhs, rhs, rhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("sub", pair_operand::<f64>("sub", lhs, rhs, rhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f64>>(typed_sub_with_pool(
-                buffers,
-                pair_operand::<Complex<f64>>("sub", lhs, rhs, lhs)?,
-                &scalar,
-            )?))
+            let value = typed_host_data("sub", pair_operand::<f64>("sub", lhs, rhs, rhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let first = pair_operand::<Complex<f64>>("sub", lhs, rhs, lhs)?;
+            let out = typed_sub_with_pool(buffers, first, &scalar)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(out))
         }
         _ => Err(tensor_pair_error("sub", lhs, rhs)),
     }
@@ -834,56 +810,44 @@ pub fn mul_with_pool(
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("mul", pair_operand::<f32>("mul", lhs, rhs, lhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f32>>(typed_mul_with_pool(
-                buffers,
-                &scalar,
-                pair_operand::<Complex<f32>>("mul", lhs, rhs, rhs)?,
-            )?))
+            let value = typed_host_data("mul", pair_operand::<f32>("mul", lhs, rhs, lhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let other = pair_operand::<Complex<f32>>("mul", lhs, rhs, rhs)?;
+            let out = typed_mul_with_pool(buffers, &scalar, other)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(out))
         }
         (DType::C32, DType::F32)
             if pair_operand::<f32>("mul", lhs, rhs, rhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("mul", pair_operand::<f32>("mul", lhs, rhs, rhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f32>>(typed_mul_with_pool(
-                buffers,
-                pair_operand::<Complex<f32>>("mul", lhs, rhs, lhs)?,
-                &scalar,
-            )?))
+            let value = typed_host_data("mul", pair_operand::<f32>("mul", lhs, rhs, rhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let first = pair_operand::<Complex<f32>>("mul", lhs, rhs, lhs)?;
+            let out = typed_mul_with_pool(buffers, first, &scalar)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(out))
         }
         (DType::F64, DType::C64)
             if pair_operand::<f64>("mul", lhs, rhs, lhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("mul", pair_operand::<f64>("mul", lhs, rhs, lhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f64>>(typed_mul_with_pool(
-                buffers,
-                &scalar,
-                pair_operand::<Complex<f64>>("mul", lhs, rhs, rhs)?,
-            )?))
+            let value = typed_host_data("mul", pair_operand::<f64>("mul", lhs, rhs, lhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let other = pair_operand::<Complex<f64>>("mul", lhs, rhs, rhs)?;
+            let out = typed_mul_with_pool(buffers, &scalar, other)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(out))
         }
         (DType::C64, DType::F64)
             if pair_operand::<f64>("mul", lhs, rhs, rhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("mul", pair_operand::<f64>("mul", lhs, rhs, rhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f64>>(typed_mul_with_pool(
-                buffers,
-                pair_operand::<Complex<f64>>("mul", lhs, rhs, lhs)?,
-                &scalar,
-            )?))
+            let value = typed_host_data("mul", pair_operand::<f64>("mul", lhs, rhs, rhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let first = pair_operand::<Complex<f64>>("mul", lhs, rhs, lhs)?;
+            let out = typed_mul_with_pool(buffers, first, &scalar)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(out))
         }
         _ => Err(tensor_pair_error("mul", lhs, rhs)),
     }
@@ -2057,56 +2021,44 @@ pub fn div_with_pool(
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("div", pair_operand::<f32>("div", lhs, rhs, lhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f32>>(typed_div_with_pool(
-                buffers,
-                &scalar,
-                pair_operand::<Complex<f32>>("div", lhs, rhs, rhs)?,
-            )?))
+            let value = typed_host_data("div", pair_operand::<f32>("div", lhs, rhs, lhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let other = pair_operand::<Complex<f32>>("div", lhs, rhs, rhs)?;
+            let out = typed_div_with_pool(buffers, &scalar, other)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(out))
         }
         (DType::C32, DType::F32)
             if pair_operand::<f32>("div", lhs, rhs, rhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("div", pair_operand::<f32>("div", lhs, rhs, rhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f32>>(typed_div_with_pool(
-                buffers,
-                pair_operand::<Complex<f32>>("div", lhs, rhs, lhs)?,
-                &scalar,
-            )?))
+            let value = typed_host_data("div", pair_operand::<f32>("div", lhs, rhs, rhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let first = pair_operand::<Complex<f32>>("div", lhs, rhs, lhs)?;
+            let out = typed_div_with_pool(buffers, first, &scalar)?;
+            Ok(Tensor::from_typed::<Complex<f32>>(out))
         }
         (DType::F64, DType::C64)
             if pair_operand::<f64>("div", lhs, rhs, lhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("div", pair_operand::<f64>("div", lhs, rhs, lhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f64>>(typed_div_with_pool(
-                buffers,
-                &scalar,
-                pair_operand::<Complex<f64>>("div", lhs, rhs, rhs)?,
-            )?))
+            let value = typed_host_data("div", pair_operand::<f64>("div", lhs, rhs, lhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let other = pair_operand::<Complex<f64>>("div", lhs, rhs, rhs)?;
+            let out = typed_div_with_pool(buffers, &scalar, other)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(out))
         }
         (DType::C64, DType::F64)
             if pair_operand::<f64>("div", lhs, rhs, rhs)?
                 .shape()
                 .is_empty() =>
         {
-            let scalar = complex_scalar_tensor(
-                typed_host_data("div", pair_operand::<f64>("div", lhs, rhs, rhs)?)?[0],
-            )?;
-            Ok(Tensor::from_typed::<Complex<f64>>(typed_div_with_pool(
-                buffers,
-                pair_operand::<Complex<f64>>("div", lhs, rhs, lhs)?,
-                &scalar,
-            )?))
+            let value = typed_host_data("div", pair_operand::<f64>("div", lhs, rhs, rhs)?)?[0];
+            let scalar = complex_scalar_tensor(value)?;
+            let first = pair_operand::<Complex<f64>>("div", lhs, rhs, lhs)?;
+            let out = typed_div_with_pool(buffers, first, &scalar)?;
+            Ok(Tensor::from_typed::<Complex<f64>>(out))
         }
         _ => Err(crate::Error::dtype_mismatch(
             "div",
