@@ -19,10 +19,10 @@ fn f64_scalar(val: f64) -> Tensor {
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
-    match t {
-        Tensor::F64(inner) => inner.host_data().unwrap(),
-        _ => panic!("expected F64"),
-    }
+    t.as_typed::<f64>()
+        .expect("expected F64")
+        .host_data()
+        .unwrap()
 }
 
 fn eval_tensor(traced: TracedTensor) -> Tensor {

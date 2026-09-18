@@ -15,17 +15,17 @@ fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
-    match t {
-        Tensor::F64(inner) => inner.host_data().unwrap(),
-        _ => panic!("expected F64"),
-    }
+    t.as_typed::<f64>()
+        .expect("expected F64")
+        .host_data()
+        .unwrap()
 }
 
 fn get_i64_data(t: &Tensor) -> &[i64] {
-    match t {
-        Tensor::I64(inner) => inner.host_data().unwrap(),
-        _ => panic!("expected I64"),
-    }
+    t.as_typed::<i64>()
+        .expect("expected I64")
+        .host_data()
+        .unwrap()
 }
 
 #[test]

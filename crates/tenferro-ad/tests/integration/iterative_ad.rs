@@ -27,10 +27,10 @@ fn f64_scalar(val: f64) -> Tensor {
 }
 
 fn get_f64_scalar(t: &Tensor) -> f64 {
-    match t {
-        Tensor::F64(inner) => inner.host_data().unwrap()[0],
-        _ => panic!("expected F64"),
-    }
+    t.as_typed::<f64>()
+        .expect("expected F64")
+        .host_data()
+        .unwrap()[0]
 }
 
 /// Count total ops across all graphs in the graph tree, deduplicating

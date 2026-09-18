@@ -11,10 +11,11 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 }
 
 fn get_f64_data(tensor: &Tensor) -> &[f64] {
-    match tensor {
-        Tensor::F64(inner) => inner.host_data().unwrap(),
-        _ => panic!("expected F64"),
-    }
+    tensor
+        .as_typed::<f64>()
+        .expect("expected F64")
+        .host_data()
+        .unwrap()
 }
 
 fn traced_input(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {

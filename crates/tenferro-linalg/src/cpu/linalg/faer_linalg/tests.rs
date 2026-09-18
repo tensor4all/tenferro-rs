@@ -16,10 +16,11 @@ fn product(a: &[f64], a_rows: usize, a_cols: usize, b: &[f64], b_cols: usize) ->
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
-    match tensor {
-        Tensor::F64(tensor) => tensor.host_data().unwrap(),
-        _ => panic!("expected f64 tensor"),
-    }
+    tensor
+        .as_typed::<f64>()
+        .expect("expected f64 tensor")
+        .host_data()
+        .unwrap()
 }
 
 fn assert_close(actual: &[f64], expected: &[f64]) {

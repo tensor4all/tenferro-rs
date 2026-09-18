@@ -177,10 +177,11 @@ fn eager_input_promotion_plan_covers_all_promoted_families() {
 }
 
 fn data(t: &Tensor) -> Vec<f64> {
-    match t {
-        Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
-        _ => panic!("expected F64"),
-    }
+    t.as_typed::<f64>()
+        .expect("expected F64")
+        .host_data()
+        .unwrap()
+        .to_vec()
 }
 
 #[test]

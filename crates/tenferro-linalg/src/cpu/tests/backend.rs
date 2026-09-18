@@ -141,10 +141,12 @@ fn test_solve_with_regular_matrix_rhs() {
     let mut backend = CpuBackend::new();
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[2, 2]);
-    let x_data = match &x {
-        Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
-        _ => panic!("expected f64 tensor"),
-    };
+    let x_data = &x
+        .as_typed::<f64>()
+        .expect("expected f64 tensor")
+        .host_data()
+        .unwrap()
+        .to_vec();
     let recon = matmul_f64(&[2.0, 1.0, 0.0, 3.0], &x_data, 2, 2, 2);
     assert_f64_close_tol(recon[0], 5.0, 1e-10);
     assert_f64_close_tol(recon[1], 7.0, 1e-10);

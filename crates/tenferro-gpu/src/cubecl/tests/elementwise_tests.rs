@@ -784,10 +784,12 @@ fn test_log1p_small_x_f32_precision() {
 
     let gpu_out = backend.log1p(&gpu_input).unwrap();
     let result = super::download(&backend, &gpu_out);
-    let result_slice = match result {
-        Tensor::F32(t) => t.as_slice().unwrap().to_vec(),
-        _ => panic!("expected F32"),
-    };
+    let result_slice = result
+        .as_typed::<f32>()
+        .expect("expected F32")
+        .as_slice()
+        .unwrap()
+        .to_vec();
 
     for (x, got) in x_values.iter().zip(result_slice.iter()) {
         let expected = (*x).ln_1p();
@@ -813,10 +815,12 @@ fn test_expm1_small_x_f32_precision() {
 
     let gpu_out = backend.expm1(&gpu_input).unwrap();
     let result = super::download(&backend, &gpu_out);
-    let result_slice = match result {
-        Tensor::F32(t) => t.as_slice().unwrap().to_vec(),
-        _ => panic!("expected F32"),
-    };
+    let result_slice = result
+        .as_typed::<f32>()
+        .expect("expected F32")
+        .as_slice()
+        .unwrap()
+        .to_vec();
 
     for (x, got) in x_values.iter().zip(result_slice.iter()) {
         let expected = (*x).exp_m1();
@@ -1317,19 +1321,25 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
 }
 
 fn nonnegative_integer_exponents_like(tensor: &Tensor) -> Tensor {
-    match tensor {
-        Tensor::I32(tensor) => tensor_i32(
-            tensor.shape().to_vec(),
-            (0..tensor.n_elements())
-                .map(|idx| (idx % 5) as i32)
-                .collect(),
-        ),
-        Tensor::I64(tensor) => tensor_i64(
-            tensor.shape().to_vec(),
-            (0..tensor.n_elements())
-                .map(|idx| (idx % 5) as i64)
-                .collect(),
-        ),
+    match tensor.dtype() {
+        crate::DType::I32 => {
+            let tensor = tensor.as_typed::<i32>().expect("expected integer tensor");
+            tensor_i32(
+                tensor.shape().to_vec(),
+                (0..tensor.n_elements())
+                    .map(|idx| (idx % 5) as i32)
+                    .collect(),
+            )
+        }
+        crate::DType::I64 => {
+            let tensor = tensor.as_typed::<i64>().expect("expected integer tensor");
+            tensor_i64(
+                tensor.shape().to_vec(),
+                (0..tensor.n_elements())
+                    .map(|idx| (idx % 5) as i64)
+                    .collect(),
+            )
+        }
         _ => panic!("expected integer tensor"),
     }
 }
@@ -1480,10 +1490,9 @@ fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
     }
     let mut gpu = gpu_backend();
     let input = tensor_f64(vec![2], vec![1.0, -2.0]);
-    let mut gpu_input = match upload(&gpu, &input) {
-        Tensor::F64(tensor) => tensor,
-        _ => panic!("expected F64 upload"),
-    };
+    let mut gpu_input = upload(&gpu, &input)
+        .into_typed::<f64>()
+        .expect("expected F64 upload");
     let mut placement = gpu_input.placement().clone();
     placement.device = None;
     gpu_input.set_placement(placement);
