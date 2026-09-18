@@ -1396,6 +1396,38 @@ source-text contract needles such as `Tensor::I64(status)`. The migration theref
 the pass was reverted before landing. The remaining 129 shipping and 775 test construction sites, and the
 37 pattern sites outside `types.rs`, are that per-file work.
 
+**Step 4 is done, and Step 5 is the remaining code change.** Every pattern and construction site
+outside `types.rs` now reads the dtype or calls a constructor, so a repository-wide search finds no
+`Tensor` variant name outside the enum's own implementation: 373 pattern sites (the guarded
+`matches!`, the `let ... else` bindings, the tuple and `TensorRead`/`TensorWrite` matches, the view
+fixtures, the external-payload patterns, and the cast matrix) and 985 construction sites moved to
+`Tensor::from_typed::<T>(...)`. `tenferro_tensor_core`'s `Tensor` is the generated default scalar set,
+a different type, and is out of scope.
+
+What Step 5 still has to do, now that nothing outside depends on the variants:
+
+1. In `types.rs`, replace `pub enum Tensor` with `pub struct Tensor { payload: TensorPayload }` and
+   `#[repr(C, u8)] enum TensorPayload { Native(TensorCore<DynRank>),
+   External(ErasedHostTensor, Placement) }`. The measured size is 1464 B / align 8, with
+   `ErasedHostTensor` 232 B and `Placement` 80 B on the external side.
+2. Give `OwnedTensorGroup<R>` a `dtype()` from the crate-private `AllocationGroup::descriptor_dtype`
+   added in `storage/group.rs`, so `Native` needs no duplicate tag.
+3. Rewrite the `impl_tensor_scalar!` seam (five `Tensor::$variant` uses) to
+   `Tensor::from_core(tensor.core)` for construction and `tensor.as_typed::<T>()` for the matches; that
+   seam is the single place the seven names remain.
+4. Rewrite the `Tensor` impls, whose ~277 variant mentions are the dtype-independent readers
+   (`shape`, `strides`, `placement`, `layout_linear_offset`, `is_col_major_contiguous`, the placement
+   and allocation accessors), the owned operations (`duplicate`, `as_read_only`, `into_group_parts`),
+   and the typed accessors, which become one `match &self.payload` plus `as_typed`/`as_typed_mut`/
+   `into_typed` with the documented `repr(transparent)` reborrow.
+5. Keep `Tensor::external`, `external_with_placement`, `external_payload`, `external_payload_mut` as
+   the external entry points; the enum is the only thing that disappears.
+
+Verification for Step 5 is the goal's list: `size_of::<Tensor>() == 1464`/align 8, `from_typed` at
+zero allocations, the seven-dtype round-trip/match/mismatch/shared/mutable/swap tests, the external
+construction/access/drop/ownership-split behaviour, focused Miri, the per-feature checks, and the
+public-boundary inventory regenerated.
+
 **Still open, and not claimed as decided here.**
 
 - `Tensor` also holds `DType::External(ErasedHostTensor)`, so one payload has to carry both the
