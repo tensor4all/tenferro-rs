@@ -10,7 +10,7 @@ use tenferro_gpu::{
 use tenferro_linalg::{
     HouseholderQr, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions, TensorLinalgExt,
 };
-use tenferro_tensor::{BackendSessionHost, Error, Tensor, TensorRead, TypedTensor};
+use tenferro_tensor::{BackendSessionHost, DType, Error, Tensor, TensorRead, TypedTensor};
 
 fn cpu_backend() -> CpuBackend {
     CpuBackend::new()
