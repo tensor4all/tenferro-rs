@@ -1431,6 +1431,19 @@ zero allocations, the seven-dtype round-trip/match/mismatch/shared/mutable/swap 
 construction/access/drop/ownership-split behaviour, focused Miri, the per-feature checks, and the
 public-boundary inventory regenerated.
 
+**Step 5 is done, and Step 6's evidence is recorded here.** `Tensor` is now the opaque struct over
+`#[repr(C, u8)] TensorPayload { Native(TensorCore<DynRank>), External(ErasedHostTensor, Placement) }`,
+the seven preset names are gone from the repository, and the accessor contract is pinned by
+`erased_payload_accessors_cover_every_preset_dtype`, which drives all seven dtypes through the owned
+round-trip, the mismatch refusal, mutable access, `mem::swap`/`mem::replace` and `into_typed`. Measured:
+`size_of::<Tensor>()` = 1464 B and `Tensor::from_typed` = 0 allocations. Focused Miri
+(`cargo +nightly miri test -j 8 -p tenferro-tensor --lib -- erased_payload_accessors
+an_external_payload`) passes both the accessor test and the external-payload test. The public-boundary
+inventory reports no drift, the repository rules review passes, and `scripts/check-pr-fast.sh
+--coverage-reviewed` passes. The boundary audit found no serialization of `Tensor` in this repository,
+cache identity keyed on the operation tag and `DType` rather than on the representation, and no `Tensor`
+variant reference in the XLA lowering.
+
 **Still open, and not claimed as decided here.**
 
 - `Tensor` also holds `DType::External(ErasedHostTensor)`, so one payload has to carry both the

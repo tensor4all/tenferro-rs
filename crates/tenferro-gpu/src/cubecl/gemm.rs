@@ -30,31 +30,6 @@ use tenferro_tensor::{
     TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
 
-/// The Rust scalar type behind a preset variant name a macro received.
-#[allow(unused_macros)]
-macro_rules! preset_scalar {
-    (F32) => {
-        f32
-    };
-    (F64) => {
-        f64
-    };
-    (I32) => {
-        i32
-    };
-    (I64) => {
-        i64
-    };
-    (Bool) => {
-        bool
-    };
-    (C32) => {
-        num_complex::Complex32
-    };
-    (C64) => {
-        num_complex::Complex64
-    };
-}
 const OP: &str = "dot_general";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
 const DEFAULT_CUTENSOR_PLAN_CACHE_MAX_ENTRIES: usize = 64;
