@@ -419,80 +419,80 @@ fn test_backend_cast_supports_real_complex_and_precision_changes() {
         assert_eq!(output.shape(), &[2]);
         assert_eq!(output.dtype(), to);
 
-        match (input.dtype(), &output) {
-            (DType::F32, Tensor::F32(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.25, -2.5])
+        match (input.dtype(), output.dtype()) {
+            (DType::F32, DType::F32) => {
+                assert_eq!(output.as_slice::<f32>().unwrap(), &[1.25, -2.5])
             }
-            (DType::F32, Tensor::F64(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.25, -2.5])
+            (DType::F32, DType::F64) => {
+                assert_eq!(output.as_slice::<f64>().unwrap(), &[1.25, -2.5])
             }
-            (DType::F32, Tensor::I64(inner)) => assert_eq!(inner.host_data().unwrap(), &[1, -2]),
-            (DType::F32, Tensor::C32(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::F32, DType::I64) => assert_eq!(output.as_slice::<i64>().unwrap(), &[1, -2]),
+            (DType::F32, DType::C32) => assert_eq!(
+                output.as_slice::<Complex32>().unwrap(),
                 &[Complex32::new(1.25, 0.0), Complex32::new(-2.5, 0.0)]
             ),
-            (DType::F32, Tensor::C64(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::F32, DType::C64) => assert_eq!(
+                output.as_slice::<Complex64>().unwrap(),
                 &[Complex64::new(1.25, 0.0), Complex64::new(-2.5, 0.0)]
             ),
-            (DType::F64, Tensor::F32(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.25, -2.5])
+            (DType::F64, DType::F32) => {
+                assert_eq!(output.as_slice::<f32>().unwrap(), &[1.25, -2.5])
             }
-            (DType::F64, Tensor::F64(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.25, -2.5])
+            (DType::F64, DType::F64) => {
+                assert_eq!(output.as_slice::<f64>().unwrap(), &[1.25, -2.5])
             }
-            (DType::F64, Tensor::I64(inner)) => assert_eq!(inner.host_data().unwrap(), &[1, -2]),
-            (DType::F64, Tensor::C32(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::F64, DType::I64) => assert_eq!(output.as_slice::<i64>().unwrap(), &[1, -2]),
+            (DType::F64, DType::C32) => assert_eq!(
+                output.as_slice::<Complex32>().unwrap(),
                 &[Complex32::new(1.25, 0.0), Complex32::new(-2.5, 0.0)]
             ),
-            (DType::F64, Tensor::C64(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::F64, DType::C64) => assert_eq!(
+                output.as_slice::<Complex64>().unwrap(),
                 &[Complex64::new(1.25, 0.0), Complex64::new(-2.5, 0.0)]
             ),
-            (DType::I64, Tensor::F32(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.0, -2.0])
+            (DType::I64, DType::F32) => {
+                assert_eq!(output.as_slice::<f32>().unwrap(), &[1.0, -2.0])
             }
-            (DType::I64, Tensor::F64(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.0, -2.0])
+            (DType::I64, DType::F64) => {
+                assert_eq!(output.as_slice::<f64>().unwrap(), &[1.0, -2.0])
             }
-            (DType::I64, Tensor::I64(inner)) => assert_eq!(inner.host_data().unwrap(), &[1, -2]),
-            (DType::I64, Tensor::C32(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::I64, DType::I64) => assert_eq!(output.as_slice::<i64>().unwrap(), &[1, -2]),
+            (DType::I64, DType::C32) => assert_eq!(
+                output.as_slice::<Complex32>().unwrap(),
                 &[Complex32::new(1.0, 0.0), Complex32::new(-2.0, 0.0)]
             ),
-            (DType::I64, Tensor::C64(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::I64, DType::C64) => assert_eq!(
+                output.as_slice::<Complex64>().unwrap(),
                 &[Complex64::new(1.0, 0.0), Complex64::new(-2.0, 0.0)]
             ),
-            (DType::C32, Tensor::F32(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.25, -2.5])
+            (DType::C32, DType::F32) => {
+                assert_eq!(output.as_slice::<f32>().unwrap(), &[1.25, -2.5])
             }
-            (DType::C32, Tensor::F64(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.25, -2.5])
+            (DType::C32, DType::F64) => {
+                assert_eq!(output.as_slice::<f64>().unwrap(), &[1.25, -2.5])
             }
-            (DType::C32, Tensor::I64(inner)) => assert_eq!(inner.host_data().unwrap(), &[1, -2]),
-            (DType::C32, Tensor::C32(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::C32, DType::I64) => assert_eq!(output.as_slice::<i64>().unwrap(), &[1, -2]),
+            (DType::C32, DType::C32) => assert_eq!(
+                output.as_slice::<Complex32>().unwrap(),
                 &[Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)]
             ),
-            (DType::C32, Tensor::C64(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::C32, DType::C64) => assert_eq!(
+                output.as_slice::<Complex64>().unwrap(),
                 &[Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)]
             ),
-            (DType::C64, Tensor::F32(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.25, -2.5])
+            (DType::C64, DType::F32) => {
+                assert_eq!(output.as_slice::<f32>().unwrap(), &[1.25, -2.5])
             }
-            (DType::C64, Tensor::F64(inner)) => {
-                assert_eq!(inner.host_data().unwrap(), &[1.25, -2.5])
+            (DType::C64, DType::F64) => {
+                assert_eq!(output.as_slice::<f64>().unwrap(), &[1.25, -2.5])
             }
-            (DType::C64, Tensor::I64(inner)) => assert_eq!(inner.host_data().unwrap(), &[1, -2]),
-            (DType::C64, Tensor::C32(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::C64, DType::I64) => assert_eq!(output.as_slice::<i64>().unwrap(), &[1, -2]),
+            (DType::C64, DType::C32) => assert_eq!(
+                output.as_slice::<Complex32>().unwrap(),
                 &[Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)]
             ),
-            (DType::C64, Tensor::C64(inner)) => assert_eq!(
-                inner.host_data().unwrap(),
+            (DType::C64, DType::C64) => assert_eq!(
+                output.as_slice::<Complex64>().unwrap(),
                 &[Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)]
             ),
             _ => unreachable!("unexpected conversion case"),
