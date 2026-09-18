@@ -328,21 +328,18 @@ def test_repo_settings_requires_repository_rules_review() -> None:
     assert '"repository rules review gate"' in text
 
 
-def test_gpu_ci_waits_for_review_bot_gate_before_cuda_work() -> None:
+def test_gpu_ci_starts_after_lint_before_expensive_work() -> None:
     text = read(".github/workflows/CI_gpu.yml")
 
-    assert '"repository rules review gate"' in text
+    assert 'const required = ["rustfmt", "clippy"];' in text
     assert "repository rules review (LLM)" not in text
     assert text.index("pre-gpu-gate:") < text.index("cuda-archive:")
     assert text.index("pre-gpu-gate:") < text.index("runs-on: ubuntu-gpu")
-    # The expensive GPU runner (cuda-run) stays gated behind the review +
-    # non-GPU checks: it needs both pre-gpu-gate and the archive.
+    # The expensive GPU runner (cuda-run) stays gated behind lint + archive.
     assert "needs: [pre-gpu-gate, cuda-archive]" in text
     # The cheap non-GPU archive build must NOT be gated on pre-gpu-gate: it
-    # compiles in parallel with the non-GPU CI so the GPU stage can start the
-    # moment the gate clears. Guard against re-adding a bare `needs:
-    # [pre-gpu-gate]`, which would serialize the archive back onto the critical
-    # path (only cuda-run carries the gate).
+    # compiles in parallel with the non-GPU CI so the GPU stage can start as
+    # soon as lint clears.
     assert "needs: [pre-gpu-gate]" not in text
 
 
