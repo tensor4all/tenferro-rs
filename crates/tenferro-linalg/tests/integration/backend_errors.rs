@@ -189,10 +189,13 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             src: TensorRead<'_>,
             dst: TensorWrite<'_>,
         ) -> tenferro_tensor::Result<()> {
-            let Some(Tensor::F64(src)) = src.as_tensor() else {
+            let Some(src) = src.as_tensor().and_then(|tensor| tensor.as_typed::<f64>()) else {
                 panic!("the default solve_read_into test uses an owned f64 source")
             };
-            let TensorWrite::Tensor(Tensor::F64(dst)) = dst else {
+            let TensorWrite::Tensor(dst) = dst else {
+                panic!("the default solve_read_into test uses an owned f64 destination")
+            };
+            let Some(dst) = dst.as_typed_mut::<f64>() else {
                 panic!("the default solve_read_into test uses an owned f64 destination")
             };
             dst.host_data_mut()?.copy_from_slice(src.host_data()?);
@@ -678,7 +681,7 @@ fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
             matches!(&factors[1].as_typed::<i32>(), Some(t) if t.host_data().unwrap() == [1, 2])
         );
         assert!(
-            matches!(&factors[2], Tensor::C32(t) if t.host_data().unwrap() == [Complex32::new(1.0, 0.0)])
+            matches!(&factors[2].as_typed::<Complex32>(), Some(t) if t.host_data().unwrap() == [Complex32::new(1.0, 0.0)])
         );
     });
 }

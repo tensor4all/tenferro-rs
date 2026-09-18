@@ -351,7 +351,7 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
         concatenated.as_slice::<bool>().unwrap(),
         &[false, false, false, true, false, true]
     );
-    let Tensor::Bool(input) = &mut input else {
+    let Some(input) = input.as_typed_mut::<bool>() else {
         panic!("test input must remain Bool");
     };
     input.host_data_mut().unwrap().fill(true);

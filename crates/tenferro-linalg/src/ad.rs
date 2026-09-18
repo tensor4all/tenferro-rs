@@ -1370,19 +1370,19 @@ mod tests {
 
         assert_eq!(lhs.dtype(), rhs.dtype());
         assert_eq!(lhs.shape(), rhs.shape());
-        match (lhs, rhs) {
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => lhs
-                .as_slice()
+        match (lhs.dtype(), rhs.dtype()) {
+            (DType::F64, DType::F64) => lhs
+                .as_slice::<f64>()
                 .unwrap()
                 .iter()
-                .zip(rhs.as_slice().unwrap())
+                .zip(rhs.as_slice::<f64>().unwrap())
                 .map(|(lhs, rhs)| lhs * rhs)
                 .sum(),
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => lhs
-                .as_slice()
+            (DType::C64, DType::C64) => lhs
+                .as_slice::<Complex64>()
                 .unwrap()
                 .iter()
-                .zip(rhs.as_slice().unwrap())
+                .zip(rhs.as_slice::<Complex64>().unwrap())
                 .map(|(lhs, rhs): (&Complex64, &Complex64)| (lhs.conj() * rhs).re)
                 .sum(),
             _ => panic!("semantic linalg parity helper received {:?}", lhs.dtype()),

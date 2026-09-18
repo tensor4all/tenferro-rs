@@ -611,7 +611,7 @@ impl TransferProvider for RecordingTransferProvider {
                 let mut output =
                     domain.allocate(request.input().dtype(), request.input().shape())?;
                 let source_values = read_f64_values(request.input().clone())?;
-                let Tensor::F64(destination) = &mut output else {
+                let Some(destination) = output.as_typed_mut::<f64>() else {
                     return Err(Error::Internal(
                         "materializing test transfer currently expects f64 tensors".into(),
                     ));
@@ -693,7 +693,7 @@ impl TransferProvider for FaultyTransferProvider {
             FaultyTransferOutput::Shape => Ok(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?),
             FaultyTransferOutput::Placement => {
                 let mut tensor = duplicate_f64_read(request.input().clone())?;
-                let Tensor::F64(tensor) = &mut tensor else {
+                let Some(tensor) = tensor.as_typed_mut::<f64>() else {
                     return Err(Error::Internal(
                         "test transfer expected an f64 tensor".into(),
                     ));
@@ -1063,7 +1063,7 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
                 Error::Internal("allocation-domain test executor requires a shared domain".into())
             })?;
             let mut output = domain.allocate(DType::F64, &shape)?;
-            let Tensor::F64(destination) = &mut output else {
+            let Some(destination) = output.as_typed_mut::<f64>() else {
                 return Err(Error::Internal(
                     "allocation-domain test executor produced a non-f64 tensor".into(),
                 ));

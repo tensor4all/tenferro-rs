@@ -29,8 +29,14 @@ fn assert_complex_classes_and_values_match(actual: &Tensor, expected: &Tensor) {
         }
     }
 
-    match (actual, expected) {
-        (Tensor::C32(actual), Tensor::C32(expected)) => {
+    match (actual.dtype(), expected.dtype()) {
+        (DType::C32, DType::C32) => {
+            let actual = actual
+                .as_typed::<Complex32>()
+                .expect("the dtype guard selects this arm");
+            let expected = expected
+                .as_typed::<Complex32>()
+                .expect("the dtype guard selects this arm");
             for (actual, expected) in actual
                 .as_slice()
                 .unwrap()
@@ -41,7 +47,13 @@ fn assert_complex_classes_and_values_match(actual: &Tensor, expected: &Tensor) {
                 component_matches(actual.im, expected.im);
             }
         }
-        (Tensor::C64(actual), Tensor::C64(expected)) => {
+        (DType::C64, DType::C64) => {
+            let actual = actual
+                .as_typed::<Complex64>()
+                .expect("the dtype guard selects this arm");
+            let expected = expected
+                .as_typed::<Complex64>()
+                .expect("the dtype guard selects this arm");
             for (actual, expected) in actual
                 .as_slice()
                 .unwrap()
@@ -658,8 +670,14 @@ fn test_cubecl_complex_abs_matches_cpu() {
 
         assert_eq!(actual.dtype(), expected.dtype());
         assert_float_classes_and_zero_signs_match("abs", &actual, &expected);
-        match (&actual, &expected) {
-            (Tensor::F32(actual), Tensor::F32(expected)) => {
+        match (actual.dtype(), expected.dtype()) {
+            (DType::F32, DType::F32) => {
+                let actual = actual
+                    .as_typed::<f32>()
+                    .expect("the dtype guard selects this arm");
+                let expected = expected
+                    .as_typed::<f32>()
+                    .expect("the dtype guard selects this arm");
                 let actual = actual.as_slice().unwrap();
                 let expected = expected.as_slice().unwrap();
                 assert_eq!(&actual[..3], &[5.0, 13.0, 0.0]);
@@ -668,7 +686,13 @@ fn test_cubecl_complex_abs_matches_cpu() {
                     assert!((actual / expected - 1.0).abs() <= 2.0 * f32::EPSILON);
                 }
             }
-            (Tensor::F64(actual), Tensor::F64(expected)) => {
+            (DType::F64, DType::F64) => {
+                let actual = actual
+                    .as_typed::<f64>()
+                    .expect("the dtype guard selects this arm");
+                let expected = expected
+                    .as_typed::<f64>()
+                    .expect("the dtype guard selects this arm");
                 let actual = actual.as_slice().unwrap();
                 let expected = expected.as_slice().unwrap();
                 assert_eq!(&actual[..3], &[5.0, 13.0, 0.0]);
@@ -926,8 +950,14 @@ fn test_cubecl_maximum_minimum_propagate_nan_independent_of_argument_order() {
 }
 
 fn assert_float_classes_and_zero_signs_match(op: &str, actual: &Tensor, expected: &Tensor) {
-    match (actual, expected) {
-        (Tensor::F32(actual), Tensor::F32(expected)) => {
+    match (actual.dtype(), expected.dtype()) {
+        (DType::F32, DType::F32) => {
+            let actual = actual
+                .as_typed::<f32>()
+                .expect("the dtype guard selects this arm");
+            let expected = expected
+                .as_typed::<f32>()
+                .expect("the dtype guard selects this arm");
             assert_eq!(actual.shape(), expected.shape());
             assert_eq!(actual.n_elements(), expected.n_elements());
             for (index, (actual, expected)) in actual
@@ -963,7 +993,13 @@ fn assert_float_classes_and_zero_signs_match(op: &str, actual: &Tensor, expected
                 }
             }
         }
-        (Tensor::F64(actual), Tensor::F64(expected)) => {
+        (DType::F64, DType::F64) => {
+            let actual = actual
+                .as_typed::<f64>()
+                .expect("the dtype guard selects this arm");
+            let expected = expected
+                .as_typed::<f64>()
+                .expect("the dtype guard selects this arm");
             assert_eq!(actual.shape(), expected.shape());
             assert_eq!(actual.n_elements(), expected.n_elements());
             for (index, (actual, expected)) in actual
@@ -1072,15 +1108,27 @@ fn test_float_unary_special_values_match_cpu() {
         let expected_abs = cpu.abs(&input).unwrap();
         let gpu_abs = gpu.abs(&gpu_input).unwrap();
         let actual_abs = download(&gpu, &gpu_abs);
-        match (&actual_abs, &expected_abs) {
-            (Tensor::F32(actual), Tensor::F32(expected)) => {
+        match (actual_abs.dtype(), expected_abs.dtype()) {
+            (DType::F32, DType::F32) => {
+                let actual = actual_abs
+                    .as_typed::<f32>()
+                    .expect("the dtype guard selects this arm");
+                let expected = expected_abs
+                    .as_typed::<f32>()
+                    .expect("the dtype guard selects this arm");
                 let actual = actual.as_slice().unwrap();
                 let expected = expected.as_slice().unwrap();
                 assert_eq!(actual[0].to_bits(), expected[0].to_bits());
                 assert_eq!(actual[1..4], expected[1..4]);
                 assert!(actual[4].is_nan());
             }
-            (Tensor::F64(actual), Tensor::F64(expected)) => {
+            (DType::F64, DType::F64) => {
+                let actual = actual_abs
+                    .as_typed::<f64>()
+                    .expect("the dtype guard selects this arm");
+                let expected = expected_abs
+                    .as_typed::<f64>()
+                    .expect("the dtype guard selects this arm");
                 let actual = actual.as_slice().unwrap();
                 let expected = expected.as_slice().unwrap();
                 assert_eq!(actual[0].to_bits(), expected[0].to_bits());
@@ -1093,8 +1141,14 @@ fn test_float_unary_special_values_match_cpu() {
         let expected_sign = cpu.sign(&input).unwrap();
         let gpu_sign = gpu.sign(&gpu_input).unwrap();
         let actual_sign = download(&gpu, &gpu_sign);
-        match (&actual_sign, &expected_sign) {
-            (Tensor::F32(actual), Tensor::F32(expected)) => {
+        match (actual_sign.dtype(), expected_sign.dtype()) {
+            (DType::F32, DType::F32) => {
+                let actual = actual_sign
+                    .as_typed::<f32>()
+                    .expect("the dtype guard selects this arm");
+                let expected = expected_sign
+                    .as_typed::<f32>()
+                    .expect("the dtype guard selects this arm");
                 let actual = actual.as_slice().unwrap();
                 let expected = expected.as_slice().unwrap();
                 assert_eq!(actual[0].to_bits(), expected[0].to_bits());
@@ -1102,7 +1156,13 @@ fn test_float_unary_special_values_match_cpu() {
                 assert_eq!(actual[2..4], expected[2..4]);
                 assert!(actual[4].is_nan());
             }
-            (Tensor::F64(actual), Tensor::F64(expected)) => {
+            (DType::F64, DType::F64) => {
+                let actual = actual_sign
+                    .as_typed::<f64>()
+                    .expect("the dtype guard selects this arm");
+                let expected = expected_sign
+                    .as_typed::<f64>()
+                    .expect("the dtype guard selects this arm");
                 let actual = actual.as_slice().unwrap();
                 let expected = expected.as_slice().unwrap();
                 assert_eq!(actual[0].to_bits(), expected[0].to_bits());

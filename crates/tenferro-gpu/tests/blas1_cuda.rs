@@ -590,7 +590,7 @@ fn cuda_axpby_accepts_compact_views_with_offsets() {
     let Some(x) = x.as_typed::<Complex64>() else {
         unreachable!("test input is C64")
     };
-    let Tensor::C64(y_typed) = &mut y else {
+    let Some(y_typed) = y.as_typed_mut::<Complex64>() else {
         unreachable!("test output is C64")
     };
     let x_view = x.backend_region_view(vec![2], vec![1], 1).unwrap();

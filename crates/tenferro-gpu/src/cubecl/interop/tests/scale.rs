@@ -267,7 +267,7 @@ cuda_test!(scale_tensor_write_view_full_buffer_is_safe, {
     );
 
     {
-        let Tensor::F64(output) = &mut output else {
+        let Some(output) = output.as_typed_mut::<f64>() else {
             unreachable!()
         };
         let view = output
@@ -297,7 +297,7 @@ cuda_test!(scale_tensor_write_view_compact_prefix_preserves_outside, {
     );
 
     {
-        let Tensor::F64(output) = &mut output else {
+        let Some(output) = output.as_typed_mut::<f64>() else {
             unreachable!()
         };
         let view = output.backend_region_view_mut(vec![3], vec![1], 0).unwrap();
@@ -327,7 +327,7 @@ cuda_test!(
         );
 
         let error = {
-            let Tensor::F64(output) = &mut output else {
+            let Some(output) = output.as_typed_mut::<f64>() else {
                 unreachable!()
             };
             let view = output.backend_region_view_mut(vec![3], vec![1], 1).unwrap();
@@ -357,7 +357,7 @@ cuda_test!(scale_tensor_write_view_rejects_strided_without_writes, {
     );
 
     let error = {
-        let Tensor::F64(output) = &mut output else {
+        let Some(output) = output.as_typed_mut::<f64>() else {
             unreachable!()
         };
         let view = output.backend_region_view_mut(vec![3], vec![2], 0).unwrap();
@@ -386,7 +386,7 @@ cuda_test!(scale_tensor_write_view_empty_is_a_noop, {
     );
 
     {
-        let Tensor::F64(output) = &mut output else {
+        let Some(output) = output.as_typed_mut::<f64>() else {
             unreachable!()
         };
         let view = output.backend_region_view_mut(vec![0], vec![1], 0).unwrap();

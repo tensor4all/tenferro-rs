@@ -681,7 +681,12 @@ impl CanonicalFallbackSpy {
                 assert!(!parts.accumulation.lhs_conj);
                 assert!(!parts.accumulation.rhs_conj);
                 match &mut *parts.output {
-                    TensorWrite::Tensor(Tensor::F64(output)) => {
+                    TensorWrite::Tensor(output)
+                        if output.dtype() == tenferro_tensor::DType::F64 =>
+                    {
+                        let output = output
+                            .as_typed_mut::<f64>()
+                            .expect("the dtype guard selects this arm");
                         assert_eq!(output.host_data()?, &[41.0; 4]);
                         output
                             .host_data_mut()?
@@ -702,19 +707,30 @@ impl CanonicalFallbackSpy {
                     ContractionScalar::C64(Complex64::new(3.0, 0.0)),
                 );
                 match parts.lhs {
-                    TensorRead::Tensor(Tensor::C64(lhs)) => {
+                    TensorRead::Tensor(lhs) if lhs.dtype() == tenferro_tensor::DType::C64 => {
+                        let lhs = lhs
+                            .as_typed::<Complex64>()
+                            .expect("the dtype guard selects this arm");
                         assert_eq!(lhs.host_data()?, &[Complex64::new(1.0, -2.0)]);
                     }
                     other => panic!("conjugated lhs was not materialized: {other:?}"),
                 }
                 match parts.rhs {
-                    TensorRead::Tensor(Tensor::C64(rhs)) => {
+                    TensorRead::Tensor(rhs) if rhs.dtype() == tenferro_tensor::DType::C64 => {
+                        let rhs = rhs
+                            .as_typed::<Complex64>()
+                            .expect("the dtype guard selects this arm");
                         assert_eq!(rhs.host_data()?, &[Complex64::new(3.0, 4.0)]);
                     }
                     other => panic!("rhs was not materialized: {other:?}"),
                 }
                 match &mut *parts.output {
-                    TensorWrite::Tensor(Tensor::C64(output)) => {
+                    TensorWrite::Tensor(output)
+                        if output.dtype() == tenferro_tensor::DType::C64 =>
+                    {
+                        let output = output
+                            .as_typed_mut::<Complex64>()
+                            .expect("the dtype guard selects this arm");
                         assert_eq!(output.host_data()?, &[Complex64::new(5.0, 1.0)]);
                         output.host_data_mut()?[0] = Complex64::new(37.0, -1.0);
                     }
