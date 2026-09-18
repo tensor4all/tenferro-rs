@@ -666,7 +666,7 @@ def main() -> int:
         test_review_bot_workflow_exists,
         test_review_bot_runs_deterministic_checks_without_llm,
         test_repo_settings_requires_repository_rules_review,
-        test_gpu_ci_waits_for_review_bot_gate_before_cuda_work,
+        test_gpu_ci_starts_after_lint_before_expensive_work,
         test_pre_pr_checklist_requires_local_repository_rules_review,
         test_operation_surface_checker_requires_inherent_tensor_methods,
         test_operation_surface_checker_rejects_tensor_module_exports,
