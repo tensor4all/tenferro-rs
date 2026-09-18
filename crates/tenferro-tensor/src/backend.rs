@@ -910,13 +910,22 @@ where
 {
     validate_grouped_gemm(&lhs, &rhs, &out, config, "grouped_gemm")?;
     macro_rules! dispatch {
-        ($variant:ident, $wrapper:ty) => {
+        ($variant:ident, $scalar:ty, $wrapper:ty) => {
             match (&lhs, &rhs, &mut out) {
-                (
-                    TensorRead::Tensor(Tensor::$variant(a)),
-                    TensorRead::Tensor(Tensor::$variant(b)),
-                    TensorWrite::Tensor(Tensor::$variant(c)),
-                ) => {
+                (TensorRead::Tensor(a), TensorRead::Tensor(b), TensorWrite::Tensor(c))
+                    if a.dtype() == <$scalar as crate::TensorScalar>::dtype()
+                        && b.dtype() == <$scalar as crate::TensorScalar>::dtype()
+                        && c.dtype() == <$scalar as crate::TensorScalar>::dtype() =>
+                {
+                    let a = a
+                        .as_typed::<$scalar>()
+                        .expect("the dtype guard selects this arm");
+                    let b = b
+                        .as_typed::<$scalar>()
+                        .expect("the dtype guard selects this arm");
+                    let c = c
+                        .as_typed_mut::<$scalar>()
+                        .expect("the dtype guard selects this arm");
                     let (a_data, a_base) = typed_read_storage(a, "grouped_gemm")?;
                     let (b_data, b_base) = typed_read_storage(b, "grouped_gemm")?;
                     let mut c_view = c.as_view_mut();
@@ -931,10 +940,18 @@ where
                     );
                 }
                 (
-                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::Tensor(a),
                     TensorRead::View(TensorView::$variant(b)),
-                    TensorWrite::Tensor(Tensor::$variant(c)),
-                ) => {
+                    TensorWrite::Tensor(c),
+                ) if a.dtype() == <$scalar as crate::TensorScalar>::dtype()
+                    && c.dtype() == <$scalar as crate::TensorScalar>::dtype() =>
+                {
+                    let a = a
+                        .as_typed::<$scalar>()
+                        .expect("the dtype guard selects this arm");
+                    let c = c
+                        .as_typed_mut::<$scalar>()
+                        .expect("the dtype guard selects this arm");
                     let (a_data, a_base) = typed_read_storage(a, "grouped_gemm")?;
                     let mut c_view = c.as_view_mut();
                     return grouped_gemm_default_loop::<_, _, $wrapper>(
@@ -949,9 +966,17 @@ where
                 }
                 (
                     TensorRead::View(TensorView::$variant(a)),
-                    TensorRead::Tensor(Tensor::$variant(b)),
-                    TensorWrite::Tensor(Tensor::$variant(c)),
-                ) => {
+                    TensorRead::Tensor(b),
+                    TensorWrite::Tensor(c),
+                ) if b.dtype() == <$scalar as crate::TensorScalar>::dtype()
+                    && c.dtype() == <$scalar as crate::TensorScalar>::dtype() =>
+                {
+                    let b = b
+                        .as_typed::<$scalar>()
+                        .expect("the dtype guard selects this arm");
+                    let c = c
+                        .as_typed_mut::<$scalar>()
+                        .expect("the dtype guard selects this arm");
                     let (b_data, b_base) = typed_read_storage(b, "grouped_gemm")?;
                     let mut c_view = c.as_view_mut();
                     return grouped_gemm_default_loop::<_, _, $wrapper>(
@@ -967,8 +992,11 @@ where
                 (
                     TensorRead::View(TensorView::$variant(a)),
                     TensorRead::View(TensorView::$variant(b)),
-                    TensorWrite::Tensor(Tensor::$variant(c)),
-                ) => {
+                    TensorWrite::Tensor(c),
+                ) if c.dtype() == <$scalar as crate::TensorScalar>::dtype() => {
+                    let c = c
+                        .as_typed_mut::<$scalar>()
+                        .expect("the dtype guard selects this arm");
                     let mut c_view = c.as_view_mut();
                     return grouped_gemm_default_loop::<_, _, $wrapper>(
                         backend,
@@ -981,10 +1009,18 @@ where
                     );
                 }
                 (
-                    TensorRead::Tensor(Tensor::$variant(a)),
-                    TensorRead::Tensor(Tensor::$variant(b)),
+                    TensorRead::Tensor(a),
+                    TensorRead::Tensor(b),
                     TensorWrite::View(TensorViewMut::$variant(c)),
-                ) => {
+                ) if a.dtype() == <$scalar as crate::TensorScalar>::dtype()
+                    && b.dtype() == <$scalar as crate::TensorScalar>::dtype() =>
+                {
+                    let a = a
+                        .as_typed::<$scalar>()
+                        .expect("the dtype guard selects this arm");
+                    let b = b
+                        .as_typed::<$scalar>()
+                        .expect("the dtype guard selects this arm");
                     let (a_data, a_base) = typed_read_storage(a, "grouped_gemm")?;
                     let (b_data, b_base) = typed_read_storage(b, "grouped_gemm")?;
                     return grouped_gemm_default_loop::<_, _, $wrapper>(
@@ -992,10 +1028,13 @@ where
                     );
                 }
                 (
-                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::Tensor(a),
                     TensorRead::View(TensorView::$variant(b)),
                     TensorWrite::View(TensorViewMut::$variant(c)),
-                ) => {
+                ) if a.dtype() == <$scalar as crate::TensorScalar>::dtype() => {
+                    let a = a
+                        .as_typed::<$scalar>()
+                        .expect("the dtype guard selects this arm");
                     let (a_data, a_base) = typed_read_storage(a, "grouped_gemm")?;
                     return grouped_gemm_default_loop::<_, _, $wrapper>(
                         backend,
@@ -1009,9 +1048,12 @@ where
                 }
                 (
                     TensorRead::View(TensorView::$variant(a)),
-                    TensorRead::Tensor(Tensor::$variant(b)),
+                    TensorRead::Tensor(b),
                     TensorWrite::View(TensorViewMut::$variant(c)),
-                ) => {
+                ) if b.dtype() == <$scalar as crate::TensorScalar>::dtype() => {
+                    let b = b
+                        .as_typed::<$scalar>()
+                        .expect("the dtype guard selects this arm");
                     let (b_data, b_base) = typed_read_storage(b, "grouped_gemm")?;
                     return grouped_gemm_default_loop::<_, _, $wrapper>(
                         backend,
@@ -1043,10 +1085,10 @@ where
         };
     }
 
-    dispatch!(F32, GroupedF32);
-    dispatch!(F64, GroupedF64);
-    dispatch!(C32, GroupedC32);
-    dispatch!(C64, GroupedC64);
+    dispatch!(F32, f32, GroupedF32);
+    dispatch!(F64, f64, GroupedF64);
+    dispatch!(C32, Complex32, GroupedC32);
+    dispatch!(C64, Complex64, GroupedC64);
     Err(validation(
         "grouped_gemm",
         ValidationError::DTypeMismatch {
@@ -1077,14 +1119,26 @@ pub fn accumulate_dot_result_into(
 ) -> crate::Result<()> {
     macro_rules! dispatch {
         ($variant:ident, $ty:ty) => {
-            if let (
-                Tensor::$variant(dot),
-                ContractionScalar::$variant(alpha),
-                ContractionScalar::$variant(beta),
-            ) = (dot, accumulation.alpha, accumulation.beta)
-            {
+            if dot.dtype() == <$ty as crate::TensorScalar>::dtype() {
+                let (ContractionScalar::$variant(alpha), ContractionScalar::$variant(beta)) =
+                    (accumulation.alpha, accumulation.beta)
+                else {
+                    return Err(validation(
+                        "dot_general",
+                        ValidationError::DTypeMismatch {
+                            expected: dot.dtype(),
+                            actual: accumulation.alpha.dtype(),
+                        },
+                    ));
+                };
+                let dot = dot
+                    .as_typed::<$ty>()
+                    .expect("the dtype guard selects this arm");
                 match out {
-                    TensorWrite::Tensor(Tensor::$variant(out)) => {
+                    TensorWrite::Tensor(out) => {
+                        let out = out
+                            .as_typed_mut::<$ty>()
+                            .expect("the dtype guard selects this arm");
                         let mut out = out.as_view_mut();
                         accumulate_typed(dot.as_slice()?, alpha, beta, &mut out)?;
                         return Ok(());
