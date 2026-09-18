@@ -777,10 +777,14 @@ pub(super) fn dot_general_read_allocating(
     let shape =
         tenferro_tensor::backend::dot_general_output_shape(lhs.shape(), rhs.shape(), config, OP)?;
     let mut out = match dtype {
-        DType::F32 => Tensor::F32(alloc_output::<f32>(backend.runtime(), &shape)?),
-        DType::F64 => Tensor::F64(alloc_output::<f64>(backend.runtime(), &shape)?),
-        DType::C32 => Tensor::C32(alloc_output::<Complex32>(backend.runtime(), &shape)?),
-        DType::C64 => Tensor::C64(alloc_output::<Complex64>(backend.runtime(), &shape)?),
+        DType::F32 => Tensor::from_typed::<f32>(alloc_output::<f32>(backend.runtime(), &shape)?),
+        DType::F64 => Tensor::from_typed::<f64>(alloc_output::<f64>(backend.runtime(), &shape)?),
+        DType::C32 => {
+            Tensor::from_typed::<Complex32>(alloc_output::<Complex32>(backend.runtime(), &shape)?)
+        }
+        DType::C64 => {
+            Tensor::from_typed::<Complex64>(alloc_output::<Complex64>(backend.runtime(), &shape)?)
+        }
         dtype => return Err(unsupported_dtype(OP, dtype)),
     };
     let accumulation = DotGeneralAccumulation {

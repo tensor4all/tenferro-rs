@@ -393,7 +393,7 @@ fn test_read_view_operands_allocating_f64() {
 
     let lhs_gpu = upload(&gpu, &tensor_f64(vec![32], lhs_host));
     let rhs_gpu = upload(&gpu, &tensor_f64(vec![32], rhs_host));
-    let (Tensor::F64(lhs_t), Tensor::F64(rhs_t)) = (&lhs_gpu, &rhs_gpu) else {
+    let (Some(lhs_t), Some(rhs_t)) = (lhs_gpu.as_typed::<f64>(), rhs_gpu.as_typed::<f64>()) else {
         unreachable!()
     };
     let lhs_view = lhs_t
