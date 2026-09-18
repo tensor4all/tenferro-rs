@@ -49,7 +49,27 @@ pub mod core {
 
 // Re-exported so the exported dispatch macros can name them with `$crate` paths.
 pub use num_complex::Complex;
+
+/// The 32-bit complex scalar the exported dispatch macros name.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::Complex32;
+///
+/// assert_eq!(Complex32::new(1.0, 2.0).im, 2.0);
+/// ```
 pub type Complex32 = Complex<f32>;
+
+/// The 64-bit complex scalar the exported dispatch macros name.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::Complex64;
+///
+/// assert_eq!(Complex64::new(1.0, 2.0).re, 1.0);
+/// ```
 pub type Complex64 = Complex<f64>;
 
 pub use tenferro_tensor_core::{

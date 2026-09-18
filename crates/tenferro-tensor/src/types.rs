@@ -3761,6 +3761,16 @@ enum TensorPayload {
 /// `Native` core whose descriptor records the element type, and a caller-owned scalar is an
 /// `External` payload recovered by its own type. Use [`TypedTensor<T, R>`](TypedTensor)
 /// directly when the scalar type or rank should be represented in Rust's type system.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DType, Tensor};
+///
+/// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// assert_eq!(tensor.dtype(), DType::F64);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Tensor {
     payload: TensorPayload,
@@ -3917,6 +3927,18 @@ impl Tensor {
     /// [`Tensor::external`] defaults the placement to unpinned host memory, which is where
     /// a caller-owned payload normally lives; this entry point is for a caller that knows
     /// the placement it wants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Placement, Tensor};
+    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    ///
+    /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let tensor = Tensor::external_with_placement(payload, Placement::default());
+    /// assert!(tensor.external_payload().is_some());
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
     #[must_use]
     pub fn external_with_placement(
         payload: tenferro_tensor_core::ErasedHostTensor,
@@ -3931,6 +3953,19 @@ impl Tensor {
     ///
     /// The counterpart of [`Tensor::external_payload`] for callers that update the payload
     /// in place, such as a mutation test that checks the copy boundary.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    ///
+    /// let mut tensor = Tensor::external(ErasedHostTensor::new(
+    ///     HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?,
+    /// ));
+    /// assert!(tensor.external_payload_mut().is_some());
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
     #[must_use]
     pub fn external_payload_mut(&mut self) -> Option<&mut tenferro_tensor_core::ErasedHostTensor> {
         match &mut self.payload {
