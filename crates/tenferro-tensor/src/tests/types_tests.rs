@@ -2257,6 +2257,65 @@ fn value_types_are_send_and_sync() {
     assert_send_sync::<TensorView<'_>>();
 }
 
+/// The erased payload's accessor contract: every preset dtype round-trips through the one
+/// `Native` payload, only the matching scalar is accepted, mutable access reaches the same
+/// storage, and swapping or replacing the whole value leaves a usable tensor behind.
+#[test]
+fn erased_payload_accessors_cover_every_preset_dtype() {
+    fn round_trip<T: TensorScalar + PartialEq + std::fmt::Debug>(values: Vec<T>) {
+        let tensor = Tensor::from_vec_col_major(vec![values.len()], values.clone()).unwrap();
+        assert_eq!(tensor.dtype(), T::dtype());
+        assert_eq!(
+            tensor
+                .as_typed::<T>()
+                .expect("the dtype matches")
+                .host_data()
+                .unwrap(),
+            values.as_slice()
+        );
+        if T::dtype() != DType::F32 {
+            assert!(tensor.as_typed::<f32>().is_none(), "a mismatch is refused");
+        }
+
+        let mut tensor = tensor;
+        tensor
+            .as_typed_mut::<T>()
+            .expect("the dtype matches")
+            .host_data_mut()
+            .unwrap()[0] = values[0];
+        assert_eq!(
+            tensor
+                .as_typed::<T>()
+                .expect("the dtype still matches")
+                .host_data()
+                .unwrap(),
+            values.as_slice()
+        );
+
+        let scalar = Tensor::from_vec_col_major(vec![1], vec![values[0]]).unwrap();
+        let mut first = scalar.duplicate().unwrap();
+        let mut second = scalar;
+        std::mem::swap(&mut first, &mut second);
+        assert!(first.as_typed::<T>().is_some());
+        assert!(second.as_typed::<T>().is_some());
+        let replaced = std::mem::replace(&mut first, second);
+        assert!(replaced.as_typed::<T>().is_some());
+        assert!(first.as_typed::<T>().is_some());
+        assert_eq!(
+            first.into_typed::<T>().unwrap().host_data().unwrap(),
+            &[values[0]]
+        );
+    }
+
+    round_trip(vec![1.0_f32, 2.0]);
+    round_trip(vec![1.0_f64, 2.0]);
+    round_trip(vec![1_i32, 2]);
+    round_trip(vec![1_i64, 2]);
+    round_trip(vec![false, true]);
+    round_trip(vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, 0.0)]);
+    round_trip(vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 0.0)]);
+}
+
 #[test]
 fn an_external_payload_is_carried_by_the_value_type() {
     use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
