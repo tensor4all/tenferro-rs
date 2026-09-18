@@ -13,23 +13,23 @@ const TOL: f64 = 1.0e-5;
 const FD_H: f64 = 1.0e-5;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f64_scalar(value: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
 }
 
 fn i64_scalar(value: i64) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
+    Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
 }
 
 fn backend_f64_scalar() -> Tensor {
-    Tensor::F64(
+    Tensor::from_typed::<f64>(
         TypedTensor::from_buffer_col_major(
             vec![],
             StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(11, 1))),

@@ -179,7 +179,7 @@ fn execute_cfft(
         plan.normalization,
         op,
     )
-    .map(Tensor::C32)
+    .map(Tensor::from_typed::<tenferro_tensor::Complex32>)
 }
 
 fn execute_rfft(
@@ -199,7 +199,7 @@ fn execute_rfft(
         plan.normalization,
         op,
     )
-    .map(Tensor::C32)
+    .map(Tensor::from_typed::<tenferro_tensor::Complex32>)
 }
 
 fn execute_irfft(
@@ -219,7 +219,7 @@ fn execute_irfft(
         plan.normalization,
         op,
     )
-    .map(Tensor::F32)
+    .map(Tensor::from_typed::<f32>)
 }
 
 fn validate_spec_input(input: &Tensor, spec: &FftPlanSpec) -> tenferro_tensor::Result<()> {

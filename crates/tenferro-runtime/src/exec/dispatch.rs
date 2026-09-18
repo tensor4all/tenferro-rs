@@ -377,7 +377,7 @@ fn execute_shape_of_host<B: HostExecution + ?Sized>(
             ),
         ));
     }
-    let host = Tensor::F64(tenferro_tensor::TypedTensor::from_vec_col_major(
+    let host = Tensor::from_typed::<f64>(tenferro_tensor::TypedTensor::from_vec_col_major(
         vec![],
         vec![input.shape()[*axis] as f64],
     )?);

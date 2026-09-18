@@ -8,18 +8,22 @@ use tenferro_tensor::{DType, Tensor, TensorWrite, TypedTensor};
 
 fn cases() -> Vec<Tensor> {
     vec![
-        Tensor::F32(
+        Tensor::from_typed::<f32>(
             TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0f32, 0.0, 0.0, 1.0]).unwrap(),
         ),
-        Tensor::F64(
+        Tensor::from_typed::<f64>(
             TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0f64, 0.0, 0.0, 1.0]).unwrap(),
         ),
-        Tensor::I32(TypedTensor::from_vec_col_major(vec![2, 2], vec![1i32, 0, 0, 1]).unwrap()),
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1i64, 0, 0, 1]).unwrap()),
-        Tensor::Bool(
+        Tensor::from_typed::<i32>(
+            TypedTensor::from_vec_col_major(vec![2, 2], vec![1i32, 0, 0, 1]).unwrap(),
+        ),
+        Tensor::from_typed::<i64>(
+            TypedTensor::from_vec_col_major(vec![2, 2], vec![1i64, 0, 0, 1]).unwrap(),
+        ),
+        Tensor::from_typed::<bool>(
             TypedTensor::from_vec_col_major(vec![2, 2], vec![true, false, false, true]).unwrap(),
         ),
-        Tensor::C32(
+        Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -31,7 +35,7 @@ fn cases() -> Vec<Tensor> {
             )
             .unwrap(),
         ),
-        Tensor::C64(
+        Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -62,14 +66,16 @@ fn host_check_and_zero_like_cover_every_preset_scalar() {
 /// mismatch is the same typed refusal the wildcard arms produce, never a panic.
 #[test]
 fn typed_host_refuses_a_dtype_the_dispatch_never_produces() {
-    let tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
+    let tensor =
+        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     assert!(typed_host::<f32>(&tensor, "lu_factor").is_err());
 }
 
 /// The accessor reports the module's refusal when the tag and the runtime dtype disagree.
 #[test]
 fn typed_host_refuses_a_dtype_the_table_never_produces() {
-    let tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
+    let tensor =
+        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     assert!(typed_host::<f32>(&tensor, "zeros_like_tensor").is_err());
 }
 
@@ -78,7 +84,8 @@ fn typed_host_refuses_a_dtype_the_table_never_produces() {
 #[test]
 #[should_panic(expected = "linalg validates its input dtypes first")]
 fn write_view_operand_unwinds_for_a_dtype_with_no_view() {
-    let mut tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
+    let mut tensor =
+        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     let _ = write_view_operand::<f32>(&mut tensor);
 }
 

@@ -144,7 +144,7 @@ impl TensorDot for WrongDTypeBackend {
         _rhs: &Tensor,
         _config: &DotGeneralConfig,
     ) -> tenferro_tensor::Result<Tensor> {
-        Ok(Tensor::F64(
+        Ok(Tensor::from_typed::<f64>(
             TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
         ))
     }
@@ -338,8 +338,10 @@ fn typed_einsum_preserves_typed_parser_source_for_invalid_notation() {
 
 #[test]
 fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
-    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![1.0]).unwrap());
-    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![3.0]).unwrap());
+    let lhs =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1, 1], vec![1.0]).unwrap());
+    let rhs =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1, 1], vec![3.0]).unwrap());
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],

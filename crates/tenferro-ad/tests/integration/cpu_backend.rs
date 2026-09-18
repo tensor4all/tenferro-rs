@@ -8,11 +8,11 @@ use tenferro_runtime::traced::TracedTensor;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {

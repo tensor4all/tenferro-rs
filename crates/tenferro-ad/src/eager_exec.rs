@@ -416,7 +416,7 @@ fn shape_of_host_tensor(axis: usize, shape: &[usize]) -> Result<Tensor> {
         return Err(axis_out_of_bounds("ShapeOf", axis, shape.len()));
     }
     let size = shape[axis] as f64;
-    Ok(Tensor::F64(TypedTensor::from_vec_col_major(
+    Ok(Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(
         vec![],
         vec![size],
     )?))
@@ -964,23 +964,23 @@ fn resolve_tensor_read_shape_exprs(
 
 fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
     Ok(match dtype {
-        DType::F64 => Tensor::F64(TypedTensor::from_vec_col_major(
+        DType::F64 => Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(
             vec![],
             vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
         )?),
-        DType::F32 => Tensor::F32(TypedTensor::from_vec_col_major(
+        DType::F32 => Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(
             vec![],
             vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
         )?),
-        DType::I32 => Tensor::I32(TypedTensor::from_vec_col_major(
+        DType::I32 => Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(
             vec![],
             vec![i32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
         )?),
-        DType::I64 => Tensor::I64(TypedTensor::from_vec_col_major(
+        DType::I64 => Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(
             vec![],
             vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
         )?),
-        DType::Bool => Tensor::Bool(TypedTensor::from_vec_col_major(
+        DType::Bool => Tensor::from_typed::<bool>(TypedTensor::from_vec_col_major(
             vec![],
             vec![exact_bytes::<1>(dtype, bytes)?[0] != 0],
         )?),
@@ -992,7 +992,7 @@ fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
             im_bytes.copy_from_slice(&data[8..]);
             let re = f64::from_le_bytes(re_bytes);
             let im = f64::from_le_bytes(im_bytes);
-            Tensor::C64(TypedTensor::from_vec_col_major(
+            Tensor::from_typed::<tenferro_tensor::Complex64>(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex64::new(re, im)],
             )?)
@@ -1005,7 +1005,7 @@ fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
             im_bytes.copy_from_slice(&data[4..]);
             let re = f32::from_le_bytes(re_bytes);
             let im = f32::from_le_bytes(im_bytes);
-            Tensor::C32(TypedTensor::from_vec_col_major(
+            Tensor::from_typed::<tenferro_tensor::Complex32>(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex32::new(re, im)],
             )?)

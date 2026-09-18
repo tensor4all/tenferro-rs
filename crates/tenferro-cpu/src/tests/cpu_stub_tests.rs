@@ -16,7 +16,7 @@ fn opaque_backend_placement() -> Placement {
 }
 
 fn backend_tensor_f64(handle_id: u64, len: usize) -> Tensor {
-    Tensor::F64(TypedTensor::<f64>::from_buffer_col_major(
+    Tensor::from_typed::<f64>(TypedTensor::<f64>::from_buffer_col_major(
         vec![len],
         StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(handle_id, len))),
         opaque_backend_placement(),
@@ -86,7 +86,7 @@ fn cpu_dot_general_read_rejects_backend_view_without_panic() {
         StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(9, 4))),
         opaque_backend_placement(),
     ).unwrap();
-    let rhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
+    let rhs = Tensor::from_typed::<f64>(TypedTensor::<f64>::from_vec_col_major(
         vec![2, 2],
         vec![1.0, 2.0, 3.0, 4.0],
     ).unwrap());
@@ -180,16 +180,16 @@ fn cpu_reduce_read_rejects_backend_views_without_download() {
 fn cpu_materialize_tensor_read_covers_host_tensor_and_view_dtypes() {
     let mut buffers = crate::buffer_pool::BufferPool::new();
     let tensors = [
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap()),
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()),
-        Tensor::I32(TypedTensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap()),
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()),
-        Tensor::Bool(TypedTensor::from_vec_col_major(vec![1], vec![true]).unwrap()),
-        Tensor::C32(TypedTensor::from_vec_col_major(
+        Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap()),
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()),
+        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap()),
+        Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()),
+        Tensor::from_typed::<bool>(TypedTensor::from_vec_col_major(vec![1], vec![true]).unwrap()),
+        Tensor::from_typed::<tenferro_tensor::Complex32>(TypedTensor::from_vec_col_major(
             vec![1],
             vec![Complex32::new(1.0, 0.0)],
         ).unwrap()),
-        Tensor::C64(TypedTensor::from_vec_col_major(
+        Tensor::from_typed::<tenferro_tensor::Complex64>(TypedTensor::from_vec_col_major(
             vec![1],
             vec![Complex64::new(1.0, 0.0)],
         ).unwrap()),

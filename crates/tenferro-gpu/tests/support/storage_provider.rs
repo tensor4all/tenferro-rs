@@ -12,7 +12,7 @@ mod cuda {
     };
 
     fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
-        let Tensor::F32(tensor) = tensor else {
+        let Some(tensor) = tensor.as_typed::<f32>() else {
             panic!("provider test uses f32 tensors")
         };
         (tensor.allocation_domain(), tensor.allocation_id())
@@ -58,7 +58,7 @@ mod webgpu {
     use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead, TensorStructural};
 
     fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
-        let Tensor::F32(tensor) = tensor else {
+        let Some(tensor) = tensor.as_typed::<f32>() else {
             panic!("provider test uses f32 tensors")
         };
         (tensor.allocation_domain(), tensor.allocation_id())

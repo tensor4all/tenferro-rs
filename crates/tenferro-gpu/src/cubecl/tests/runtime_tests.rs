@@ -161,7 +161,7 @@ gpu_test!(test_pointer_bridge, {
     let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 
     let gpu = upload_tensor(backend.runtime(), &host).unwrap();
-    let Tensor::F64(gpu) = &gpu else {
+    let Some(gpu) = gpu.as_typed::<f64>() else {
         unreachable!("f64 upload should preserve dtype");
     };
     backend
@@ -260,7 +260,7 @@ gpu_test!(test_cached_scalar_read_observes_queued_writes, {
         &Tensor::from_vec_col_major([1], vec![0.0_f64]).unwrap(),
     )
     .unwrap();
-    let Tensor::F64(typed) = &output else {
+    let Some(typed) = output.as_typed::<f64>() else {
         unreachable!()
     };
     let handle = super::super::dispatch::cubecl_buffer(typed, "test")
@@ -442,7 +442,7 @@ gpu_test!(test_pointer_and_stream_bridge, {
     let t = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let gpu = upload_tensor(backend.runtime(), &t).unwrap();
 
-    let Tensor::F64(gpu_typed) = &gpu else {
+    let Some(gpu_typed) = gpu.as_typed::<f64>() else {
         unreachable!("f64 upload should preserve dtype");
     };
     backend

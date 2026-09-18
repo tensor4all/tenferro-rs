@@ -101,8 +101,12 @@ fn test_with_backend_session_runs_compiled_ops() {
     let result = backend.with_backend_session(|session| {
         session
             .add(
-                &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap()),
-                &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap()),
+                &Tensor::from_typed::<f64>(
+                    TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+                ),
+                &Tensor::from_typed::<f64>(
+                    TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
+                ),
             )
             .unwrap()
     });
@@ -134,8 +138,12 @@ fn cpu_install_accepts_send_state() {
 fn cpu_backend_multi_operation_session_enters_executor_once() {
     let context = Arc::new(CpuContext::with_threads(2).unwrap());
     let mut backend = CpuBackend::from_context(Arc::clone(&context));
-    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
-    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap());
+    let lhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
+    );
     let before = context.executor_install_calls_for_test();
 
     backend.with_backend_session(|session| {

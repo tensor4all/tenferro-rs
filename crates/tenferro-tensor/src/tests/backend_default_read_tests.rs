@@ -125,7 +125,13 @@ impl TensorElementwise for DefaultReadBackend {
         let direct = out.dtype() == DType::F64
             && out.as_read().backend_family().is_none()
             && inputs.iter().all(|input| {
-                matches!(input, TensorRead::Tensor(Tensor::F64(tensor)) if tensor.backend_buffer().is_none())
+                matches!(input, TensorRead::Tensor(tensor)
+                    if tensor.dtype() == DType::F64
+                        && tensor
+                            .as_typed::<f64>()
+                            .expect("the dtype guard selects f64")
+                            .backend_buffer()
+                            .is_none())
             });
         if !direct {
             return crate::backend::elementwise_read_into_via_allocating_ops(self, op, inputs, out);
@@ -699,11 +705,12 @@ fn blas1_axpby_rejects_backend_alias_before_execution() {
         device: None,
         cpu_affinity: None,
     };
-    let x = Tensor::F64(
+    let x = Tensor::from_typed::<f64>(
         TypedTensor::from_buffer_col_major(vec![2], storage(), placement.clone()).unwrap(),
     );
-    let mut y =
-        Tensor::F64(TypedTensor::from_buffer_col_major(vec![2], storage(), placement).unwrap());
+    let mut y = Tensor::from_typed::<f64>(
+        TypedTensor::from_buffer_col_major(vec![2], storage(), placement).unwrap(),
+    );
 
     let error = validate_axpby_read_into_accum(
         ContractionScalar::F64(1.0),
@@ -957,7 +964,7 @@ fn elementwise_into_accepts_independent_backend_destinations() {
         }),
         cpu_affinity: None,
     };
-    let lhs = Tensor::F64(
+    let lhs = Tensor::from_typed::<f64>(
         TypedTensor::from_buffer_col_major(
             vec![1],
             crate::StorageBuffer::Backend(Box::new(
@@ -968,7 +975,7 @@ fn elementwise_into_accepts_independent_backend_destinations() {
         .unwrap(),
     );
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    let mut out = Tensor::F64(
+    let mut out = Tensor::from_typed::<f64>(
         TypedTensor::from_buffer_col_major(
             vec![1],
             crate::StorageBuffer::Backend(Box::new(
@@ -1845,7 +1852,7 @@ fn structural_runtime_materialization_rejects_views_by_default() {
 
 #[test]
 fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_buffer_col_major(
             vec![2],
             crate::StorageBuffer::Backend(Box::new(

@@ -121,7 +121,7 @@ fn finite_diff_c64_directional(
 
 fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     let len = shape.iter().product();
-    Tensor::C64(
+    Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_buffer_col_major(
             shape,
             StorageBuffer::Backend(Box::new(BackendStorageHandle::<Complex64>::new_with_len(
@@ -661,7 +661,7 @@ fn traced_fft_rejects_invalid_dtype_axis_and_length() {
         }
     ));
 
-    let zero_axis = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
+    let zero_axis = TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap(),
     ))
     .unwrap();

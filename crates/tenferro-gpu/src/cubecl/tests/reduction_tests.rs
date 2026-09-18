@@ -151,7 +151,7 @@ fn test_cubecl_sum_squares_does_not_contract_multiply_and_add() {
         .reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), &[0])
         .unwrap();
     let actual = download(&gpu, &gpu_output);
-    let crate::Tensor::F32(actual) = actual else {
+    let Some(actual) = actual.as_typed::<f32>() else {
         panic!("sum-of-squares output must remain f32");
     };
     let actual = actual.as_slice().unwrap()[0];

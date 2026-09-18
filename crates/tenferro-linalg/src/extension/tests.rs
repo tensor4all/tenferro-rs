@@ -282,7 +282,7 @@ fn canonical_pivot_svd_gauge_flips_real_vectors_and_vt_rows_together() {
 #[test]
 fn canonical_pivot_svd_gauge_removes_complex_pivot_phase() {
     let mut outputs = vec![
-        Tensor::C64(
+        Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![2, 1],
                 vec![Complex64::new(1.0, 1.0), Complex64::new(0.1, 0.0)],
@@ -290,7 +290,7 @@ fn canonical_pivot_svd_gauge_removes_complex_pivot_phase() {
             .unwrap(),
         ),
         Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-        Tensor::C64(
+        Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![1, 2],
                 vec![Complex64::new(2.0, 0.0), Complex64::new(3.0, 4.0)],
@@ -429,7 +429,7 @@ fn canonical_pivot_svd_gauge_handles_batched_f32_and_c32_outputs() {
     );
 
     let mut complex_outputs = vec![
-        Tensor::C32(
+        Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![1, 1, 2],
                 vec![Complex32::new(1.0, 1.0), Complex32::new(0.0, -2.0)],
@@ -437,7 +437,7 @@ fn canonical_pivot_svd_gauge_handles_batched_f32_and_c32_outputs() {
             .unwrap(),
         ),
         Tensor::from_vec_col_major(vec![1, 2], vec![2.0_f32, 3.0]).unwrap(),
-        Tensor::C32(
+        Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![1, 1, 2],
                 vec![Complex32::new(2.0, 0.0), Complex32::new(3.0, 0.0)],
@@ -505,7 +505,7 @@ fn canonical_pivot_eigh_gauge_flips_real_eigenvector_columns() {
 fn canonical_pivot_eigh_gauge_removes_complex_eigenvector_phase() {
     let mut outputs = vec![
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-        Tensor::C64(
+        Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -587,7 +587,7 @@ fn eigh_gauge_covers_f32_and_c32_paths() {
 
     let mut complex_outputs = vec![
         Tensor::from_vec_col_major(vec![2], vec![2.0_f32, 3.0]).unwrap(),
-        Tensor::C32(
+        Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -650,14 +650,14 @@ fn positive_diagonal_qr_gauge_flips_real_q_columns_and_r_rows() {
 #[test]
 fn positive_diagonal_qr_gauge_removes_complex_diagonal_phase() {
     let mut outputs = vec![
-        Tensor::C64(
+        Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![2, 1],
                 vec![Complex64::new(2.0, 0.0), Complex64::new(0.0, 1.0)],
             )
             .unwrap(),
         ),
-        Tensor::C64(
+        Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![1, 2],
                 vec![Complex64::new(1.0, 1.0), Complex64::new(3.0, 4.0)],
@@ -716,7 +716,7 @@ fn qr_gauge_covers_f32_and_c32_paths() {
     );
 
     let mut complex_outputs = vec![
-        Tensor::C32(
+        Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -728,7 +728,7 @@ fn qr_gauge_covers_f32_and_c32_paths() {
             )
             .unwrap(),
         ),
-        Tensor::C32(
+        Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![

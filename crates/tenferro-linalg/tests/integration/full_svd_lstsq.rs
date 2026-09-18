@@ -13,14 +13,14 @@ use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
 use super::support;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape(Tensor::F64(
+    TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(shape, data).unwrap(),
     ))
     .unwrap()
 }
 
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape(Tensor::C64(
+    TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(shape, data).unwrap(),
     ))
     .unwrap()

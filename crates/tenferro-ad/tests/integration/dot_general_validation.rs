@@ -9,7 +9,7 @@ use tenferro_tensor::{
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn assert_validation_error(config: DotGeneralConfig, expected_kind: ValidationKind) {

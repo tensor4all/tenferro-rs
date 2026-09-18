@@ -235,7 +235,7 @@ fn cuda_registration_ingress_accepts_backend_created_tensor() {
         runtime.allocation_domain_id()
     ));
 
-    let Tensor::F32(typed) = &input else {
+    let Some(typed) = input.as_typed::<f32>() else {
         unreachable!("uploaded f32 tensor")
     };
     let StorageBuffer::Backend(_buffer) = typed.buffer() else {
@@ -625,7 +625,7 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         panic_output.as_ref().expect("panic-path output retained"),
     )
     .expect("panic-path work retired before unwind returned");
-    let Tensor::F32(panic_output) = panic_output else {
+    let Some(panic_output) = panic_output.as_typed::<f32>() else {
         unreachable!("f32 panic-path output")
     };
     assert_eq!(
@@ -635,7 +635,7 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
 
     let output = download_tensor(&runtime, second_output.as_ref().expect("second output"))
         .expect("CUDA download");
-    let Tensor::F32(output) = output else {
+    let Some(output) = output.as_typed::<f32>() else {
         unreachable!("f32 elementwise output")
     };
     assert_eq!(output.as_slice().expect("host slice"), &[3.0, 6.0]);

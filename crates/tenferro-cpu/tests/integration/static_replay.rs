@@ -11,7 +11,7 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
     assert_eq!(backend.num_threads(), 1);
     let values = [0.25_f64, 1.5, 4.0];
     let typed = TypedTensor::<f64>::from_vec_col_major([3], values.to_vec()).unwrap();
-    let owned = Tensor::F64(typed.duplicate().unwrap());
+    let owned = Tensor::from_typed::<f64>(typed.duplicate().unwrap());
     let reversed = typed
         .as_view()
         .try_slice(&[StridedSliceSpec::new(0, Some(3), -1)])

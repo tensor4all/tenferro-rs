@@ -228,10 +228,10 @@ fn opted_out_gemm_provider_keeps_zeroed_dot_output_values() {
     let gemm_calls = Arc::clone(&gemm.gemm_calls);
     let mut backend = backend_with_bundle(dot_bundle(gemm));
 
-    let lhs = Tensor::F64(
+    let lhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap(),
     );
-    let rhs = Tensor::F64(
+    let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0]).unwrap(),
     );
     let output = backend.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
@@ -252,10 +252,10 @@ fn opted_in_gemm_provider_unsupported_falls_back_to_zeroed_dot() {
     let uninit_calls = Arc::clone(&gemm.uninit_calls);
     let mut backend = backend_with_bundle(dot_bundle(gemm));
 
-    let lhs = Tensor::F64(
+    let lhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap(),
     );
-    let rhs = Tensor::F64(
+    let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0]).unwrap(),
     );
     let output = backend.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
@@ -284,11 +284,11 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
     let cases: Vec<(Tensor, Tensor, DotGeneralConfig)> = vec![
         // Plain matmul.
         (
-            Tensor::F64(
+            Tensor::from_typed::<f64>(
                 TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
                     .unwrap(),
             ),
-            Tensor::F64(
+            Tensor::from_typed::<f64>(
                 TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0])
                     .unwrap(),
             ),
@@ -296,14 +296,14 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
         ),
         // Batched matmul: batch dim 0 on both operands.
         (
-            Tensor::F64(
+            Tensor::from_typed::<f64>(
                 TypedTensor::from_vec_col_major(
                     vec![2, 2, 3],
                     vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0, 2.0, 1.0, 1.0, 2.0, 1.0, 1.0],
                 )
                 .unwrap(),
             ),
-            Tensor::F64(
+            Tensor::from_typed::<f64>(
                 TypedTensor::from_vec_col_major(
                     vec![2, 3, 2],
                     vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0],
@@ -319,14 +319,20 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
         ),
         // Empty contraction (k == 0): output must be zeros.
         (
-            Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 0], Vec::<f64>::new()).unwrap()),
-            Tensor::F64(TypedTensor::from_vec_col_major(vec![0, 2], Vec::<f64>::new()).unwrap()),
+            Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2, 0], Vec::<f64>::new()).unwrap(),
+            ),
+            Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![0, 2], Vec::<f64>::new()).unwrap(),
+            ),
             matmul_config(),
         ),
         // Empty output (zero rows).
         (
-            Tensor::F64(TypedTensor::from_vec_col_major(vec![0, 3], Vec::<f64>::new()).unwrap()),
-            Tensor::F64(
+            Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![0, 3], Vec::<f64>::new()).unwrap(),
+            ),
+            Tensor::from_typed::<f64>(
                 TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0])
                     .unwrap(),
             ),
@@ -345,7 +351,7 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
     }
 
     // Conjugated complex dot (direct faer conjugation) also matches.
-    let lhs = Tensor::C64(
+    let lhs = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2, 2],
             vec![
@@ -357,7 +363,7 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
         )
         .unwrap(),
     );
-    let rhs = Tensor::C64(
+    let rhs = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2, 2],
             vec![

@@ -3,17 +3,20 @@ use super::*;
 #[test]
 fn test_solve_zero_dim_returns_zeros() {
     let mut backend = CpuBackend::new();
-    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 0], vec![]).unwrap());
-    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![0, 1], vec![]).unwrap());
+    let a = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![2, 0], vec![]).unwrap());
+    let b = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 1], vec![]).unwrap());
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[0, 1]);
 }
 
 #[test]
 fn test_solve_with_1d_vector_rhs() {
-    let a =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]).unwrap());
-    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![5.0, 7.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![5.0, 7.0]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[2]);
@@ -51,15 +54,16 @@ fn test_prepared_lu_solve_reuses_an_entered_cpu_session() {
 
 #[test]
 fn test_solve_with_batched_vector_rhs() {
-    let a = Tensor::F64(
+    let a = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(
             vec![2, 2, 2],
             vec![2.0, 1.0, 0.0, 3.0, 1.0, 0.0, 1.0, 2.0],
         )
         .unwrap(),
     );
-    let b =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]).unwrap());
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[2, 2]);
@@ -68,10 +72,12 @@ fn test_solve_with_batched_vector_rhs() {
 #[test]
 fn test_triangular_solve_dtype_mismatch_and_unsupported() {
     let mut backend = CpuBackend::new();
-    let a_f32 = Tensor::F32(
+    let a_f32 = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0f32, 0.0, 0.0, 1.0]).unwrap(),
     );
-    let b_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap());
+    let b_f64 = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap(),
+    );
     let err = with_cpu_linalg(&mut backend, |backend| {
         backend.triangular_solve(&a_f32, &b_f64, true, true, false, false)
     })
@@ -84,9 +90,12 @@ fn test_triangular_solve_dtype_mismatch_and_unsupported() {
         }
     ));
 
-    let a_i64 =
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
-    let b_i64 = Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 2]).unwrap());
+    let a_i64 = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap(),
+    );
+    let b_i64 = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 2]).unwrap(),
+    );
     let err = with_cpu_linalg(&mut backend, |backend| {
         backend.triangular_solve(&a_i64, &b_i64, true, true, false, false)
     })
@@ -105,9 +114,12 @@ fn test_triangular_solve_dtype_mismatch_and_unsupported() {
 #[test]
 fn test_linalg_returns_errors_for_unsupported_dtypes() {
     let mut backend = CpuBackend::new();
-    let i64_matrix =
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
-    let i64_rhs = Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 2]).unwrap());
+    let i64_matrix = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap(),
+    );
+    let i64_rhs = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 2]).unwrap(),
+    );
 
     with_cpu_linalg(&mut backend, |backend| {
         assert!(backend.cholesky(&i64_matrix).is_err());
@@ -125,19 +137,22 @@ fn test_linalg_returns_errors_for_unsupported_dtypes() {
 #[test]
 fn test_solve_zero_dim_rhs_returns_zeros() {
     let mut backend = CpuBackend::new();
-    let a =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap());
-    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![0], vec![]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0], vec![]).unwrap());
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[0]);
 }
 
 #[test]
 fn test_solve_with_regular_matrix_rhs() {
-    let a =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]).unwrap());
-    let b =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[2, 2]);
@@ -156,15 +171,18 @@ fn test_solve_with_regular_matrix_rhs() {
 
 #[test]
 fn test_lu_unsupported_dtype_returns_error() {
-    let input =
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
+    let input = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
     assert!(with_cpu_linalg(&mut backend, |backend| backend.lu(&input)).is_err());
 }
 
 #[test]
 fn test_lu_zero_sized_batch_outputs_empty_parity() {
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2, 0], Vec::new()).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2, 0], Vec::new()).unwrap(),
+    );
     let mut backend = CpuBackend::new();
     let outputs = with_cpu_linalg(&mut backend, |backend| backend.lu(&input)).unwrap();
 
@@ -185,8 +203,9 @@ fn test_lu_zero_sized_batch_outputs_empty_parity() {
 
 #[test]
 fn test_svd_unsupported_dtype_returns_error() {
-    let input =
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
+    let input = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
     assert!(with_cpu_linalg(&mut backend, |backend| backend.svd(&input)).is_err());
 }
@@ -209,7 +228,7 @@ fn test_faer_svd_decomposition_failure_returns_error() {
 #[test]
 fn test_faer_eig_decomposition_failure_returns_error() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]).unwrap(),
     );
 
@@ -223,15 +242,16 @@ fn test_faer_eig_decomposition_failure_returns_error() {
 
 #[test]
 fn test_qr_unsupported_dtype_returns_error() {
-    let input =
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
+    let input = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
     assert!(with_cpu_linalg(&mut backend, |backend| backend.qr(&input)).is_err());
 }
 
 #[test]
 fn test_eig_returns_complex_outputs_for_real_input() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0, -1.0, 1.0, 0.0]).unwrap(),
     );
     let mut backend = CpuBackend::new();
@@ -249,8 +269,12 @@ fn test_eig_returns_complex_outputs_for_real_input() {
 fn test_faer_eig_zero_extent_returns_empty_complex_outputs_per_input_width() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let cases = [
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![0, 0], Vec::<f32>::new()).unwrap()),
-        Tensor::C32(TypedTensor::from_vec_col_major(vec![0, 0], Vec::<Complex32>::new()).unwrap()),
+        Tensor::from_typed::<f32>(
+            TypedTensor::from_vec_col_major(vec![0, 0], Vec::<f32>::new()).unwrap(),
+        ),
+        Tensor::from_typed::<tenferro_tensor::Complex32>(
+            TypedTensor::from_vec_col_major(vec![0, 0], Vec::<Complex32>::new()).unwrap(),
+        ),
     ];
 
     for input in &cases {
@@ -271,10 +295,10 @@ fn test_faer_eig_zero_extent_returns_empty_complex_outputs_per_input_width() {
 #[test]
 fn test_faer_value_only_entries_cover_the_single_precision_arms() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let general = Tensor::F32(
+    let general = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 0.0, 0.0, 1.0]).unwrap(),
     );
-    let symmetric = Tensor::F32(
+    let symmetric = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f32, 0.0, 0.0, 3.0]).unwrap(),
     );
 

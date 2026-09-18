@@ -1467,7 +1467,7 @@ fn test_cubecl_float_to_complex_convert_preserves_resident_device() {
 
     let converted = gpu.convert(&gpu_input, DType::C64).unwrap();
 
-    let Tensor::C64(tensor) = converted else {
+    let Some(tensor) = converted.as_typed::<Complex64>() else {
         panic!("expected C64 output");
     };
     let resident = tensor
@@ -1497,7 +1497,7 @@ fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
     placement.device = None;
     gpu_input.set_placement(placement);
 
-    let err = gpu.conj(&Tensor::F64(gpu_input)).unwrap_err();
+    let err = gpu.conj(&Tensor::from_typed::<f64>(gpu_input)).unwrap_err();
 
     assert_eq!(err.kind(), ErrorKind::RuntimeState);
 }

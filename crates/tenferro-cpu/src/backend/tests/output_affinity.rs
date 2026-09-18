@@ -19,7 +19,7 @@ fn placed_f64(shape: Vec<usize>, data: Vec<f64>, domain: CpuDomainId) -> Tensor 
         device: None,
         cpu_affinity: Some(domain),
     });
-    Tensor::F64(tensor)
+    Tensor::from_typed::<f64>(tensor)
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn reshaping_a_borrowed_view_tags_only_the_materialized_output() {
     let selected = backend.execution_info().domain_id();
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
-    let Tensor::F64(input_tensor) = &input else {
+    let Some(input_tensor) = input.as_typed::<f64>() else {
         unreachable!()
     };
     let view = input_tensor.as_view().transpose_view([1, 0]).unwrap();
@@ -227,7 +227,7 @@ fn lazy_tensor_value_tags_its_fresh_base() {
     let remote = remote_domain(selected);
     let lhs = placed_f64(vec![3, 2], vec![1.0; 6], remote);
     let rhs = placed_f64(vec![4], vec![2.0; 4], remote);
-    let Tensor::F64(lhs_tensor) = &lhs else {
+    let Some(lhs_tensor) = lhs.as_typed::<f64>() else {
         unreachable!()
     };
     let lhs_view = lhs_tensor.as_view().transpose_view([1, 0]).unwrap();
@@ -274,7 +274,7 @@ fn fresh_tagging_preserves_device_and_memory_kind_fields() {
         device: Some(device.clone()),
         cpu_affinity: None,
     });
-    let mut tensor = Tensor::F64(tensor);
+    let mut tensor = Tensor::from_typed::<f64>(tensor);
 
     tag_fresh_output(&mut tensor, CpuDomainId::new(11));
 

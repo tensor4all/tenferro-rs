@@ -200,10 +200,14 @@ impl SharedTensorAllocationDomain for FakeDomain {
         self.counts.allocations.fetch_add(1, Ordering::Relaxed);
         let len = Self::element_count(shape)?;
         Ok(match dtype {
-            DType::F32 => Tensor::F32(self.tensor(shape, vec![0.0_f32; len])),
-            DType::F64 => Tensor::F64(self.tensor(shape, vec![0.0_f64; len])),
-            DType::C32 => Tensor::C32(self.tensor(shape, vec![Complex32::new(0.0, 0.0); len])),
-            DType::C64 => Tensor::C64(self.tensor(shape, vec![Complex64::new(0.0, 0.0); len])),
+            DType::F32 => Tensor::from_typed::<f32>(self.tensor(shape, vec![0.0_f32; len])),
+            DType::F64 => Tensor::from_typed::<f64>(self.tensor(shape, vec![0.0_f64; len])),
+            DType::C32 => Tensor::from_typed::<tenferro_tensor::Complex32>(
+                self.tensor(shape, vec![Complex32::new(0.0, 0.0); len]),
+            ),
+            DType::C64 => Tensor::from_typed::<tenferro_tensor::Complex64>(
+                self.tensor(shape, vec![Complex64::new(0.0, 0.0); len]),
+            ),
             other => {
                 return Err(tenferro_tensor::Error::unsupported_dtype(
                     "cholesky",
@@ -342,7 +346,9 @@ fn fake_managed_cholesky_rejects_foreign_device_local_and_busy_buffers() {
 
     with_cpu_linalg(&mut backend, |backend| {
         let foreign_tensor = foreign.tensor(&[2, 2], values.clone());
-        let error = backend.cholesky(&Tensor::F32(foreign_tensor)).unwrap_err();
+        let error = backend
+            .cholesky(&Tensor::from_typed::<f32>(foreign_tensor))
+            .unwrap_err();
         assert!(matches!(
             error,
             tenferro_tensor::Error::HostAccess {
@@ -358,7 +364,9 @@ fn fake_managed_cholesky_rejects_foreign_device_local_and_busy_buffers() {
             false,
             MemoryKind::Device,
         );
-        let error = backend.cholesky(&Tensor::F32(device_local)).unwrap_err();
+        let error = backend
+            .cholesky(&Tensor::from_typed::<f32>(device_local))
+            .unwrap_err();
         assert!(matches!(
             error,
             tenferro_tensor::Error::HostAccess {
@@ -369,7 +377,9 @@ fn fake_managed_cholesky_rejects_foreign_device_local_and_busy_buffers() {
 
         let busy =
             domain.tensor_with_domain(&[2, 2], values, Some(domain.id), true, MemoryKind::Managed);
-        let error = backend.cholesky(&Tensor::F32(busy)).unwrap_err();
+        let error = backend
+            .cholesky(&Tensor::from_typed::<f32>(busy))
+            .unwrap_err();
         assert!(matches!(
             error,
             tenferro_tensor::Error::HostAccess {

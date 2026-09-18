@@ -102,7 +102,7 @@ fn raw_tensor_ref_carries_validated_span() {
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
     let host = tensor_f32(vec![8], vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
     let gpu = upload(&backend, &host);
-    let Tensor::F32(gpu_typed) = &gpu else {
+    let Some(gpu_typed) = gpu.as_typed::<f32>() else {
         unreachable!("f32 tensor")
     };
     with_cuda_exec(&mut backend, |session| {
@@ -133,7 +133,7 @@ fn raw_retain_tensor_pins_the_allocation_across_a_drop() {
                 let (saved_ptr, retained) = {
                     let host = tensor_f32(vec![4], vec![1.0f32, 2.0, 3.0, 4.0]);
                     let gpu = upload_tensor(&rt, &host).unwrap();
-                    let Tensor::F32(gpu_typed) = &gpu else {
+                    let Some(gpu_typed) = gpu.as_typed::<f32>() else {
                         unreachable!("f32 tensor")
                     };
                     let reference = raw.tensor(gpu_typed)?;
@@ -172,7 +172,7 @@ fn raw_retain_tensor_pins_the_allocation_across_a_drop() {
                     )?;
                 }
                 raw.synchronize()?;
-                let back = download_tensor(&rt, &Tensor::F32(probe)).unwrap();
+                let back = download_tensor(&rt, &Tensor::from_typed::<f32>(probe)).unwrap();
                 assert_eq!(
                     back.as_slice::<f32>().unwrap(),
                     &[1.0f32, 2.0, 3.0, 4.0],
@@ -195,7 +195,7 @@ fn raw_retain_tensor_rejects_tensor_from_another_runtime() {
     let foreign_rt = CudaRuntime::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = tensor_f32(vec![4], vec![1.0f32, 2.0, 3.0, 4.0]);
     let gpu = upload_tensor(&foreign_rt, &host).unwrap();
-    let Tensor::F32(gpu_typed) = &gpu else {
+    let Some(gpu_typed) = gpu.as_typed::<f32>() else {
         unreachable!("f32 tensor")
     };
     with_cuda_exec(&mut backend, |session| {

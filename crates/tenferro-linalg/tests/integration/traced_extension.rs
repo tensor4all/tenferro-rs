@@ -12,26 +12,26 @@ use super::support;
 fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
     let n_elements = shape.iter().product();
     let tensor = match dtype {
-        DType::F32 => {
-            Tensor::F32(TypedTensor::from_vec_col_major(shape, vec![1.0_f32; n_elements]).unwrap())
-        }
-        DType::F64 => {
-            Tensor::F64(TypedTensor::from_vec_col_major(shape, vec![1.0_f64; n_elements]).unwrap())
-        }
-        DType::I32 => {
-            Tensor::I32(TypedTensor::from_vec_col_major(shape, vec![1_i32; n_elements]).unwrap())
-        }
-        DType::I64 => {
-            Tensor::I64(TypedTensor::from_vec_col_major(shape, vec![1_i64; n_elements]).unwrap())
-        }
-        DType::Bool => {
-            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![true; n_elements]).unwrap())
-        }
-        DType::C32 => Tensor::C32(
+        DType::F32 => Tensor::from_typed::<f32>(
+            TypedTensor::from_vec_col_major(shape, vec![1.0_f32; n_elements]).unwrap(),
+        ),
+        DType::F64 => Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(shape, vec![1.0_f64; n_elements]).unwrap(),
+        ),
+        DType::I32 => Tensor::from_typed::<i32>(
+            TypedTensor::from_vec_col_major(shape, vec![1_i32; n_elements]).unwrap(),
+        ),
+        DType::I64 => Tensor::from_typed::<i64>(
+            TypedTensor::from_vec_col_major(shape, vec![1_i64; n_elements]).unwrap(),
+        ),
+        DType::Bool => Tensor::from_typed::<bool>(
+            TypedTensor::from_vec_col_major(shape, vec![true; n_elements]).unwrap(),
+        ),
+        DType::C32 => Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(shape, vec![Complex32::new(1.0, 0.5); n_elements])
                 .unwrap(),
         ),
-        DType::C64 => Tensor::C64(
+        DType::C64 => Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(shape, vec![Complex64::new(1.0, 0.5); n_elements])
                 .unwrap(),
         ),
@@ -170,19 +170,20 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
 
 #[test]
 fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
-    let a = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
-        TypedTensor::from_vec_col_major(
-            vec![2, 2],
-            vec![
-                Complex64::new(3.0, 0.5),
-                Complex64::new(0.2, -0.4),
-                Complex64::new(-0.1, 0.3),
-                Complex64::new(2.0, -0.2),
-            ],
-        )
-        .unwrap(),
-    ))
-    .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::from_vec_col_major(
+                vec![2, 2],
+                vec![
+                    Complex64::new(3.0, 0.5),
+                    Complex64::new(0.2, -0.4),
+                    Complex64::new(-0.1, 0.3),
+                    Complex64::new(2.0, -0.2),
+                ],
+            )
+            .unwrap(),
+        ))
+        .unwrap();
     let (_u, s, _vt) = a.svd().unwrap();
     assert_eq!(s.dtype, DType::F64);
 
@@ -287,11 +288,12 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
         Tensor::from_vec_col_major(vec![3, 3, 2], vec![1.0_f64; 18]).unwrap(),
     )
     .unwrap();
-    let complex_square = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
-        TypedTensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4]).unwrap(),
-    ))
-    .unwrap();
-    let ints = TracedTensor::from_tensor_concrete_shape(Tensor::I64(
+    let complex_square =
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4]).unwrap(),
+        ))
+        .unwrap();
+    let ints = TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<i64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 2]).unwrap(),
     ))
     .unwrap();
@@ -509,7 +511,7 @@ fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
 #[test]
 fn traced_norm_rejects_duplicate_axis_before_empty_shortcut() {
     let nonempty = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let empty = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
+    let empty = TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![0, 2], vec![]).unwrap(),
     ))
     .unwrap();

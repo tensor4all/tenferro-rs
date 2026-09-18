@@ -1707,7 +1707,7 @@ mod tests {
             }),
             cpu_affinity: None,
         };
-        let lhs = Arc::new(RetainedValue::from_tensor(Tensor::F64(
+        let lhs = Arc::new(RetainedValue::from_tensor(Tensor::from_typed::<f64>(
             TypedTensor::from_buffer_col_major(
                 vec![2],
                 StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(1, 2))),
@@ -1715,7 +1715,7 @@ mod tests {
             )
             .unwrap(),
         )));
-        let rhs = Arc::new(RetainedValue::from_tensor(Tensor::F64(
+        let rhs = Arc::new(RetainedValue::from_tensor(Tensor::from_typed::<f64>(
             TypedTensor::from_buffer_col_major(
                 vec![2],
                 StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(2, 2))),

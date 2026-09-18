@@ -1,7 +1,6 @@
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{GraphCompiler, TracedTensor};
-use tenferro_tensor::Tensor;
 
 use crate::support::{cpu_runtime, run_compiled_one};
 

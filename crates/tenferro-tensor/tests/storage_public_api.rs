@@ -31,7 +31,7 @@ fn canonical_owner_view_and_mutable_view_surface_is_available() {
             &[1.0, 3.0, 1.0, 1.0]
         );
     }
-    let owner = Tensor::F64(
+    let owner = Tensor::from_typed::<f64>(
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0; 4]).expect("dynamic owner"),
     );
     let read = TensorRead::from_tensor(&owner);

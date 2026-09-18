@@ -1053,8 +1053,10 @@ fn uninit_output_partial_write_then_panic_discards_without_replenishment() {
 fn cached_dot_dispatch_reports_dtype_mismatches() {
     let mut backend = CpuBackend::new();
     let mut cache = gemm::GemmAnalysisCache::default();
-    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
-    let rhs = Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
+    let lhs =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
+    let rhs =
+        Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![0],
         rhs_contracting_dims: vec![0],

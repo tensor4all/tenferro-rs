@@ -39,7 +39,7 @@ fn uploaded_storage_is_root_owned_and_prepares_once_at_the_descriptor_boundary()
     };
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let tensor = upload_webgpu_tensor(backend.runtime(), &host).unwrap();
-    let Tensor::F32(typed) = &tensor else {
+    let Some(typed) = tensor.as_typed::<f32>() else {
         panic!("provider contract uses f32")
     };
 
@@ -63,7 +63,7 @@ fn device_local_host_mapping_is_rejected_without_an_implicit_download() {
     };
     let host = Tensor::from_vec_col_major(vec![1], vec![3.0_f32]).unwrap();
     let tensor = upload_webgpu_tensor(backend.runtime(), &host).unwrap();
-    let Tensor::F32(typed) = &tensor else {
+    let Some(typed) = tensor.as_typed::<f32>() else {
         panic!("provider contract uses f32")
     };
 
@@ -78,7 +78,7 @@ fn empty_upload_keeps_a_zero_logical_root_span() {
     };
     let host = Tensor::from_vec_col_major(vec![0], Vec::<f32>::new()).unwrap();
     let tensor = upload_webgpu_tensor(backend.runtime(), &host).unwrap();
-    let Tensor::F32(typed) = tensor else {
+    let Some(typed) = tensor.as_typed::<f32>() else {
         panic!("provider contract uses f32")
     };
     assert_eq!(typed.n_elements(), 0);

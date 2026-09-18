@@ -11,7 +11,7 @@ use tenferro_runtime::{DotGeneralConfig, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-5;
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f64_scalar(val: f64) -> Tensor {

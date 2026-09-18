@@ -43,7 +43,8 @@ fn reduce_max_and_min_cover_every_preset_scalar() {
 /// a mismatch is a typed error, never a panic.
 #[test]
 fn typed_input_refuses_a_dtype_the_dispatch_never_produces() {
-    let tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
+    let tensor =
+        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     assert!(typed_input::<f32>("reduce_sum", &tensor).is_err());
 }
 

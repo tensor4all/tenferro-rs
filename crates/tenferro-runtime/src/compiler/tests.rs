@@ -1166,11 +1166,12 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     //                       RHS = sequential 0..20, reshaped as [4, 5].
     let lhs_data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let rhs_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
-    let lhs = Tensor::F64(
+    let lhs = Tensor::from_typed::<f64>(
         TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 4], lhs_data.clone()).unwrap(),
     );
-    let rhs =
-        Tensor::F64(TypedTensor::<f64>::from_vec_col_major(vec![4, 5], rhs_data.clone()).unwrap());
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::<f64>::from_vec_col_major(vec![4, 5], rhs_data.clone()).unwrap(),
+    );
 
     let mut backend = CpuBackend::default();
     let mut outputs =

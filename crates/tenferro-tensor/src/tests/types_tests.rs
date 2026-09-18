@@ -1084,7 +1084,7 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
     assert_eq!(tensor.placement().device.as_ref().unwrap().ordinal, 0);
 
     assert!(tensor.host_data().is_err());
-    let erased = Tensor::F64(tensor);
+    let erased = Tensor::from_typed::<f64>(tensor);
     assert!(erased.as_slice::<f64>().is_err());
     assert!(erased.get::<f64>(&[0]).is_err());
 
@@ -1095,7 +1095,7 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
     )
     .unwrap();
     assert!(mutable_tensor.host_data_mut().is_err());
-    let mut erased_mut = Tensor::F64(mutable_tensor);
+    let mut erased_mut = Tensor::from_typed::<f64>(mutable_tensor);
     assert!(erased_mut.as_slice_mut::<f64>().is_err());
     assert!(erased_mut.get_mut::<f64>(&[0]).is_err());
 }
@@ -1235,19 +1235,23 @@ fn typed_tensor_metadata_accessors_keep_owned_scalar_storage_rooted() {
 
 #[test]
 fn tensor_shape_and_dtype_cover_all_variants() {
-    let f32_tensor =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap());
-    let f64_tensor = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap());
-    let i32_tensor =
-        Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1_i32, -2]).unwrap());
-    let c32_tensor = Tensor::C32(
+    let f32_tensor = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap(),
+    );
+    let f64_tensor =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap());
+    let i32_tensor = Tensor::from_typed::<i32>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1_i32, -2]).unwrap(),
+    );
+    let c32_tensor = Tensor::from_typed::<crate::Complex32>(
         TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, -2.0)]).unwrap(),
     );
-    let c64_tensor = Tensor::C64(
+    let c64_tensor = Tensor::from_typed::<crate::Complex64>(
         TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(-3.0, 4.0)]).unwrap(),
     );
-    let bool_tensor =
-        Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap());
+    let bool_tensor = Tensor::from_typed::<bool>(
+        TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
+    );
 
     assert_eq!(f32_tensor.shape(), &[2]);
     assert_eq!(f32_tensor.dtype(), DType::F32);
@@ -1792,7 +1796,7 @@ fn tensor_read_as_slice_rejects_backend_owned_storage_without_transfer() {
     )
     .unwrap();
 
-    let err = TensorRead::from_tensor(&Tensor::F64(tensor))
+    let err = TensorRead::from_tensor(&Tensor::from_typed::<f64>(tensor))
         .as_slice::<f64>()
         .unwrap_err();
 

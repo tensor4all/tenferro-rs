@@ -1759,7 +1759,7 @@ fn cubecl_i64_index_conversion_does_not_roundtrip_through_host() {
     let mod_source = cubecl_source("mod.rs");
     let banned = [
         "fn i64_indices_as_f64",
-        "download_tensor(self.runtime(), &Tensor::I64",
+        "download_tensor(self.runtime(), &Tensor::from_typed::<i64>",
         "upload_tensor(self.runtime(), &converted",
     ];
 

@@ -623,7 +623,7 @@ fn validate_upper_trapezoidal_gpu(
     let maximum = backend.reduce_max(&Tensor::from_typed::<i32>(flags), &[0, 1])?;
     backend.runtime().synchronize()?;
     let host = download_tensor(backend.runtime(), &maximum)?;
-    let Tensor::I32(value) = host else {
+    let Tensor::from_typed::<i32>(value) = host else {
         return Err(Error::Internal(format!(
             "{op}: unexpected upper-trapezoidal validation dtype"
         )));

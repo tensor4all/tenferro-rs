@@ -261,10 +261,12 @@ fn provider_inject_dot_general_uses_registered_blas() {
     register_test_ptrs_once();
     DGEMM_CALLS.store(0, Ordering::SeqCst);
 
-    let a =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]).unwrap());
-    let b =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap(),
+    );
 
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
     assert_eq!(backend.kind(), CpuBackendKind::Blas);
@@ -281,7 +283,9 @@ fn provider_inject_dot_general_uses_registered_blas() {
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data().unwrap(), &[19.0, 43.0, 22.0, 50.0]),
+        Ok(Tensor::from_typed::<f64>(inner)) => {
+            assert_eq!(inner.host_data().unwrap(), &[19.0, 43.0, 22.0, 50.0])
+        }
         _ => panic!("expected f64 tensor"),
     }
 }
@@ -294,8 +298,12 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
     register_test_ptrs_once();
     DGEMM_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 2], vec![1.0, 2.0]).unwrap());
-    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 2], vec![3.0, 4.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![1, 2], vec![1.0, 2.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![1, 2], vec![3.0, 4.0]).unwrap(),
+    );
 
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
     let c = backend.dot_general(
@@ -311,7 +319,9 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data().unwrap(), &[3.0, 6.0, 4.0, 8.0]),
+        Ok(Tensor::from_typed::<f64>(inner)) => {
+            assert_eq!(inner.host_data().unwrap(), &[3.0, 6.0, 4.0, 8.0])
+        }
         _ => panic!("expected f64 tensor"),
     }
 }
@@ -324,8 +334,8 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
     register_test_ptrs_once();
     DGEMM_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![2.0]).unwrap());
-    let b = Tensor::F64(
+    let a = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1], vec![2.0]).unwrap());
+    let b = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 1, 2], vec![3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
 
@@ -343,7 +353,9 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data().unwrap(), &[6.0, 8.0, 10.0, 12.0]),
+        Ok(Tensor::from_typed::<f64>(inner)) => {
+            assert_eq!(inner.host_data().unwrap(), &[6.0, 8.0, 10.0, 12.0])
+        }
         _ => panic!("expected f64 tensor"),
     }
 }

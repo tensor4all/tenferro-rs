@@ -417,7 +417,7 @@ pub(crate) fn eig(
             eig_real32_2d,
         )?
         .into_iter()
-        .map(Tensor::C32)
+        .map(Tensor::from_typed::<tenferro_tensor::Complex32>)
         .collect()),
         DType::F64 => Ok(batched_multi_convert(
             "eig",
@@ -428,7 +428,7 @@ pub(crate) fn eig(
             eig_real64_2d,
         )?
         .into_iter()
-        .map(Tensor::C64)
+        .map(Tensor::from_typed::<tenferro_tensor::Complex64>)
         .collect()),
         DType::C32 => Ok(batched_multi_convert(
             "eig",
@@ -439,7 +439,7 @@ pub(crate) fn eig(
             eig_complex32_2d,
         )?
         .into_iter()
-        .map(Tensor::C32)
+        .map(Tensor::from_typed::<tenferro_tensor::Complex32>)
         .collect()),
         DType::C64 => Ok(batched_multi_convert(
             "eig",
@@ -450,7 +450,7 @@ pub(crate) fn eig(
             eig_complex64_2d,
         )?
         .into_iter()
-        .map(Tensor::C64)
+        .map(Tensor::from_typed::<tenferro_tensor::Complex64>)
         .collect()),
         _ => Err(unsupported_dtype("eig", input.dtype())),
     }
@@ -475,14 +475,12 @@ fn zero_dim_eig_values_output(input: &Tensor) -> tenferro_tensor::Result<Tensor>
     }
     let value_shape = vector_with_batch_shape(n, &shape[2..]);
     match input.dtype() {
-        DType::F32 | DType::C32 => Ok(Tensor::C32(TypedTensor::from_vec_col_major(
-            value_shape,
-            Vec::new(),
-        )?)),
-        DType::F64 | DType::C64 => Ok(Tensor::C64(TypedTensor::from_vec_col_major(
-            value_shape,
-            Vec::new(),
-        )?)),
+        DType::F32 | DType::C32 => Ok(Tensor::from_typed::<tenferro_tensor::Complex32>(
+            TypedTensor::from_vec_col_major(value_shape, Vec::new())?,
+        )),
+        DType::F64 | DType::C64 => Ok(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::from_vec_col_major(value_shape, Vec::new())?,
+        )),
         _ => Err(unsupported_dtype("eig_values", input.dtype())),
     }
 }
@@ -505,7 +503,9 @@ pub(crate) fn eig_values(
                     .ok_or_else(|| crate::error::unsupported_dtype("eig_values", input.dtype()))?,
                 |buffers, batch| eig_values_real32_2d(buffers, batch).map(|values| vec![values]),
             )?;
-            Ok(Tensor::C32(outputs.remove(0)))
+            Ok(Tensor::from_typed::<tenferro_tensor::Complex32>(
+                outputs.remove(0),
+            ))
         }
         DType::F64 => {
             let mut outputs = batched_multi_convert(
@@ -516,7 +516,9 @@ pub(crate) fn eig_values(
                     .ok_or_else(|| crate::error::unsupported_dtype("eig_values", input.dtype()))?,
                 |buffers, batch| eig_values_real64_2d(buffers, batch).map(|values| vec![values]),
             )?;
-            Ok(Tensor::C64(outputs.remove(0)))
+            Ok(Tensor::from_typed::<tenferro_tensor::Complex64>(
+                outputs.remove(0),
+            ))
         }
         DType::C32 => {
             let mut outputs = batched_multi_convert(
@@ -527,7 +529,9 @@ pub(crate) fn eig_values(
                     .ok_or_else(|| crate::error::unsupported_dtype("eig_values", input.dtype()))?,
                 |buffers, batch| eig_values_complex32_2d(buffers, batch).map(|values| vec![values]),
             )?;
-            Ok(Tensor::C32(outputs.remove(0)))
+            Ok(Tensor::from_typed::<tenferro_tensor::Complex32>(
+                outputs.remove(0),
+            ))
         }
         DType::C64 => {
             let mut outputs = batched_multi_convert(
@@ -538,7 +542,9 @@ pub(crate) fn eig_values(
                     .ok_or_else(|| crate::error::unsupported_dtype("eig_values", input.dtype()))?,
                 |buffers, batch| eig_values_complex64_2d(buffers, batch).map(|values| vec![values]),
             )?;
-            Ok(Tensor::C64(outputs.remove(0)))
+            Ok(Tensor::from_typed::<tenferro_tensor::Complex64>(
+                outputs.remove(0),
+            ))
         }
         _ => Err(unsupported_dtype("eig_values", input.dtype())),
     }

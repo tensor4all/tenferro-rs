@@ -44,10 +44,10 @@ fn raw_nvrtc_launch_roundtrip() {
         let runtime = session.runtime().clone();
         session
             .with_raw("test.add", |sess| {
-                let Tensor::F32(a_typed) = &a_gpu else {
+                let Some(a_typed) = a_gpu.as_typed::<f32>() else {
                     unreachable!("f32")
                 };
-                let Tensor::F32(b_typed) = &b_gpu else {
+                let Some(b_typed) = b_gpu.as_typed::<f32>() else {
                     unreachable!("f32")
                 };
                 let a_ref = sess.tensor(a_typed)?;
@@ -115,10 +115,10 @@ fn raw_ptx_load_launch_roundtrip() {
                 let module = sess.load_ptx(&ptx_cstr)?;
                 let function = module.function("add_kernel")?;
 
-                let Tensor::F32(a_typed) = &a_gpu else {
+                let Some(a_typed) = a_gpu.as_typed::<f32>() else {
                     unreachable!("f32")
                 };
-                let Tensor::F32(b_typed) = &b_gpu else {
+                let Some(b_typed) = b_gpu.as_typed::<f32>() else {
                     unreachable!("f32")
                 };
                 let a_ref = sess.tensor(a_typed)?;
@@ -211,9 +211,9 @@ fn download_tensor_typed(
     runtime: &crate::cubecl::CudaRuntime,
     tensor: crate::TypedTensor<f32>,
 ) -> crate::Result<(Vec<usize>, Vec<f32>)> {
-    let wrapped = crate::Tensor::F32(tensor);
+    let wrapped = crate::Tensor::from_typed::<f32>(tensor);
     let downloaded = crate::cuda::download_tensor(runtime, &wrapped)?;
-    let crate::Tensor::F32(host) = downloaded else {
+    let Ok(host) = downloaded.into_typed::<f32>() else {
         unreachable!("f32 download")
     };
     host.into_vec_col_major()

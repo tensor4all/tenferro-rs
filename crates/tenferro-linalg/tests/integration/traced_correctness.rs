@@ -5,7 +5,7 @@ use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
 use super::support;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_f64_data(tensor: &Tensor) -> &[f64] {
@@ -99,15 +99,17 @@ fn linalg_single_output_traced_tensor_functions_eval() {
 fn traced_solve_accepts_a_tiny_nonzero_complex_pivot() {
     // What: traced solve's LU-prepared lowering preserves a representable nonzero complex pivot.
     let scale = 2.0_f64.powi(-600);
-    let a = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
-        TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(scale, 0.0)]).unwrap(),
-    ))
-    .unwrap();
-    let b = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
-        TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(3.0 * scale, 0.0)])
-            .unwrap(),
-    ))
-    .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(scale, 0.0)]).unwrap(),
+        ))
+        .unwrap();
+    let b =
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(3.0 * scale, 0.0)])
+                .unwrap(),
+        ))
+        .unwrap();
 
     let solved = a.solve(&b).unwrap();
     let results = run_many(&[&solved]);
@@ -223,19 +225,20 @@ fn traced_spectral_norm_preserves_signed_and_complex_input() {
     let signed =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 1.0, 1.0, -1.0]))
             .unwrap();
-    let complex = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
-        TypedTensor::from_vec_col_major(
-            vec![2, 2],
-            vec![
-                Complex64::new(0.0, 1.0),
-                Complex64::new(0.0, 1.0),
-                Complex64::new(0.0, 1.0),
-                Complex64::new(0.0, -1.0),
-            ],
-        )
-        .unwrap(),
-    ))
-    .unwrap();
+    let complex =
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::from_vec_col_major(
+                vec![2, 2],
+                vec![
+                    Complex64::new(0.0, 1.0),
+                    Complex64::new(0.0, 1.0),
+                    Complex64::new(0.0, 1.0),
+                    Complex64::new(0.0, -1.0),
+                ],
+            )
+            .unwrap(),
+        ))
+        .unwrap();
     let outputs = [
         signed.norm(Some(2.0), Some(&[0, 1]), false).unwrap(),
         signed.norm(Some(-2.0), Some(&[0, 1]), false).unwrap(),

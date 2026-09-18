@@ -136,13 +136,13 @@ fn structural_operand<T: tenferro_tensor::TensorScalar>(
 macro_rules! dispatch_tensor_view_unary_result {
     ($input:expr, |$view:ident| $body:expr) => {
         match $input {
-            TensorView::F32($view) => Ok(Tensor::F32($body?)),
-            TensorView::F64($view) => Ok(Tensor::F64($body?)),
-            TensorView::I32($view) => Ok(Tensor::I32($body?)),
-            TensorView::I64($view) => Ok(Tensor::I64($body?)),
-            TensorView::Bool($view) => Ok(Tensor::Bool($body?)),
-            TensorView::C32($view) => Ok(Tensor::C32($body?)),
-            TensorView::C64($view) => Ok(Tensor::C64($body?)),
+            TensorView::F32($view) => Ok(Tensor::from_typed::<f32>($body?)),
+            TensorView::F64($view) => Ok(Tensor::from_typed::<f64>($body?)),
+            TensorView::I32($view) => Ok(Tensor::from_typed::<i32>($body?)),
+            TensorView::I64($view) => Ok(Tensor::from_typed::<i64>($body?)),
+            TensorView::Bool($view) => Ok(Tensor::from_typed::<bool>($body?)),
+            TensorView::C32($view) => Ok(Tensor::from_typed::<tenferro_tensor::Complex32>($body?)),
+            TensorView::C64($view) => Ok(Tensor::from_typed::<tenferro_tensor::Complex64>($body?)),
         }
     };
 }

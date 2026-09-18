@@ -339,7 +339,7 @@ fn faer_read_transposed_view_uses_provider_runtime() {
         vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0],
     )
     .unwrap();
-    let rhs = Tensor::F64(rhs);
+    let rhs = Tensor::from_typed::<f64>(rhs);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -377,7 +377,11 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
     let mut backend =
         crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Blas).unwrap();
     let out = backend
-        .dot_general(&Tensor::F64(lhs), &Tensor::F64(rhs), &config)
+        .dot_general(
+            &Tensor::from_typed::<f64>(lhs),
+            &Tensor::from_typed::<f64>(rhs),
+            &config,
+        )
         .expect("dot_general should succeed");
 
     assert_eq!(out.shape(), &[2, 2]);

@@ -19,7 +19,7 @@ use tenferro_tensor::{
 };
 
 fn f64t(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn scalar(v: f64) -> Tensor {
@@ -27,7 +27,7 @@ fn scalar(v: f64) -> Tensor {
 }
 
 fn i64_scalar(v: i64) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec_col_major(vec![], vec![v]).unwrap())
+    Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![], vec![v]).unwrap())
 }
 
 fn planned_input_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Vec<DType> {

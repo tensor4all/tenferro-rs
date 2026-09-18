@@ -1149,23 +1149,23 @@ where
 
 pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
     match dtype {
-        DType::F64 => Ok(Tensor::F64(TypedTensor::from_vec_col_major(
+        DType::F64 => Ok(Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(
             vec![],
             vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
         )?)),
-        DType::F32 => Ok(Tensor::F32(TypedTensor::from_vec_col_major(
+        DType::F32 => Ok(Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(
             vec![],
             vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
         )?)),
-        DType::I32 => Ok(Tensor::I32(TypedTensor::from_vec_col_major(
+        DType::I32 => Ok(Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(
             vec![],
             vec![i32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
         )?)),
-        DType::I64 => Ok(Tensor::I64(TypedTensor::from_vec_col_major(
+        DType::I64 => Ok(Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(
             vec![],
             vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
         )?)),
-        DType::Bool => Ok(Tensor::Bool(TypedTensor::from_vec_col_major(
+        DType::Bool => Ok(Tensor::from_typed::<bool>(TypedTensor::from_vec_col_major(
             vec![],
             vec![exact_bytes::<1>(dtype, bytes)?[0] != 0],
         )?)),
@@ -1177,10 +1177,9 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
             im_bytes.copy_from_slice(&data[8..]);
             let re = f64::from_le_bytes(re_bytes);
             let im = f64::from_le_bytes(im_bytes);
-            Ok(Tensor::C64(TypedTensor::from_vec_col_major(
-                vec![],
-                vec![Complex64::new(re, im)],
-            )?))
+            Ok(Tensor::from_typed::<tenferro_tensor::Complex64>(
+                TypedTensor::from_vec_col_major(vec![], vec![Complex64::new(re, im)])?,
+            ))
         }
         DType::C32 => {
             let data = exact_bytes::<8>(dtype, bytes)?;
@@ -1190,10 +1189,9 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
             im_bytes.copy_from_slice(&data[4..]);
             let re = f32::from_le_bytes(re_bytes);
             let im = f32::from_le_bytes(im_bytes);
-            Ok(Tensor::C32(TypedTensor::from_vec_col_major(
-                vec![],
-                vec![Complex32::new(re, im)],
-            )?))
+            Ok(Tensor::from_typed::<tenferro_tensor::Complex32>(
+                TypedTensor::from_vec_col_major(vec![], vec![Complex32::new(re, im)])?,
+            ))
         }
         // An externally defined scalar has no runtime constant representation, so
         // the compiled program rejects it rather than decoding a guessed layout.

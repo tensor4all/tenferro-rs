@@ -232,7 +232,7 @@ fn cuda_vdot_matches_cpu_and_conjugates_the_left_operand() {
 /// Device and host tensors take different view constructors: `backend_region_view`
 /// requires a device allocation, and host storage goes through `from_slice`.
 fn transposed_device_view(tensor: &Tensor) -> TensorRead<'_> {
-    let Tensor::C64(typed) = tensor else {
+    let Some(typed) = tensor.as_typed::<Complex64>() else {
         panic!("blas1 parity tests use C64 tensors")
     };
     let view = typed
@@ -266,7 +266,7 @@ fn offset_host_view(tensor: &Tensor) -> TensorRead<'_> {
 }
 
 fn offset_device_view(tensor: &Tensor) -> TensorRead<'_> {
-    let Tensor::C64(typed) = tensor else {
+    let Some(typed) = tensor.as_typed::<Complex64>() else {
         panic!("blas1 parity tests use C64 tensors")
     };
     let view = typed.backend_region_view(vec![3], vec![1], 1).unwrap();
@@ -587,7 +587,7 @@ fn cuda_axpby_accepts_compact_views_with_offsets() {
     .unwrap();
     let x = upload_tensor(cuda.runtime(), &host_x).unwrap();
     let mut y = upload_tensor(cuda.runtime(), &host_y).unwrap();
-    let Tensor::C64(x) = &x else {
+    let Some(x) = x.as_typed::<Complex64>() else {
         unreachable!("test input is C64")
     };
     let Tensor::C64(y_typed) = &mut y else {

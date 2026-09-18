@@ -536,7 +536,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
         .unwrap_err();
     assert_runtime_state(&err, "dynamic_slice", &wrong_device_message);
 
-    let malformed_bool = crate::Tensor::Bool(
+    let malformed_bool = crate::Tensor::from_typed::<bool>(
         TypedTensor::from_buffer_col_major(
             vec![0],
             StorageBuffer::Host(vec![]),
@@ -610,7 +610,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
         .unwrap_err();
     assert_runtime_state(&err, "scatter", &wrong_device_message);
 
-    let malformed_updates = crate::Tensor::F64(
+    let malformed_updates = crate::Tensor::from_typed::<f64>(
         TypedTensor::from_buffer_col_major(
             vec![0],
             StorageBuffer::Host(vec![]),

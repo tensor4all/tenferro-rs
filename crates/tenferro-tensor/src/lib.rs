@@ -31,7 +31,7 @@
 //! ```rust
 //! use tenferro_tensor::{Tensor, TypedTensor};
 //!
-//! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+//! let a = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
 //! assert_eq!(a.shape(), &[2]);
 //! ```
 

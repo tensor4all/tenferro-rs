@@ -38,7 +38,7 @@ fn eager_i32(data: Vec<i32>, shape: Vec<usize>) -> EagerTensor {
 }
 
 fn traced_i32(data: Vec<i32>, shape: Vec<usize>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape(Tensor::I32(
+    TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<i32>(
         TypedTensor::from_vec_col_major(shape, data).unwrap(),
     ))
     .unwrap()

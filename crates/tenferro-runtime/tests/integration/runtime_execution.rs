@@ -376,7 +376,7 @@ fn test_cpu_input_signature(
 }
 
 fn tensor_f64_values(tensor: &Tensor) -> tenferro_tensor::Result<Vec<f64>> {
-    let Tensor::F64(tensor) = tensor else {
+    let Some(tensor) = tensor.as_typed::<f64>() else {
         return Err(tenferro_tensor::Error::dtype_mismatch(
             "tensor_f64_values",
             DType::F64,
@@ -1329,7 +1329,7 @@ fn execute_published_route_with_targets(
     .expect("published route extension has one output");
     let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let mut input = TestAllocationDomain(fixture.source_domain).allocate(DType::F64, &[2])?;
-    if let Tensor::F64(input) = &mut input {
+    if let Some(input) = input.as_typed_mut::<f64>() {
         if input.backend_buffer_mut().is_some() {
             input
                 .backend_buffer_mut()

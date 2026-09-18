@@ -6,15 +6,15 @@ use crate::{Error, ErrorPhase};
 use tenferro_tensor::{DType, ErrorKind, Tensor, TypedTensor};
 
 fn f64_scalar(value: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
 }
 
 fn f32_scalar(value: f32) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
+    Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
 }
 
 fn i64_scalar(value: i64) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
+    Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
 }
 
 #[test]
@@ -87,14 +87,16 @@ fn dynamic_truncate_i64_routing_clamps_without_lossy_float_conversion() {
 
 #[test]
 fn dynamic_truncate_size_rejects_non_scalar_or_wrong_dtype() {
-    let vector = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
+    let vector =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
     let err = dynamic_truncate_size(&vector, 4).unwrap_err();
     assert!(
         err.to_string().contains("scalar"),
         "expected scalar-shape error, got {err:?}"
     );
 
-    let bool_scalar = Tensor::Bool(TypedTensor::from_vec_col_major(vec![], vec![true]).unwrap());
+    let bool_scalar =
+        Tensor::from_typed::<bool>(TypedTensor::from_vec_col_major(vec![], vec![true]).unwrap());
     let err = dynamic_truncate_size(&bool_scalar, 4).unwrap_err();
     assert!(matches!(
         &err,

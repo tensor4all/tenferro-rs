@@ -3193,7 +3193,7 @@ mod tests {
     }
 
     fn f64_zeros(shape: Vec<usize>) -> Tensor {
-        Tensor::F64(TypedTensor::zeros(shape).unwrap())
+        Tensor::from_typed::<f64>(TypedTensor::zeros(shape).unwrap())
     }
 
     fn nz(value: u64) -> NonZeroU64 {

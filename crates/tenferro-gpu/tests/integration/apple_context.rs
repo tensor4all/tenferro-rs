@@ -47,7 +47,7 @@ fn managed_upload_maps_without_post_creation_transfers_and_keeps_identity() {
         }
     );
 
-    let Tensor::F32(typed) = &mut managed else {
+    let Tensor::from_typed::<f32>(typed) = &mut managed else {
         panic!("expected f32 tensor")
     };
     assert_eq!(typed.allocation_domain(), Some(context.domain_id()));
@@ -78,7 +78,7 @@ fn cpu_domain_allocator_produces_write_only_managed_outputs_without_transfers() 
     };
     let domain = context.cpu_backend().shared_allocation_domain().unwrap();
     let output = domain.allocate(tenferro_tensor::DType::F64, &[2]).unwrap();
-    let Tensor::F64(mut output) = output else {
+    let Tensor::from_typed::<f64>(mut output) = output else {
         panic!("expected f64 output")
     };
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));
@@ -97,11 +97,15 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
     let Some(context) = apple_context() else {
         return;
     };
-    let lhs = Tensor::F32(TypedTensor::from_vec_col_major(vec![1, 1], vec![2.0_f32]).unwrap());
-    let rhs = Tensor::F32(TypedTensor::from_vec_col_major(vec![1, 1], vec![3.0_f32]).unwrap());
+    let lhs = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![2.0_f32]).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![3.0_f32]).unwrap(),
+    );
     let lhs = context.upload_tensor(&lhs).unwrap();
     let rhs = context.upload_tensor(&rhs).unwrap();
-    let Tensor::F32(lhs_typed) = &lhs else {
+    let Tensor::from_typed::<f32>(lhs_typed) = &lhs else {
         panic!("expected f32 lhs")
     };
     let lhs_allocation = lhs_typed.allocation_id().unwrap();
@@ -130,7 +134,7 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
     );
     assert_eq!(lhs_typed.allocation_id(), Some(lhs_allocation));
 
-    let Tensor::F32(output) = output else {
+    let Tensor::from_typed::<f32>(output) = output else {
         panic!("expected f32 output")
     };
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));

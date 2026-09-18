@@ -39,7 +39,7 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
         .with_backend_session(|session| managed_f32.rfft(Some(4), 1, FftNorm::Ortho, session))
         .unwrap();
 
-    let Tensor::C32(output) = output else {
+    let Tensor::from_typed::<tenferro_tensor::Complex32>(output) = output else {
         panic!("expected C32 output")
     };
     assert_eq!(output.shape(), &[2, 3]);
@@ -67,7 +67,7 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
             .irfft(Some(4), 0, FftNorm::Forward, session)
             .unwrap()
     });
-    let Tensor::F64(round_trip) = round_trip else {
+    let Tensor::from_typed::<f64>(round_trip) = round_trip else {
         panic!("expected F64 output")
     };
     assert_eq!(round_trip.allocation_domain(), Some(context.domain_id()));
@@ -94,7 +94,7 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
     let output = apple_cpu
         .with_backend_session(|session| managed_c32.fft(Some(2), 0, FftNorm::Forward, session))
         .unwrap();
-    let Tensor::C32(output) = output else {
+    let Tensor::from_typed::<tenferro_tensor::Complex32>(output) = output else {
         panic!("expected C32 output")
     };
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));
@@ -127,7 +127,7 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
     let cached_entries = executor.cache_stats().entries;
     assert!(cached_entries > 0);
     assert_eq!(executor.cache_stats().entries, cached_entries);
-    let Tensor::C64(output) = output else {
+    let Tensor::from_typed::<tenferro_tensor::Complex64>(output) = output else {
         panic!("expected C64 output")
     };
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));
@@ -135,7 +135,7 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
         mapped_slice(&output),
         reference.as_slice::<Complex64>().unwrap()
     );
-    let Tensor::C64(repeated) = repeated else {
+    let Tensor::from_typed::<tenferro_tensor::Complex64>(repeated) = repeated else {
         panic!("expected repeated C64 output")
     };
     assert_eq!(mapped_slice(&repeated), mapped_slice(&output));

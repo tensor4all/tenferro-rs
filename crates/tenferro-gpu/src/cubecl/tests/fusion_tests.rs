@@ -95,10 +95,10 @@ fn broadcast_multiply_consumes_compact_borrowed_views_and_rejects_strided_ones()
         .unwrap()
         .expect("the CPU backend executes broadcast multiply");
 
-    let crate::Tensor::F32(lhs_typed) = &gpu_lhs else {
+    let Some(lhs_typed) = gpu_lhs.as_typed::<f32>() else {
         unreachable!("f32 upload preserves the dtype")
     };
-    let crate::Tensor::F32(rhs_typed) = &gpu_rhs else {
+    let Some(rhs_typed) = gpu_rhs.as_typed::<f32>() else {
         unreachable!("f32 upload preserves the dtype")
     };
 

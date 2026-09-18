@@ -9,7 +9,7 @@ use tenferro_gpu::{
 use tenferro_runtime::{Tensor, TensorRead, TypedTensor};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 #[test]

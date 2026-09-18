@@ -15,9 +15,10 @@ fn recycled_output_returns_only_after_final_group_owner_drops() {
     let mut pool = BufferPool::new();
     let tensor = recycled(&mut pool);
     let pointer = tensor.as_slice().unwrap().as_ptr();
-    let (group, slots) =
-        tenferro_tensor::AllocationGroup::from_tensors(vec![tenferro_tensor::Tensor::F64(tensor)])
-            .unwrap();
+    let (group, slots) = tenferro_tensor::AllocationGroup::from_tensors(vec![
+        tenferro_tensor::Tensor::from_typed::<f64>(tensor),
+    ])
+    .unwrap();
     assert!(pool.is_empty());
     {
         let reads = group.read_views(&slots).unwrap();

@@ -34,14 +34,16 @@ fn test_from_vec_uses_column_major_indices() {
 
 #[test]
 fn test_tensor_metadata() {
-    let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap());
+    let t = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap(),
+    );
     assert_eq!(t.shape(), &[2, 1]);
     assert_eq!(t.dtype(), DType::F64);
 }
 
 #[test]
 fn test_reshape() {
-    let t = Tensor::F64(
+    let t = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
     let r = reshape(&t, &[3, 2]).unwrap();
@@ -56,9 +58,10 @@ fn test_reshape() {
 
 #[test]
 fn test_add_mul() {
-    let a =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
-    let b = Tensor::F64(
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![10.0, 20.0, 30.0, 40.0]).unwrap(),
     );
     let sum = add(&a, &b).unwrap();
@@ -77,8 +80,12 @@ fn test_add_mul() {
 
 #[test]
 fn test_add_mul_i64() {
-    let a = Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 2, 3, 4]).unwrap());
-    let b = Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![10, 20, 30, 40]).unwrap());
+    let a = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 2, 3, 4]).unwrap(),
+    );
+    let b = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![10, 20, 30, 40]).unwrap(),
+    );
     let sum = add(&a, &b).unwrap();
     let prod = mul(&a, &b).unwrap();
 
@@ -567,10 +574,12 @@ fn float_div_rem_preserve_ieee_special_values() {
 
 #[test]
 fn test_float_rem_matches_rust_remainder_sign() {
-    let lhs =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![4], vec![7.0, -7.0, 7.0, -7.0]).unwrap());
-    let rhs =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![4], vec![3.0, 3.0, -3.0, -3.0]).unwrap());
+    let lhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![4], vec![7.0, -7.0, 7.0, -7.0]).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![4], vec![3.0, 3.0, -3.0, -3.0]).unwrap(),
+    );
 
     let out = rem(&lhs, &rhs).unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, -1.0, 1.0, -1.0]);
@@ -578,9 +587,11 @@ fn test_float_rem_matches_rust_remainder_sign() {
 
 #[test]
 fn test_add_mul_rank0_broadcast() {
-    let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
-    let tensor =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
+    let scalar =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
+    let tensor = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+    );
 
     let scalar_plus_tensor = add(&scalar, &tensor).unwrap();
     let tensor_plus_scalar = add(&tensor, &scalar).unwrap();
@@ -606,8 +617,9 @@ fn test_add_mul_rank0_broadcast() {
 
 #[test]
 fn test_mul_rank0_real_scalar_broadcasts_over_complex_tensor() {
-    let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
-    let tensor = Tensor::C64(
+    let scalar =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
+    let tensor = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
@@ -627,10 +639,10 @@ fn test_mul_rank0_real_scalar_broadcasts_over_complex_tensor() {
 
 #[test]
 fn test_mul_rank0_complex_scalar_broadcasts_over_complex_tensor() {
-    let scalar = Tensor::C64(
+    let scalar = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![], vec![Complex64::new(2.0, -1.0)]).unwrap(),
     );
-    let tensor = Tensor::C64(
+    let tensor = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
@@ -668,7 +680,7 @@ fn test_rank0_typed_tensor_behaves_like_scalar() {
 
 #[test]
 fn test_reduce_sum() {
-    let t = Tensor::F64(
+    let t = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
     let r = reduce_sum(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
@@ -746,7 +758,7 @@ fn unsupported_reduction_dtype_messages_prescribe_known_recovery() {
         } if message == "unsupported dtype I64; supported dtypes: F32/F64; convert to F64 before reduction"
     ));
 
-    let complex = Tensor::C64(
+    let complex = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
@@ -784,7 +796,7 @@ fn test_reduce_sum_squares_read_accepts_noncompact_view() {
 
 #[test]
 fn test_reduce_prod() {
-    let t = Tensor::F64(
+    let t = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
 
@@ -849,7 +861,7 @@ fn test_integer_reduce_read_views_wrap_on_overflow() {
 
 #[test]
 fn test_reduce_max_and_min() {
-    let t = Tensor::F64(
+    let t = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
 
@@ -875,7 +887,7 @@ fn test_reduce_max_and_min() {
 
 #[test]
 fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
-    let t = Tensor::F64(
+    let t = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
     let mut backend = CpuBackend::new();
@@ -898,7 +910,7 @@ fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
 
 #[test]
 fn test_slice() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4, 4], (1..=16).map(|value| value as f64).collect())
             .unwrap(),
     );
@@ -923,7 +935,7 @@ fn test_slice() {
 
 #[test]
 fn test_reverse_axis_zero() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
     let mut backend = CpuBackend::new();
@@ -1056,7 +1068,9 @@ fn tensor_stack_reuses_reclaimed_cpu_buffer() {
 
 #[test]
 fn test_reverse_axis_out_of_bounds_returns_error() {
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
 
     let err = backend.reverse(&input, &[1]).unwrap_err();
@@ -1072,11 +1086,11 @@ fn test_reverse_axis_out_of_bounds_returns_error() {
 
 #[test]
 fn test_gather_rejects_fractional_float_indices() {
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let start_indices =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![1.5]).unwrap());
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1, 1], vec![1.5]).unwrap());
     let mut backend = CpuBackend::new();
 
     let err = backend
@@ -1094,10 +1108,10 @@ fn test_gather_rejects_fractional_float_indices() {
 
 #[test]
 fn test_gather_rejects_complex_indices() {
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
-    let start_indices = Tensor::C64(
+    let start_indices = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap(),
     );
     let mut backend = CpuBackend::new();
@@ -1117,7 +1131,9 @@ fn test_gather_rejects_complex_indices() {
 
 #[test]
 fn test_dynamic_slice_rejects_oversized_window() {
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+    );
     let starts = Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap();
     let mut backend = CpuBackend::new();
 
@@ -1134,10 +1150,10 @@ fn test_dynamic_slice_rejects_oversized_window() {
 
 #[test]
 fn test_large_float_index_outside_exact_integer_range_returns_error() {
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
-    let start_indices = Tensor::F64(
+    let start_indices = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![1, 1], vec![9_007_199_254_740_995.0f64]).unwrap(),
     );
     let mut backend = CpuBackend::new();
@@ -1157,8 +1173,9 @@ fn test_large_float_index_outside_exact_integer_range_returns_error() {
 
 #[test]
 fn test_invalid_slice_config_returns_error() {
-    let input =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
 
     let err = backend
@@ -1176,7 +1193,9 @@ fn test_invalid_slice_config_returns_error() {
 
 #[test]
 fn test_invalid_pad_config_returns_error() {
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
 
     let err = backend
@@ -1194,7 +1213,7 @@ fn test_invalid_pad_config_returns_error() {
 
 #[test]
 fn test_gather_rejects_malformed_offset_dims() {
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
     let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 1, 2]).unwrap();
@@ -1215,11 +1234,12 @@ fn test_gather_rejects_malformed_offset_dims() {
 
 #[test]
 fn test_scatter_rejects_update_window_dim_out_of_bounds() {
-    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3, 3]).unwrap());
+    let operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![3, 3, 3]).unwrap());
     let scatter_indices =
         Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]).unwrap();
-    let updates =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3, 3, 3], vec![0.0; 27]).unwrap());
+    let updates = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3, 3, 3], vec![0.0; 27]).unwrap(),
+    );
     let mut backend = CpuBackend::new();
     let config = ScatterConfig {
         update_window_dims: vec![0, 3],
@@ -1242,10 +1262,11 @@ fn test_scatter_rejects_update_window_dim_out_of_bounds() {
 
 #[test]
 fn test_scatter_rejects_too_many_update_window_dims() {
-    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3, 3]).unwrap());
+    let operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![3, 3, 3]).unwrap());
     let scatter_indices =
         Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]).unwrap();
-    let updates = Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![0.0; 3]).unwrap());
+    let updates =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![3], vec![0.0; 3]).unwrap());
     let mut backend = CpuBackend::new();
     let config = ScatterConfig {
         update_window_dims: vec![0, 1],
@@ -1266,10 +1287,10 @@ fn test_scatter_rejects_too_many_update_window_dims() {
 
 #[test]
 fn test_concatenate_axis_zero() {
-    let lhs = Tensor::F64(
+    let lhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
-    let rhs = Tensor::F64(
+    let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap(),
     );
     let mut backend = CpuBackend::new();

@@ -67,8 +67,9 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
     let mut backend = CpuBackend::new();
     let indices = Tensor::from_vec_col_major(vec![2], vec![0_i64, 2]).unwrap();
 
-    let f32_operand =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap());
+    let f32_operand = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap(),
+    );
     assert_eq!(
         gather(&f32_operand, &indices, &simple_gather_config())
             .unwrap()
@@ -76,7 +77,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2]
     );
 
-    let c32_operand = Tensor::C32(
+    let c32_operand = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::from_vec_col_major(
             vec![3],
             vec![
@@ -94,7 +95,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2]
     );
 
-    let c64_operand = Tensor::C64(
+    let c64_operand = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![3],
             vec![
@@ -138,11 +139,12 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
 
     let scatter_indices = Tensor::from_vec_col_major(vec![2, 2], vec![0_i64, 1, 0, 1]).unwrap();
 
-    let f32_updates =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![5.0, 6.0]).unwrap());
+    let f32_updates = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![2], vec![5.0, 6.0]).unwrap(),
+    );
     assert_eq!(
         scatter(
-            &Tensor::F32(TypedTensor::zeros(vec![2, 2]).unwrap()),
+            &Tensor::from_typed::<f32>(TypedTensor::zeros(vec![2, 2]).unwrap()),
             &scatter_indices,
             &f32_updates,
             &diagonal_scatter_config(),
@@ -152,7 +154,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2, 2]
     );
 
-    let c32_updates = Tensor::C32(
+    let c32_updates = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex32::new(5.0, 1.0), Complex32::new(6.0, 2.0)],
@@ -161,7 +163,9 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
     );
     assert_eq!(
         scatter(
-            &Tensor::C32(TypedTensor::zeros(vec![2, 2]).unwrap()),
+            &Tensor::from_typed::<tenferro_tensor::Complex32>(
+                TypedTensor::zeros(vec![2, 2]).unwrap()
+            ),
             &scatter_indices,
             &c32_updates,
             &diagonal_scatter_config(),
@@ -171,7 +175,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2, 2]
     );
 
-    let c64_updates = Tensor::C64(
+    let c64_updates = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex64::new(5.0, 1.0), Complex64::new(6.0, 2.0)],
@@ -180,7 +184,9 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
     );
     assert_eq!(
         scatter(
-            &Tensor::C64(TypedTensor::zeros(vec![2, 2]).unwrap()),
+            &Tensor::from_typed::<tenferro_tensor::Complex64>(
+                TypedTensor::zeros(vec![2, 2]).unwrap()
+            ),
             &scatter_indices,
             &c64_updates,
             &diagonal_scatter_config(),
@@ -212,9 +218,9 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
     ));
     assert!(matches!(
         scatter(
-            &Tensor::F32(TypedTensor::zeros(vec![2, 2]).unwrap()),
+            &Tensor::from_typed::<f32>(TypedTensor::zeros(vec![2, 2]).unwrap()),
             &scatter_indices,
-            &Tensor::F64(TypedTensor::zeros(vec![2]).unwrap()),
+            &Tensor::from_typed::<f64>(TypedTensor::zeros(vec![2]).unwrap()),
             &diagonal_scatter_config(),
         ),
         Err(crate::Error::Validation {
@@ -401,7 +407,9 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
 #[test]
 fn cpu_slice_limit_over_dimension_is_invalid_configuration() {
     let mut backend = CpuBackend::new();
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+    );
     let error = backend
         .slice(
             &input,
@@ -428,7 +436,9 @@ fn cpu_slice_limit_over_dimension_is_invalid_configuration() {
 #[test]
 fn cpu_indexing_validation_covers_error_branches() {
     let mut backend = CpuBackend::new();
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+    );
 
     expect_rank_mismatch(
         backend.slice(
@@ -486,8 +496,9 @@ fn cpu_indexing_validation_covers_error_branches() {
         "slice",
     );
 
-    let matrix =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
+    let matrix = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+    );
     expect_rank_mismatch(
         backend.dynamic_slice(
             &matrix,
@@ -580,15 +591,18 @@ fn cpu_indexing_validation_covers_error_branches() {
         "pad",
     );
 
-    let operand_2d =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
+    let operand_2d = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+    );
     let idx = Tensor::from_vec_col_major(vec![1, 1], vec![0_i64]).unwrap();
     let idx2 = Tensor::from_vec_col_major(vec![1, 2], vec![0_i64, 0]).unwrap();
 
     expect_invalid_config(
         gather(
             &operand_2d,
-            &Tensor::F32(TypedTensor::from_vec_col_major(vec![1, 1], vec![0.5]).unwrap()),
+            &Tensor::from_typed::<f32>(
+                TypedTensor::from_vec_col_major(vec![1, 1], vec![0.5]).unwrap(),
+            ),
             &valid_gather_2d_config(),
         ),
         "index_tensor",
@@ -596,7 +610,9 @@ fn cpu_indexing_validation_covers_error_branches() {
     expect_invalid_config(
         gather(
             &operand_2d,
-            &Tensor::F32(TypedTensor::from_vec_col_major(vec![1, 1], vec![16_777_218.0]).unwrap()),
+            &Tensor::from_typed::<f32>(
+                TypedTensor::from_vec_col_major(vec![1, 1], vec![16_777_218.0]).unwrap(),
+            ),
             &valid_gather_2d_config(),
         ),
         "index_tensor",
@@ -604,7 +620,7 @@ fn cpu_indexing_validation_covers_error_branches() {
     expect_invalid_config(
         gather(
             &operand_2d,
-            &Tensor::F64(
+            &Tensor::from_typed::<f64>(
                 TypedTensor::from_vec_col_major(vec![1, 1], vec![9_007_199_254_740_994.0]).unwrap(),
             ),
             &valid_gather_2d_config(),
@@ -657,7 +673,8 @@ fn cpu_indexing_validation_covers_error_branches() {
     };
     expect_duplicate_axis(gather(&operand_2d, &idx, &gather_cfg), "gather");
 
-    let updates = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![5.0]).unwrap());
+    let updates =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1], vec![5.0]).unwrap());
     let mut scatter_cfg = diagonal_scatter_config();
     scatter_cfg.inserted_window_dims = vec![2];
     expect_axis_oob(
@@ -717,7 +734,7 @@ fn cpu_indexing_validation_covers_error_branches() {
 
     let scatter_cfg = diagonal_scatter_config();
     let bad_batch_updates =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![5.0]).unwrap());
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1, 1], vec![5.0]).unwrap());
     expect_invalid_config(
         scatter(&operand_2d, &idx2, &bad_batch_updates, &scatter_cfg),
         "scatter",
@@ -729,7 +746,8 @@ fn cpu_indexing_validation_covers_error_branches() {
         scatter_dims_to_operand_dims: vec![0, 1],
         index_vector_dim: 1,
     };
-    let updates_2d = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![5.0]).unwrap());
+    let updates_2d =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1, 1], vec![5.0]).unwrap());
     expect_axis_oob(
         scatter(&operand_2d, &idx2, &updates_2d, &scatter_cfg),
         "scatter",
@@ -741,16 +759,18 @@ fn cpu_indexing_validation_covers_error_branches() {
         scatter_dims_to_operand_dims: vec![0, 1],
         index_vector_dim: 1,
     };
-    let updates_3d =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1, 1], vec![5.0]).unwrap());
+    let updates_3d = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![1, 1, 1], vec![5.0]).unwrap(),
+    );
     expect_duplicate_axis(
         scatter(&operand_2d, &idx2, &updates_3d, &scatter_cfg),
         "scatter",
     );
 
     let scatter_cfg = diagonal_scatter_config();
-    let mismatched_updates =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap());
+    let mismatched_updates = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap(),
+    );
     expect_invalid_config(
         scatter(&operand_2d, &idx2, &mismatched_updates, &scatter_cfg),
         "scatter",
@@ -759,7 +779,7 @@ fn cpu_indexing_validation_covers_error_branches() {
 
 #[test]
 fn cpu_pad_supports_signed_edge_cropping() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap(),
     );
 
@@ -783,7 +803,9 @@ fn cpu_pad_supports_signed_edge_cropping() {
 
 #[test]
 fn cpu_pad_skips_extreme_signed_positions_without_overflow() {
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+    );
     let output = pad(
         &input,
         &PadConfig {
@@ -809,10 +831,12 @@ fn cpu_pad_does_not_reject_signed_edges_before_checked_shape_validation() {
 fn cpu_exec_session_covers_dot_errors_and_reclaim_dispatch() {
     let mut backend = CpuBackend::new();
     backend.with_backend_session(|exec| {
-        let f32_vec =
-            Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
-        let f64_vec =
-            Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+        let f32_vec = Tensor::from_typed::<f32>(
+            TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+        );
+        let f64_vec = Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+        );
         let dot_cfg = DotGeneralConfig {
             lhs_contracting_dims: vec![0],
             rhs_contracting_dims: vec![0],
@@ -827,9 +851,17 @@ fn cpu_exec_session_covers_dot_errors_and_reclaim_dispatch() {
             })
         ));
 
-        exec.reclaim_buffer(Tensor::F32(TypedTensor::zeros(vec![1]).unwrap()));
-        exec.reclaim_buffer(Tensor::F64(TypedTensor::zeros(vec![1]).unwrap()));
-        exec.reclaim_buffer(Tensor::C32(TypedTensor::zeros(vec![1]).unwrap()));
-        exec.reclaim_buffer(Tensor::C64(TypedTensor::zeros(vec![1]).unwrap()));
+        exec.reclaim_buffer(Tensor::from_typed::<f32>(
+            TypedTensor::zeros(vec![1]).unwrap(),
+        ));
+        exec.reclaim_buffer(Tensor::from_typed::<f64>(
+            TypedTensor::zeros(vec![1]).unwrap(),
+        ));
+        exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex32>(
+            TypedTensor::zeros(vec![1]).unwrap(),
+        ));
+        exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::zeros(vec![1]).unwrap(),
+        ));
     });
 }

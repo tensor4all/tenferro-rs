@@ -496,10 +496,10 @@ pub(super) fn rank_revealing_qr(
             let input = gpu_linalg_typed::<f32>(OP, input)?;
             rank_revealing_qr_typed(backend, input, options).map(|(q, r, p, rank)| {
                 vec![
-                    Tensor::F32(q),
-                    Tensor::F32(r),
-                    Tensor::I64(p),
-                    Tensor::I64(rank),
+                    Tensor::from_typed::<f32>(q),
+                    Tensor::from_typed::<f32>(r),
+                    Tensor::from_typed::<i64>(p),
+                    Tensor::from_typed::<i64>(rank),
                 ]
             })
         }
@@ -507,10 +507,10 @@ pub(super) fn rank_revealing_qr(
             let input = gpu_linalg_typed::<f64>(OP, input)?;
             rank_revealing_qr_typed(backend, input, options).map(|(q, r, p, rank)| {
                 vec![
-                    Tensor::F64(q),
-                    Tensor::F64(r),
-                    Tensor::I64(p),
-                    Tensor::I64(rank),
+                    Tensor::from_typed::<f64>(q),
+                    Tensor::from_typed::<f64>(r),
+                    Tensor::from_typed::<i64>(p),
+                    Tensor::from_typed::<i64>(rank),
                 ]
             })
         }
@@ -518,10 +518,10 @@ pub(super) fn rank_revealing_qr(
             let input = gpu_linalg_typed::<Complex32>(OP, input)?;
             rank_revealing_qr_typed(backend, input, options).map(|(q, r, p, rank)| {
                 vec![
-                    Tensor::C32(q),
-                    Tensor::C32(r),
-                    Tensor::I64(p),
-                    Tensor::I64(rank),
+                    Tensor::from_typed::<tenferro_tensor::Complex32>(q),
+                    Tensor::from_typed::<tenferro_tensor::Complex32>(r),
+                    Tensor::from_typed::<i64>(p),
+                    Tensor::from_typed::<i64>(rank),
                 ]
             })
         }
@@ -529,10 +529,10 @@ pub(super) fn rank_revealing_qr(
             let input = gpu_linalg_typed::<Complex64>(OP, input)?;
             rank_revealing_qr_typed(backend, input, options).map(|(q, r, p, rank)| {
                 vec![
-                    Tensor::C64(q),
-                    Tensor::C64(r),
-                    Tensor::I64(p),
-                    Tensor::I64(rank),
+                    Tensor::from_typed::<tenferro_tensor::Complex64>(q),
+                    Tensor::from_typed::<tenferro_tensor::Complex64>(r),
+                    Tensor::from_typed::<i64>(p),
+                    Tensor::from_typed::<i64>(rank),
                 ]
             })
         }
@@ -700,8 +700,8 @@ where
     // The only CUDA-to-host read is this bounded provider-status vector. Matrix
     // payloads, norms, pivots, permutation, and rank remain device-resident.
     backend.runtime().synchronize()?;
-    let host_status = download_tensor(backend.runtime(), &Tensor::I64(status))?;
-    let Tensor::I64(host_status) = host_status else {
+    let host_status = download_tensor(backend.runtime(), &Tensor::from_typed::<i64>(status))?;
+    let Tensor::from_typed::<i64>(host_status) = host_status else {
         return Err(Error::Internal(
             "rank_revealing_qr: unexpected provider-status dtype".into(),
         ));

@@ -497,7 +497,7 @@ fn typed_surface_covers_all_receiver_adapters() {
 #[test]
 fn concrete_spectral_norm_preserves_signed_and_complex_input_across_surfaces() {
     let signed = Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 1.0, 1.0, -1.0]).unwrap();
-    let complex = Tensor::C64(
+    let complex = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2, 2],
             vec![

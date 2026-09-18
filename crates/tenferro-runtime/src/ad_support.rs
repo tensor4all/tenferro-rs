@@ -592,20 +592,24 @@ pub fn linear_input_key(
 /// when it cannot be constructed from `shape`.
 pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
     match dtype {
-        DType::F32 => Ok(Tensor::F32(TypedTensor::ones(shape)?)),
-        DType::F64 => Ok(Tensor::F64(TypedTensor::ones(shape)?)),
-        DType::I32 => Ok(Tensor::I32(TypedTensor::ones(shape)?)),
-        DType::I64 => Ok(Tensor::I64(TypedTensor::ones(shape)?)),
+        DType::F32 => Ok(Tensor::from_typed::<f32>(TypedTensor::ones(shape)?)),
+        DType::F64 => Ok(Tensor::from_typed::<f64>(TypedTensor::ones(shape)?)),
+        DType::I32 => Ok(Tensor::from_typed::<i32>(TypedTensor::ones(shape)?)),
+        DType::I64 => Ok(Tensor::from_typed::<i64>(TypedTensor::ones(shape)?)),
         DType::Bool => {
             let len =
                 tenferro_tensor::validate::checked_shape_product("ones_tensor", "shape", &shape)?;
-            Ok(Tensor::Bool(TypedTensor::from_vec_col_major(
+            Ok(Tensor::from_typed::<bool>(TypedTensor::from_vec_col_major(
                 shape,
                 vec![true; len],
             )?))
         }
-        DType::C32 => Ok(Tensor::C32(TypedTensor::ones(shape)?)),
-        DType::C64 => Ok(Tensor::C64(TypedTensor::ones(shape)?)),
+        DType::C32 => Ok(Tensor::from_typed::<tenferro_tensor::Complex32>(
+            TypedTensor::ones(shape)?,
+        )),
+        DType::C64 => Ok(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::ones(shape)?,
+        )),
         // An externally defined scalar is caller-owned and has no core identity
         // tensor, so the runtime cannot build one for it.
         DType::External(_) => Err(Error::invalid_argument(

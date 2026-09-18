@@ -408,8 +408,9 @@ fn faer_strided_read_fast_path_enters_once() {
 #[test]
 fn faer_full_svd_enters_once() {
     let (mut backend, installs, submits) = external_no_inner_backend();
-    let input =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).unwrap(),
+    );
 
     let outputs = with_cpu_linalg(&mut backend, |backend| backend.svd_full(&input)).unwrap();
 
@@ -494,7 +495,7 @@ fn every_one_input_read_fallback_enters_once() {
 fn managed_cholesky_read_keeps_nonzero_storage_work_inside_one_entry() {
     let domain = FakeDomain::new();
     let (mut backend, installs, submits) = external_no_inner_managed_backend(&domain);
-    let input = Tensor::F64(domain.tensor(&[2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]));
+    let input = Tensor::from_typed::<f64>(domain.tensor(&[2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]));
 
     let output = with_cpu_linalg(&mut backend, |backend| {
         backend.cholesky_read(TensorRead::from_tensor(&input))
@@ -507,7 +508,7 @@ fn managed_cholesky_read_keeps_nonzero_storage_work_inside_one_entry() {
     assert_eq!(domain.counts.writes.load(Ordering::Relaxed), 1);
     assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), 1);
     assert_eq!(domain.counts.outside_entry.load(Ordering::Relaxed), 0);
-    let Tensor::F64(output) = output else {
+    let Some(output) = output.as_typed::<f64>() else {
         panic!("managed Cholesky should preserve f64 dtype")
     };
     let StorageBuffer::Backend(buffer) = output.buffer() else {
@@ -534,7 +535,7 @@ fn managed_cholesky_read_keeps_nonzero_storage_work_inside_one_entry() {
 fn managed_cholesky_read_keeps_zero_size_output_work_inside_one_entry() {
     let domain = FakeDomain::new();
     let (mut backend, installs, submits) = external_no_inner_managed_backend(&domain);
-    let input = Tensor::F64(domain.tensor(&[0, 0], Vec::<f64>::new()));
+    let input = Tensor::from_typed::<f64>(domain.tensor(&[0, 0], Vec::<f64>::new()));
 
     let output = with_cpu_linalg(&mut backend, |backend| {
         backend.cholesky_read(TensorRead::from_tensor(&input))
@@ -711,8 +712,10 @@ fn linalg_provider_panic_allows_next_operation_without_clearing_stats_poison() {
 fn faer_full_svd_covers_the_float_and_complex_tags() {
     let (mut backend, _, _) = external_no_inner_backend();
     let inputs = [
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0_f32, 4.0]).unwrap()),
-        Tensor::C32(
+        Tensor::from_typed::<f32>(
+            TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0_f32, 4.0]).unwrap(),
+        ),
+        Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![2, 1],
                 vec![

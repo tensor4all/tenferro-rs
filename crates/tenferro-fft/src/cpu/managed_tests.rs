@@ -145,10 +145,14 @@ impl SharedTensorAllocationDomain for FakeDomain {
     fn allocate(&self, dtype: DType, shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
         let len = Self::element_count(shape)?;
         Ok(match dtype {
-            DType::F32 => Tensor::F32(self.tensor(shape, vec![0.0_f32; len])),
-            DType::F64 => Tensor::F64(self.tensor(shape, vec![0.0_f64; len])),
-            DType::C32 => Tensor::C32(self.tensor(shape, vec![Complex32::default(); len])),
-            DType::C64 => Tensor::C64(self.tensor(shape, vec![Complex64::default(); len])),
+            DType::F32 => Tensor::from_typed::<f32>(self.tensor(shape, vec![0.0_f32; len])),
+            DType::F64 => Tensor::from_typed::<f64>(self.tensor(shape, vec![0.0_f64; len])),
+            DType::C32 => Tensor::from_typed::<tenferro_tensor::Complex32>(
+                self.tensor(shape, vec![Complex32::default(); len]),
+            ),
+            DType::C64 => Tensor::from_typed::<tenferro_tensor::Complex64>(
+                self.tensor(shape, vec![Complex64::default(); len]),
+            ),
             other => {
                 return Err(tenferro_tensor::Error::unsupported_dtype(
                     "fft",
@@ -201,7 +205,7 @@ fn managed_output_failures_return_errors_and_leave_input_usable() {
         OutputFault::WrongLength,
     ] {
         let domain = FakeDomain::new();
-        let input = Tensor::F64(domain.tensor(&[4], vec![1., 2., 3., 4.]));
+        let input = Tensor::from_typed::<f64>(domain.tensor(&[4], vec![1., 2., 3., 4.]));
         let mut failing = CpuBackend::with_threads(1)
             .unwrap()
             .with_allocation_domain(Arc::new(FaultyOutputDomain {
@@ -221,7 +225,7 @@ fn managed_output_failures_return_errors_and_leave_input_usable() {
         let result = valid
             .with_backend_session(|s| input.rfft(None, 0, FftNorm::Backward, s))
             .unwrap();
-        let Tensor::C64(result) = result else {
+        let Some(result) = result.as_typed::<Complex64>() else {
             panic!("expected complex result")
         };
         let guard = result.backend_buffer().unwrap().map_read().unwrap();
@@ -279,7 +283,7 @@ fn domain_bound_backend_accepts_host_owned_fft() {
     let output = backend
         .with_backend_session(|session| host.rfft(None, 0, FftNorm::Backward, session))
         .unwrap();
-    let Tensor::C64(output) = output else {
+    let Some(output) = output.as_typed::<Complex64>() else {
         panic!("expected C64 host FFT output")
     };
 
@@ -308,7 +312,7 @@ fn domain_bound_backend_accepts_host_read_fft() {
     let output = backend
         .with_backend_session(|session| input.rfft_read(None, 0, FftNorm::Backward, session))
         .unwrap();
-    let Tensor::C64(output) = output else {
+    let Some(output) = output.as_typed::<Complex64>() else {
         panic!("expected C64 host FFT output")
     };
 
@@ -331,7 +335,7 @@ fn domain_bound_backend_accepts_host_read_fft() {
 fn domain_bound_backend_rejects_foreign_fft_input() {
     let domain = FakeDomain::new();
     let foreign = FakeDomain::new();
-    let input = Tensor::F64(foreign.tensor(&[4], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    let input = Tensor::from_typed::<f64>(foreign.tensor(&[4], vec![1.0_f64, 2.0, 3.0, 4.0]));
     let mut backend = backend(&domain);
 
     let error = backend
@@ -355,38 +359,38 @@ fn managed_cpu_fft_covers_all_supported_scalar_and_operation_paths() {
     backend.with_backend_session(|session| {
         let real32 = domain.tensor(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
         let real32_id = real32.allocation_id();
-        let full32 = Tensor::F32(real32)
+        let full32 = Tensor::from_typed::<f32>(real32)
             .fft(None, 0, FftNorm::Backward, session)
             .unwrap();
         assert_managed_output(&full32, &domain, real32_id);
         let real32 = domain.tensor(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
-        let one_sided32 = Tensor::F32(real32)
+        let one_sided32 = Tensor::from_typed::<f32>(real32)
             .rfft(None, 0, FftNorm::Backward, session)
             .unwrap();
-        let Tensor::C32(one_sided32) = one_sided32 else {
+        let Ok(one_sided32) = one_sided32.into_typed::<Complex32>() else {
             unreachable!()
         };
-        let recovered32 = Tensor::C32(one_sided32)
+        let recovered32 = Tensor::from_typed::<tenferro_tensor::Complex32>(one_sided32)
             .irfft(Some(4), 0, FftNorm::Backward, session)
             .unwrap();
         assert_managed_output(&recovered32, &domain, None);
 
         let real64 = domain.tensor(&[4], vec![1.0_f64, 2.0, 3.0, 4.0]);
         let real64_id = real64.allocation_id();
-        let one_sided64 = Tensor::F64(real64)
+        let one_sided64 = Tensor::from_typed::<f64>(real64)
             .rfft(None, 0, FftNorm::Backward, session)
             .unwrap();
         assert_managed_output(&one_sided64, &domain, real64_id);
-        let Tensor::C64(one_sided64) = one_sided64 else {
+        let Ok(one_sided64) = one_sided64.into_typed::<Complex64>() else {
             unreachable!()
         };
-        let recovered64 = Tensor::C64(one_sided64)
+        let recovered64 = Tensor::from_typed::<tenferro_tensor::Complex64>(one_sided64)
             .irfft(Some(4), 0, FftNorm::Backward, session)
             .unwrap();
         assert_managed_output(&recovered64, &domain, None);
 
         let complex32 = domain.tensor(&[4], vec![Complex32::new(1.0, 0.0); 4]);
-        let transformed32 = Tensor::C32(complex32)
+        let transformed32 = Tensor::from_typed::<tenferro_tensor::Complex32>(complex32)
             .fft(None, 0, FftNorm::Backward, session)
             .unwrap();
         let inverted32 = transformed32
@@ -395,7 +399,7 @@ fn managed_cpu_fft_covers_all_supported_scalar_and_operation_paths() {
         assert_managed_output(&inverted32, &domain, None);
 
         let complex64 = domain.tensor(&[4], vec![Complex64::new(1.0, 0.0); 4]);
-        let transformed64 = Tensor::C64(complex64)
+        let transformed64 = Tensor::from_typed::<tenferro_tensor::Complex64>(complex64)
             .fft(None, 0, FftNorm::Backward, session)
             .unwrap();
         let inverted64 = transformed64

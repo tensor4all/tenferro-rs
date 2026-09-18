@@ -382,7 +382,7 @@ fn execute_erased_fused_outputs(
                     shape,
                     plan,
                     output,
-                    Tensor::F32,
+                    Tensor::from_typed::<f32>,
                 )
             })
             .collect(),
@@ -398,7 +398,7 @@ fn execute_erased_fused_outputs(
                     shape,
                     plan,
                     output,
-                    Tensor::F64,
+                    Tensor::from_typed::<f64>,
                 )
             })
             .collect(),
@@ -414,7 +414,7 @@ fn execute_erased_fused_outputs(
                     shape,
                     plan,
                     output,
-                    Tensor::I32,
+                    Tensor::from_typed::<i32>,
                 )
             })
             .collect(),
@@ -430,7 +430,7 @@ fn execute_erased_fused_outputs(
                     shape,
                     plan,
                     output,
-                    Tensor::I64,
+                    Tensor::from_typed::<i64>,
                 )
             })
             .collect(),
@@ -446,7 +446,7 @@ fn execute_erased_fused_outputs(
                     shape,
                     plan,
                     output,
-                    Tensor::Bool,
+                    Tensor::from_typed::<bool>,
                 )
             })
             .collect(),
@@ -462,7 +462,7 @@ fn execute_erased_fused_outputs(
                     shape,
                     plan,
                     output,
-                    Tensor::C32,
+                    Tensor::from_typed::<tenferro_tensor::Complex32>,
                 )
             })
             .collect(),
@@ -478,7 +478,7 @@ fn execute_erased_fused_outputs(
                     shape,
                     plan,
                     output,
-                    Tensor::C64,
+                    Tensor::from_typed::<tenferro_tensor::Complex64>,
                 )
             })
             .collect(),

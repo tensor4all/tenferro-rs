@@ -393,7 +393,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         panic_output.as_ref().expect("panic-path output retained"),
     )
     .expect("panic-path work retired before unwind returned");
-    let Tensor::F32(panic_output) = panic_output else {
+    let Some(panic_output) = panic_output.as_typed::<f32>() else {
         unreachable!("f32 panic-path output")
     };
     assert_eq!(
@@ -403,7 +403,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
 
     let output = download_webgpu_tensor(&runtime, second_output.as_ref().expect("second output"))
         .expect("WebGPU download");
-    let Tensor::F32(output) = output else {
+    let Some(output) = output.as_typed::<f32>() else {
         unreachable!("f32 elementwise output")
     };
     assert_eq!(

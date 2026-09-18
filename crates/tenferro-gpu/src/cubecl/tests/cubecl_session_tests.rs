@@ -115,7 +115,7 @@ fn cubecl_session_scales_output_in_place() {
                 Ok(output)
             })
             .unwrap();
-        let mut output_enum = tenferro_tensor::Tensor::F32(output);
+        let mut output_enum = tenferro_tensor::Tensor::from_typed::<f32>(output);
         session
             .with_cubecl("test.cubecl_scale", |cubecl| {
                 cubecl.scale_tensor_write(

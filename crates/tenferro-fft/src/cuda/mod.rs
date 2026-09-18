@@ -483,20 +483,20 @@ fn allocate_cuda_output(
     match dtype {
         DType::F32 => session
             .with_cubecl(OP, |cubecl| cubecl.alloc_output::<f32>(shape))
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
         DType::F64 => session
             .with_cubecl(OP, |cubecl| cubecl.alloc_output::<f64>(shape))
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
         DType::C32 => session
             .with_cubecl(OP, |cubecl| {
                 cubecl.alloc_output::<num_complex::Complex32>(shape)
             })
-            .map(Tensor::C32),
+            .map(Tensor::from_typed::<tenferro_tensor::Complex32>),
         DType::C64 => session
             .with_cubecl(OP, |cubecl| {
                 cubecl.alloc_output::<num_complex::Complex64>(shape)
             })
-            .map(Tensor::C64),
+            .map(Tensor::from_typed::<tenferro_tensor::Complex64>),
         _ => Err(crate::tensor_unsupported_dtype(
             OP,
             dtype,
@@ -513,23 +513,23 @@ fn allocate_cuda_zero_output(
     match dtype {
         DType::F32 => session
             .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f32>(shape))
-            .map(Tensor::F32),
+            .map(Tensor::from_typed::<f32>),
         DType::F64 => session
             .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f64>(shape))
-            .map(Tensor::F64),
+            .map(Tensor::from_typed::<f64>),
         // CubeCL's generic complex fill-zero kernel is not accepted by all
         // CUDA toolkits. Fill a same-device real tensor with the shared kernel
         // and use the existing device conversion path for complex padding.
         DType::C32 => {
             let real = session
                 .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f32>(shape))
-                .map(Tensor::F32)?;
+                .map(Tensor::from_typed::<f32>)?;
             session.cast(&real, DType::C32)
         }
         DType::C64 => {
             let real = session
                 .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f64>(shape))
-                .map(Tensor::F64)?;
+                .map(Tensor::from_typed::<f64>)?;
             session.cast(&real, DType::C64)
         }
         _ => Err(crate::tensor_unsupported_dtype(

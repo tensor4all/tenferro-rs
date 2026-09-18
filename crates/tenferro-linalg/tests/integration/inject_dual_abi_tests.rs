@@ -205,10 +205,12 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
 
     DGEMM_ILP64_CALLS.store(0, Ordering::SeqCst);
 
-    let a =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]).unwrap());
-    let b =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap(),
+    );
 
     let mut backend = CpuBackend::new();
     let c = backend.dot_general(
@@ -224,7 +226,9 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
 
     assert_eq!(DGEMM_ILP64_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data().unwrap(), &[19.0, 43.0, 22.0, 50.0]),
+        Ok(Tensor::from_typed::<f64>(inner)) => {
+            assert_eq!(inner.host_data().unwrap(), &[19.0, 43.0, 22.0, 50.0])
+        }
         _ => panic!("expected f64 tensor"),
     }
 }
@@ -253,9 +257,12 @@ fn ilp64_lapack_full_piv_lu_bridges_integer_arrays() {
     DGETC2_ILP64_CALLS.store(0, Ordering::SeqCst);
     DGESC2_ILP64_CALLS.store(0, Ordering::SeqCst);
 
-    let a =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap());
-    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]).unwrap(),
+    );
 
     let mut backend = CpuBackend::new();
     let x = backend.full_piv_lu_solve(&a, &b, false);
@@ -263,7 +270,7 @@ fn ilp64_lapack_full_piv_lu_bridges_integer_arrays() {
     assert_eq!(DGETC2_ILP64_CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(DGESC2_ILP64_CALLS.load(Ordering::SeqCst), 1);
     match x {
-        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data().unwrap(), &[4.0, 8.0]),
+        Ok(Tensor::from_typed::<f64>(inner)) => assert_eq!(inner.host_data().unwrap(), &[4.0, 8.0]),
         _ => panic!("expected f64 tensor"),
     }
 }
@@ -292,7 +299,9 @@ fn ilp64_lapack_qr_workspace_query() {
     DGEQRF_ILP64_CALLS.store(0, Ordering::SeqCst);
     DORGQR_ILP64_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap(),
+    );
 
     let mut backend = CpuBackend::new();
     let result = backend.qr(&a);

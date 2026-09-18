@@ -21,7 +21,7 @@ fn tensor_input_uses_checked_shape_product_and_dtype_width() {
         cpu_affinity: Some(CpuDomainId::new(7)),
     });
 
-    let input = CpuAffinityInput::from_tensor(&Tensor::F64(tensor)).unwrap();
+    let input = CpuAffinityInput::from_tensor(&Tensor::from_typed::<f64>(tensor)).unwrap();
 
     assert_eq!(input.domain, Some(CpuDomainId::new(7)));
     assert_eq!(input.logical_bytes, 6 * std::mem::size_of::<f64>());

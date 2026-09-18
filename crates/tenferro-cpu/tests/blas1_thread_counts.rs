@@ -29,7 +29,7 @@ fn reference_norm_squared(input: &[Complex64]) -> f64 {
 /// A flat view over an owned tensor, which is how a sweep hands a slice of a
 /// larger buffer to BLAS1 without materializing it.
 fn flat_view(tensor: &Tensor, len: usize) -> TensorRead<'_> {
-    let Tensor::C64(typed) = tensor else {
+    let Some(typed) = tensor.as_typed::<Complex64>() else {
         panic!("these cases are C64")
     };
     let view = TypedTensorView::from_slice(

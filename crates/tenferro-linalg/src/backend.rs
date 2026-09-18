@@ -95,7 +95,7 @@ pub trait LinalgBackend: BackendSession {
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
     /// })?;
-    /// let Tensor::F64(x) = x else { unreachable!("F64 inputs return F64 output") };
+    /// let Tensor::from_typed::<f64>(x) = x else { unreachable!("F64 inputs return F64 output") };
     /// assert_eq!(x.host_data()?, &[0.5, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -881,7 +881,7 @@ pub trait LinalgBackend: BackendSession {
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
     /// })?;
-    /// let Tensor::F64(x) = x else { unreachable!("F64 inputs return F64 output") };
+    /// let Tensor::from_typed::<f64>(x) = x else { unreachable!("F64 inputs return F64 output") };
     /// assert_eq!(x.host_data()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```

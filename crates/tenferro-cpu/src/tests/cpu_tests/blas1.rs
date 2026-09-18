@@ -368,7 +368,7 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
     );
 
     let mut placed_x = x.duplicate().unwrap();
-    if let Tensor::F64(tensor) = &mut placed_x {
+    if let Some(tensor) = placed_x.as_typed_mut::<f64>() {
         tensor.set_placement(Placement {
             memory_kind: MemoryKind::PinnedHost,
             device: None,
@@ -384,7 +384,7 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
     );
 
     let mut device_x = x.duplicate().unwrap();
-    if let Tensor::F64(tensor) = &mut device_x {
+    if let Some(tensor) = device_x.as_typed_mut::<f64>() {
         tensor.set_placement(Placement {
             memory_kind: MemoryKind::Device,
             device: None,
@@ -392,7 +392,7 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
         });
     }
     let mut device_y = y.duplicate().unwrap();
-    if let Tensor::F64(tensor) = &mut device_y {
+    if let Some(tensor) = device_y.as_typed_mut::<f64>() {
         tensor.set_placement(Placement {
             memory_kind: MemoryKind::Device,
             device: None,
@@ -438,7 +438,7 @@ fn blas1_vdot_and_norm_reject_invalid_metadata_and_placement() {
     }
 
     let mut device = x.duplicate().unwrap();
-    if let Tensor::F64(tensor) = &mut device {
+    if let Some(tensor) = device.as_typed_mut::<f64>() {
         tensor.set_placement(Placement {
             memory_kind: MemoryKind::Device,
             device: None,

@@ -132,7 +132,7 @@ fn index_select_config(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let indices = Tensor::I64(TypedTensor::from_vec_col_major(
+    let indices = Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(
         vec![positions.len(), 1],
         index_data,
     )?);

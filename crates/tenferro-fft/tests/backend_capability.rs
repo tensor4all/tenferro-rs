@@ -308,7 +308,7 @@ fn concrete_cpu_execution_preserves_all_four_scalar_dtypes() {
 
 fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     let len = shape.iter().product();
-    Tensor::C64(
+    Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_buffer_col_major(
             shape,
             StorageBuffer::Backend(Box::new(BackendStorageHandle::<Complex64>::new_with_len(

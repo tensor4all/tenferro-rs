@@ -10,12 +10,12 @@ use tenferro_runtime::{DotGeneralConfig, Tensor, TensorRead, TracedTensor, Typed
 use tenferro_tensor::StorageBuffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn assert_f64_tensor_close(actual: &Tensor, expected: &Tensor, rtol: f64, atol: f64) {
     match (actual, expected) {
-        (Tensor::F64(actual), Tensor::F64(expected)) => {
+        (Tensor::from_typed::<f64>(actual), Tensor::from_typed::<f64>(expected)) => {
             assert_eq!(actual.shape(), expected.shape());
             for (idx, (&actual, &expected)) in actual
                 .host_data()

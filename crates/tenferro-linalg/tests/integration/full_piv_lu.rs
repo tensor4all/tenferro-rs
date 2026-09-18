@@ -6,7 +6,7 @@ use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TensorStructur
 use super::support;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -14,7 +14,7 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn c64_data(tensor: &Tensor) -> &[Complex64] {
@@ -73,7 +73,7 @@ fn full_piv_lu_reconstructs_permuted_matrix() {
 
 #[test]
 fn full_piv_lu_complex_parity_uses_real_counterpart_dtype() {
-    let a = Tensor::C64(
+    let a = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2, 2],
             vec![
@@ -201,7 +201,7 @@ fn full_piv_lu_solve_accepts_small_and_large_scaled_f32_and_complex_systems() {
     }
 
     for scale in [1.0e-20_f64, 1.0e20_f64] {
-        let a = Tensor::C64(
+        let a = Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -213,7 +213,7 @@ fn full_piv_lu_solve_accepts_small_and_large_scaled_f32_and_complex_systems() {
             )
             .unwrap(),
         );
-        let b = Tensor::C64(
+        let b = Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![2, 1],
                 vec![
@@ -233,7 +233,7 @@ fn full_piv_lu_solve_accepts_small_and_large_scaled_f32_and_complex_systems() {
     }
 
     for scale in [1.0e-10_f32, 1.0e10_f32] {
-        let a = Tensor::C32(
+        let a = Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -245,7 +245,7 @@ fn full_piv_lu_solve_accepts_small_and_large_scaled_f32_and_complex_systems() {
             )
             .unwrap(),
         );
-        let b = Tensor::C32(
+        let b = Tensor::from_typed::<tenferro_tensor::Complex32>(
             TypedTensor::from_vec_col_major(
                 vec![2, 1],
                 vec![

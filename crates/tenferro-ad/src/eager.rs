@@ -4383,16 +4383,20 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(
                 ),
             ));
         }
-        DType::F32 => Tensor::F32(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::F64 => Tensor::F64(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::I32 => Tensor::I32(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::I64 => Tensor::I64(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::Bool => Tensor::Bool(TypedTensor::from_vec_col_major(
+        DType::F32 => Tensor::from_typed::<f32>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::F64 => Tensor::from_typed::<f64>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::I32 => Tensor::from_typed::<i32>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::I64 => Tensor::from_typed::<i64>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::Bool => Tensor::from_typed::<bool>(TypedTensor::from_vec_col_major(
             input.shape().to_vec(),
             vec![false; input.shape().iter().product()],
         )?),
-        DType::C32 => Tensor::C32(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::C64 => Tensor::C64(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::C32 => Tensor::from_typed::<tenferro_tensor::Complex32>(TypedTensor::zeros(
+            input.shape().to_vec(),
+        )?),
+        DType::C64 => Tensor::from_typed::<tenferro_tensor::Complex64>(TypedTensor::zeros(
+            input.shape().to_vec(),
+        )?),
     };
     backend
         .upload_host_tensor(TensorRead::from_tensor(&host))

@@ -479,7 +479,7 @@ fn test_accum_negative_stride_view_rejected() {
     // nonnegative-stride contract: explicit error, no silent canonicalization.
     let mut gpu = gpu_backend();
     let lhs_gpu = upload(&gpu, &tensor_f64(vec![8], flat_f64(8, 0.0)));
-    let Tensor::F64(lhs_t) = &lhs_gpu else {
+    let Some(lhs_t) = lhs_gpu.as_typed::<f64>() else {
         unreachable!()
     };
     let lhs_view = lhs_t

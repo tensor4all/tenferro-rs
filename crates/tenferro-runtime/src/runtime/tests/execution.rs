@@ -362,7 +362,7 @@ fn scoped_non_host_input_is_rejected_before_admission() -> Result<(), Box<dyn St
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::F64(TypedTensor::from_buffer_col_major(
+    let input = Tensor::from_typed::<f64>(TypedTensor::from_buffer_col_major(
         vec![2],
         StorageBuffer::Backend(Box::new(ForeignProbeBuffer {
             values: Arc::new(Mutex::new(vec![1.0, 2.0])),

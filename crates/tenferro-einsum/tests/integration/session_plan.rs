@@ -365,7 +365,7 @@ impl TensorDot for WrongDTypeSessionBackend {
         _rhs: &Tensor,
         _config: &DotGeneralConfig,
     ) -> TensorResult {
-        Ok(Tensor::F64(
+        Ok(Tensor::from_typed::<f64>(
             tenferro_tensor::TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0; 4]).unwrap(),
         ))
     }

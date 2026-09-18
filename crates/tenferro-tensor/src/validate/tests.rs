@@ -634,7 +634,8 @@ fn diagonal_validation_preserves_numerical_source_and_unsupported_dtype() {
         Some(DiagonalError::SingularOrNonFinite { index: 0 })
     ));
 
-    let integer = Tensor::I32(TypedTensor::from_vec_col_major(vec![1, 1], vec![1]).unwrap());
+    let integer =
+        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![1, 1], vec![1]).unwrap());
     let unsupported_error = validate_nonsingular_u(&integer).unwrap_err();
     assert_eq!(unsupported_error.kind(), ErrorKind::Unsupported);
     assert!(matches!(

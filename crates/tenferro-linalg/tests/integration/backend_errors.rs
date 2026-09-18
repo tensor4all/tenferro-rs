@@ -16,23 +16,27 @@ use tenferro_tensor::{
 use super::support;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<tenferro_tensor::Complex64>(
+        TypedTensor::from_vec_col_major(shape, data).unwrap(),
+    )
 }
 
 fn c32_tensor(shape: Vec<usize>, data: Vec<Complex32>) -> Tensor {
-    Tensor::C32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<tenferro_tensor::Complex32>(
+        TypedTensor::from_vec_col_major(shape, data).unwrap(),
+    )
 }
 
 fn i32_tensor(shape: Vec<usize>, data: Vec<i32>) -> Tensor {
-    Tensor::I32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f64_values(tensor: &Tensor) -> Vec<f64> {
@@ -63,7 +67,7 @@ fn opaque_backend_placement() -> Placement {
 
 fn backend_f64_tensor(shape: Vec<usize>, handle_id: u64) -> Tensor {
     let len = shape.iter().product();
-    Tensor::F64(
+    Tensor::from_typed::<f64>(
         TypedTensor::<f64>::from_buffer_col_major(
             shape,
             StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(
@@ -279,7 +283,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             _a: TensorRead<'_>,
             b: TensorRead<'_>,
         ) -> tenferro_tensor::Result<Tensor> {
-            Ok(Tensor::F64(
+            Ok(Tensor::from_typed::<f64>(
                 TypedTensor::from_vec_col_major(b.shape().to_vec(), vec![2.0, 3.0]).unwrap(),
             ))
         }
@@ -299,7 +303,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         eig_values_result: None,
         eig_values_calls: 0,
     };
-    let state_tensor = Tensor::F64(input.duplicate().unwrap());
+    let state_tensor = Tensor::from_typed::<f64>(input.duplicate().unwrap());
     let unsupported = [
         (
             LinalgBackend::householder_qr(&mut backend, &state_tensor).unwrap_err(),
@@ -353,7 +357,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     // CPU/CUDA execution sessions; a session without a linalg capability
     // returns a typed capability error instead of accepting the arbitrary
     // backend (issue #1680 Phase 3). The custom backend here is SPI-only.
-    let error = Tensor::F64(input.duplicate().unwrap())
+    let error = Tensor::from_typed::<f64>(input.duplicate().unwrap())
         .eigvals(&mut backend)
         .unwrap_err();
     assert!(matches!(
@@ -366,7 +370,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     assert_eq!(backend.eig_values_calls, 0);
 
     let err = backend
-        .lu_factor(&Tensor::F64(input.duplicate().unwrap()))
+        .lu_factor(&Tensor::from_typed::<f64>(input.duplicate().unwrap()))
         .unwrap_err();
     assert!(matches!(
         err,
@@ -377,7 +381,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     ));
 
     let err = backend
-        .svd_values(&Tensor::F64(input.duplicate().unwrap()))
+        .svd_values(&Tensor::from_typed::<f64>(input.duplicate().unwrap()))
         .unwrap_err();
     assert!(matches!(
         err,
@@ -387,7 +391,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
-    let owned_input = Tensor::F64(input.duplicate().unwrap());
+    let owned_input = Tensor::from_typed::<f64>(input.duplicate().unwrap());
 
     let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![7.0_f64, 11.0]).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64; 2]).unwrap();
@@ -494,7 +498,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     ));
 
     let err = backend
-        .eigh_values(&Tensor::F64(input.duplicate().unwrap()))
+        .eigh_values(&Tensor::from_typed::<f64>(input.duplicate().unwrap()))
         .unwrap_err();
     assert!(matches!(
         err,
@@ -504,13 +508,14 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
-    let pivots = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
+    let pivots =
+        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     let err = backend
         .lu_solve_prepared(
-            &Tensor::F64(input.duplicate().unwrap()),
-            &Tensor::F64(input.duplicate().unwrap()),
+            &Tensor::from_typed::<f64>(input.duplicate().unwrap()),
+            &Tensor::from_typed::<f64>(input.duplicate().unwrap()),
             &pivots,
-            &Tensor::F64(input.duplicate().unwrap()),
+            &Tensor::from_typed::<f64>(input.duplicate().unwrap()),
             false,
             false,
         )
@@ -567,8 +572,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("tensor reads")
     ));
 
-    let rhs =
-        Tensor::F64(TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap());
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap(),
+    );
     let solved = backend
         .solve_read(
             TensorRead::from_tensor(&owned_input),

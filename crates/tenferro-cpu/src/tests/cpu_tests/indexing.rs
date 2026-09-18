@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_gather_1d_indices() {
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
@@ -17,7 +17,7 @@ fn test_gather_1d_indices() {
 
 #[test]
 fn test_gather_accepts_i64_indices() {
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
@@ -37,7 +37,7 @@ fn test_gather_accepts_i64_indices() {
 
 #[test]
 fn test_gather_with_implicit_index_vector_dim() {
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let start_indices = Tensor::from_vec_col_major(vec![3], vec![4_i64, 1, 0]).unwrap();
@@ -58,11 +58,12 @@ fn test_gather_with_implicit_index_vector_dim() {
 
 #[test]
 fn test_scatter_accepts_i64_indices() {
-    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]).unwrap());
+    let operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![3, 3]).unwrap());
     let scatter_indices =
         Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]).unwrap();
-    let updates =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap());
+    let updates = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap(),
+    );
 
     let out = scatter(
         &operand,
@@ -81,11 +82,14 @@ fn test_scatter_accepts_i64_indices() {
 
 #[test]
 fn test_scatter_bool_error_lists_supported_data_dtypes() {
-    let operand =
-        Tensor::Bool(TypedTensor::from_vec_col_major(vec![3, 3], vec![false; 9]).unwrap());
+    let operand = Tensor::from_typed::<bool>(
+        TypedTensor::from_vec_col_major(vec![3, 3], vec![false; 9]).unwrap(),
+    );
     let scatter_indices =
         Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]).unwrap();
-    let updates = Tensor::Bool(TypedTensor::from_vec_col_major(vec![3], vec![true; 3]).unwrap());
+    let updates = Tensor::from_typed::<bool>(
+        TypedTensor::from_vec_col_major(vec![3], vec![true; 3]).unwrap(),
+    );
 
     let error = scatter(
         &operand,
@@ -105,9 +109,12 @@ fn test_scatter_bool_error_lists_supported_data_dtypes() {
 
 #[test]
 fn test_bool_index_error_lists_supported_index_dtypes() {
-    let operand =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![10.0, 20.0, 30.0]).unwrap());
-    let indices = Tensor::Bool(TypedTensor::from_vec_col_major(vec![1, 1], vec![true]).unwrap());
+    let operand = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![10.0, 20.0, 30.0]).unwrap(),
+    );
+    let indices = Tensor::from_typed::<bool>(
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![true]).unwrap(),
+    );
 
     let error = gather(&operand, &indices, &simple_gather_config()).unwrap_err();
     assert!(matches!(
@@ -124,11 +131,12 @@ fn test_bool_index_error_lists_supported_index_dtypes() {
 
 #[test]
 fn test_scatter_to_diagonal() {
-    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]).unwrap());
+    let operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![3, 3]).unwrap());
     let scatter_indices =
         Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]).unwrap();
-    let updates =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap());
+    let updates = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap(),
+    );
 
     let out = scatter(
         &operand,
@@ -148,10 +156,11 @@ fn test_scatter_to_diagonal() {
 
 #[test]
 fn test_scatter_clamps_negative_and_out_of_bounds_windows() {
-    let operand = Tensor::F64(TypedTensor::zeros(vec![4]).unwrap());
+    let operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![4]).unwrap());
     let scatter_indices = Tensor::from_vec_col_major(vec![3, 1], vec![-1_i64, 2, 4]).unwrap();
-    let updates =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap());
+    let updates = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap(),
+    );
     let config = ScatterConfig {
         update_window_dims: vec![],
         inserted_window_dims: vec![0],
@@ -169,7 +178,7 @@ fn test_scatter_clamps_negative_and_out_of_bounds_windows() {
 
 #[test]
 fn test_pad_adds_zero_edges() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
     let config = PadConfig {
@@ -191,7 +200,9 @@ fn test_pad_adds_zero_edges() {
 
 #[test]
 fn test_pad_with_interior_spacing() {
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+    );
     let config = PadConfig {
         edge_padding_low: vec![1],
         edge_padding_high: vec![1],
@@ -209,7 +220,7 @@ fn test_pad_with_interior_spacing() {
 
 #[test]
 fn test_dynamic_slice_clamps_starts() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(
             vec![4, 4],
             vec![
@@ -232,7 +243,7 @@ fn test_dynamic_slice_clamps_starts() {
 
 #[test]
 fn test_dynamic_slice_accepts_i64_starts() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(
             vec![4, 4],
             vec![
@@ -256,11 +267,12 @@ fn test_dynamic_slice_accepts_i64_starts() {
 
 #[test]
 fn test_dynamic_update_slice_clamps_starts() {
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 11.0, 12.0, 13.0, 14.0]).unwrap(),
     );
-    let update =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap());
+    let update = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap(),
+    );
     let starts = Tensor::from_vec_col_major(vec![1], vec![4_i64]).unwrap();
 
     let out = dynamic_update_slice(&operand, &update, &starts).unwrap();
@@ -271,7 +283,7 @@ fn test_dynamic_update_slice_clamps_starts() {
 
 #[test]
 fn test_slice_concatenate_and_reverse_edge_cases() {
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(
             vec![4, 3],
             vec![
@@ -293,9 +305,15 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
     assert_eq!(get_f64(&sliced, &[0, 1]), 9.0);
     assert_eq!(get_f64(&sliced, &[1, 1]), 11.0);
 
-    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap());
-    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0, 4.0]).unwrap());
-    let c = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![5.0, 6.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0, 4.0]).unwrap(),
+    );
+    let c = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![5.0, 6.0]).unwrap(),
+    );
     let concatenated = backend.concatenate(&[&a, &b, &c], 1).unwrap();
     assert_eq!(concatenated.shape(), &[2, 3]);
     assert_eq!(get_f64(&concatenated, &[0, 0]), 1.0);
@@ -310,8 +328,9 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
 
 #[test]
 fn test_structural_convert_helper_returns_result() {
-    let input =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.25_f32, -2.5_f32]).unwrap());
+    let input = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.25_f32, -2.5_f32]).unwrap(),
+    );
 
     let output = crate::structural::convert(&input, DType::F64).unwrap();
 
@@ -323,8 +342,9 @@ fn test_structural_convert_helper_returns_result() {
 
 #[test]
 fn test_structural_convert_rejects_lossy_dtype_projection() {
-    let input =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.5_f64]).unwrap());
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.5_f64]).unwrap(),
+    );
 
     let err = crate::structural::convert(&input, DType::I32).unwrap_err();
 
@@ -342,20 +362,23 @@ fn test_structural_convert_rejects_lossy_dtype_projection() {
 #[test]
 fn test_backend_cast_supports_real_complex_and_precision_changes() {
     let mut backend = CpuBackend::new();
-    let f32_input =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.25_f32, -2.5_f32]).unwrap());
-    let f64_input =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.5_f64]).unwrap());
-    let i64_input =
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![1_i64, -2_i64]).unwrap());
-    let c32_input = Tensor::C32(
+    let f32_input = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.25_f32, -2.5_f32]).unwrap(),
+    );
+    let f64_input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.5_f64]).unwrap(),
+    );
+    let i64_input = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1_i64, -2_i64]).unwrap(),
+    );
+    let c32_input = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)],
         )
         .unwrap(),
     );
-    let c64_input = Tensor::C64(
+    let c64_input = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)],
@@ -481,7 +504,7 @@ fn test_backend_cast_supports_real_complex_and_precision_changes() {
 fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
     let mut backend = CpuBackend::new();
 
-    let f64_bad = Tensor::F64(
+    let f64_bad = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(
             vec![4],
             vec![
@@ -505,8 +528,9 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
         } if message.contains("finite") || message.contains("out of i32 range")
     ));
 
-    let f32_bad =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![i64::MAX as f32]).unwrap());
+    let f32_bad = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![1], vec![i64::MAX as f32]).unwrap(),
+    );
     let err = backend.cast(&f32_bad, DType::I64).unwrap_err();
     assert!(matches!(
         err,
@@ -516,7 +540,7 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
         } if source.to_string().contains("out of i64 range")
     ));
 
-    let c64_bad = Tensor::C64(
+    let c64_bad = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(f64::INFINITY, 0.0)]).unwrap(),
     );
     let err = backend.cast(&c64_bad, DType::I64).unwrap_err();
@@ -623,9 +647,13 @@ fn test_backend_buffer_pool_controls_report_and_update_limits() {
 
 #[test]
 fn test_backend_mul_neg_conj_dispatch() {
-    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, -2.0]).unwrap());
-    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap());
-    let c = Tensor::C64(
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0, -2.0]).unwrap(),
+    );
+    let b = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
+    );
+    let c = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
@@ -650,10 +678,12 @@ fn test_backend_mul_neg_conj_dispatch() {
 #[test]
 fn test_backend_structural_ops_dispatch() {
     let mut backend = CpuBackend::new();
-    let a =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
+    let a = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+    );
 
-    let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![5.0]).unwrap());
+    let scalar =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![5.0]).unwrap());
     let broadcast = backend.broadcast_in_dim(&scalar, &[2, 2], &[]).unwrap();
     assert_eq!(broadcast.shape(), &[2, 2]);
     assert_eq!(get_f64(&broadcast, &[0, 0]), 5.0);
@@ -664,7 +694,9 @@ fn test_backend_structural_ops_dispatch() {
     assert_eq!(get_f64(&diag, &[0]), 1.0);
     assert_eq!(get_f64(&diag, &[1]), 4.0);
 
-    let d = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![10.0, 20.0]).unwrap());
+    let d = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![10.0, 20.0]).unwrap(),
+    );
     let embedded = backend.embed_diagonal(&d, 0, 1).unwrap();
     assert_eq!(embedded.shape(), &[2, 2]);
     assert_eq!(get_f64(&embedded, &[0, 0]), 10.0);
@@ -694,21 +726,23 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
         rhs_batch_dims: vec![],
     };
 
-    let a_f32 =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![1, 2], vec![1.0f32, 2.0]).unwrap());
-    let b_f32 =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0f32, 4.0]).unwrap());
+    let a_f32 = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![1, 2], vec![1.0f32, 2.0]).unwrap(),
+    );
+    let b_f32 = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0f32, 4.0]).unwrap(),
+    );
     let out_f32 = backend.dot_general(&a_f32, &b_f32, &config).unwrap();
     assert_eq!(out_f32.shape(), &[1, 1]);
 
-    let a_c32 = Tensor::C32(
+    let a_c32 = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::from_vec_col_major(
             vec![1, 2],
             vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
         )
         .unwrap(),
     );
-    let b_c32 = Tensor::C32(
+    let b_c32 = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::from_vec_col_major(
             vec![2, 1],
             vec![Complex32::new(3.0, 0.0), Complex32::new(4.0, 0.0)],
@@ -718,8 +752,12 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
     let out_c32 = backend.dot_general(&a_c32, &b_c32, &config).unwrap();
     assert_eq!(out_c32.shape(), &[1, 1]);
 
-    let f64_t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
-    let f32_t = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap());
+    let f64_t = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+    );
+    let f32_t = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap(),
+    );
     let err = backend.dot_general(&f64_t, &f32_t, &config).unwrap_err();
     assert!(matches!(
         err,
@@ -734,7 +772,7 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
 fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     let mut backend = CpuBackend::new();
 
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
@@ -745,11 +783,12 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     assert_eq!(get_f64(&gathered, &[0]), 10.0);
     assert_eq!(get_f64(&gathered, &[2]), 50.0);
 
-    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]).unwrap());
+    let operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![3, 3]).unwrap());
     let scatter_indices =
         Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]).unwrap();
-    let updates =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap());
+    let updates = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap(),
+    );
     let scattered = backend
         .scatter(
             &operand,
@@ -762,7 +801,7 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     assert_eq!(get_f64(&scattered, &[1, 1]), 6.0);
     assert_eq!(get_f64(&scattered, &[2, 2]), 7.0);
 
-    let input = Tensor::F64(
+    let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(
             vec![4, 4],
             vec![
@@ -782,7 +821,7 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
 #[test]
 fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
@@ -796,9 +835,10 @@ fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
     assert!(after_compile.retained_bytes > 0);
 
     backend.gather(&operand, &indices, &config).unwrap();
-    let scatter_operand = Tensor::F64(TypedTensor::zeros(vec![5]).unwrap());
-    let updates =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap());
+    let scatter_operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![5]).unwrap());
+    let updates = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap(),
+    );
     let scatter_config = ScatterConfig {
         update_window_dims: vec![],
         inserted_window_dims: vec![0],
@@ -806,7 +846,9 @@ fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
         index_vector_dim: 1,
     };
     let starts = Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
-    let update = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![7.0, 8.0]).unwrap());
+    let update = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![7.0, 8.0]).unwrap(),
+    );
     for _ in 0..2 {
         backend
             .scatter(&scatter_operand, &indices, &updates, &scatter_config)
@@ -833,7 +875,7 @@ fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
 #[test]
 fn indexed_plan_cache_reuses_gather_plan_through_exec_session() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let operand = Tensor::F64(
+    let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();

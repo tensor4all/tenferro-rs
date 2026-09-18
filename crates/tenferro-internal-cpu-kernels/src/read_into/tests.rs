@@ -150,9 +150,10 @@ fn replay_supports_mutable_views_and_preserves_fallback_errors() {
     .unwrap();
     assert_eq!(output_data, [-2.0, -3.0]);
 
-    let input =
-        Tensor::F32(tenferro_tensor::TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
-    let mut output = Tensor::F32(
+    let input = Tensor::from_typed::<f32>(
+        tenferro_tensor::TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap(),
+    );
+    let mut output = Tensor::from_typed::<f32>(
         tenferro_tensor::TypedTensor::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap(),
     );
     let mut fallback_called = false;
@@ -169,8 +170,9 @@ fn replay_supports_mutable_views_and_preserves_fallback_errors() {
     .unwrap_err();
     assert!(fallback_called);
 
-    let mut output =
-        Tensor::F64(tenferro_tensor::TypedTensor::from_vec_col_major(vec![1], vec![0.0]).unwrap());
+    let mut output = Tensor::from_typed::<f64>(
+        tenferro_tensor::TypedTensor::from_vec_col_major(vec![1], vec![0.0]).unwrap(),
+    );
     let error = elementwise_read_into_with_context(
         ElementwiseReadOp::Conj,
         &[],

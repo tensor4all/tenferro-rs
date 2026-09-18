@@ -3577,7 +3577,7 @@ fn apply_lu_pivots_cpu(
     pivots: &Tensor,
     inverse: bool,
 ) -> tenferro_tensor::Result<Tensor> {
-    let Tensor::I32(pivots) = pivots else {
+    let Some(pivots) = pivots.as_typed::<i32>() else {
         return Err(Error::dtype_mismatch(
             "lu_solve_prepared",
             DType::I32,

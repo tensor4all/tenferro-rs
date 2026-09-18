@@ -18,7 +18,7 @@ fn placed_matrix(values: Vec<f64>, domain: CpuDomainId) -> Tensor {
         device: None,
         cpu_affinity: Some(domain),
     });
-    Tensor::F64(tensor)
+    Tensor::from_typed::<f64>(tensor)
 }
 
 fn assert_selected(outputs: &[Tensor], selected: CpuDomainId) {
@@ -109,8 +109,8 @@ fn zero_extent_solve_output_is_still_tagged_as_a_fresh_allocation() {
             cpu_affinity: Some(remote),
         });
     }
-    let a = Tensor::F64(a);
-    let b = Tensor::F64(b);
+    let a = Tensor::from_typed::<f64>(a);
+    let b = Tensor::from_typed::<f64>(b);
 
     let output = with_cpu_linalg(&mut backend, |backend| {
         backend.full_piv_lu_solve(&a, &b, false)

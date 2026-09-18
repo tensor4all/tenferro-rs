@@ -9,15 +9,15 @@ use tenferro_tensor::{
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+    Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
@@ -29,7 +29,7 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 
 fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
     let len = shape.iter().product();
-    Tensor::F64(
+    Tensor::from_typed::<f64>(
         TypedTensor::from_buffer_col_major(
             shape,
             StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(7, len))),

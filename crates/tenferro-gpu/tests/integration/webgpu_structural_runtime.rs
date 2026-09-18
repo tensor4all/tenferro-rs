@@ -77,7 +77,7 @@ fn webgpu_to_contiguous_f32_materializes_a_noncompact_resident_view() {
     let input = backend
         .upload_host_tensor(tenferro_tensor::TensorRead::from_tensor(&host))
         .unwrap();
-    let Tensor::F32(input) = &input else {
+    let Some(input) = input.as_typed::<f32>() else {
         unreachable!("uploaded f32 tensor must remain f32");
     };
     let view = input.backend_region_view(vec![3], vec![2], 0).unwrap();

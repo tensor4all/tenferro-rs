@@ -316,10 +316,12 @@ fn broadcast_multiply_fallback_handles_permuted_elementwise_without_materializat
     let mut buffers = BufferPool::default();
     let lhs_data: Vec<f64> = (0..24).map(|i| (i + 1) as f64).collect();
     let rhs_data: Vec<f64> = (0..24).map(|i| (100 + i) as f64).collect();
-    let lhs =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 3, 4], lhs_data.clone()).unwrap());
-    let rhs =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![4, 2, 3], rhs_data.clone()).unwrap());
+    let lhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 3, 4], lhs_data.clone()).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![4, 2, 3], rhs_data.clone()).unwrap(),
+    );
 
     let out = broadcast_multiply_read_with_pool(
         &mut buffers,
@@ -354,9 +356,11 @@ fn broadcast_multiply_fallback_handles_permuted_elementwise_without_materializat
 #[test]
 fn broadcast_multiply_handles_scalar_full_output_pairs() {
     let mut buffers = BufferPool::default();
-    let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
-    let vector =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap());
+    let scalar =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
+    let vector = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap(),
+    );
 
     let lhs_scalar = broadcast_multiply_read_with_pool(
         &mut buffers,
@@ -384,7 +388,8 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
     .expect("scalar rhs broadcast multiply should materialize");
     assert_eq!(rhs_scalar.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
-    let other_scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
+    let other_scalar =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
     let both_scalar = broadcast_multiply_read_with_pool(
         &mut buffers,
         TensorRead::from_tensor(&scalar),
@@ -398,9 +403,10 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
     .expect("scalar-scalar broadcast multiply should materialize");
     assert_eq!(both_scalar.as_slice::<f64>().unwrap(), &[6.0, 6.0, 6.0]);
 
-    let complex_scalar =
-        Tensor::C64(TypedTensor::from_vec_col_major(vec![], vec![c64(0.5, -1.5)]).unwrap());
-    let complex_vector = Tensor::C64(
+    let complex_scalar = Tensor::from_typed::<tenferro_tensor::Complex64>(
+        TypedTensor::from_vec_col_major(vec![], vec![c64(0.5, -1.5)]).unwrap(),
+    );
+    let complex_vector = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![2], vec![c64(1.0, 2.0), c64(-3.0, 0.5)]).unwrap(),
     );
     let complex_value = broadcast_multiply_value_with_pool(
@@ -443,7 +449,9 @@ fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
 
     assert_eq!(out.shape, vec![2, 3, 4]);
     assert_ne!(out.strides, col_major_strides(&out.shape).unwrap());
-    let value = lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
+    let value =
+        lazy_outer_product_value(Tensor::from_typed::<f64>(out.base), out.shape, out.strides)
+            .unwrap();
     let tensor = crate::materialize_tensor_read(&mut buffers, "test", value.tensor_read()).unwrap();
     let expected: Vec<f64> = (0..4)
         .flat_map(|k| {
@@ -476,7 +484,9 @@ fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
 
     assert_eq!(out.shape, vec![4, 2, 3]);
     assert_ne!(out.strides, col_major_strides(&out.shape).unwrap());
-    let value = lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
+    let value =
+        lazy_outer_product_value(Tensor::from_typed::<f64>(out.base), out.shape, out.strides)
+            .unwrap();
     let tensor = crate::materialize_tensor_read(&mut buffers, "test", value.tensor_read()).unwrap();
     let expected: Vec<f64> = (0..3)
         .flat_map(|j| {
@@ -538,8 +548,12 @@ fn assert_unsupported_contains<T>(result: crate::Result<T>, op: &'static str, ex
 
 #[test]
 fn complex_ordered_ops_are_explicitly_rejected() {
-    let lhs = Tensor::C64(TypedTensor::from_vec_col_major(vec![1], vec![c64(1.0, 0.0)]).unwrap());
-    let rhs = Tensor::C64(TypedTensor::from_vec_col_major(vec![1], vec![c64(0.0, 1.0)]).unwrap());
+    let lhs = Tensor::from_typed::<tenferro_tensor::Complex64>(
+        TypedTensor::from_vec_col_major(vec![1], vec![c64(1.0, 0.0)]).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<tenferro_tensor::Complex64>(
+        TypedTensor::from_vec_col_major(vec![1], vec![c64(0.0, 1.0)]).unwrap(),
+    );
 
     for (op, result) in [
         ("maximum", maximum(&lhs, &rhs)),
@@ -682,18 +696,25 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
 
 #[test]
 fn read_as_cpu_view_covers_tensor_and_view_variants() {
-    let f32_tensor =
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap());
-    let f64_tensor =
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
-    let i32_tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap());
-    let i64_tensor = Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap());
-    let bool_tensor =
-        Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap());
-    let c32_tensor = Tensor::C32(
+    let f32_tensor = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap(),
+    );
+    let f64_tensor = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    );
+    let i32_tensor = Tensor::from_typed::<i32>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap(),
+    );
+    let i64_tensor = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap(),
+    );
+    let bool_tensor = Tensor::from_typed::<bool>(
+        TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
+    );
+    let c32_tensor = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::from_vec_col_major(vec![2], vec![c32(1.0, 0.0), c32(0.0, 1.0)]).unwrap(),
     );
-    let c64_tensor = Tensor::C64(
+    let c64_tensor = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![2], vec![c64(1.0, 0.0), c64(0.0, 1.0)]).unwrap(),
     );
 
@@ -846,12 +867,12 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     )
     .unwrap();
 
-    let f32_b_tensor = Tensor::F32(f32_b.duplicate().unwrap());
-    let f64_b_tensor = Tensor::F64(f64_b.duplicate().unwrap());
-    let c32_b_tensor = Tensor::C32(c32_b.duplicate().unwrap());
-    let c64_b_tensor = Tensor::C64(c64_b.duplicate().unwrap());
-    let f32_scalar_tensor = Tensor::F32(f32_scalar.duplicate().unwrap());
-    let f64_scalar_tensor = Tensor::F64(f64_scalar.duplicate().unwrap());
+    let f32_b_tensor = Tensor::from_typed::<f32>(f32_b.duplicate().unwrap());
+    let f64_b_tensor = Tensor::from_typed::<f64>(f64_b.duplicate().unwrap());
+    let c32_b_tensor = Tensor::from_typed::<tenferro_tensor::Complex32>(c32_b.duplicate().unwrap());
+    let c64_b_tensor = Tensor::from_typed::<tenferro_tensor::Complex64>(c64_b.duplicate().unwrap());
+    let f32_scalar_tensor = Tensor::from_typed::<f32>(f32_scalar.duplicate().unwrap());
+    let f64_scalar_tensor = Tensor::from_typed::<f64>(f64_scalar.duplicate().unwrap());
 
     let add_f32 = add_read_with_pool(
         &mut buffers,
@@ -1169,10 +1190,10 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 fn ordered_compare_fixed_dispatch_preserves_owned_and_view_semantics() {
     let lhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, f64::NAN]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 3.0, 4.0]).unwrap();
-    let Tensor::F64(lhs_typed) = &lhs else {
+    let Some(lhs_typed) = lhs.as_typed::<f64>() else {
         unreachable!("f64 fixture");
     };
-    let Tensor::F64(rhs_typed) = &rhs else {
+    let Some(rhs_typed) = rhs.as_typed::<f64>() else {
         unreachable!("f64 fixture");
     };
     let cases = [
@@ -1349,9 +1370,9 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     assert!(value_c64.is_view());
 
     let same_shape_i64_lhs =
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![2, 3]).unwrap());
+        Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![2], vec![2, 3]).unwrap());
     let same_shape_i64_rhs =
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![4, 5]).unwrap());
+        Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![2], vec![4, 5]).unwrap());
     let materialized = broadcast_multiply_value_with_pool(
         &mut buffers,
         TensorRead::from_tensor(&same_shape_i64_lhs),
@@ -1372,10 +1393,12 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
         &[8, 15]
     );
 
-    let bool_lhs =
-        Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap());
-    let bool_rhs =
-        Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, true]).unwrap());
+    let bool_lhs = Tensor::from_typed::<bool>(
+        TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
+    );
+    let bool_rhs = Tensor::from_typed::<bool>(
+        TypedTensor::from_vec_col_major(vec![2], vec![true, true]).unwrap(),
+    );
     assert!(broadcast_multiply_read_with_pool(
         &mut buffers,
         TensorRead::from_tensor(&bool_lhs),

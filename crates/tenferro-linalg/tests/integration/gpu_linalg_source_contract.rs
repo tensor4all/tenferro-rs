@@ -397,7 +397,7 @@ fn cuda_rrqr_has_no_payload_download_or_cpu_fallback() {
             "CUDA RRQR must not use payload host access, CPU fallback, or a single-worker launch: {banned}"
         );
     }
-    assert!(source.contains("Tensor::I64(status)"));
+    assert!(source.contains("Tensor::from_typed::<i64>(status)"));
     assert!(source.contains("rank remain device-resident"));
 }
 

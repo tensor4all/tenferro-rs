@@ -647,13 +647,13 @@ impl PjrtBuffer<'_> {
                 let col_major = self.download_host_vec::<f32>(&spec.shape)?;
                 let tensor = TypedTensor::from_vec_col_major(spec.shape.clone(), col_major)
                     .map_err(Error::from)?;
-                Ok(Tensor::F32(tensor))
+                Ok(Tensor::from_typed::<f32>(tensor))
             }
             DType::F64 => {
                 let col_major = self.download_host_vec::<f64>(&spec.shape)?;
                 let tensor = TypedTensor::from_vec_col_major(spec.shape.clone(), col_major)
                     .map_err(Error::from)?;
-                Ok(Tensor::F64(tensor))
+                Ok(Tensor::from_typed::<f64>(tensor))
             }
             other => Err(Error::UnsupportedDType {
                 dtype: other,

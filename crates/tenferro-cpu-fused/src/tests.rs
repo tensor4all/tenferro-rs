@@ -5,7 +5,9 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
     use tenferro_cpu_basic::reject_complex_ordered_dtypes;
     use tenferro_tensor::backend::ElementwiseFusionInst;
 
-    let input = Tensor::F32(TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0]).unwrap());
+    let input = Tensor::from_typed::<f32>(
+        TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0]).unwrap(),
+    );
 
     let wrong_input_count = ElementwiseFusionPlan::new(
         DType::F32,
@@ -81,10 +83,12 @@ fn elementwise_fusion_executes_i32_add_multiply_plan() {
     let rhs_data = (0..n)
         .map(|i| (i as i32).wrapping_add(1))
         .collect::<Vec<_>>();
-    let lhs =
-        Tensor::I32(TypedTensor::<i32>::from_vec_col_major(vec![n], lhs_data.clone()).unwrap());
-    let rhs =
-        Tensor::I32(TypedTensor::<i32>::from_vec_col_major(vec![n], rhs_data.clone()).unwrap());
+    let lhs = Tensor::from_typed::<i32>(
+        TypedTensor::<i32>::from_vec_col_major(vec![n], lhs_data.clone()).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<i32>(
+        TypedTensor::<i32>::from_vec_col_major(vec![n], rhs_data.clone()).unwrap(),
+    );
     let plan = ElementwiseFusionPlan::new(
         DType::I32,
         2,
@@ -120,8 +124,12 @@ fn elementwise_fusion_executes_reversed_first_input_plan() {
     let n = ELEMENTWISE_FUSION_MIN_ELEMENTS;
     let lhs_data = (0..n).map(|i| i as f64 + 1.0).collect::<Vec<_>>();
     let rhs_data = (0..n).map(|i| (i as f64 + 1.0) * 10.0).collect::<Vec<_>>();
-    let lhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(vec![n], lhs_data).unwrap());
-    let rhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(vec![n], rhs_data).unwrap());
+    let lhs = Tensor::from_typed::<f64>(
+        TypedTensor::<f64>::from_vec_col_major(vec![n], lhs_data).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::<f64>::from_vec_col_major(vec![n], rhs_data).unwrap(),
+    );
     let plan = ElementwiseFusionPlan::new(
         DType::F64,
         2,
@@ -152,10 +160,12 @@ fn elementwise_fusion_executes_f32_and_i64_erased_dtype_arms() {
     let n = ELEMENTWISE_FUSION_MIN_ELEMENTS;
     let f32_lhs_data = (0..n).map(|i| i as f32).collect::<Vec<_>>();
     let f32_rhs_data = (0..n).map(|i| (i as f32) * 2.0).collect::<Vec<_>>();
-    let f32_lhs =
-        Tensor::F32(TypedTensor::<f32>::from_vec_col_major(vec![n], f32_lhs_data.clone()).unwrap());
-    let f32_rhs =
-        Tensor::F32(TypedTensor::<f32>::from_vec_col_major(vec![n], f32_rhs_data.clone()).unwrap());
+    let f32_lhs = Tensor::from_typed::<f32>(
+        TypedTensor::<f32>::from_vec_col_major(vec![n], f32_lhs_data.clone()).unwrap(),
+    );
+    let f32_rhs = Tensor::from_typed::<f32>(
+        TypedTensor::<f32>::from_vec_col_major(vec![n], f32_rhs_data.clone()).unwrap(),
+    );
     let add_plan = ElementwiseFusionPlan::new(
         DType::F32,
         2,
@@ -181,10 +191,12 @@ fn elementwise_fusion_executes_f32_and_i64_erased_dtype_arms() {
     let i64_rhs_data = (0..n)
         .map(|i| (i as i64).wrapping_mul(3))
         .collect::<Vec<_>>();
-    let i64_lhs =
-        Tensor::I64(TypedTensor::<i64>::from_vec_col_major(vec![n], i64_lhs_data.clone()).unwrap());
-    let i64_rhs =
-        Tensor::I64(TypedTensor::<i64>::from_vec_col_major(vec![n], i64_rhs_data.clone()).unwrap());
+    let i64_lhs = Tensor::from_typed::<i64>(
+        TypedTensor::<i64>::from_vec_col_major(vec![n], i64_lhs_data.clone()).unwrap(),
+    );
+    let i64_rhs = Tensor::from_typed::<i64>(
+        TypedTensor::<i64>::from_vec_col_major(vec![n], i64_rhs_data.clone()).unwrap(),
+    );
     let i64_plan = ElementwiseFusionPlan::new(
         DType::I64,
         2,
@@ -214,8 +226,9 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
     let mut buffers = BufferPool::default();
     let n = ELEMENTWISE_FUSION_MIN_ELEMENTS;
     let bool_data = (0..n).map(|i| i % 3 == 0).collect::<Vec<_>>();
-    let bool_input =
-        Tensor::Bool(TypedTensor::<bool>::from_vec_col_major(vec![n], bool_data.clone()).unwrap());
+    let bool_input = Tensor::from_typed::<bool>(
+        TypedTensor::<bool>::from_vec_col_major(vec![n], bool_data.clone()).unwrap(),
+    );
     let bool_plan = ElementwiseFusionPlan::new(
         DType::Bool,
         1,
@@ -245,11 +258,11 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
     let c32_rhs_data = (0..n)
         .map(|i| num_complex::Complex32::new(2.0, i as f32))
         .collect::<Vec<_>>();
-    let c32_lhs = Tensor::C32(
+    let c32_lhs = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::<num_complex::Complex32>::from_vec_col_major(vec![n], c32_lhs_data.clone())
             .unwrap(),
     );
-    let c32_rhs = Tensor::C32(
+    let c32_rhs = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::<num_complex::Complex32>::from_vec_col_major(vec![n], c32_rhs_data.clone())
             .unwrap(),
     );
@@ -287,11 +300,11 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
     let c64_rhs_data = (0..n)
         .map(|i| num_complex::Complex64::new(1.0, i as f64))
         .collect::<Vec<_>>();
-    let c64_lhs = Tensor::C64(
+    let c64_lhs = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::<num_complex::Complex64>::from_vec_col_major(vec![n], c64_lhs_data.clone())
             .unwrap(),
     );
-    let c64_rhs = Tensor::C64(
+    let c64_rhs = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::<num_complex::Complex64>::from_vec_col_major(vec![n], c64_rhs_data.clone())
             .unwrap(),
     );
@@ -325,8 +338,12 @@ fn elementwise_fusion_returns_none_for_erased_unsupported_ops() {
 
     let mut buffers = BufferPool::default();
     let n = ELEMENTWISE_FUSION_MIN_ELEMENTS;
-    let lhs = Tensor::I32(TypedTensor::<i32>::from_vec_col_major(vec![n], vec![6; n]).unwrap());
-    let rhs = Tensor::I32(TypedTensor::<i32>::from_vec_col_major(vec![n], vec![2; n]).unwrap());
+    let lhs = Tensor::from_typed::<i32>(
+        TypedTensor::<i32>::from_vec_col_major(vec![n], vec![6; n]).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<i32>(
+        TypedTensor::<i32>::from_vec_col_major(vec![n], vec![2; n]).unwrap(),
+    );
     let divide_plan = ElementwiseFusionPlan::new(
         DType::I32,
         2,
@@ -348,7 +365,7 @@ fn elementwise_fusion_returns_none_for_erased_unsupported_ops() {
         "integer divide is not owned by erased strided fusion"
     );
 
-    let complex = Tensor::C64(
+    let complex = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::<num_complex::Complex64>::from_vec_col_major(
             vec![n],
             vec![num_complex::Complex64::new(1.0, 0.0); n],

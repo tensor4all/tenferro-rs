@@ -18,7 +18,7 @@ use tenferro_tensor::backend::BackendSessionHost as _;
 use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead, TensorStructural};
 
 fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
-    let Tensor::F32(tensor) = tensor else {
+    let Some(tensor) = tensor.as_typed::<f32>() else {
         panic!("P7 provider tests use f32 tensors")
     };
     (tensor.allocation_domain(), tensor.allocation_id())
@@ -35,7 +35,7 @@ fn cuda_tensor_view_keeps_the_single_root_identity() {
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let (domain, allocation) = identity(&input);
 
-    let Tensor::F32(tensor) = &input else {
+    let Some(tensor) = input.as_typed::<f32>() else {
         panic!("provider test uses f32 tensors")
     };
     let view = tensor.as_view();
@@ -52,7 +52,7 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
     let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
-    let Tensor::F32(tensor) = &input else {
+    let Some(tensor) = input.as_typed::<f32>() else {
         panic!("provider test uses f32 tensors")
     };
 

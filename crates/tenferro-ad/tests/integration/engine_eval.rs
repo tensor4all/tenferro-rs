@@ -15,8 +15,10 @@ fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
             &[(&lhs_value, DType::F64, &[]), (&rhs_value, DType::F64, &[])],
         )
         .unwrap();
-    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
-    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
+    let lhs =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
+    let rhs =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
 
     let runtime = runtime_from_cpu_backend(&CpuBackend::with_threads(1).unwrap());
     let output = run_compiled_one(&runtime, &program, &[&lhs, &rhs])

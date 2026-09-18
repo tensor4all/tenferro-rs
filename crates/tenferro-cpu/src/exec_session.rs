@@ -57,10 +57,14 @@ fn allocate_dot_output(
     shape: Vec<usize>,
 ) -> crate::Result<Tensor> {
     match dtype {
-        DType::F32 => pooled_zero_tensor(buffers, shape).map(Tensor::F32),
-        DType::F64 => pooled_zero_tensor(buffers, shape).map(Tensor::F64),
-        DType::C32 => pooled_zero_tensor(buffers, shape).map(Tensor::C32),
-        DType::C64 => pooled_zero_tensor(buffers, shape).map(Tensor::C64),
+        DType::F32 => pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<f32>),
+        DType::F64 => pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<f64>),
+        DType::C32 => {
+            pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<tenferro_tensor::Complex32>)
+        }
+        DType::C64 => {
+            pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<tenferro_tensor::Complex64>)
+        }
         dtype => Err(crate::Error::unsupported_dtype(
             "dot_general",
             dtype,
