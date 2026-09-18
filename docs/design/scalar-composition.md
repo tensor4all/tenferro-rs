@@ -1328,6 +1328,78 @@ resource-boundary decision #1789 owns, which is why this section calls the remov
 large. The test also pins the property the pool boundary depends on: the erased wrapper adds no allocation, so
 a change that starts allocating there fails a test instead of passing review unnoticed.
 
+### 5.16b The measured representation decision
+
+Section 5.16a gated the removal on a representation that does not exist, and measured the cost of the
+proxy `(DType, Box<dyn Any + Send + Sync>)`. A prototype of an inline representation changes that
+picture, so the decision is recorded here with the measurement that produced it.
+
+**The structural fact the gate missed.** `TypedTensor<T, R>` has the same size for every preset `T`:
+all seven instantiations measure 1456 bytes at alignment 8, because the element type is carried by
+`DescriptorRecord.dtype: DType` and `T` appears only as `PhantomData<T>`. Breaking the handle down:
+
+| Component | Bytes |
+| --- | --- |
+| `Tensor` (today's seven-variant enum) | 1464 = 1456 + tag |
+| `TypedTensor<f64>` | 1456 |
+| `OwnedTensorGroup<DynRank>` | 1208 |
+| `AllocationGroup` | 1168 |
+| ├ `SmallVec<[Option<DescriptorRecord>; 1]>` (inlines one 928-byte `DescriptorRecord`) | 944 |
+| └ `SmallVec<[Option<OwnedStorage>; 1]>` (inlines one 208-byte `OwnedStorage`) | 224 |
+| `TensorLayout<DynRank>` | 168 (`ShapeVec` 80 + `StrideVec` 80 + offset 8) |
+| `Placement` | 80 |
+
+`AllocationGroup` keeps the descriptor and the root pin inline on purpose: its own comment says the
+common one-root one-descriptor tensor must not pay a per-result metadata allocation on CPU hot paths.
+The handle is large because the allocation is zero.
+
+**Prototype and measurements.** A tag plus the three T-independent fields
+(`TensorCore { group, layout, placement }`), moved out of a `TypedTensor<T>` with a plain field move,
+measures:
+
+| Representation | `size_of` | convert | access | move 1e6 | wrap+drop 1e6 |
+| --- | --- | --- | --- | --- | --- |
+| today's seven-variant enum | 1464 | 0 alloc / 0 B | – | 74.2 ms | 10.70 s |
+| inline tag+core prototype | 1464 | 0 alloc / 0 B | 0 alloc | 70.0 ms | 10.52 s |
+| boxed `(DType, Box<dyn Any>)` | 40 | 1 alloc / 1456 B | – | 9.4 ms (box alone) | 10.68 s |
+
+The wrap+drop column is dominated by the storage path, so the box's extra allocation is about 1%
+there and +1 allocation per tensor in isolation. The move column favors the box because it moves a
+16-byte pointer instead of 1464 bytes; that is the only thing the box buys, and it is paid for with a
+per-tensor allocation outside the accounted pool. The prototype round-trips f64 values, refuses a
+mismatched tag, and keeps `size_of` equal to today's `Tensor`. A one-byte `PresetTag` is what holds
+1464: tagging with `DType` itself (24 bytes, because of `External(TypeId)`) grows the struct to 1480.
+
+**Decision.** The removal takes the **inline** shape. `TypedTensor<T, R>` is now a
+`#[repr(transparent)]` wrapper over a shared `TensorCore<R>` that holds the three T-independent
+fields, so the erased payload can be one tag plus that core rather than a boxed trait object. The
+consequences for the gate in 5.16a are:
+
+- The inline payload performs no allocation, so the representation does not move tensor metadata
+  outside the pooled path, and the "an erased payload for device-resident tensors does not exist"
+  argument no longer gates the representation itself.
+- What the removal must still preserve is the existing ownership contract: allocation and owner
+  identity, the descriptor and placement, release to the originating owner, drop order, and device
+  retirement. Only a genuinely new ownership question goes back to #1789; the inline shape is not a
+  blanket reason to wait for that issue.
+- What the boxed proxy would have bought — a 16-byte wrapper — is not free and is not adopted.
+
+**Still open, and not claimed as decided here.**
+
+- `Tensor` also holds `DType::External(ErasedHostTensor)`, so one payload has to carry both the
+  preset core and the external shape. The planned shape is a private two-branch payload
+  (`Native(TensorCore<DynRank>)` / `External(ErasedHostTensor, DType)`); the size of the finished
+  payload is therefore not yet measured, and the "same size as today" claim is established only for
+  the preset-only prototype.
+- `TensorCore` and the `Deref`/`DerefMut` impls that keep the existing field reads working are a
+  public-surface change. Either they are accepted with the public-boundary inventory regenerated, or
+  the field reads move to crate-private accessors. The current step takes the `Deref` route because
+  it is the smaller diff; the alternative is mechanical but wider.
+- The accessor's safety argument rests on `#[repr(transparent)]` plus the dtype invariant: the tag
+  proves the element type, and the wrapper guarantees that `&TensorCore<R>` and
+  `&TypedTensor<T, R>` have the same address, size and alignment. A production reborrow keeps the
+  `unsafe` to that one place and documents it; a focused Miri run is the evidence to add.
+
 ### 5.17a What the removal still needs, measured
 
 The three accessors tag-based dispatch was missing now exist — `Tensor::as_typed_mut`,

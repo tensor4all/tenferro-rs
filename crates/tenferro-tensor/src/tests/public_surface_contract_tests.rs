@@ -74,25 +74,28 @@ fn typed_tensor_uses_one_typed_group_owner() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = fs::read_to_string(crate_dir.join("src/types.rs"))
         .expect("tenferro-tensor types source must be readable");
+    // The typed owner group lives on `TensorCore`, which `TypedTensor` wraps as a
+    // zero-cost typed view; the single-owner invariants are the same ones, checked on the
+    // definition that now carries the fields.
     let typed_tensor = source
-        .split_once("pub struct TypedTensor<T, R: TensorRank = DynRank>")
-        .expect("TypedTensor definition must exist")
+        .split_once("pub struct TensorCore<R: TensorRank = DynRank>")
+        .expect("TensorCore definition must exist")
         .1
         .split_once("/// The sole owner handle")
-        .expect("TypedTensor definition must precede OwnedTensorGroup")
+        .expect("TensorCore definition must precede OwnedTensorGroup")
         .0;
 
     assert!(
         !typed_tensor.contains("buffer: StorageBuffer<T>"),
-        "TypedTensor must not retain a second physical buffer owner"
+        "the tensor core must not retain a second physical buffer owner"
     );
     assert!(
         !typed_tensor.contains("group: Option<OwnedTensorGroup<R>>"),
-        "TypedTensor must always carry its typed owner group"
+        "the tensor core must always carry its typed owner group"
     );
     assert!(
         typed_tensor.contains("group: OwnedTensorGroup<R>"),
-        "TypedTensor must own one typed allocation group"
+        "the tensor core must own one typed allocation group"
     );
     assert!(
         !source.contains("slot: Option<DescriptorSlot>"),
