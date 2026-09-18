@@ -20,7 +20,7 @@ use tenferro_tensor::{
 };
 
 use super::identity::GpuExtensionCapability;
-use super::runtime::RawContextRestore;
+use super::{gemm, runtime::RawContextRestore};
 use super::{
     raw, session_cubecl, CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime,
     CudaRuntimeIdentity,
@@ -547,6 +547,11 @@ delegate!(TensorDot {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor>;
+    fn dot_general_read(
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor>;
     fn dot_general_read_into_accum(
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
@@ -624,6 +629,38 @@ macro_rules! delegate_cached {
                     <CudaBackend as SessionCachedDot>::$method(self.backend, $($arg),*)
                 }
             )*
+
+            // `CudaBackend` gets `SessionCachedDot` from the blanket impl over
+            // `TensorBackend`, so the read-based cached entries are overridden
+            // here rather than on the backend itself.
+            fn dot_general_read_cached(
+                &mut self,
+                _cache_slot: Option<usize>,
+                lhs: TensorRead<'_>,
+                rhs: TensorRead<'_>,
+                config: &DotGeneralConfig,
+            ) -> crate::Result<Tensor> {
+                gemm::dot_general_read_allocating(self.backend, lhs, rhs, config, false, false)
+            }
+
+            fn dot_general_with_conj_read_cached(
+                &mut self,
+                _cache_slot: Option<usize>,
+                lhs: TensorRead<'_>,
+                rhs: TensorRead<'_>,
+                config: &DotGeneralConfig,
+                lhs_conj: bool,
+                rhs_conj: bool,
+            ) -> crate::Result<Tensor> {
+                gemm::dot_general_read_allocating(
+                    self.backend,
+                    lhs,
+                    rhs,
+                    config,
+                    lhs_conj,
+                    rhs_conj,
+                )
+            }
         }
     };
 }
@@ -635,24 +672,10 @@ delegate_cached! {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor>;
-    fn dot_general_read_cached(
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor>;
     fn dot_general_with_conj_cached(
         cache_slot: Option<usize>,
         lhs: &Tensor,
         rhs: &Tensor,
-        config: &DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
-    ) -> crate::Result<Tensor>;
-    fn dot_general_with_conj_read_cached(
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
         lhs_conj: bool,
         rhs_conj: bool,

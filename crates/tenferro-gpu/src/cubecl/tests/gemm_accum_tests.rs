@@ -367,6 +367,55 @@ fn test_accum_view_operands_offset_regions_f64() {
 
 #[test]
 #[ignore]
+fn test_read_view_operands_allocating_f64() {
+    // `TensorDot::dot_general_read` must contract strided view operands in
+    // place; the `TensorDot` default materializes them through
+    // `to_contiguous_read` first. lhs: [2,3] region at offset 5 with leading
+    // dimension 4; rhs: [3,2] region at offset 7 with leading dimension 3.
+    let mut gpu = gpu_backend();
+    let mut cpu = cpu_backend();
+    let lhs_host = flat_f64(32, -3.0);
+    let rhs_host = flat_f64(32, 1.5);
+
+    let lhs_compact: Vec<f64> = (0..2 * 3)
+        .map(|i| region_get(&lhs_host, 5, &[1, 4], &[i % 2, i / 2]))
+        .collect();
+    let rhs_compact: Vec<f64> = (0..3 * 2)
+        .map(|i| region_get(&rhs_host, 7, &[1, 3], &[i % 3, i / 3]))
+        .collect();
+    let expected = cpu
+        .dot_general(
+            &tensor_f64(vec![2, 3], lhs_compact),
+            &tensor_f64(vec![3, 2], rhs_compact),
+            &matmul_config(),
+        )
+        .unwrap();
+
+    let lhs_gpu = upload(&gpu, &tensor_f64(vec![32], lhs_host));
+    let rhs_gpu = upload(&gpu, &tensor_f64(vec![32], rhs_host));
+    let (Tensor::F64(lhs_t), Tensor::F64(rhs_t)) = (&lhs_gpu, &rhs_gpu) else {
+        unreachable!()
+    };
+    let lhs_view = lhs_t
+        .backend_region_view(vec![2, 3], vec![1, 4], 5)
+        .unwrap();
+    let rhs_view = rhs_t
+        .backend_region_view(vec![3, 2], vec![1, 3], 7)
+        .unwrap();
+    let actual = gpu
+        .dot_general_read(
+            TensorRead::from_view(TensorView::F64(lhs_view)),
+            TensorRead::from_view(TensorView::F64(rhs_view)),
+            &matmul_config(),
+        )
+        .unwrap();
+
+    let actual = download(&gpu, &actual);
+    assert_tensor_close(&actual, &expected, 1e-10);
+}
+
+#[test]
+#[ignore]
 fn test_accum_block_diagonal_regions_of_one_buffer_f64() {
     // Two successive accumulations into disjoint diagonal blocks of ONE flat
     // device buffer holding a col-major [4,4] matrix; off-block elements and

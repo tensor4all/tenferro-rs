@@ -755,6 +755,46 @@ fn write_operand<'a, 'b, T: CutensorScalar>(
 /// GPU-resident device buffer. Host-backed views, negative view strides, and
 /// out-of-bounds regions are explicit errors — no hidden host transfer and no
 /// silent fallback.
+/// Allocate the dot-general output and contract straight from the reads.
+///
+/// The `TensorDot` default implementations run any strided read through
+/// `to_contiguous_read` before contracting, which turns every view operand into
+/// a materialized copy. The device descriptors already carry the operand
+/// strides (see [`dot_general_read_into_accum`]), so view operands are consumed
+/// in place here instead.
+pub(super) fn dot_general_read_allocating(
+    backend: &mut CudaBackend,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<Tensor> {
+    if let (Some(lhs_owned), Some(rhs_owned)) = (lhs.as_tensor(), rhs.as_tensor()) {
+        return dot_general_with_conj(backend, lhs_owned, rhs_owned, config, lhs_conj, rhs_conj);
+    }
+    let dtype = lhs.dtype();
+    let shape =
+        tenferro_tensor::backend::dot_general_output_shape(lhs.shape(), rhs.shape(), config, OP)?;
+    let mut out = match dtype {
+        DType::F32 => Tensor::F32(alloc_output::<f32>(backend.runtime(), &shape)?),
+        DType::F64 => Tensor::F64(alloc_output::<f64>(backend.runtime(), &shape)?),
+        DType::C32 => Tensor::C32(alloc_output::<Complex32>(backend.runtime(), &shape)?),
+        DType::C64 => Tensor::C64(alloc_output::<Complex64>(backend.runtime(), &shape)?),
+        dtype => return Err(unsupported_dtype(OP, dtype)),
+    };
+    let accumulation = DotGeneralAccumulation {
+        lhs_conj,
+        rhs_conj,
+        ..DotGeneralAccumulation::overwrite(dtype)?
+    };
+    {
+        let mut out_write = TensorWrite::from_tensor(&mut out);
+        dot_general_read_into_accum(backend, &lhs, &rhs, config, accumulation, &mut out_write)?;
+    }
+    Ok(out)
+}
+
 pub(super) fn dot_general_read_into_accum(
     backend: &CudaBackend,
     lhs: &TensorRead<'_>,

@@ -5956,6 +5956,17 @@ impl TensorDot for CudaBackend {
         gemm::dot_general_with_conj(self, lhs, rhs, config, lhs_conj, rhs_conj)
     }
 
+    // Contract strided reads in place instead of materializing them through
+    // `to_contiguous_read` (the `TensorDot` default behavior).
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        gemm::dot_general_read_allocating(self, lhs, rhs, config, false, false)
+    }
+
     // CUDA-native accumulation (tensor4all/tenferro-rs#1287): one cuTENSOR
     // contraction with C = D = out; no temporary result tensor, no host
     // transfer. Stage 2 accepts compact owned tensors and borrowed strided
@@ -7159,7 +7170,33 @@ impl BackendSession for CudaBackend {
     }
 }
 
-impl BackendCachedDot for CudaBackend {}
+impl BackendCachedDot for CudaBackend {
+    // Read-based cached dot paths keep strided operands on device; the plan
+    // cache is per backend, so the runtime cache slot stays unused.
+    fn dot_general_read_cached(
+        &mut self,
+        _cache: &mut Self::RuntimeCache,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        gemm::dot_general_read_allocating(self, lhs, rhs, config, false, false)
+    }
+
+    fn dot_general_with_conj_read_cached(
+        &mut self,
+        _cache: &mut Self::RuntimeCache,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        gemm::dot_general_read_allocating(self, lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+}
 
 impl TensorBuffer for CudaBackend {}
 
