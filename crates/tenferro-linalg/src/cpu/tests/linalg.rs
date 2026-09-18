@@ -579,10 +579,12 @@ fn eigh_read_canonicalizes_transposed_host_view_before_lapack() {
     assert_eq!(outputs[0].shape(), &[2]);
     assert_eq!(outputs[1].shape(), &[2, 2]);
 
-    let values = match &outputs[0] {
-        Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
-        _ => panic!("expected f64 eigenvalues"),
-    };
+    let values = outputs[0]
+        .as_typed::<f64>()
+        .expect("expected f64 eigenvalues")
+        .host_data()
+        .unwrap()
+        .to_vec();
     let vectors = matrix_f64_from_tensor(&outputs[1], 2, 2);
     let recon = matmul_f64(
         &matmul_f64(&vectors, &diag_f64(&values), 2, 2, 2),
@@ -1461,10 +1463,11 @@ fn test_triangular_solve_lower() {
     .unwrap();
 
     assert_eq!(x.shape(), &[3, 1]);
-    let x_data = match &x {
-        Tensor::F64(inner) => inner.host_data().unwrap(),
-        _ => panic!("expected f64 tensor"),
-    };
+    let x_data = x
+        .as_typed::<f64>()
+        .expect("expected f64 tensor")
+        .host_data()
+        .unwrap();
     let recon = matmul_f64(&l_data, x_data, 3, 3, 1);
     for (actual, expected) in recon.iter().zip(b_data.iter()) {
         assert_f64_close_tol(*actual, *expected, 1.0e-10);
@@ -1485,10 +1488,12 @@ fn test_triangular_solve_right_side_unit_transpose() {
     .unwrap();
 
     assert_eq!(x.shape(), &[1, 2]);
-    let x_data = match &x {
-        Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
-        _ => panic!("expected f64 tensor"),
-    };
+    let x_data = x
+        .as_typed::<f64>()
+        .expect("expected f64 tensor")
+        .host_data()
+        .unwrap()
+        .to_vec();
     let recon = matmul_f64(&x_data, &transpose_f64(&a_data, 2, 2), 1, 2, 2);
     for (actual, expected) in recon.iter().zip(b_data.iter()) {
         assert_f64_close_tol(*actual, *expected, 1.0e-10);
@@ -1541,10 +1546,11 @@ fn test_triangular_solve_covers_all_real_branch_combinations() {
                     })
                     .unwrap();
 
-                    let x_data = match &x {
-                        Tensor::F64(inner) => inner.host_data().unwrap(),
-                        _ => panic!("expected f64 tensor"),
-                    };
+                    let x_data = x
+                        .as_typed::<f64>()
+                        .expect("expected f64 tensor")
+                        .host_data()
+                        .unwrap();
                     for (actual, expected) in x_data.iter().zip(expected_x.iter()) {
                         assert_f64_close_tol(*actual, *expected, 1.0e-10);
                     }
@@ -1615,10 +1621,11 @@ fn test_real_solve_non_batched() {
     let mut backend = CpuBackend::new();
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
 
-    let x_data = match &x {
-        Tensor::F64(inner) => inner.host_data().unwrap(),
-        _ => panic!("expected f64 tensor"),
-    };
+    let x_data = x
+        .as_typed::<f64>()
+        .expect("expected f64 tensor")
+        .host_data()
+        .unwrap();
     let recon = matmul_f64(&a_data, x_data, 2, 2, 2);
     for (actual, expected) in recon.iter().zip(b_data.iter()) {
         assert_f64_close_tol(*actual, *expected, 1.0e-10);
@@ -1729,10 +1736,12 @@ fn test_real_eigh() {
     assert_eq!(out[0].shape(), &[2]);
     assert_eq!(out[1].shape(), &[2, 2]);
 
-    let values = match &out[0] {
-        Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
-        _ => panic!("expected f64 tensor"),
-    };
+    let values = out[0]
+        .as_typed::<f64>()
+        .expect("expected f64 tensor")
+        .host_data()
+        .unwrap()
+        .to_vec();
     let vectors = matrix_f64_from_tensor(&out[1], 2, 2);
     let recon = matmul_f64(
         &matmul_f64(&vectors, &diag_f64(&values), 2, 2, 2),
@@ -1915,10 +1924,12 @@ fn test_complex_triangular_solve_right_side_unit_transpose() {
     .unwrap();
 
     assert_eq!(x.shape(), &[1, 2]);
-    let x_data = match &x {
-        Tensor::C64(inner) => inner.host_data().unwrap().to_vec(),
-        _ => panic!("expected c64 tensor"),
-    };
+    let x_data = x
+        .as_typed::<Complex64>()
+        .expect("expected c64 tensor")
+        .host_data()
+        .unwrap()
+        .to_vec();
     let recon = matmul_c64(&x_data, &transpose_c64(&a_data, 2, 2), 1, 2, 2);
     for (actual, expected) in recon.iter().zip(b_data.iter()) {
         assert_c64_close_tol(*actual, *expected, 1.0e-10);
@@ -1986,10 +1997,11 @@ fn test_triangular_solve_covers_all_complex_branch_combinations() {
                     })
                     .unwrap();
 
-                    let x_data = match &x {
-                        Tensor::C64(inner) => inner.host_data().unwrap(),
-                        _ => panic!("expected c64 tensor"),
-                    };
+                    let x_data = x
+                        .as_typed::<Complex64>()
+                        .expect("expected c64 tensor")
+                        .host_data()
+                        .unwrap();
                     for (actual, expected) in x_data.iter().zip(expected_x.iter()) {
                         assert_c64_close_tol(*actual, *expected, 1.0e-10);
                     }

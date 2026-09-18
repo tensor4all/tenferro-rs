@@ -40,16 +40,25 @@ fn assert_device_backed(tensor: &Tensor) {
         matches!(buffer, StorageBuffer::Backend(buffer) if buffer.backend_family() == "cubecl")
     }
 
-    match tensor {
-        Tensor::F32(inner) => assert!(is_cubecl(inner.buffer())),
-        Tensor::F64(inner) => assert!(is_cubecl(inner.buffer())),
-        Tensor::I64(inner) => assert!(is_cubecl(inner.buffer())),
-        Tensor::C32(inner) => assert!(is_cubecl(inner.buffer())),
-        Tensor::C64(inner) => assert!(is_cubecl(inner.buffer())),
-        Tensor::I32(inner) => assert!(is_cubecl(inner.buffer())),
-        Tensor::Bool(inner) => assert!(is_cubecl(inner.buffer())),
+    fn assert_typed<T: tenferro_tensor::TensorScalar>(tensor: &Tensor) {
+        assert!(is_cubecl(
+            tensor
+                .as_typed::<T>()
+                .expect("the dtype guard selects this arm")
+                .buffer()
+        ));
+    }
+
+    match tensor.dtype() {
+        tenferro_tensor::DType::F32 => assert_typed::<f32>(tensor),
+        tenferro_tensor::DType::F64 => assert_typed::<f64>(tensor),
+        tenferro_tensor::DType::I64 => assert_typed::<i64>(tensor),
+        tenferro_tensor::DType::C32 => assert_typed::<num_complex::Complex32>(tensor),
+        tenferro_tensor::DType::C64 => assert_typed::<num_complex::Complex64>(tensor),
+        tenferro_tensor::DType::I32 => assert_typed::<i32>(tensor),
+        tenferro_tensor::DType::Bool => assert_typed::<bool>(tensor),
         // A caller-owned payload has no device buffer to inspect.
-        Tensor::External(..) => panic!("a caller-owned payload is not a device tensor"),
+        _ => panic!("a caller-owned payload is not a device tensor"),
     }
 }
 

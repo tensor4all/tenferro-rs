@@ -4,17 +4,21 @@ use tenferro_gpu::{webgpu::upload_webgpu_tensor, webgpu::WebGpuBackend};
 use tenferro_tensor::{AllocationId, DType, Tensor, TensorRead, TensorStructural};
 
 fn allocation_id(tensor: &Tensor) -> Option<AllocationId> {
-    match tensor {
-        Tensor::F32(tensor) => tensor.allocation_id(),
-        Tensor::F64(tensor) => tensor.allocation_id(),
-        Tensor::I32(tensor) => tensor.allocation_id(),
-        Tensor::I64(tensor) => tensor.allocation_id(),
-        Tensor::Bool(tensor) => tensor.allocation_id(),
-        Tensor::C32(tensor) => tensor.allocation_id(),
-        Tensor::C64(tensor) => tensor.allocation_id(),
+    fn typed<T: tenferro_tensor::TensorScalar>(tensor: &Tensor) -> Option<AllocationId> {
+        tensor.as_typed::<T>().and_then(|t| t.allocation_id())
+    }
+
+    match tensor.dtype() {
+        DType::F32 => typed::<f32>(tensor),
+        DType::F64 => typed::<f64>(tensor),
+        DType::I32 => typed::<i32>(tensor),
+        DType::I64 => typed::<i64>(tensor),
+        DType::Bool => typed::<bool>(tensor),
+        DType::C32 => typed::<num_complex::Complex32>(tensor),
+        DType::C64 => typed::<num_complex::Complex64>(tensor),
         // The fixture covers the preset dtypes; an externally defined payload has
         // no fixture and would change what this test asserts.
-        Tensor::External(..) => None,
+        _ => None,
     }
 }
 
