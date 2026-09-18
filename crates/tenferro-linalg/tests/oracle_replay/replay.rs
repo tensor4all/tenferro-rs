@@ -1239,26 +1239,26 @@ fn compare_tensor(
             expected.shape
         ));
     }
-    match actual {
-        Tensor::F32(_) => compare_real_slice(
+    match actual.dtype() {
+        DType::F32 => compare_real_slice(
             actual.as_slice::<f32>().map_err(to_string)?,
             &tensor_data_as_col_major::<f32>(expected)?,
             rtol,
             atol,
         ),
-        Tensor::F64(_) => compare_real_slice(
+        DType::F64 => compare_real_slice(
             actual.as_slice::<f64>().map_err(to_string)?,
             &tensor_data_as_col_major::<f64>(expected)?,
             rtol,
             atol,
         ),
-        Tensor::C32(_) => compare_complex_slice(
+        DType::C32 => compare_complex_slice(
             actual.as_slice::<Complex32>().map_err(to_string)?,
             &complex_tensor_data_as_col_major::<f32>(expected)?,
             rtol,
             atol,
         ),
-        Tensor::C64(_) => compare_complex_slice(
+        DType::C64 => compare_complex_slice(
             actual.as_slice::<Complex64>().map_err(to_string)?,
             &complex_tensor_data_as_col_major::<f64>(expected)?,
             rtol,

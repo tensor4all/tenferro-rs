@@ -195,10 +195,10 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
     ));
 
     let mut misplaced = Tensor::from_vec_col_major(vec![2], vec![0_i32; 2]).unwrap();
-    match &mut misplaced {
-        Tensor::I32(tensor) => tensor.set_placement(opaque_backend_placement()),
-        _ => unreachable!(),
-    }
+    misplaced
+        .as_typed_mut::<i32>()
+        .expect("an i32 tensor")
+        .set_placement(opaque_backend_placement());
     assert!(matches!(
         backend.copy_read_into(
             TensorRead::from_tensor(&src),
@@ -860,10 +860,9 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
         crate::structural::transpose_with_pool(&mut buffers, &input, &[1]).unwrap_err();
     let view_transpose = crate::structural::transpose_read_with_pool(
         &mut buffers,
-        TensorRead::from_view(TensorView::F64(match &input {
-            Tensor::F64(input) => input.as_view(),
-            _ => unreachable!(),
-        })),
+        TensorRead::from_view(TensorView::F64(
+            input.as_typed::<f64>().expect("an f64 tensor").as_view(),
+        )),
         &[1],
     )
     .unwrap_err();
@@ -873,10 +872,9 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
     let owned_reshape = crate::structural::reshape(&input, &[3]).unwrap_err();
     let view_reshape = crate::structural::reshape_read_with_pool(
         &mut buffers,
-        TensorRead::from_view(TensorView::F64(match &input {
-            Tensor::F64(input) => input.as_view(),
-            _ => unreachable!(),
-        })),
+        TensorRead::from_view(TensorView::F64(
+            input.as_typed::<f64>().expect("an f64 tensor").as_view(),
+        )),
         &[3],
     )
     .unwrap_err();
@@ -888,10 +886,9 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
             .unwrap_err();
     let view_broadcast = crate::structural::broadcast_in_dim_read_with_pool(
         &mut buffers,
-        TensorRead::from_view(TensorView::F64(match &input {
-            Tensor::F64(input) => input.as_view(),
-            _ => unreachable!(),
-        })),
+        TensorRead::from_view(TensorView::F64(
+            input.as_typed::<f64>().expect("an f64 tensor").as_view(),
+        )),
         &[3],
         &[0],
     )

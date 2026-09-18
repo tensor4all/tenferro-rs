@@ -377,25 +377,39 @@ impl TensorStructural for DefaultReadBackend {
         }
         let src = self.to_contiguous_read(src)?;
         macro_rules! copy_typed {
-            ($src:expr, $dst:expr, $variant:ident) => {
+            ($src:expr, $dst:expr, $variant:ident, $ty:ty) => {
                 match $dst {
-                    TensorWrite::Tensor(dst) => *dst = Tensor::$variant($src),
+                    TensorWrite::Tensor(dst) => *dst = Tensor::from_typed::<$ty>($src),
                     TensorWrite::View(TensorViewMut::$variant(dst)) => copy_host_view(&$src, dst)?,
                     _ => unreachable!("dtype was validated before copy dispatch"),
                 }
             };
         }
-        match src {
-            Tensor::F32(src) => copy_typed!(src, dst, F32),
-            Tensor::F64(src) => copy_typed!(src, dst, F64),
-            Tensor::I32(src) => copy_typed!(src, dst, I32),
-            Tensor::I64(src) => copy_typed!(src, dst, I64),
-            Tensor::Bool(src) => copy_typed!(src, dst, Bool),
-            Tensor::C32(src) => copy_typed!(src, dst, C32),
-            Tensor::C64(src) => copy_typed!(src, dst, C64),
+        match src.dtype() {
+            crate::DType::F32 => copy_typed!(src.into_typed::<f32>()?, dst, F32, f32),
+            crate::DType::F64 => copy_typed!(src.into_typed::<f64>()?, dst, F64, f64),
+            crate::DType::I32 => copy_typed!(src.into_typed::<i32>()?, dst, I32, i32),
+            crate::DType::I64 => copy_typed!(src.into_typed::<i64>()?, dst, I64, i64),
+            crate::DType::Bool => copy_typed!(src.into_typed::<bool>()?, dst, Bool, bool),
+            crate::DType::C32 => {
+                copy_typed!(
+                    src.into_typed::<num_complex::Complex32>()?,
+                    dst,
+                    C32,
+                    num_complex::Complex32
+                )
+            }
+            crate::DType::C64 => {
+                copy_typed!(
+                    src.into_typed::<num_complex::Complex64>()?,
+                    dst,
+                    C64,
+                    num_complex::Complex64
+                )
+            }
             // The fixture covers the preset dtypes; an externally defined payload
             // has no fixture and would change what this test asserts.
-            Tensor::External(..) => unreachable!("the fixture covers the preset dtypes"),
+            _ => unreachable!("the fixture covers the preset dtypes"),
         }
         Ok(())
     }

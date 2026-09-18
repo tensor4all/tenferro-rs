@@ -117,10 +117,13 @@ fn solve_read_into_rejects_bad_destination_before_mutation() {
                 )
                 .unwrap_err();
             assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
-            match out {
-                Tensor::F64(out) => assert_eq!(out.host_data().unwrap(), &[-23.0, -23.0, -23.0]),
-                _ => unreachable!("test output is f64"),
-            }
+            assert_eq!(
+                out.as_typed::<f64>()
+                    .expect("test output is f64")
+                    .host_data()
+                    .unwrap(),
+                &[-23.0, -23.0, -23.0]
+            );
         });
     }
 }
@@ -2092,9 +2095,21 @@ fn svd_read_faer_strided_c64_view() {
     assert_eq!(out[2].shape(), &[2, 2]); // Vt (thin, complex)
 
     // Singular values are returned as a real tensor, mirroring the materialized path.
-    let s_vals = match &out[1] {
-        Tensor::F64(t) => t.host_data().unwrap().to_vec(),
-        Tensor::C64(t) => t.host_data().unwrap().iter().map(|c| c.re).collect(),
+    let s_vals: Vec<f64> = match out[1].dtype() {
+        DType::F64 => out[1]
+            .as_typed::<f64>()
+            .expect("f64 singular values")
+            .host_data()
+            .unwrap()
+            .to_vec(),
+        DType::C64 => out[1]
+            .as_typed::<Complex64>()
+            .expect("c64 singular values")
+            .host_data()
+            .unwrap()
+            .iter()
+            .map(|c| c.re)
+            .collect(),
         _ => panic!("unexpected type for singular values"),
     };
     assert!(s_vals.iter().all(|&v| v.is_finite() && v >= 0.0));

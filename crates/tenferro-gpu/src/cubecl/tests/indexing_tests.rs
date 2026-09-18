@@ -82,13 +82,25 @@ fn cuda_float_index_validation_matches_cpu() {
     ) {
         let operand = tensor_f64(vec![4], vec![10.0, 20.0, 30.0, 40.0]);
         let updates = tensor_f64(vec![1], vec![5.0]);
-        let gather_indices = match &index {
-            crate::Tensor::F32(values) => {
-                tensor_f32(vec![1, 1], values.as_slice().unwrap().to_vec())
-            }
-            crate::Tensor::F64(values) => {
-                tensor_f64(vec![1, 1], values.as_slice().unwrap().to_vec())
-            }
+        let gather_indices = match index.dtype() {
+            crate::DType::F32 => tensor_f32(
+                vec![1, 1],
+                index
+                    .as_typed::<f32>()
+                    .expect("float indices")
+                    .as_slice()
+                    .unwrap()
+                    .to_vec(),
+            ),
+            crate::DType::F64 => tensor_f64(
+                vec![1, 1],
+                index
+                    .as_typed::<f64>()
+                    .expect("float indices")
+                    .as_slice()
+                    .unwrap()
+                    .to_vec(),
+            ),
             _ => unreachable!("matrix only contains float indices"),
         };
         let scatter_config = ScatterConfig {
@@ -501,11 +513,10 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
 
     let wrong_device_message =
         "expected GPU tensor resident on cuda:0, got Gpu(Cuda):1".to_string();
-    let wrong_starts = crate::Tensor::I32(with_cuda_ordinal(
-        match upload(&gpu, &tensor_i32(vec![1], vec![0])) {
-            crate::Tensor::I32(tensor) => tensor,
-            _ => unreachable!(),
-        },
+    let wrong_starts = crate::Tensor::from_typed::<i32>(with_cuda_ordinal(
+        upload(&gpu, &tensor_i32(vec![1], vec![0]))
+            .into_typed::<i32>()
+            .expect("the upload keeps the dtype"),
         1,
     ));
     let err = gpu
@@ -514,11 +525,10 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     assert_runtime_state(&err, "dynamic_slice", &wrong_device_message);
 
     let empty_bool = upload(&gpu, &tensor_bool(vec![0], vec![]));
-    let wrong_float_starts = crate::Tensor::F32(with_cuda_ordinal(
-        match upload(&gpu, &tensor_f32(vec![1], vec![0.0])) {
-            crate::Tensor::F32(tensor) => tensor,
-            _ => unreachable!(),
-        },
+    let wrong_float_starts = crate::Tensor::from_typed::<f32>(with_cuda_ordinal(
+        upload(&gpu, &tensor_f32(vec![1], vec![0.0]))
+            .into_typed::<f32>()
+            .expect("the upload keeps the dtype"),
         1,
     ));
     let err = gpu
@@ -554,11 +564,10 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
         "expected CubeCL GPU tensor, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
     );
 
-    let wrong_indices = crate::Tensor::I32(with_cuda_ordinal(
-        match upload(&gpu, &tensor_i32(vec![0, 1], vec![])) {
-            crate::Tensor::I32(tensor) => tensor,
-            _ => unreachable!(),
-        },
+    let wrong_indices = crate::Tensor::from_typed::<i32>(with_cuda_ordinal(
+        upload(&gpu, &tensor_i32(vec![0, 1], vec![]))
+            .into_typed::<i32>()
+            .expect("the upload keeps the dtype"),
         1,
     ));
     let gather_operand = upload(&gpu, &tensor_f64(vec![2], vec![1.0, 2.0]));

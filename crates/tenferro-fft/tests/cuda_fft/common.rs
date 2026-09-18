@@ -439,14 +439,14 @@ pub(crate) fn compiled_cuda_fft(
 }
 
 pub(crate) fn assert_full_hermitian(actual: &Tensor) {
-    match actual {
-        Tensor::C32(_) => {
+    match actual.dtype() {
+        DType::C32 => {
             let values = actual.as_slice::<Complex32>().unwrap();
             for index in 1..=(values.len() - 1) / 2 {
                 assert_eq!(values[values.len() - index], values[index].conj());
             }
         }
-        Tensor::C64(_) => {
+        DType::C64 => {
             let values = actual.as_slice::<Complex64>().unwrap();
             for index in 1..=(values.len() - 1) / 2 {
                 assert_eq!(values[values.len() - index], values[index].conj());

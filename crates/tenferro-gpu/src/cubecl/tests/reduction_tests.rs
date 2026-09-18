@@ -169,22 +169,28 @@ fn test_cubecl_float_max_min_reductions_propagate_nan_for_unit_and_plane() {
     }
 
     fn assert_all_nan(tensor: &crate::Tensor) {
-        match tensor {
-            crate::Tensor::F32(tensor) => {
+        match tensor.dtype() {
+            crate::DType::F32 => {
+                let tensor = tensor
+                    .as_typed::<f32>()
+                    .expect("the dtype guard selects this arm");
                 assert!(tensor
                     .as_slice()
                     .unwrap()
                     .iter()
                     .all(|value| value.is_nan()));
             }
-            crate::Tensor::F64(tensor) => {
+            crate::DType::F64 => {
+                let tensor = tensor
+                    .as_typed::<f64>()
+                    .expect("the dtype guard selects this arm");
                 assert!(tensor
                     .as_slice()
                     .unwrap()
                     .iter()
                     .all(|value| value.is_nan()));
             }
-            other => panic!("expected float reduction output, got {:?}", other.dtype()),
+            other => panic!("expected float reduction output, got {:?}", other),
         }
     }
 
