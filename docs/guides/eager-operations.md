@@ -116,7 +116,7 @@ assert!(b_bad.try_into_rank::<3>().is_err());
 
 // Convert between layers for a specific dtype.
 let b_for_tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])?;
-let c = Tensor::F64(b_for_tensor);
+let c = Tensor::from_typed(b_for_tensor);
 assert_eq!(c.shape(), &[2, 3]);
 ```
 <!-- end-snippet-source -->
