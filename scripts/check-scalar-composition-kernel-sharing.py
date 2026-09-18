@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -39,6 +40,11 @@ EXTERNAL_OP = "7Df64Add"
 SHARED_KERNEL_CRATE = "tenferro_internal_cpu_kernels10scalar_ops18scalar_binary_into"
 
 DEFINITION = re.compile(r"^(_R[A-Za-z0-9_]+):$")
+
+
+def target_root() -> Path:
+    path = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
+    return path if path.is_absolute() else ROOT / path
 
 
 def run(*args: str) -> str:
@@ -159,7 +165,7 @@ def main() -> int:
 
     profile_dir = "debug" if args.debug else "release"
     assemblies = sorted(
-        (ROOT / "target" / profile_dir / "deps").glob(f"{test_target}-*.s"),
+        (target_root() / profile_dir / "deps").glob(f"{test_target}-*.s"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -299,7 +305,7 @@ def compare_with(
 
     profile_dir = "debug" if args.debug else "release"
     assemblies = sorted(
-        (ROOT / "target" / profile_dir / "deps").glob(f"{args.against_target}-*.s"),
+        (target_root() / profile_dir / "deps").glob(f"{args.against_target}-*.s"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
