@@ -1384,6 +1384,18 @@ consequences for the gate in 5.16a are:
   blanket reason to wait for that issue.
 - What the boxed proxy would have bought — a 16-byte wrapper — is not free and is not adopted.
 
+**The caller migration has its own hazard, measured.** Replacing `Tensor::F32(expr)` with
+`Tensor::from_typed(expr)` changes type inference whenever `expr`'s element type came from the variant
+name: `TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0])` defaults its literals to
+`f64` once `F32` stops forcing `f32`. A first pass over 149 construction sites did compile, and the test
+`tenferro-linalg cpu::tests::dtype::cpu_linalg_accepts_f32_happy_paths` caught the consequence: `eig`
+returned `C64` where `C32` was asserted. The same textual pass also hits pattern positions — 43 mostly in
+the GPU test modules, where `Tensor::F32(inner) =>` is a pattern, not a construction — and the
+source-text contract needles such as `Tensor::I64(status)`. The migration therefore spells the scalar
+(`Tensor::from_typed::<f32>(...)`) and proceeds per file with the compiler as the check, not by script;
+the pass was reverted before landing. The remaining 129 shipping and 775 test construction sites, and the
+37 pattern sites outside `types.rs`, are that per-file work.
+
 **Still open, and not claimed as decided here.**
 
 - `Tensor` also holds `DType::External(ErasedHostTensor)`, so one payload has to carry both the
