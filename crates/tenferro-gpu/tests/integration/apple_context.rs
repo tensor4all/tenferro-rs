@@ -76,7 +76,7 @@ fn cpu_domain_allocator_produces_write_only_managed_outputs_without_transfers() 
     };
     let domain = context.cpu_backend().shared_allocation_domain().unwrap();
     let output = domain.allocate(tenferro_tensor::DType::F64, &[2]).unwrap();
-    let output = output.into_typed::<f64>().expect("expected f64 output");
+    let mut output = output.into_typed::<f64>().expect("expected f64 output");
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));
     output
         .with_host_write(|data| data.copy_from_slice(&[5.0, 8.0]))
