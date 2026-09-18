@@ -15,6 +15,31 @@ use tenferro_tensor::{
 use super::with_cpu_linalg;
 use crate::LinalgBackend;
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 thread_local! {
     static OBSERVED_OPERATION_ENTRY_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
@@ -281,8 +306,10 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
                     ],
                 );
                 let input_id = input.allocation_id();
-                let output = backend.cholesky(&Tensor::$variant(input)).unwrap();
-                let Tensor::$variant(output) = output else {
+                let output = backend
+                    .cholesky(&Tensor::from_typed::<preset_scalar!($variant)>(input))
+                    .unwrap();
+                let Ok(output) = output.into_typed::<preset_scalar!($variant)>() else {
                     unreachable!()
                 };
                 assert_eq!(output.allocation_domain(), Some(domain.id));
@@ -306,8 +333,10 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
                     vec![value(4.0), value(2.0), value(2.0), value(3.0)],
                 );
                 let input_id = input.allocation_id();
-                let output = backend.cholesky(&Tensor::$variant(input)).unwrap();
-                let Tensor::$variant(output) = output else {
+                let output = backend
+                    .cholesky(&Tensor::from_typed::<preset_scalar!($variant)>(input))
+                    .unwrap();
+                let Ok(output) = output.into_typed::<preset_scalar!($variant)>() else {
                     unreachable!()
                 };
                 assert_eq!(output.allocation_domain(), Some(domain.id));

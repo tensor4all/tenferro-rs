@@ -78,6 +78,7 @@ use cubecl::prelude::{CubeCount, Int as CubeInt, StorageType, TensorBinding, Typ
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
+
 use tenferro_tensor::CacheStats;
 use tenferro_tensor::{
     ContractionScalar, DType, DotGeneralAccumulation, ElementwiseReadOp, TensorRead, TensorWrite,
@@ -102,6 +103,31 @@ use crate::{
     TypedTensorView, TypedTensorViewMut,
 };
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 mod blas1;
 mod capability;
 mod device;
@@ -4919,14 +4945,14 @@ impl TensorStructural for CudaBackend {
             ($variant:ident, $view:expr) => {{
                 let view = $view;
                 self.to_contiguous_view_cutensor_or_cubecl(&view, "CudaBackend::to_contiguous_read")
-                    .map(Tensor::$variant)
+                    .map(Tensor::from_typed::<preset_scalar!($variant)>)
             }};
         }
         macro_rules! materialize_cubecl {
             ($variant:ident, $view:expr) => {{
                 let view = $view;
                 self.to_contiguous_view_typed(&view, "CudaBackend::to_contiguous_read")
-                    .map(Tensor::$variant)
+                    .map(Tensor::from_typed::<preset_scalar!($variant)>)
             }};
         }
 
@@ -4982,7 +5008,13 @@ impl TensorStructural for CudaBackend {
             ($variant:ident, $src:expr) => {{
                 let src = $src;
                 match dst {
-                    TensorWrite::Tensor(Tensor::$variant(dst)) => {
+                    TensorWrite::Tensor(dst)
+                        if dst.dtype()
+                            == <preset_scalar!($variant) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let dst = dst
+                            .as_typed_mut::<preset_scalar!($variant)>()
+                            .expect("the dtype guard selects this arm");
                         let mut dst = dst.as_view_mut();
                         self.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
                     }
@@ -5001,7 +5033,13 @@ impl TensorStructural for CudaBackend {
             ($variant:ident, $src:expr) => {{
                 let src = $src;
                 match dst {
-                    TensorWrite::Tensor(Tensor::$variant(dst)) => {
+                    TensorWrite::Tensor(dst)
+                        if dst.dtype()
+                            == <preset_scalar!($variant) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let dst = dst
+                            .as_typed_mut::<preset_scalar!($variant)>()
+                            .expect("the dtype guard selects this arm");
                         let mut dst = dst.as_view_mut();
                         self.copy_view_to_view_cutensor_or_cubecl(
                             &src,

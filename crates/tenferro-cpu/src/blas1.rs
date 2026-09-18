@@ -1,4 +1,29 @@
 use std::ops::{Add, Mul};
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -107,7 +132,13 @@ macro_rules! axpby_write {
             beta: $ty,
         ) -> crate::Result<()> {
             match y {
-                TensorWrite::Tensor(Tensor::$variant(tensor)) => {
+                TensorWrite::Tensor(tensor)
+                    if tensor.dtype()
+                        == <preset_scalar!($variant) as tenferro_tensor::TensorScalar>::dtype() =>
+                {
+                    let tensor = tensor
+                        .as_typed_mut::<preset_scalar!($variant)>()
+                        .expect("the dtype guard selects this arm");
                     axpby_typed(context, x_data, tensor.host_data_mut()?, alpha, beta)
                 }
                 TensorWrite::View(TensorViewMut::$variant(mut view)) => {

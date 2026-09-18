@@ -1,12 +1,37 @@
 use super::*;
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 mod static_replay;
 
 #[test]
 fn materialize_tensor_read_covers_all_owned_dtypes() {
     macro_rules! check {
         ($variant:ident, $ty:ty, $value:expr) => {{
-            let source = Tensor::$variant(
+            let source = Tensor::from_typed::<preset_scalar!($variant)>(
                 TypedTensor::<$ty>::from_vec_col_major(vec![1], vec![$value]).unwrap(),
             );
             let mut buffers = BufferPool::new();
@@ -48,8 +73,12 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             let other = TypedTensor::<$ty>::from_vec_col_major(vec![], vec![2]).unwrap();
             let owned = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
-                TensorRead::from_tensor(&Tensor::$variant(other.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    scalar.duplicate().unwrap(),
+                )),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    other.duplicate().unwrap(),
+                )),
             )
             .unwrap();
             assert_eq!(owned.as_slice::<$ty>().unwrap(), &[expected]);
@@ -62,10 +91,12 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             assert_eq!(view.as_slice::<$ty>().unwrap(), &[expected]);
             let broadcast = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    scalar.duplicate().unwrap(),
+                )),
                 &[],
                 &[],
-                TensorRead::from_tensor(&Tensor::$variant(other)),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(other)),
                 &[],
                 &[],
             )
@@ -81,8 +112,12 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             ];
             let owned_scalar_vector = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
-                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    scalar.duplicate().unwrap(),
+                )),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    vector.duplicate().unwrap(),
+                )),
             )
             .unwrap();
             assert_eq!(owned_scalar_vector.shape(), &[3]);
@@ -92,8 +127,12 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let owned_vector_scalar = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
-                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    vector.duplicate().unwrap(),
+                )),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    scalar.duplicate().unwrap(),
+                )),
             )
             .unwrap();
             assert_eq!(owned_vector_scalar.shape(), &[3]);
@@ -127,10 +166,14 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
 
             let broadcast_scalar_vector = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    scalar.duplicate().unwrap(),
+                )),
                 &[3],
                 &[],
-                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
+                    vector.duplicate().unwrap(),
+                )),
                 &[3],
                 &[0],
             )
@@ -143,10 +186,10 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let broadcast_vector_scalar = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(vector)),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(vector)),
                 &[3],
                 &[0],
-                TensorRead::from_tensor(&Tensor::$variant(scalar)),
+                TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(scalar)),
                 &[3],
                 &[],
             )

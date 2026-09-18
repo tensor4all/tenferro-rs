@@ -4,6 +4,31 @@ use tenferro_tensor::{
     TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
 };
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 fn opaque_backend_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::Device,
@@ -95,12 +120,15 @@ fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
     macro_rules! assert_copied {
         ($variant:ident, $ty:ty, $values:expr, $zeros:expr) => {{
             let values: Vec<$ty> = $values;
-            let src =
-                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], values.clone()).unwrap());
-            let mut direct_dst =
-                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap());
-            let mut session_dst =
-                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap());
+            let src = Tensor::from_typed::<preset_scalar!($variant)>(
+                TypedTensor::from_vec_col_major(vec![2], values.clone()).unwrap(),
+            );
+            let mut direct_dst = Tensor::from_typed::<preset_scalar!($variant)>(
+                TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap(),
+            );
+            let mut session_dst = Tensor::from_typed::<preset_scalar!($variant)>(
+                TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap(),
+            );
             let mut backend = CpuBackend::with_threads(2).unwrap();
 
             backend

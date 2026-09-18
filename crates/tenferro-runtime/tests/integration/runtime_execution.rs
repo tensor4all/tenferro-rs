@@ -37,6 +37,31 @@ use tenferro_tensor::{
     StorageBuffer, Tensor, TensorRead, TensorView, TypedTensor,
 };
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
 const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const CPU_STORAGE_CLASS_ID: &str = "tenferro-cpu.host.v1";
@@ -429,7 +454,7 @@ impl SharedTensorAllocationDomain for TestAllocationDomain {
                     StorageBuffer::Backend(Box::new(buffer)),
                     Placement::default(),
                 )
-                .map(Tensor::$variant)
+                .map(Tensor::from_typed::<preset_scalar!($variant)>)
             }};
         }
         match dtype {

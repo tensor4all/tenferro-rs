@@ -23,6 +23,31 @@
     allow(dead_code, unused_imports)
 )]
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 #[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
 compile_error!("enable at least one CPU backend: cpu-faer or cpu-blas");
 
@@ -391,7 +416,13 @@ pub(crate) fn copy_tensor_read_into(
         ($variant:ident, $src:expr) => {{
             let src = $src;
             match dst {
-                TensorWrite::Tensor(Tensor::$variant(dst)) => {
+                TensorWrite::Tensor(dst)
+                    if dst.dtype()
+                        == <preset_scalar!($variant) as tenferro_tensor::TensorScalar>::dtype() =>
+                {
+                    let dst = dst
+                        .as_typed_mut::<preset_scalar!($variant)>()
+                        .expect("the dtype guard selects this arm");
                     let mut dst = dst.as_view_mut();
                     structural::typed_copy_view_into(&src, &mut dst, op)
                 }
@@ -481,7 +512,9 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Te
         ($variant:ident, $tensor:expr) => {{
             structural::validate_cpu_host_placement(op, "source", $tensor.placement())?;
             typed_host_data(op, $tensor)?;
-            $tensor.duplicate().map(Tensor::$variant)
+            $tensor
+                .duplicate()
+                .map(Tensor::from_typed::<preset_scalar!($variant)>)
         }};
     }
 
@@ -556,7 +589,7 @@ fn materialize_tensor_view(
 ) -> crate::Result<Tensor> {
     macro_rules! materialize {
         ($variant:ident, $view:expr) => {{
-            Ok(Tensor::$variant(
+            Ok(Tensor::from_typed::<preset_scalar!($variant)>(
                 structural::typed_materialize_view_with_pool(buffers, &$view, op)?,
             ))
         }};

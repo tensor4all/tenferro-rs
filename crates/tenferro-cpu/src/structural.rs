@@ -14,6 +14,31 @@ use tenferro_tensor::{
     TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 #[cfg(test)]
 use super::tensor_from_array;
 #[cfg(test)]
@@ -575,9 +600,9 @@ pub(crate) fn cast_with_pool(
 ) -> crate::Result<Tensor> {
     macro_rules! converted {
         ($variant:ident, $tensor:expr, $map:expr) => {
-            Ok(Tensor::$variant(typed_convert_with_pool(
-                buffers, $tensor, $map,
-            )?))
+            Ok(Tensor::from_typed::<preset_scalar!($variant)>(
+                typed_convert_with_pool(buffers, $tensor, $map)?,
+            ))
         };
     }
 

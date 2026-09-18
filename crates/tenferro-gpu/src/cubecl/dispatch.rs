@@ -13,6 +13,31 @@ use tenferro_tensor::{
     PreparedDeviceAccess, TensorBackendCapability as TensorBackendCapabilityTrait, TensorScalar,
 };
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
 
 pub(crate) struct CubeclPreparedAccess {
@@ -1169,7 +1194,7 @@ macro_rules! launch_binary_elementwise_kernel {
                 );
             },
         )
-        .map(Tensor::$variant)
+        .map(Tensor::from_typed::<preset_scalar!($variant)>)
     };
 }
 
@@ -1186,7 +1211,7 @@ macro_rules! launch_unary_elementwise_kernel {
                 );
             },
         )
-        .map(Tensor::$variant)
+        .map(Tensor::from_typed::<preset_scalar!($variant)>)
     };
 }
 

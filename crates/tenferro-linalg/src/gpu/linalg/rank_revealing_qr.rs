@@ -4,6 +4,31 @@ use tenferro_tensor::DType;
 use super::*;
 use crate::{rank_revealing_qr::validate_rank_revealing_qr_options, RankRevealingQrOptions};
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 const OP: &str = "rank_revealing_qr";
 const RRQR_PLANE_WIDTH: u32 = 32;
 
@@ -298,12 +323,14 @@ macro_rules! impl_cuda_rrqr_complex {
             fn device_imaginary_unit(
                 backend: &mut CudaExecSession<'_>,
             ) -> Result<Option<TypedTensor<Self>>> {
-                let host = Tensor::$variant(TypedTensor::from_vec_col_major(
-                    vec![1],
-                    vec![<$scalar>::new(0.0 as $real, 1.0 as $real)],
-                )?);
+                let host = Tensor::from_typed::<preset_scalar!($variant)>(
+                    TypedTensor::from_vec_col_major(
+                        vec![1],
+                        vec![<$scalar>::new(0.0 as $real, 1.0 as $real)],
+                    )?,
+                );
                 match tenferro_gpu::cuda::upload_tensor(backend.runtime(), &host)? {
-                    Tensor::$variant(tensor) => Ok(Some(tensor)),
+                    Tensor::from_typed::<preset_scalar!($variant)>(tensor) => Ok(Some(tensor)),
                     _ => Err(Error::Internal("RRQR constant upload changed dtype".into())),
                 }
             }
@@ -870,15 +897,15 @@ macro_rules! impl_rrqr_tensor_variant {
     ($scalar:ty, $variant:ident) => {
         impl RrqrTensorVariant for $scalar {
             fn wrap(tensor: TypedTensor<Self>) -> Tensor {
-                Tensor::$variant(tensor)
+                Tensor::from_typed::<preset_scalar!($variant)>(tensor)
             }
 
             fn unwrap(tensor: Tensor) -> Result<TypedTensor<Self>> {
                 match tensor {
-                    Tensor::$variant(tensor) => Ok(tensor),
+                    Tensor::from_typed::<preset_scalar!($variant)>(tensor) => Ok(tensor),
                     other => Err(Error::dtype_mismatch(
                         OP,
-                        <$scalar as TensorScalar>::dtype(),
+                        <$scalar as tenferro_tensor::TensorScalar>::dtype(),
                         other.dtype(),
                     )),
                 }

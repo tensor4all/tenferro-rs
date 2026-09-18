@@ -14,6 +14,31 @@ use tenferro_tensor::{
     TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 trait FreshLinalgOutput {
     fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId);
 }
@@ -1023,7 +1048,7 @@ macro_rules! impl_managed_cholesky_scalar {
             }
 
             fn take_output(output: Tensor) -> tenferro_tensor::Result<TypedTensor<Self>> {
-                let Tensor::$variant(output) = output else {
+                let Ok(output) = output.into_typed::<preset_scalar!($variant)>() else {
                     return Err(tenferro_tensor::Error::runtime_state(
                         "cholesky",
                         concat!(
@@ -1037,7 +1062,7 @@ macro_rules! impl_managed_cholesky_scalar {
             }
 
             fn wrap(output: TypedTensor<Self>) -> Tensor {
-                Tensor::$variant(output)
+                Tensor::from_typed::<preset_scalar!($variant)>(output)
             }
         }
     };
@@ -2259,8 +2284,8 @@ fn rank_revealing_qr_entered(
         ($result:expr, $variant:ident) => {{
             $result.map(|result| {
                 vec![
-                    Tensor::$variant(result.q),
-                    Tensor::$variant(result.r),
+                    Tensor::from_typed::<preset_scalar!($variant)>(result.q),
+                    Tensor::from_typed::<preset_scalar!($variant)>(result.r),
                     Tensor::from_typed::<i64>(result.column_permutation),
                     Tensor::from_typed::<i64>(result.rank),
                 ]
@@ -2395,8 +2420,8 @@ fn householder_qr_entered(
                         let (packed, coeff) =
                             linalg::faer::compact_factor_2d(context, buffers, $tensor)?;
                         Ok(CompactQrResult {
-                            packed: Tensor::$variant(packed),
-                            coeff: Tensor::$variant(coeff),
+                            packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
+                            coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
                         })
                     }};
                 }
@@ -2442,8 +2467,8 @@ fn householder_qr_entered(
                     ($tensor:expr, $variant:ident) => {{
                         let (packed, coeff) = linalg::blas::householder_qr(buffers, $tensor)?;
                         Ok(CompactQrResult {
-                            packed: Tensor::$variant(packed),
-                            coeff: Tensor::$variant(coeff),
+                            packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
+                            coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
                         })
                     }};
                 }
@@ -2505,8 +2530,8 @@ fn householder_qr_from_factors_entered(
                 ($q:expr, $r:expr, $variant:ident) => {{
                     let (packed, coeff) = linalg::faer::from_factors_2d(context, buffers, $q, $r)?;
                     return Ok(CompactQrResult {
-                        packed: Tensor::$variant(packed),
-                        coeff: Tensor::$variant(coeff),
+                        packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
+                        coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
                     });
                 }};
             }
@@ -2543,8 +2568,8 @@ fn householder_qr_from_factors_entered(
             ($q:expr, $r:expr, $variant:ident) => {{
                 let (packed, coeff) = linalg::blas::householder_qr_from_factors(buffers, $q, $r)?;
                 Ok(CompactQrResult {
-                    packed: Tensor::$variant(packed),
-                    coeff: Tensor::$variant(coeff),
+                    packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
+                    coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
                 })
             }};
         }
@@ -2601,8 +2626,8 @@ fn householder_qr_append_entered(
                     let (packed, coeff) =
                         linalg::faer::append_2d(context, buffers, $packed, $coeff, $block)?;
                     return Ok(CompactQrResult {
-                        packed: Tensor::$variant(packed),
-                        coeff: Tensor::$variant(coeff),
+                        packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
+                        coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
                     });
                 }};
             }
@@ -2644,8 +2669,8 @@ fn householder_qr_append_entered(
                 let (packed, coeff) =
                     linalg::blas::householder_qr_append(buffers, $packed, $coeff, $block)?;
                 Ok(CompactQrResult {
-                    packed: Tensor::$variant(packed),
-                    coeff: Tensor::$variant(coeff),
+                    packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
+                    coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
                 })
             }};
         }
@@ -2821,7 +2846,7 @@ fn householder_qr_q_columns_entered(
                     columns.end,
                     positive,
                 )
-                .map(Tensor::$variant)
+                .map(Tensor::from_typed::<preset_scalar!($variant)>)
             };
         }
         match (packed.dtype(), coeff.dtype()) {

@@ -2,6 +2,31 @@ use num_complex::{Complex32, Complex64};
 
 use super::*;
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 #[test]
 fn checked_convert_follows_dtype_promotion_lattice() {
     assert!(can_convert_dtype(DType::F32, DType::F64));
@@ -654,7 +679,7 @@ macro_rules! validate_nonsingular_u_test {
 
             #[test]
             fn singular() {
-                let t = Tensor::$variant(
+                let t = Tensor::from_typed::<preset_scalar!($variant)>(
                     TypedTensor::<$inner>::from_vec_col_major(
                         vec![2, 2],
                         vec![
@@ -678,7 +703,7 @@ macro_rules! validate_nonsingular_u_test {
 
             #[test]
             fn nonsingular() {
-                let t = Tensor::$variant(
+                let t = Tensor::from_typed::<preset_scalar!($variant)>(
                     TypedTensor::<$inner>::from_vec_col_major(
                         vec![2, 2],
                         vec![

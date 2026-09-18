@@ -5,6 +5,31 @@
 //! Shared resource ownership is implemented by `tenferro-cpu-basic`; this crate
 //! owns the ordinary dtype-dispatch kernel family.
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 pub type Result<T> = tenferro_tensor::Result<T>;
 pub use tenferro_cpu_basic::{
     cpu_backend_buffer_error, cpu_division_by_zero, typed_host_data, typed_view,
@@ -46,7 +71,9 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> Result<Tensor> {
     macro_rules! clone_host {
         ($variant:ident, $tensor:expr) => {{
             typed_host_data(op, $tensor)?;
-            Ok(Tensor::$variant($tensor.duplicate()?))
+            Ok(Tensor::from_typed::<preset_scalar!($variant)>(
+                $tensor.duplicate()?,
+            ))
         }};
     }
     match tensor.dtype() {
@@ -115,9 +142,9 @@ fn materialize_tensor_view(
 ) -> Result<Tensor> {
     macro_rules! materialize {
         ($variant:ident, $view:expr) => {{
-            Ok(Tensor::$variant(typed_materialize_view_for_tests(
-                buffers, &$view, op,
-            )?))
+            Ok(Tensor::from_typed::<preset_scalar!($variant)>(
+                typed_materialize_view_for_tests(buffers, &$view, op)?,
+            ))
         }};
     }
     match view {

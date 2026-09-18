@@ -1,5 +1,30 @@
 use super::*;
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 fn run(
     op: ElementwiseReadOp,
     inputs: &[TensorRead<'_>],
@@ -14,11 +39,11 @@ fn run(
 fn unary_conjugation_covers_all_owned_dtypes() {
     macro_rules! check {
         ($variant:ident, $ty:ty, $value:expr) => {{
-            let input = Tensor::$variant(
+            let input = Tensor::from_typed::<preset_scalar!($variant)>(
                 tenferro_tensor::TypedTensor::<$ty>::from_vec_col_major(vec![1], vec![$value])
                     .unwrap(),
             );
-            let mut output = Tensor::$variant(
+            let mut output = Tensor::from_typed::<preset_scalar!($variant)>(
                 tenferro_tensor::TypedTensor::<$ty>::from_vec_col_major(vec![1], vec![$value])
                     .unwrap(),
             );
@@ -56,7 +81,7 @@ fn unary_and_binary_replay_cover_view_and_dtype_dispatch() {
             let view =
                 tenferro_tensor::TypedTensorView::from_slice(vec![1], vec![1], 0, &data).unwrap();
             let input = TensorRead::from_view(TensorView::$variant(view));
-            let mut output = Tensor::$variant(
+            let mut output = Tensor::from_typed::<preset_scalar!($variant)>(
                 tenferro_tensor::TypedTensor::<$ty>::from_vec_col_major(vec![1], vec![$value])
                     .unwrap(),
             );
@@ -87,15 +112,15 @@ fn unary_and_binary_replay_cover_view_and_dtype_dispatch() {
 
     macro_rules! check_zip {
         ($variant:ident, $ty:ty, $lhs:expr, $rhs:expr) => {{
-            let lhs = Tensor::$variant(
+            let lhs = Tensor::from_typed::<preset_scalar!($variant)>(
                 tenferro_tensor::TypedTensor::<$ty>::from_vec_col_major(vec![1], vec![$lhs])
                     .unwrap(),
             );
-            let rhs = Tensor::$variant(
+            let rhs = Tensor::from_typed::<preset_scalar!($variant)>(
                 tenferro_tensor::TypedTensor::<$ty>::from_vec_col_major(vec![1], vec![$rhs])
                     .unwrap(),
             );
-            let mut output = Tensor::$variant(
+            let mut output = Tensor::from_typed::<preset_scalar!($variant)>(
                 tenferro_tensor::TypedTensor::<$ty>::from_vec_col_major(vec![1], vec![$lhs])
                     .unwrap(),
             );

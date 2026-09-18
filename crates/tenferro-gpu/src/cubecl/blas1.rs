@@ -54,6 +54,31 @@ use crate::{
     TypedTensorViewMut,
 };
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 const VDOT_OP: &str = "BackendSession::vdot_read";
 const NORM_OP: &str = "BackendSession::norm_squared_read";
 const AXPBY_OP: &str = "BackendSession::axpby_read_into_accum";
@@ -525,10 +550,7 @@ macro_rules! impl_cublas_scalar {
             const GEAM_NAME: &'static str = stringify!($geam);
 
             fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
-                match tensor {
-                    Tensor::$variant(tensor) => Some(tensor),
-                    _ => None,
-                }
+                tensor.as_typed::<Self>()
             }
 
             fn unwrap_view<'a, 'b>(
@@ -541,10 +563,7 @@ macro_rules! impl_cublas_scalar {
             }
 
             fn unwrap_tensor_mut(tensor: &mut Tensor) -> Option<&mut TypedTensor<Self>> {
-                match tensor {
-                    Tensor::$variant(tensor) => Some(tensor),
-                    _ => None,
-                }
+                tensor.as_typed_mut::<Self>()
             }
 
             fn unwrap_view_mut<'a, 'b>(
@@ -557,7 +576,7 @@ macro_rules! impl_cublas_scalar {
             }
 
             fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
-                Tensor::$variant(tensor)
+                Tensor::from_typed::<preset_scalar!($variant)>(tensor)
             }
 
             fn from_scalar(value: ContractionScalar) -> Option<Self> {

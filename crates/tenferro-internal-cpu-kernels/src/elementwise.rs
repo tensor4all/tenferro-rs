@@ -19,6 +19,32 @@ use tenferro_cpu_basic::{
     reject_complex_ordered_dtypes, reject_complex_unsupported_compare_dtypes,
 };
 
+/// The typed operands behind a same-dtype triple, or this module's refusal for one.
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 macro_rules! dispatch_ternary_result_with_pool {
     ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {{
         match $a.dtype() {
@@ -37,8 +63,6 @@ macro_rules! dispatch_ternary_result_with_pool {
         }
     }};
 }
-
-/// The typed operands behind a same-dtype triple, or this module's refusal for one.
 fn ternary_operands<'a, T: TensorScalar>(
     op: &'static str,
     a: &'a Tensor,
@@ -504,25 +528,37 @@ pub fn add_with_pool(
 macro_rules! dispatch_read_same_variant {
     ($buffers:expr, $lhs:expr, $rhs:expr, $variant:ident, $func:ident) => {
         match (&$lhs, &$rhs) {
-            (
-                TensorRead::Tensor(Tensor::$variant(a)),
-                TensorRead::View(TensorView::$variant(b)),
-            ) => {
+            (TensorRead::Tensor(a), TensorRead::View(TensorView::$variant(b)))
+                if a.dtype()
+                    == <preset_scalar!($variant) as tenferro_tensor::TensorScalar>::dtype() =>
+            {
+                let a = a
+                    .as_typed::<preset_scalar!($variant)>()
+                    .expect("the dtype guard selects this arm");
                 let a = a.as_view();
-                return Ok(Tensor::$variant($func($buffers, &a, b)?));
+                return Ok(Tensor::from_typed::<preset_scalar!($variant)>($func(
+                    $buffers, &a, b,
+                )?));
             }
-            (
-                TensorRead::View(TensorView::$variant(a)),
-                TensorRead::Tensor(Tensor::$variant(b)),
-            ) => {
+            (TensorRead::View(TensorView::$variant(a)), TensorRead::Tensor(b))
+                if b.dtype()
+                    == <preset_scalar!($variant) as tenferro_tensor::TensorScalar>::dtype() =>
+            {
+                let b = b
+                    .as_typed::<preset_scalar!($variant)>()
+                    .expect("the dtype guard selects this arm");
                 let b = b.as_view();
-                return Ok(Tensor::$variant($func($buffers, a, &b)?));
+                return Ok(Tensor::from_typed::<preset_scalar!($variant)>($func(
+                    $buffers, a, &b,
+                )?));
             }
             (
                 TensorRead::View(TensorView::$variant(a)),
                 TensorRead::View(TensorView::$variant(b)),
             ) => {
-                return Ok(Tensor::$variant($func($buffers, a, b)?));
+                return Ok(Tensor::from_typed::<preset_scalar!($variant)>($func(
+                    $buffers, a, b,
+                )?));
             }
             _ => {}
         }
@@ -1863,11 +1899,13 @@ pub fn broadcast_multiply_read_with_pool(
             if let Some(out) = try_outer_product_with_pool(
                 buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
             )? {
-                return Ok(Some(Tensor::$variant(out)));
+                return Ok(Some(Tensor::from_typed::<preset_scalar!($variant)>(out)));
             }
-            Ok(Some(Tensor::$variant(typed_broadcast_mul_view_with_pool(
-                buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims, $mul,
-            )?)))
+            Ok(Some(Tensor::from_typed::<preset_scalar!($variant)>(
+                typed_broadcast_mul_view_with_pool(
+                    buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims, $mul,
+                )?,
+            )))
         }};
     }
 
@@ -1929,7 +1967,7 @@ pub fn broadcast_multiply_value_with_pool_and_tag(
             if let Some(out) = try_lazy_outer_product_with_pool(
                 buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
             )? {
-                let mut base = Tensor::$variant(out.base);
+                let mut base = Tensor::from_typed::<preset_scalar!($variant)>(out.base);
                 tag_output(&mut base);
                 return Ok(Some(lazy_outer_product_value(
                     base,

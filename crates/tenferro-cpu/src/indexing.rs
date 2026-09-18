@@ -15,6 +15,31 @@ use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 type InlineStrides = SmallVec<[isize; 8]>;
 
 fn inline_col_major_strides(op: &'static str, dims: &[usize]) -> crate::Result<InlineStrides> {
@@ -57,10 +82,8 @@ macro_rules! impl_tensor_as_typed {
         $(
             impl TensorAsTyped<$ty> for Tensor {
                 fn as_typed(&self) -> Option<&TypedTensor<$ty>> {
-                    match self {
-                        Tensor::$variant(tensor) => Some(tensor),
-                        _ => None,
-                    }
+                    let tensor = tenferro_tensor::Tensor::as_typed::<$ty>(self);
+                    tensor
                 }
             }
         )+

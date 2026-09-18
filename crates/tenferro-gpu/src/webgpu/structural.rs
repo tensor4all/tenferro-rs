@@ -13,6 +13,31 @@ use super::{
 };
 use crate::native_permutation::compact_col_major_strides;
 
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
 const TRANSPOSE_OP: &str = "webgpu_transpose";
 const MATERIALIZE_OP: &str = "WebGpuBackend::to_contiguous_read";
 
@@ -311,7 +336,7 @@ pub(super) fn to_contiguous_read(
 ) -> crate::Result<Tensor> {
     macro_rules! materialize {
         ($variant:ident, $view:expr) => {
-            materialize_typed(backend, &$view).map(Tensor::$variant)
+            materialize_typed(backend, &$view).map(Tensor::from_typed::<preset_scalar!($variant)>)
         };
     }
 
