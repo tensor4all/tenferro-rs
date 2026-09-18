@@ -1207,12 +1207,6 @@ impl AllocationGroup {
             .backend_buffer::<T>()
     }
 
-    pub(crate) fn descriptor_dtype(&self, slot: DescriptorSlot) -> Option<DType> {
-        self.resolve_descriptor(slot)
-            .ok()
-            .map(|(_, descriptor)| descriptor.dtype)
-    }
-
     pub(crate) fn descriptor_len(&self, slot: DescriptorSlot) -> Option<usize> {
         self.resolve_descriptor(slot)
             .ok()

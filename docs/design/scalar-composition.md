@@ -1410,8 +1410,8 @@ What Step 5 still has to do, now that nothing outside depends on the variants:
    `#[repr(C, u8)] enum TensorPayload { Native(TensorCore<DynRank>),
    External(ErasedHostTensor, Placement) }`. The measured size is 1464 B / align 8, with
    `ErasedHostTensor` 232 B and `Placement` 80 B on the external side.
-2. Give `OwnedTensorGroup<R>` a `dtype()` from the crate-private `AllocationGroup::descriptor_dtype`
-   added in `storage/group.rs`, so `Native` needs no duplicate tag.
+2. Give `OwnedTensorGroup<R>` a `dtype()` from a new crate-private
+   `AllocationGroup::descriptor_dtype` in `storage/group.rs`, so `Native` needs no duplicate tag.
 3. Rewrite the `impl_tensor_scalar!` seam (five `Tensor::$variant` uses) to
    `Tensor::from_core(tensor.core)` for construction and `tensor.as_typed::<T>()` for the matches; that
    seam is the single place the seven names remain.
