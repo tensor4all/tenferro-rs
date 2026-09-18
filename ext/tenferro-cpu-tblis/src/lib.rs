@@ -39,8 +39,8 @@ use tenferro_cpu::provider::{
 };
 use tenferro_cpu::{CpuPlacementControl, CpuProviderExecutionCapabilities, CpuThreadCountControl};
 use tenferro_tensor::{
-    col_major_strides, ContractionScalar, Error, Result, Tensor, TensorRead, TensorScalar,
-    TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    col_major_strides, ContractionScalar, Error, Result, TensorRead, TensorScalar, TensorView,
+    TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -291,7 +291,83 @@ fn execute_general_request(
                     (
                         TensorRead::Tensor(lhs),
                         TensorRead::Tensor(rhs),
-                        TensorWrite::Tensor(Tensor::$owned(output)),
+                        TensorWrite::Tensor(output),
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && rhs.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            )
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .expect("the dtype guard selects this arm");
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .expect("the dtype guard selects this arm");
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .expect("the dtype guard selects this arm");
+                        let mut output = output.as_view_mut();
+                        return execute_request_typed(lhs, rhs, axes, &mut output, execution);
+                    }
+                    (
+                        TensorRead::Tensor(lhs),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::Tensor(output),
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .expect("the dtype guard selects this arm");
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .expect("the dtype guard selects this arm");
+                        let mut output = output.as_view_mut();
+                        return execute_request_typed(lhs, rhs, axes, &mut output, execution);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::Tensor(rhs),
+                        TensorWrite::Tensor(output),
+                    ) if rhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .expect("the dtype guard selects this arm");
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .expect("the dtype guard selects this arm");
+                        let mut output = output.as_view_mut();
+                        return execute_request_typed(lhs, rhs, axes, &mut output, execution);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::Tensor(output),
+                    ) if output.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .expect("the dtype guard selects this arm");
+                        let mut output = output.as_view_mut();
+                        return execute_request_typed(lhs, rhs, axes, &mut output, execution);
+                    }
+                    (
+                        TensorRead::Tensor(lhs),
+                        TensorRead::Tensor(rhs),
+                        TensorWrite::View(TensorViewMut::$view(output)),
                     ) if lhs.dtype()
                         == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
                         && rhs.dtype()
@@ -304,63 +380,39 @@ fn execute_general_request(
                         let rhs = rhs
                             .as_typed::<preset_scalar!($owned)>()
                             .expect("the dtype guard selects this arm");
-                        let mut output = output.as_view_mut();
-                        return execute_request_typed(lhs, rhs, axes, &mut output, execution);
+                        return execute_request_typed(lhs, rhs, axes, output, execution);
                     }
                     (
                         TensorRead::Tensor(lhs),
                         TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::Tensor(Tensor::$owned(output)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
                     ) if lhs.dtype()
                         == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
                     {
                         let lhs = lhs
                             .as_typed::<preset_scalar!($owned)>()
                             .expect("the dtype guard selects this arm");
-                        let mut output = output.as_view_mut();
-                        return execute_request_typed(lhs, rhs, axes, &mut output, execution);
+                        return execute_request_typed(lhs, rhs, axes, output, execution);
                     }
                     (
                         TensorRead::View(TensorView::$view(lhs)),
                         TensorRead::Tensor(rhs),
-                        TensorWrite::Tensor(Tensor::$owned(output)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
                     ) if rhs.dtype()
                         == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
                     {
                         let rhs = rhs
                             .as_typed::<preset_scalar!($owned)>()
                             .expect("the dtype guard selects this arm");
-                        let mut output = output.as_view_mut();
-                        return execute_request_typed(lhs, rhs, axes, &mut output, execution);
+                        return execute_request_typed(lhs, rhs, axes, output, execution);
                     }
                     (
                         TensorRead::View(TensorView::$view(lhs)),
                         TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::Tensor(Tensor::$owned(output)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
                     ) => {
-                        let mut output = output.as_view_mut();
-                        return execute_request_typed(lhs, rhs, axes, &mut output, execution);
+                        return execute_request_typed(lhs, rhs, axes, output, execution);
                     }
-                    (
-                        TensorRead::Tensor(lhs),
-                        TensorRead::Tensor(rhs),
-                        TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => return execute_request_typed(lhs, rhs, axes, output, execution),
-                    (
-                        TensorRead::Tensor(lhs),
-                        TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => return execute_request_typed(lhs, rhs, axes, output, execution),
-                    (
-                        TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::Tensor(rhs),
-                        TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => return execute_request_typed(lhs, rhs, axes, output, execution),
-                    (
-                        TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => return execute_request_typed(lhs, rhs, axes, output, execution),
                     _ => {}
                 }
             }
