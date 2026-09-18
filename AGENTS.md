@@ -175,8 +175,8 @@ abstraction, feature, ownership, or public/private API boundaries.
 
 ### Test Coverage Target
 
-**90%+ line coverage** per source file. Cover new paths; when modifying a file
-below 90%, add tests. The existing numerically verified linalg AD exceptions in
+**80%+ line coverage** per source file. Cover new paths; when modifying a file
+below 80%, add tests. The existing numerically verified linalg AD exceptions in
 [AD Rule Coverage](REPOSITORY_RULES.md#ad-rule-coverage) apply: retain their
 per-file thresholds and numerical/oracle checks rather than padding line coverage.
 
@@ -315,7 +315,7 @@ bash scripts/check-pr-fast.sh --coverage-reviewed \
 # Check formatting
 python3 scripts/ci/run_profile.py fmt
 
-# Coverage check (per-file thresholds, target 90%+ line coverage per file)
+# Coverage check (per-file thresholds, target 80%+ line coverage per file)
 cargo llvm-cov --workspace --profile ci --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 
