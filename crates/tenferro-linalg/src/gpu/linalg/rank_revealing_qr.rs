@@ -328,10 +328,10 @@ macro_rules! impl_cuda_rrqr_complex {
                         vec![<$scalar>::new(0.0 as $real, 1.0 as $real)],
                     )?,
                 );
-                match tenferro_gpu::cuda::upload_tensor(backend.runtime(), &host)? {
-                    Tensor::from_typed::<preset_scalar!($variant)>(tensor) => Ok(Some(tensor)),
-                    _ => Err(Error::Internal("RRQR constant upload changed dtype".into())),
-                }
+                tenferro_gpu::cuda::upload_tensor(backend.runtime(), &host)?
+                    .into_typed::<preset_scalar!($variant)>()
+                    .map(Some)
+                    .map_err(|_| Error::Internal("RRQR constant upload changed dtype".into()))
             }
 
             fn launch_norms(
@@ -726,12 +726,11 @@ where
     // The only CUDA-to-host read is this bounded provider-status vector. Matrix
     // payloads, norms, pivots, permutation, and rank remain device-resident.
     backend.runtime().synchronize()?;
-    let host_status = download_tensor(backend.runtime(), &Tensor::from_typed::<i64>(status))?;
-    let Tensor::from_typed::<i64>(host_status) = host_status else {
-        return Err(Error::Internal(
-            "rank_revealing_qr: unexpected provider-status dtype".into(),
-        ));
-    };
+    let host_status = download_tensor(backend.runtime(), &Tensor::from_typed::<i64>(status))?
+        .into_typed::<i64>()
+        .map_err(|_| {
+            Error::Internal("rank_revealing_qr: unexpected provider-status dtype".into())
+        })?;
     if host_status.host_data()?.iter().any(|&value| value != 0) {
         return Err(crate::error::into_tensor_error(
             OP,
@@ -900,14 +899,16 @@ macro_rules! impl_rrqr_tensor_variant {
             }
 
             fn unwrap(tensor: Tensor) -> Result<TypedTensor<Self>> {
-                match tensor {
-                    Tensor::from_typed::<preset_scalar!($variant)>(tensor) => Ok(tensor),
-                    other => Err(Error::dtype_mismatch(
-                        OP,
-                        <$scalar as tenferro_tensor::TensorScalar>::dtype(),
-                        other.dtype(),
-                    )),
-                }
+                let actual = tensor.dtype();
+                tensor
+                    .into_typed::<preset_scalar!($variant)>()
+                    .map_err(|_| {
+                        Error::dtype_mismatch(
+                            OP,
+                            <$scalar as tenferro_tensor::TensorScalar>::dtype(),
+                            actual,
+                        )
+                    })
             }
         }
     };

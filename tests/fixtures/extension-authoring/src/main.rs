@@ -375,7 +375,7 @@ fn main() -> Result<(), Box<dyn StdError>> {
         "explicit materialization allocated {materialized_bytes} bytes for {input_bytes}-byte input"
     );
 
-    let backend_tensor = Tensor::F64(TypedTensor::<f64>::from_buffer_col_major(
+    let backend_tensor = Tensor::from_typed::<f64>(TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
         StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(1709, 2))),
         Placement::default(),

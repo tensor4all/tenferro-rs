@@ -32,16 +32,14 @@ mod metal {
     }
 
     fn c32_values(tensor: &Tensor) -> Vec<Complex32> {
-        let Tensor::from_typed::<tenferro_tensor::Complex32>(tensor) = tensor else {
-            panic!("expected C32 tensor")
-        };
+        let tensor = tensor
+            .as_typed::<tenferro_tensor::Complex32>()
+            .expect("expected C32 tensor");
         mapped(tensor)
     }
 
     fn f32_values(tensor: &Tensor) -> Vec<f32> {
-        let Tensor::from_typed::<f32>(tensor) = tensor else {
-            panic!("expected F32 tensor")
-        };
+        let tensor = tensor.as_typed::<f32>().expect("expected F32 tensor");
         mapped(tensor)
     }
 
@@ -86,9 +84,9 @@ mod metal {
             .collect::<Vec<_>>();
         let input = Tensor::from_vec_col_major(vec![8, 3], input_values).unwrap();
         let managed = context.upload_tensor(&input).unwrap();
-        let Tensor::from_typed::<tenferro_tensor::Complex32>(managed_typed) = &managed else {
-            panic!("expected C32 input")
-        };
+        let managed_typed = managed
+            .as_typed::<tenferro_tensor::Complex32>()
+            .expect("expected C32 input");
         let input_allocation = managed_typed.allocation_id().unwrap();
         let before = context.transfer_stats();
         let mut metal = context.metal_backend().clone();
@@ -116,9 +114,9 @@ mod metal {
                 reference_round_trip.as_slice().unwrap(),
                 3.0e-5,
             );
-            let Tensor::from_typed::<tenferro_tensor::Complex32>(output_typed) = output else {
-                panic!("expected C32 output")
-            };
+            let output_typed = output
+                .as_typed::<tenferro_tensor::Complex32>()
+                .expect("expected C32 output");
             assert_eq!(output_typed.allocation_domain(), Some(context.domain_id()));
             assert_ne!(output_typed.allocation_id(), Some(input_allocation));
         }
@@ -194,9 +192,7 @@ mod metal {
                 reference_round_trip.as_slice().unwrap(),
                 3.0e-5,
             );
-            let Tensor::from_typed::<f32>(round_trip) = round_trip else {
-                panic!("expected F32 output")
-            };
+            let round_trip = round_trip.as_typed::<f32>().expect("expected F32 output");
             assert_eq!(round_trip.allocation_domain(), Some(context.domain_id()));
             assert_eq!(context.transfer_stats(), before);
         }

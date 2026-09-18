@@ -404,7 +404,7 @@ fn faer_strided_read_fast_path_enters_once() {
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 #[test]
 fn faer_full_svd_enters_once() {
     let (mut backend, installs, submits) = external_no_inner_backend();
@@ -707,7 +707,7 @@ fn linalg_provider_panic_allows_next_operation_without_clearing_stats_poison() {
 
 /// The full-SVD path for the float and complex tags as well as the one the test above uses, so each
 /// tag's arms build their outputs rather than leaving those lines unvisited.
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 #[test]
 fn faer_full_svd_covers_the_float_and_complex_tags() {
     let (mut backend, _, _) = external_no_inner_backend();

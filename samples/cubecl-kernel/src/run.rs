@@ -77,16 +77,12 @@ fn run_in_cuda_session(
     n: usize,
 ) -> tenferro_tensor::Result<()> {
     let runtime = exec.runtime().clone();
-    let input = upload_tensor(&runtime, &Tensor::F32(host_input))?;
-    let output = upload_tensor(&runtime, &Tensor::F32(host_output))?;
+    let input = upload_tensor(&runtime, &Tensor::from_typed::<f32>(host_input))?;
+    let output = upload_tensor(&runtime, &Tensor::from_typed::<f32>(host_output))?;
 
     exec.with_cubecl(op, |cubecl| {
-        let Tensor::F32(input_typed) = &input else {
-            unreachable!("f32 upload")
-        };
-        let Tensor::F32(output_typed) = &output else {
-            unreachable!("f32 upload")
-        };
+        let input_typed = input.as_typed::<f32>().expect("f32 upload");
+        let output_typed = output.as_typed::<f32>().expect("f32 upload");
 
         let input_binding: ArrayArg<CubeclCudaRuntime> = cubecl.array_arg(input_typed, op)?;
         let output_binding: ArrayArg<CubeclCudaRuntime> = cubecl.array_arg(output_typed, op)?;
@@ -120,9 +116,7 @@ fn run_in_cuda_session(
     // Explicit host barrier, then download and assert.
     exec.synchronize()?;
     let downloaded = download_tensor(&runtime, &output)?;
-    let Tensor::F32(host) = downloaded else {
-        unreachable!("f32 download")
-    };
+    let host = downloaded.into_typed::<f32>().expect("f32 download");
     let (shape, values): (Vec<usize>, Vec<f32>) = host.into_vec_col_major()?;
     assert_eq!(shape, vec![n]);
     for (i, value) in values.iter().enumerate() {

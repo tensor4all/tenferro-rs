@@ -20,10 +20,9 @@ fn apple_context() -> Option<AppleContext> {
 }
 
 fn mapped_f32(tensor: &Tensor) -> Vec<f32> {
-    let Tensor::from_typed::<f32>(tensor) = tensor else {
-        panic!("expected F32 tensor")
-    };
     tensor
+        .as_typed::<f32>()
+        .expect("expected F32 tensor")
         .with_host_read(|values| values.to_vec())
         .expect("expected managed host-visible storage")
 }
@@ -34,9 +33,7 @@ fn f32_ids(
     Option<tenferro_tensor::AllocationDomainId>,
     Option<tenferro_tensor::AllocationId>,
 ) {
-    let Tensor::from_typed::<f32>(tensor) = tensor else {
-        panic!("expected F32 tensor")
-    };
+    let tensor = tensor.as_typed::<f32>().expect("expected F32 tensor");
     (tensor.allocation_domain(), tensor.allocation_id())
 }
 
@@ -105,11 +102,13 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
         .upload_tensor(&Tensor::from_vec_col_major([2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap())
         .unwrap();
     let before = context.transfer_stats();
-    let Tensor::from_typed::<f64>(f64_output) =
-        context.cpu_backend().clone().cholesky(&f64_input).unwrap()
-    else {
-        panic!("expected F64 output")
-    };
+    let f64_output = context
+        .cpu_backend()
+        .clone()
+        .cholesky(&f64_input)
+        .unwrap()
+        .into_typed::<f64>()
+        .expect("expected F64 output");
     let values = f64_output
         .with_host_read(|values| values.to_vec())
         .expect("expected managed F64 output");
@@ -124,11 +123,13 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
         )
         .unwrap();
     let before = context.transfer_stats();
-    let Tensor::from_typed::<tenferro_tensor::Complex32>(c32_output) =
-        context.cpu_backend().clone().cholesky(&c32_input).unwrap()
-    else {
-        panic!("expected C32 output")
-    };
+    let c32_output = context
+        .cpu_backend()
+        .clone()
+        .cholesky(&c32_input)
+        .unwrap()
+        .into_typed::<tenferro_tensor::Complex32>()
+        .expect("expected C32 output");
     let values = c32_output
         .with_host_read(|values| values.to_vec())
         .expect("expected managed C32 output");
@@ -144,11 +145,13 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
         )
         .unwrap();
     let before = context.transfer_stats();
-    let Tensor::from_typed::<tenferro_tensor::Complex64>(c64_output) =
-        context.cpu_backend().clone().cholesky(&c64_input).unwrap()
-    else {
-        panic!("expected C64 output")
-    };
+    let c64_output = context
+        .cpu_backend()
+        .clone()
+        .cholesky(&c64_input)
+        .unwrap()
+        .into_typed::<tenferro_tensor::Complex64>()
+        .expect("expected C64 output");
     let values = c64_output
         .with_host_read(|values| values.to_vec())
         .expect("expected managed C64 output");

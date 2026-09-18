@@ -41,7 +41,7 @@ fn c64_data(tensor: &Tensor) -> Vec<Complex64> {
 }
 
 /// Column-major reconstruction `A = U[:, :k] diag(S) Vh[:k, :]` for real inputs.
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 fn reconstruct_real(m: usize, n: usize, u: &[f64], s: &[f64], vh: &[f64]) -> Vec<f64> {
     let k = m.min(n);
     let mut a = vec![0.0_f64; m * n];
@@ -57,7 +57,7 @@ fn reconstruct_real(m: usize, n: usize, u: &[f64], s: &[f64], vh: &[f64]) -> Vec
     a
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 fn reconstruct_complex(
     m: usize,
     n: usize,
@@ -90,7 +90,7 @@ fn max_abs_diff_real(lhs: &[f64], rhs: &[f64]) -> f64 {
 // Full-matrices SVD (faer provider).
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 #[test]
 fn svd_full_tall_real_returns_square_factors_and_reconstructs() {
     let m = 3;
@@ -117,7 +117,7 @@ fn svd_full_tall_real_returns_square_factors_and_reconstructs() {
     );
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 #[test]
 fn svd_full_wide_real_reconstructs_and_recovers_nullspace() {
     // rank-2 wide matrix (2 x 3): the trailing Vh row spans the 1-D kernel.
@@ -150,7 +150,7 @@ fn svd_full_wide_real_reconstructs_and_recovers_nullspace() {
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 #[test]
 fn svd_full_1x2_recovers_one_dimensional_nullspace() {
     // Smallest wide system: thin SVD would drop the kernel row entirely.
@@ -170,7 +170,7 @@ fn svd_full_1x2_recovers_one_dimensional_nullspace() {
     assert!((v0 * v0 + v1 * v1 - 1.0).abs() < 1e-10);
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 #[test]
 fn svd_full_random_wide_recovers_nullspace_dimension() {
     // Deterministic rank-3 (3 x 5) matrix: rows are 3 independent vectors, so
@@ -206,7 +206,7 @@ fn svd_full_random_wide_recovers_nullspace_dimension() {
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 #[test]
 fn svd_full_complex_tall_reconstructs() {
     let m = 3;
@@ -243,7 +243,7 @@ fn svd_full_complex_tall_reconstructs() {
     );
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
 #[test]
 fn svd_full_batch_returns_square_factor_shapes() {
     // Leading matrix dims [m, n], trailing batch dim.
