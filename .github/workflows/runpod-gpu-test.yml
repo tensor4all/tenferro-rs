@@ -80,7 +80,9 @@ on:
         type: boolean
   workflow_run:
     workflows: ["CI PR workspace tests"]
-    types: [completed]
+    # Start trusted preparation as soon as the upstream workflow exists. The
+    # pre-runpod gate still waits for rustfmt and clippy before any paid pod.
+    types: [in_progress]
 
 concurrency:
   group: runpod-tenferro-gpu-${{ github.ref }}
@@ -116,7 +118,7 @@ env:
 jobs:
   authorize:
     name: Authorize RunPod GPU run
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request')
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.status == 'in_progress')
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -317,7 +319,7 @@ jobs:
         run: python3 scripts/ci/runpod_contract.py
 
   pre-runpod-gate:
-    name: Wait for review and non-GPU CI
+    name: Wait for rustfmt and clippy
     needs: authorize
     if: needs.authorize.outputs.gpu_required == 'true'
     runs-on: ubuntu-latest
@@ -333,19 +335,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Gate paid RunPod startup on every required non-GPU check that
-            // can already establish that this PR cannot merge: repository
-            // policy, formatting, lint, coverage, docs, and the full non-GPU
-            // workspace test aggregate. CUDA archive compilation still runs
-            // on a cheap hosted runner in parallel.
-            const required = [
-              "repository rules review gate",
-              "rustfmt",
-              "clippy",
-              "coverage",
-              "docs-site",
-              "CI gate (PR workspace tests)",
-            ];
+            // Lint is the paid-GPU start gate. Authorization and change
+            // classification already ran before this job; CPU/macOS,
+            // coverage, docs, and repository-review checks remain independent
+            // required merge checks. CUDA archive compilation runs in parallel
+            // with those checks on a cheap hosted runner.
+            const required = ["rustfmt", "clippy"];
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -475,7 +470,7 @@ jobs:
           # archive build commands or toolkit selection change; unrelated
           # workflow edits must not invalidate the key (#1403).
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v14-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/PERFORMANCE_TIPS.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
+          key="cuda-pjrt-archive-v15-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/PERFORMANCE_TIPS.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"
@@ -595,9 +590,9 @@ jobs:
         working-directory: tenferro-rs
         run: |
           set -euo pipefail
-          cargo build --release --manifest-path docs/tutorial-code/Cargo.toml \
+          cargo build --profile ci --manifest-path docs/tutorial-code/Cargo.toml \
             --no-default-features --features cuda,cpu-faer --bin cuda_tutorial
-          tar --zstd -cf "${CUDA_TUTORIAL_ARCHIVE}" -C target/release cuda_tutorial
+          tar --zstd -cf "${CUDA_TUTORIAL_ARCHIVE}" -C target/ci cuda_tutorial
 
       - name: Verify CUDA/PJRT test archives
         working-directory: tenferro-rs
@@ -1411,8 +1406,8 @@ jobs:
       (
         github.event_name == 'workflow_dispatch' ||
         (
-          github.event.workflow_run.conclusion == 'success' &&
-          github.event.workflow_run.event == 'pull_request'
+          github.event.workflow_run.event == 'pull_request' &&
+          github.event.workflow_run.status == 'in_progress'
         )
       )
 

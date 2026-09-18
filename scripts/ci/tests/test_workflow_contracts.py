@@ -59,11 +59,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("name: CI gate (PR workspace tests)", heavy)
         self.assertIn("name: macOS workspace tests", heavy)
 
-    def test_gpu_gates_wait_for_docs_and_coverage(self) -> None:
+    def test_gpu_gates_start_after_lint_only(self) -> None:
         for path in (".github/workflows/CI_gpu.yml", ".github/workflows/runpod-gpu-test.yml"):
             with self.subTest(path=path):
                 text = read(path)
-                self.assertIn('              "coverage",\n              "docs-site",', text)
+                self.assertIn('const required = ["rustfmt", "clippy"];', text)
+                self.assertNotIn('              "coverage",', text)
+                self.assertNotIn('              "docs-site",', text)
 
     def test_fast_required_jobs_fail_if_policy_fails(self) -> None:
         text = read(".github/workflows/ci.yml")
@@ -104,6 +106,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Workspace tests not required", text)
         self.assertIn("python3 scripts/ci/run_profile.py", text)
         self.assertNotIn("grep -qE", text)
+        self.assertIn(". -> ../target-${{ matrix.cfg.backend }}", text)
+        self.assertIn('libfaer-*.rlib', text)
+        self.assertIn("strided_view strided_traits strided_perm", text)
 
     def test_ci_config_installs_a_pinned_actionlint(self) -> None:
         text = read(".github/workflows/ci.yml")
@@ -553,34 +558,39 @@ class WorkflowContractTests(unittest.TestCase):
         for event in ("workflow_dispatch", "workflow_run"):
             for source in ("pull_request", "push"):
                 for conclusion in ("success", "failure", "cancelled", "skipped"):
-                    for cancelled in (False, True):
-                        with self.subTest(
-                            event=event, source=source,
-                            conclusion=conclusion, cancelled=cancelled,
-                        ):
-                            translated = expression
-                            for key, value in {
-                                "github.event_name": event,
-                                "github.event.workflow_run.event": source,
-                                "github.event.workflow_run.conclusion": conclusion,
-                                "always()": True,
-                                "cancelled()": cancelled,
-                            }.items():
-                                translated = translated.replace(key, repr(value))
-                            translated = translated.replace("&&", " and ")
-                            translated = translated.replace("||", " or ")
-                            translated = translated.replace("!", " not ")
-                            actual = eval(translated, {"__builtins__": {}})
-                            expected = not cancelled and (
-                                event == "workflow_dispatch"
-                                or (source == "pull_request" and conclusion == "success")
-                            )
-                            self.assertEqual(actual, expected)
+                    for status in ("in_progress", "completed"):
+                        for cancelled in (False, True):
+                            with self.subTest(
+                                event=event, source=source,
+                                conclusion=conclusion, status=status,
+                                cancelled=cancelled,
+                            ):
+                                translated = expression
+                                for key, value in {
+                                    "github.event_name": event,
+                                    "github.event.workflow_run.event": source,
+                                    "github.event.workflow_run.conclusion": conclusion,
+                                    "github.event.workflow_run.status": status,
+                                    "always()": True,
+                                    "cancelled()": cancelled,
+                                }.items():
+                                    translated = translated.replace(key, repr(value))
+                                translated = translated.replace("&&", " and ")
+                                translated = translated.replace("||", " or ")
+                                translated = translated.replace("!", " not ")
+                                actual = eval(translated, {"__builtins__": {}})
+                                expected = not cancelled and (
+                                    event == "workflow_dispatch"
+                                    or (source == "pull_request" and status == "in_progress")
+                                )
+                                self.assertEqual(actual, expected)
 
     def test_runpod_workflow_is_cache_reader_only(self) -> None:
         """No job that builds PR code or runs on the pod may write caches (#1403)."""
 
         text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn("types: [in_progress]", text)
+        self.assertNotIn("types: [completed]", text)
         self.assertNotIn("uses: actions/cache@", text)
         self.assertNotIn("actions/cache/save", text)
         rust_cache_uses = text.count("Swatinem/rust-cache")

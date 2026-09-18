@@ -118,7 +118,11 @@ no Cargo compilation happens on the retry path.
 ## Observability and bounds
 
 - The archive job logs its source (cache hit / reused artifact with run id /
-  fresh build) plus archive sizes and free disk.
+  fresh build) plus archive sizes and free disk. The hosted workspace matrix
+  maps rust-cache to its external `CARGO_TARGET_DIR` and, on an exact hit,
+  verifies restored `faer` and `strided-rs` dependency artifacts under the
+  actual target path; a cache-hit message alone is not treated as evidence.
+
 - The pod logs cuTENSOR and runtime-tree cache hit state before falling back
   to direct downloads.
 - The publisher logs whether a key was already published (no-op) or built.

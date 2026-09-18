@@ -254,10 +254,12 @@ diff-scoped review bot.
 Human/process protocol. This section is intentionally not routed to the
 diff-scoped review bot.
 
-- Expensive CI lanes, especially GPU or larger-runner jobs, are gated behind
-  cheaper repository-policy and non-GPU checks. Do not trigger hardware-backed
-  runners directly on PR updates when an earlier review, lint, docs, or CPU
-  test gate can reject the PR first.
+- Paid GPU execution is gated by trusted authorization, change
+  classification, and successful `rustfmt` and `clippy`. It may start before
+  CPU, macOS, coverage, docs, and repository-review checks finish so the
+  hosted archive build overlaps those independent required checks. Those
+  checks remain merge-blocking; this is a deliberate latency trade-off, not a
+  reduction in validation.
 
 ## Publication Order And Publish-Safety
 

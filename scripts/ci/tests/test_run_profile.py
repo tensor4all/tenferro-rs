@@ -109,7 +109,7 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(
             commands_for("coverage")[0],
             "cargo llvm-cov --workspace --exclude tenferro-tutorial-code "
-            "--profile ci --json --output-path coverage.json",
+            "--profile ci --no-clean --json --output-path coverage.json",
         )
 
     def test_hosted_profiles_use_cargo_ci_profile_not_release(self) -> None:

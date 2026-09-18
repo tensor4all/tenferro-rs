@@ -45,6 +45,8 @@ apple-shared = [
     "dep:tenferro-gpu",
     "dep:tenferro-tensor",
     "tenferro-fft/autodiff",
+    "tenferro-fft/webgpu",
+    "tenferro-gpu/webgpu",
 ]
 doc-snippets = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-tensor", "dep:tenferro-ext-sparse", "dep:tenferro-ext-tropical", "tenferro-fft/webgpu", "tenferro-gpu/cuda", "tenferro-ext-sparse/autodiff", "tenferro-ext-tropical/autodiff"]
 cuda = [
@@ -62,8 +64,8 @@ num-complex.workspace = true
 tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
 tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
 tenferro-einsum = { path = "../../crates/tenferro-einsum", default-features = false, features = ["autodiff"] }
-tenferro-fft = { path = "../../crates/tenferro-fft", default-features = false, features = ["webgpu"], optional = true }
-tenferro-gpu = { path = "../../crates/tenferro-gpu", default-features = false, features = ["webgpu"], optional = true }
+tenferro-fft = { path = "../../crates/tenferro-fft", default-features = false, optional = true }
+tenferro-gpu = { path = "../../crates/tenferro-gpu", default-features = false, optional = true }
 tenferro-linalg = { path = "../../crates/tenferro-linalg", default-features = false, features = ["autodiff"] }
 tenferro-ops = { package = "tenferro-internal-ops", path = "../../crates/tenferro-internal-ops" }
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }

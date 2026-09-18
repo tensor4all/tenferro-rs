@@ -98,7 +98,38 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.cfg.profile != ''
       - uses: Swatinem/rust-cache@v2
+        id: rust_cache
         if: matrix.cfg.profile != ''
+        with:
+          # Cargo writes to CARGO_TARGET_DIR outside the checkout. Without
+          # this mapping rust-cache restores ./target and misses faer and
+          # strided-rs dependency artifacts in the real target tree.
+          workspaces: |
+            . -> ../target-${{ matrix.cfg.backend }}
+          shared-key: ci-workspace-${{ matrix.cfg.backend }}
+      - name: Verify restored dependency artifacts
+        if: matrix.cfg.profile != '' && steps.rust_cache.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          deps="${CARGO_TARGET_DIR}/ci/deps"
+          test -d "${deps}"
+          for crate in strided_view strided_traits strided_perm strided_basic strided_fused strided_kernel; do
+            find "${deps}" -maxdepth 1 -type f \
+              \( -name "lib${crate}-*.rlib" -o -name "lib${crate}-*.rmeta" \) \
+              -print -quit | grep -q . || {
+                echo "restored cache is missing ${crate} artifacts in ${deps}" >&2
+                exit 1
+              }
+          done
+          if [ "${{ matrix.cfg.backend }}" = cpu-faer ]; then
+            find "${deps}" -maxdepth 1 -type f \
+              \( -name 'libfaer-*.rlib' -o -name 'libfaer-*.rmeta' \) \
+              -print -quit | grep -q . || {
+                echo "restored cache is missing faer artifacts in ${deps}" >&2
+                exit 1
+              }
+          fi
+          echo "Verified restored Cargo dependency artifacts under ${deps}."
       - name: Install BLAS/LAPACK runtime libraries
         if: matrix.cfg.backend == 'cpu-blas'
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev liblapack-dev

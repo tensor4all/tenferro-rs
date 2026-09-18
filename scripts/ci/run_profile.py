@@ -107,7 +107,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     ),
     "coverage": (
         f"cargo llvm-cov --workspace --exclude tenferro-tutorial-code "
-        f"{_CARGO_TEST_PROFILE} --json --output-path coverage.json",
+        f"{_CARGO_TEST_PROFILE} --no-clean --json --output-path coverage.json",
         "python3 scripts/check-coverage.py coverage.json",
     ),
     "ci-config": (

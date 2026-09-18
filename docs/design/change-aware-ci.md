@@ -46,9 +46,11 @@ changes and `main` pushes. It runs the shared `workspace-faer` profile on
 Apple/Metal paths. After change classification, the job starts in parallel with
 the selected Linux workspace and extension lanes. Linux and macOS remain
 independent required checks, reducing pull-request wall-clock time while still
-failing closed on either platform. The RunPod GPU workflow remains further
-downstream of the completed workspace workflow, so a failed Linux or macOS run
-still prevents paid GPU allocation.
+failing closed on either platform. The trusted RunPod workflow starts from the
+workspace workflow's `in_progress` event; its hosted archive build overlaps
+CPU/macOS/coverage/docs validation, while `pre-runpod-gate` waits only for
+successful `rustfmt` and `clippy` before provisioning a paid pod. The other
+checks remain independent merge blockers.
 
 The change policy also runs this gate when its workflow, shared profile, or
 classifier changes, so CI-only edits can validate the native lane. Other
@@ -102,7 +104,9 @@ and commit identity, allowing equivalent automatic and recovery runs to reuse
 the hosted cache while still uploading a per-run artifact for the external
 runner. Hosted archive builds produce separate `cuda-tests.tar.zst` and
 `pjrt-tests.tar.zst` nextest archives; the GPU node runs both from archive and
-does not compile Rust (PJRT plugin wheels remain a runtime download).
+does not compile Rust (PJRT plugin wheels remain a runtime download). The
+CUDA tutorial uses the workspace `ci` profile and is archived from `target/ci`,
+so it does not create a separate release-profile rebuild.
 
 The archive is compiled with cudarc's CUDA 12.8 binding set, while CubeCL JITs
 PTX on the external runner. RunPod therefore accepts CUDA 12.4-or-newer hosts
