@@ -566,10 +566,12 @@ fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
         .unwrap();
 
     assert_eq!(c.shape(), &[0, 0]);
-    match c {
-        Tensor::F64(inner) => assert!(inner.host_data().unwrap().is_empty()),
-        _ => panic!("expected F64 tensor"),
-    }
+    assert!(c
+        .as_typed::<f64>()
+        .expect("expected F64 tensor")
+        .host_data()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -591,10 +593,13 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
         .unwrap();
 
     assert_eq!(c.shape(), &[2, 3]);
-    match c {
-        Tensor::F64(inner) => assert_eq!(inner.host_data().unwrap(), &[0.0; 6]),
-        _ => panic!("expected F64 tensor"),
-    }
+    assert_eq!(
+        c.as_typed::<f64>()
+            .expect("expected F64 tensor")
+            .host_data()
+            .unwrap(),
+        &[0.0; 6]
+    );
 }
 
 #[test]
@@ -735,10 +740,11 @@ fn test_tril_3x3() {
     let lower = tril(&t, 0).unwrap();
     assert_eq!(lower.shape(), &[3, 3]);
     assert_eq!(
-        match &lower {
-            Tensor::F64(inner) => inner.host_data().unwrap(),
-            _ => panic!("expected f64 tensor"),
-        },
+        lower
+            .as_typed::<f64>()
+            .expect("expected f64 tensor")
+            .host_data()
+            .unwrap(),
         &[1.0, 2.0, 3.0, 0.0, 5.0, 6.0, 0.0, 0.0, 9.0]
     );
 }
@@ -755,10 +761,11 @@ fn test_triu_3x3() {
     let upper = triu(&t, 0).unwrap();
     assert_eq!(upper.shape(), &[3, 3]);
     assert_eq!(
-        match &upper {
-            Tensor::F64(inner) => inner.host_data().unwrap(),
-            _ => panic!("expected f64 tensor"),
-        },
+        upper
+            .as_typed::<f64>()
+            .expect("expected f64 tensor")
+            .host_data()
+            .unwrap(),
         &[1.0, 0.0, 0.0, 4.0, 5.0, 0.0, 7.0, 8.0, 9.0]
     );
 }
@@ -788,17 +795,21 @@ fn test_tril_triu_zero_sized_batch_return_empty_tensor() {
 
     let lower = tril(&t, 0).unwrap();
     assert_eq!(lower.shape(), &[2, 2, 0]);
-    match lower {
-        Tensor::F64(inner) => assert!(inner.host_data().unwrap().is_empty()),
-        _ => panic!("expected f64 tensor"),
-    }
+    assert!(lower
+        .as_typed::<f64>()
+        .expect("expected f64 tensor")
+        .host_data()
+        .unwrap()
+        .is_empty());
 
     let upper = triu(&t, 0).unwrap();
     assert_eq!(upper.shape(), &[2, 2, 0]);
-    match upper {
-        Tensor::F64(inner) => assert!(inner.host_data().unwrap().is_empty()),
-        _ => panic!("expected f64 tensor"),
-    }
+    assert!(upper
+        .as_typed::<f64>()
+        .expect("expected f64 tensor")
+        .host_data()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -808,37 +819,41 @@ fn test_tril_triu_extreme_offsets_do_not_overflow() {
 
     let lower_min = tril(&t, i64::MIN).unwrap();
     assert_eq!(
-        match &lower_min {
-            Tensor::F64(inner) => inner.host_data().unwrap(),
-            _ => panic!("expected f64 tensor"),
-        },
+        lower_min
+            .as_typed::<f64>()
+            .expect("expected f64 tensor")
+            .host_data()
+            .unwrap(),
         &[0.0, 0.0, 0.0, 0.0]
     );
 
     let upper_min = triu(&t, i64::MIN).unwrap();
     assert_eq!(
-        match &upper_min {
-            Tensor::F64(inner) => inner.host_data().unwrap(),
-            _ => panic!("expected f64 tensor"),
-        },
+        upper_min
+            .as_typed::<f64>()
+            .expect("expected f64 tensor")
+            .host_data()
+            .unwrap(),
         &[1.0, 2.0, 3.0, 4.0]
     );
 
     let lower_max = tril(&t, i64::MAX).unwrap();
     assert_eq!(
-        match &lower_max {
-            Tensor::F64(inner) => inner.host_data().unwrap(),
-            _ => panic!("expected f64 tensor"),
-        },
+        lower_max
+            .as_typed::<f64>()
+            .expect("expected f64 tensor")
+            .host_data()
+            .unwrap(),
         &[1.0, 2.0, 3.0, 4.0]
     );
 
     let upper_max = triu(&t, i64::MAX).unwrap();
     assert_eq!(
-        match &upper_max {
-            Tensor::F64(inner) => inner.host_data().unwrap(),
-            _ => panic!("expected f64 tensor"),
-        },
+        upper_max
+            .as_typed::<f64>()
+            .expect("expected f64 tensor")
+            .host_data()
+            .unwrap(),
         &[0.0, 0.0, 0.0, 0.0]
     );
 }

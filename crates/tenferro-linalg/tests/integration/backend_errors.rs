@@ -645,9 +645,13 @@ fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
     support::with_cpu_linalg(&mut backend, |backend| {
         let a = f32_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
         let factors = backend.lu_factor(&a).unwrap();
-        assert!(matches!(&factors[0], Tensor::F32(t) if t.shape() == [2, 2]));
-        assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data().unwrap() == [2, 2]));
-        assert!(matches!(&factors[2], Tensor::F32(t) if t.host_data().unwrap() == [-1.0]));
+        assert!(matches!(&factors[0].as_typed::<f32>(), Some(t) if t.shape() == [2, 2]));
+        assert!(
+            matches!(&factors[1].as_typed::<i32>(), Some(t) if t.host_data().unwrap() == [2, 2])
+        );
+        assert!(
+            matches!(&factors[2].as_typed::<f32>(), Some(t) if t.host_data().unwrap() == [-1.0])
+        );
 
         let a = c32_tensor(
             vec![2, 2],
@@ -659,8 +663,10 @@ fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
             ],
         );
         let factors = backend.lu_factor(&a).unwrap();
-        assert!(matches!(&factors[0], Tensor::C32(t) if t.shape() == [2, 2]));
-        assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data().unwrap() == [1, 2]));
+        assert!(matches!(&factors[0].as_typed::<Complex32>(), Some(t) if t.shape() == [2, 2]));
+        assert!(
+            matches!(&factors[1].as_typed::<i32>(), Some(t) if t.host_data().unwrap() == [1, 2])
+        );
         assert!(
             matches!(&factors[2], Tensor::C32(t) if t.host_data().unwrap() == [Complex32::new(1.0, 0.0)])
         );
@@ -675,7 +681,7 @@ fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
         let s = backend
             .svd_values(&f32_tensor(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0]))
             .unwrap();
-        assert!(matches!(s, Tensor::F32(ref t) if t.shape() == [2]));
+        assert!(matches!(s.as_typed::<f32>(), Some(t) if t.shape() == [2]));
 
         let s = backend
             .svd_values(&f64_tensor(
@@ -683,7 +689,7 @@ fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
                 vec![3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0],
             ))
             .unwrap();
-        assert!(matches!(s, Tensor::F64(ref t) if t.shape() == [2, 2]));
+        assert!(matches!(s.as_typed::<f64>(), Some(t) if t.shape() == [2, 2]));
 
         let s = backend
             .svd_values(&c32_tensor(
@@ -696,7 +702,7 @@ fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
                 ],
             ))
             .unwrap();
-        assert!(matches!(s, Tensor::F32(ref t) if t.shape() == [2]));
+        assert!(matches!(s.as_typed::<f32>(), Some(t) if t.shape() == [2]));
 
         let s = backend
             .svd_values(&c64_tensor(
@@ -709,12 +715,12 @@ fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
                 ],
             ))
             .unwrap();
-        assert!(matches!(s, Tensor::F64(ref t) if t.shape() == [2]));
+        assert!(matches!(s.as_typed::<f64>(), Some(t) if t.shape() == [2]));
 
         let values = backend
             .eigh_values(&f32_tensor(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0]))
             .unwrap();
-        assert!(matches!(values, Tensor::F32(ref t) if t.shape() == [2]));
+        assert!(matches!(values.as_typed::<f32>(), Some(t) if t.shape() == [2]));
 
         let values = backend
             .eigh_values(&f64_tensor(
@@ -722,7 +728,7 @@ fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
                 vec![3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0],
             ))
             .unwrap();
-        assert!(matches!(values, Tensor::F64(ref t) if t.shape() == [2, 2]));
+        assert!(matches!(values.as_typed::<f64>(), Some(t) if t.shape() == [2, 2]));
 
         let values = backend
             .eigh_values(&c32_tensor(
@@ -735,7 +741,7 @@ fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
                 ],
             ))
             .unwrap();
-        assert!(matches!(values, Tensor::F32(ref t) if t.shape() == [2]));
+        assert!(matches!(values.as_typed::<f32>(), Some(t) if t.shape() == [2]));
 
         let values = backend
             .eigh_values(&c64_tensor(
@@ -748,7 +754,7 @@ fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
                 ],
             ))
             .unwrap();
-        assert!(matches!(values, Tensor::F64(ref t) if t.shape() == [2]));
+        assert!(matches!(values.as_typed::<f64>(), Some(t) if t.shape() == [2]));
     });
 }
 

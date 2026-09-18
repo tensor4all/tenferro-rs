@@ -79,52 +79,52 @@ fn faer_parallelism_capability_runs_inside_a_cpu_session() {
 }
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
-    match t {
-        Tensor::F64(inner) => *inner.get(idx).unwrap(),
-        _ => panic!("expected F64 tensor"),
-    }
+    *t.as_typed::<f64>()
+        .expect("expected F64 tensor")
+        .get(idx)
+        .unwrap()
 }
 
 fn get_c64(t: &Tensor, idx: &[usize]) -> Complex64 {
-    match t {
-        Tensor::C64(inner) => *inner.get(idx).unwrap(),
-        _ => panic!("expected C64 tensor"),
-    }
+    *t.as_typed::<Complex64>()
+        .expect("expected C64 tensor")
+        .get(idx)
+        .unwrap()
 }
 
 fn get_f32(t: &Tensor, idx: &[usize]) -> f32 {
-    match t {
-        Tensor::F32(inner) => *inner.get(idx).unwrap(),
-        _ => panic!("expected F32 tensor"),
-    }
+    *t.as_typed::<f32>()
+        .expect("expected F32 tensor")
+        .get(idx)
+        .unwrap()
 }
 
 fn get_c32(t: &Tensor, idx: &[usize]) -> Complex32 {
-    match t {
-        Tensor::C32(inner) => *inner.get(idx).unwrap(),
-        _ => panic!("expected C32 tensor"),
-    }
+    *t.as_typed::<Complex32>()
+        .expect("expected C32 tensor")
+        .get(idx)
+        .unwrap()
 }
 
 fn get_i64(t: &Tensor, idx: &[usize]) -> i64 {
-    match t {
-        Tensor::I64(inner) => *inner.get(idx).unwrap(),
-        _ => panic!("expected I64 tensor"),
-    }
+    *t.as_typed::<i64>()
+        .expect("expected I64 tensor")
+        .get(idx)
+        .unwrap()
 }
 
 fn get_i32(t: &Tensor, idx: &[usize]) -> i32 {
-    match t {
-        Tensor::I32(inner) => *inner.get(idx).unwrap(),
-        _ => panic!("expected I32 tensor"),
-    }
+    *t.as_typed::<i32>()
+        .expect("expected I32 tensor")
+        .get(idx)
+        .unwrap()
 }
 
 fn get_bool(t: &Tensor, idx: &[usize]) -> bool {
-    match t {
-        Tensor::Bool(inner) => *inner.get(idx).unwrap(),
-        _ => panic!("expected Bool tensor"),
-    }
+    *t.as_typed::<bool>()
+        .expect("expected Bool tensor")
+        .get(idx)
+        .unwrap()
 }
 
 fn assert_f64_close(actual: f64, expected: f64) {
