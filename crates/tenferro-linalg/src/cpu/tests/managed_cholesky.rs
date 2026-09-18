@@ -16,7 +16,6 @@ use super::with_cpu_linalg;
 use crate::LinalgBackend;
 
 /// The Rust scalar type behind a preset variant name a macro received.
-#[allow(unused_macros)]
 macro_rules! preset_scalar {
     (F32) => {
         f32

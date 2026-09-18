@@ -5,7 +5,6 @@ use super::*;
 use crate::{rank_revealing_qr::validate_rank_revealing_qr_options, RankRevealingQrOptions};
 
 /// The Rust scalar type behind a preset variant name a macro received.
-#[allow(unused_macros)]
 macro_rules! preset_scalar {
     (F32) => {
         f32

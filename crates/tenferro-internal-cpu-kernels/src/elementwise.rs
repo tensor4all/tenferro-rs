@@ -21,7 +21,6 @@ use tenferro_cpu_basic::{
 
 /// The typed operands behind a same-dtype triple, or this module's refusal for one.
 /// The Rust scalar type behind a preset variant name a macro received.
-#[allow(unused_macros)]
 macro_rules! preset_scalar {
     (F32) => {
         f32

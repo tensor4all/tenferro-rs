@@ -55,7 +55,6 @@ use crate::{
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
-#[allow(unused_macros)]
 macro_rules! preset_scalar {
     (F32) => {
         f32

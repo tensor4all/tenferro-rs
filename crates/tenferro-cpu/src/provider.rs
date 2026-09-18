@@ -19,7 +19,6 @@ use crate::backend::CpuBackendKind;
 use crate::buffer_pool::BufferPool;
 use crate::domain_executor::{indexed_jobs, install_scoped};
 /// The Rust scalar type behind a preset variant name a macro received.
-#[allow(unused_macros)]
 macro_rules! preset_scalar {
     (F32) => {
         f32

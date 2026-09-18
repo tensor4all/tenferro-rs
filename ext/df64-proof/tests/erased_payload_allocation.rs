@@ -76,9 +76,18 @@ fn report_erased_payload_allocation_cost() {
     );
     println!("inline variant payload: {inline_allocs} allocations / {inline_bytes} bytes");
     println!("boxed single payload: {boxed_allocs} allocations / {boxed_bytes} bytes");
+    // The exact byte count depends on the feature-unified descriptor layout, so the pinned
+    // property is the one that matters: the single payload adds only the discriminant to
+    // the typed core rather than a pointer and a heap allocation.
+    assert_eq!(
+        std::mem::size_of::<Tensor>(),
+        std::mem::size_of::<tenferro_tensor::TypedTensor<f64>>() + 8,
+        "the single payload adds only the discriminant to the typed core"
+    );
+    assert_eq!(std::mem::align_of::<Tensor>(), 8);
     assert_eq!(
         inline_allocs, 0,
-        "the variant holds the typed tensor inline, so wrapping it is a move"
+        "the payload holds the typed tensor inline, so wrapping it is a move"
     );
     assert!(
         boxed_allocs >= 1,
