@@ -4,7 +4,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem::{align_of, needs_drop, offset_of, size_of};
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::SliceConfig;
@@ -1038,7 +1038,7 @@ impl<T: 'static> StorageBuffer<T> {
 /// on the ownership and layout rather than on `T`. Keeping the core as one named type is what
 /// lets a single erased payload reborrow any preset scalar from it.
 #[derive(Debug)]
-pub struct TensorCore<R: TensorRank = DynRank> {
+pub(crate) struct TensorCore<R: TensorRank = DynRank> {
     pub(crate) group: OwnedTensorGroup<R>,
     pub(crate) layout: TensorLayout<R>,
     pub(crate) placement: Placement,
@@ -1047,22 +1047,8 @@ pub struct TensorCore<R: TensorRank = DynRank> {
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct TypedTensor<T, R: TensorRank = DynRank> {
-    core: TensorCore<R>,
+    pub(crate) core: TensorCore<R>,
     _scalar: PhantomData<T>,
-}
-
-impl<T, R: TensorRank> Deref for TypedTensor<T, R> {
-    type Target = TensorCore<R>;
-
-    fn deref(&self) -> &TensorCore<R> {
-        &self.core
-    }
-}
-
-impl<T, R: TensorRank> DerefMut for TypedTensor<T, R> {
-    fn deref_mut(&mut self) -> &mut TensorCore<R> {
-        &mut self.core
-    }
 }
 
 /// The sole owner handle for host tensors. The allocation group owns the
@@ -2005,7 +1991,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         let shape = R::shape_from_vec(shape_vec(self.shape()))
             .map_err(|err| tensor_layout_error("TypedTensorView::duplicate", err))?;
         let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
-        tensor.placement = self.placement.clone();
+        tensor.core.placement = self.placement.clone();
         Ok(tensor)
     }
 
@@ -4637,13 +4623,13 @@ fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
             // payload it was created from and this construction cannot fail.
             unreachable!("a validated payload yields a layout inside its own storage")
         }),
-        Tensor::F32(tensor) => tensor.layout.clone(),
-        Tensor::F64(tensor) => tensor.layout.clone(),
-        Tensor::I32(tensor) => tensor.layout.clone(),
-        Tensor::I64(tensor) => tensor.layout.clone(),
-        Tensor::Bool(tensor) => tensor.layout.clone(),
-        Tensor::C32(tensor) => tensor.layout.clone(),
-        Tensor::C64(tensor) => tensor.layout.clone(),
+        Tensor::F32(tensor) => tensor.core.layout.clone(),
+        Tensor::F64(tensor) => tensor.core.layout.clone(),
+        Tensor::I32(tensor) => tensor.core.layout.clone(),
+        Tensor::I64(tensor) => tensor.core.layout.clone(),
+        Tensor::Bool(tensor) => tensor.core.layout.clone(),
+        Tensor::C32(tensor) => tensor.core.layout.clone(),
+        Tensor::C64(tensor) => tensor.core.layout.clone(),
     }
 }
 
@@ -4723,7 +4709,7 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
     tensor: &TypedTensor<T>,
     layout: TensorLayout<DynRank>,
 ) -> TypedTensorView<'_, T> {
-    let root = match tensor.group.view::<T>() {
+    let root = match tensor.core.group.view::<T>() {
         Ok(root) => root,
         Err(error) => unreachable!("typed tensor group descriptor mismatch: {error}"),
     };
@@ -4736,7 +4722,7 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
         buffer,
         root: Some(root),
         layout,
-        placement: tensor.placement.clone(),
+        placement: tensor.core.placement.clone(),
     }
 }
 
@@ -6794,7 +6780,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.shape(), &[2]);
     /// ```
     pub fn shape(&self) -> &[usize] {
-        self.layout.shape()
+        self.core.layout.shape()
     }
 
     /// Tensor rank.
@@ -6824,7 +6810,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.layout().strides(), &[1, 2]);
     /// ```
     pub fn layout(&self) -> &TensorLayout<R> {
-        &self.layout
+        &self.core.layout
     }
 
     /// Return the storage backing this tensor.
@@ -6851,9 +6837,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         match self
+            .core
             .group
             .host_buffer::<T>()
-            .or_else(|| self.group.backend_buffer::<T>())
+            .or_else(|| self.core.group.backend_buffer::<T>())
         {
             Some(buffer) => buffer,
             None => unreachable!("typed tensor group storage mismatch"),
@@ -6875,7 +6862,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        match self.group.backend_buffer::<T>() {
+        match self.core.group.backend_buffer::<T>() {
             Some(StorageBuffer::Backend(buffer)) => Some(buffer.as_ref()),
             Some(StorageBuffer::Host(_)) | None => None,
         }
@@ -6887,7 +6874,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        let buffer = self.group.backend_buffer_mut::<T>()?;
+        let buffer = self.core.group.backend_buffer_mut::<T>()?;
         match buffer {
             StorageBuffer::Host(_) => None,
             StorageBuffer::Backend(buffer) => Some(buffer.as_mut()),
@@ -6903,8 +6890,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        self.group
-            .prepare_device_read_for_layout::<T>(&self.layout)
+        self.core
+            .group
+            .prepare_device_read_for_layout::<T>(&self.core.layout)
             .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
 
@@ -6917,8 +6905,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let layout = self.layout.clone();
-        self.group
+        let layout = self.core.layout.clone();
+        self.core
+            .group
             .prepare_device_write_for_layout::<T>(&layout)
             .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
@@ -6927,9 +6916,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        self.group
+        self.core
             .group
-            .descriptor_len(self.group.slot)
+            .group
+            .descriptor_len(self.core.group.slot)
             .unwrap_or_else(|| unreachable!("typed tensor group descriptor mismatch"))
     }
 
@@ -6948,9 +6938,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        self.group
+        self.core
             .group
-            .backend_identity(self.group.slot)
+            .group
+            .backend_identity(self.core.group.slot)
             .map(|(domain, _)| domain)
     }
 
@@ -6969,9 +6960,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        self.group
+        self.core
             .group
-            .backend_identity(self.group.slot)
+            .group
+            .backend_identity(self.core.group.slot)
             .map(|(_, allocation)| allocation)
     }
 
@@ -6986,7 +6978,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.placement().memory_kind, MemoryKind::UnpinnedHost);
     /// ```
     pub fn placement(&self) -> &Placement {
-        &self.placement
+        &self.core.placement
     }
 
     /// Replace placement metadata without changing the storage buffer.
@@ -7005,7 +6997,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.placement().memory_kind, MemoryKind::PinnedHost);
     /// ```
     pub fn set_placement(&mut self, placement: Placement) {
-        self.placement = placement;
+        self.core.placement = placement;
     }
 
     /// Replace only CPU routing/locality metadata without changing storage.
@@ -7024,7 +7016,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn set_cpu_affinity(&mut self, cpu_affinity: Option<CpuDomainId>) {
-        self.placement.cpu_affinity = cpu_affinity;
+        self.core.placement.cpu_affinity = cpu_affinity;
     }
 
     /// Borrow this tensor as a typed view preserving rank and layout metadata.
@@ -7047,7 +7039,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let root = match self.group.view::<T>() {
+        let root = match self.core.group.view::<T>() {
             Ok(root) => root,
             Err(error) => unreachable!("typed tensor group descriptor mismatch: {error}"),
         };
@@ -7060,8 +7052,8 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         TypedTensorView {
             buffer,
             root,
-            layout: self.layout.clone(),
-            placement: self.placement.clone(),
+            layout: self.core.layout.clone(),
+            placement: self.core.placement.clone(),
         }
     }
 
@@ -7085,9 +7077,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let layout = self.layout.clone();
-        let placement = self.placement.clone();
-        let mut root = match self.group.view_mut::<T>() {
+        let layout = self.core.layout.clone();
+        let placement = self.core.placement.clone();
+        let mut root = match self.core.group.view_mut::<T>() {
             Ok(root) => root,
             Err(error) => unreachable!("typed tensor group descriptor mismatch: {error}"),
         };
@@ -7148,7 +7140,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: TensorScalar + 'static,
     {
         let op = "TypedTensor::backend_region_view";
-        let root = self.group.view_dyn::<T>()?;
+        let root = self.core.group.view_dyn::<T>()?;
         let Some(allocation) = root.backend_allocation() else {
             return Err(crate::Error::runtime_state(
                 op,
@@ -7167,7 +7159,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             buffer: TensorStorageRef::Root(allocation),
             root: Some(root),
             layout,
-            placement: self.placement.clone(),
+            placement: self.core.placement.clone(),
         })
     }
 
@@ -7392,7 +7384,7 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// storage; download it before exporting a host `Vec`.
     pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         let shape = self.shape().to_vec();
-        if self.group.backend_buffer::<T>().is_some() {
+        if self.core.group.backend_buffer::<T>().is_some() {
             return Err(crate::Error::runtime_state(
                 "into_vec_col_major",
                 "backend buffers cannot be exported as host Vec",
@@ -7410,7 +7402,7 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
     /// storage.
     pub fn into_host_vec(self) -> crate::Result<Vec<T>> {
-        if self.group.backend_buffer::<T>().is_some() {
+        if self.core.group.backend_buffer::<T>().is_some() {
             return Err(crate::Error::runtime_state(
                 "into_host_vec",
                 "backend buffers cannot be exported as host Vec",
@@ -7435,7 +7427,7 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
     /// storage; download it before borrowing host data.
     pub fn host_data(&self) -> crate::Result<&[T]> {
-        self.group.host_slice::<T>()
+        self.core.group.host_slice::<T>()
     }
 
     /// Borrow compact host-visible storage through one synchronization guard.
@@ -7445,9 +7437,10 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         T: TensorScalar + 'static,
     {
         let view = self
+            .core
             .group
             .group
-            .view::<T, R>(self.group.slot)
+            .view::<T, R>(self.core.group.slot)
             .map_err(|error| group_error("TypedTensor::with_host_read", error))?;
         let prepared = view.prepare_host_read().map_err(|error| {
             crate::Error::runtime_state("TypedTensor::with_host_read", error.to_string())
@@ -7525,11 +7518,12 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
     /// storage; download it before mutably borrowing host data.
     pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
-        self.group.host_slice_mut::<T>()
+        self.core.group.host_slice_mut::<T>()
     }
 
     fn group_host_slice(&self) -> &[T] {
-        self.group
+        self.core
+            .group
             .view::<T>()
             .ok()
             .and_then(|view| view.host_slice().ok())
@@ -7537,7 +7531,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     }
 
     fn group_host_slice_mut(&mut self) -> &mut [T] {
-        self.group
+        self.core
+            .group
             .view_mut::<T>()
             .ok()
             .and_then(|mut view| view.host_slice_mut().ok())
@@ -7607,7 +7602,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
     /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
-        self.layout
+        self.core
+            .layout
             .is_compact_col_major()
             .map_err(|err| tensor_layout_error("TypedTensor::is_col_major_contiguous", err))
     }
@@ -7624,7 +7620,11 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn layout_summary(&self) -> String {
-        layout_summary(self.shape(), self.layout.strides(), self.layout.offset())
+        layout_summary(
+            self.shape(),
+            self.core.layout.strides(),
+            self.core.layout.offset(),
+        )
     }
 
     /// Assert this tensor is compact column-major.
@@ -7649,8 +7649,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
             self.shape(),
-            self.layout.strides(),
-            self.layout.offset(),
+            self.core.layout.strides(),
+            self.core.layout.offset(),
             "TypedTensor::assert_col_major_contiguous",
         )
     }
@@ -7736,8 +7736,8 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
         validate_representation_pair(op, DType::C32, DType::F32)?;
         let layout = reinterpret_complex_to_real_layout(
             self.shape(),
-            self.layout.strides(),
-            self.layout.offset(),
+            self.core.layout.strides(),
+            self.core.layout.offset(),
             self.buffer_len(),
             op,
         )?;
@@ -7750,7 +7750,7 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
                 "backend representation reinterpretation is enabled by the provider phases",
             ));
         }
-        let placement = self.placement.clone();
+        let placement = self.core.placement.clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex32, f32>(
             self.group_host_slice_mut(),
             op,
@@ -7780,8 +7780,8 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
             return Err(ReinterpretError::new(self, error));
         }
         let source_shape = self.shape().to_vec();
-        let source_strides = self.layout.strides().to_vec();
-        let source_offset = self.layout.offset();
+        let source_strides = self.core.layout.strides().to_vec();
+        let source_offset = self.core.layout.offset();
         let target_layout = match reinterpret_complex_to_real_layout(
             &source_shape,
             &source_strides,
@@ -7854,8 +7854,8 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
         validate_representation_pair(op, DType::C64, DType::F64)?;
         let layout = reinterpret_complex_to_real_layout(
             self.shape(),
-            self.layout.strides(),
-            self.layout.offset(),
+            self.core.layout.strides(),
+            self.core.layout.offset(),
             self.buffer_len(),
             op,
         )?;
@@ -7868,7 +7868,7 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
                 "backend representation reinterpretation is enabled by the provider phases",
             ));
         }
-        let placement = self.placement.clone();
+        let placement = self.core.placement.clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex64, f64>(
             self.group_host_slice_mut(),
             op,
@@ -7898,8 +7898,8 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
             return Err(ReinterpretError::new(self, error));
         }
         let source_shape = self.shape().to_vec();
-        let source_strides = self.layout.strides().to_vec();
-        let source_offset = self.layout.offset();
+        let source_strides = self.core.layout.strides().to_vec();
+        let source_offset = self.core.layout.offset();
         let target_layout = match reinterpret_complex_to_real_layout(
             &source_shape,
             &source_strides,
@@ -7974,8 +7974,8 @@ impl<R: TensorRank> TypedTensor<f32, R> {
         validate_representation_pair(op, DType::F32, DType::C32)?;
         let layout = reinterpret_real_to_complex_layout(
             self.shape(),
-            self.layout.strides(),
-            self.layout.offset(),
+            self.core.layout.strides(),
+            self.core.layout.offset(),
             self.buffer_len(),
             op,
         )?;
@@ -7988,7 +7988,7 @@ impl<R: TensorRank> TypedTensor<f32, R> {
                 "backend representation reinterpretation is enabled by the provider phases",
             ));
         }
-        let placement = self.placement.clone();
+        let placement = self.core.placement.clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f32, Complex32>(
             self.group_host_slice_mut(),
             op,
@@ -8029,8 +8029,8 @@ impl<R: TensorRank> TypedTensor<f32, R> {
             ));
         }
         let source_shape = self.shape().to_vec();
-        let source_strides = self.layout.strides().to_vec();
-        let source_offset = self.layout.offset();
+        let source_strides = self.core.layout.strides().to_vec();
+        let source_offset = self.core.layout.offset();
         let target_layout = match reinterpret_real_to_complex_layout(
             &source_shape,
             &source_strides,
@@ -8105,8 +8105,8 @@ impl<R: TensorRank> TypedTensor<f64, R> {
         validate_representation_pair(op, DType::F64, DType::C64)?;
         let layout = reinterpret_real_to_complex_layout(
             self.shape(),
-            self.layout.strides(),
-            self.layout.offset(),
+            self.core.layout.strides(),
+            self.core.layout.offset(),
             self.buffer_len(),
             op,
         )?;
@@ -8119,7 +8119,7 @@ impl<R: TensorRank> TypedTensor<f64, R> {
                 "backend representation reinterpretation is enabled by the provider phases",
             ));
         }
-        let placement = self.placement.clone();
+        let placement = self.core.placement.clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f64, Complex64>(
             self.group_host_slice_mut(),
             op,
@@ -8160,8 +8160,8 @@ impl<R: TensorRank> TypedTensor<f64, R> {
             ));
         }
         let source_shape = self.shape().to_vec();
-        let source_strides = self.layout.strides().to_vec();
-        let source_offset = self.layout.offset();
+        let source_strides = self.core.layout.strides().to_vec();
+        let source_offset = self.core.layout.offset();
         let target_layout = match reinterpret_real_to_complex_layout(
             &source_shape,
             &source_strides,

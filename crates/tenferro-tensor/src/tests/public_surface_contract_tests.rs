@@ -78,7 +78,7 @@ fn typed_tensor_uses_one_typed_group_owner() {
     // zero-cost typed view; the single-owner invariants are the same ones, checked on the
     // definition that now carries the fields.
     let typed_tensor = source
-        .split_once("pub struct TensorCore<R: TensorRank = DynRank>")
+        .split_once("pub(crate) struct TensorCore<R: TensorRank = DynRank>")
         .expect("TensorCore definition must exist")
         .1
         .split_once("/// The sole owner handle")
