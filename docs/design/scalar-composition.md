@@ -1446,6 +1446,13 @@ variant reference in the XLA lowering.
 
 **Still open, and not claimed as decided here.**
 
+**Not part of this removal, and now tracked by #1810.** `tenferro_tensor_core::Tensor` (the host-only
+core model, `pub use DefaultScalars as Tensor`, whose variants hold `HostTensor<T>`) is a different
+type in a different crate: it has no external consumers, but it keeps 28 per-variant arms in
+`impl DefaultScalars`, three `Tensor::$variant` sites in `impl_scalar!` and a seven-arm
+`ScalarSet::tag`. Erasing it is a public-contract change in `tenferro-tensor-core` with its own
+semver impact, so it is recorded in #1810 rather than folded into this branch.
+
 - `Tensor` also holds `DType::External(ErasedHostTensor)`, so one payload has to carry both the
   preset core and the external shape. The planned shape is a private two-branch payload
   (`Native(TensorCore<DynRank>)` / `External(ErasedHostTensor, DType)`); the size of the finished
