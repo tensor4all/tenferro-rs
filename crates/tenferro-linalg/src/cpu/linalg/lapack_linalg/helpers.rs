@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::{Complex32, Complex64, DType, Tensor, TypedTensor};
 
 #[cfg(test)]
 #[path = "helpers/tests.rs"]
@@ -670,14 +670,26 @@ pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> tenferro_tensor::Result<Ve
     let batch_shape = &shape[2..];
     let value_shape = vector_with_batch_shape(n, batch_shape);
     let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
-    match input {
-        Tensor::F32(_) | Tensor::C32(_) => Ok(vec![
-            Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
-            Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
+    match input.dtype() {
+        DType::F32 | DType::C32 => Ok(vec![
+            Tensor::from_typed::<Complex32>(TypedTensor::from_vec_col_major(
+                value_shape,
+                Vec::new(),
+            )?),
+            Tensor::from_typed::<Complex32>(TypedTensor::from_vec_col_major(
+                vector_shape,
+                Vec::new(),
+            )?),
         ]),
-        Tensor::F64(_) | Tensor::C64(_) => Ok(vec![
-            Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
-            Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
+        DType::F64 | DType::C64 => Ok(vec![
+            Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(
+                value_shape,
+                Vec::new(),
+            )?),
+            Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(
+                vector_shape,
+                Vec::new(),
+            )?),
         ]),
         _ => Err(super::unsupported_dtype("eig", input.dtype())),
     }

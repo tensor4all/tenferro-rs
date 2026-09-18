@@ -332,20 +332,39 @@ pub fn scale_tensor_write(
     }
 
     match output {
-        TensorWrite::Tensor(output) => match output {
-            crate::Tensor::F32(output) => {
-                scale_typed_tensor(rt, output, factor as f32, launch_scale_f32)
-            }
-            crate::Tensor::F64(output) => scale_typed_tensor(rt, output, factor, launch_scale_f64),
-            crate::Tensor::C32(output) => scale_typed_tensor(
+        TensorWrite::Tensor(output) => match output.dtype() {
+            DType::F32 => scale_typed_tensor(
                 rt,
-                output,
+                output
+                    .as_typed_mut::<f32>()
+                    .expect("the dtype guard selects this arm"),
+                factor as f32,
+                launch_scale_f32,
+            ),
+            DType::F64 => scale_typed_tensor(
+                rt,
+                output
+                    .as_typed_mut::<f64>()
+                    .expect("the dtype guard selects this arm"),
+                factor,
+                launch_scale_f64,
+            ),
+            DType::C32 => scale_typed_tensor(
+                rt,
+                output
+                    .as_typed_mut::<Complex32>()
+                    .expect("the dtype guard selects this arm"),
                 Complex32::new(factor as f32, 0.0),
                 launch_scale_c32,
             ),
-            crate::Tensor::C64(output) => {
-                scale_typed_tensor(rt, output, Complex64::new(factor, 0.0), launch_scale_c64)
-            }
+            DType::C64 => scale_typed_tensor(
+                rt,
+                output
+                    .as_typed_mut::<Complex64>()
+                    .expect("the dtype guard selects this arm"),
+                Complex64::new(factor, 0.0),
+                launch_scale_c64,
+            ),
             _ => Err(unsupported_dtype(SCALE_OP, dtype)),
         },
         TensorWrite::View(mut output) => match &mut output {
@@ -374,16 +393,58 @@ fn ensure_tensor_write_resident(
 ) -> crate::Result<()> {
     let read = output.as_read();
     match &read {
-        TensorRead::Tensor(output) => match *output {
-            crate::Tensor::F32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
-            crate::Tensor::F64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
-            crate::Tensor::I32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
-            crate::Tensor::I64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
-            crate::Tensor::Bool(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
-            crate::Tensor::C32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
-            crate::Tensor::C64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+        TensorRead::Tensor(output) => match output.dtype() {
+            DType::F32 => dispatch::ensure_resident_on_runtime(
+                rt,
+                output
+                    .as_typed::<f32>()
+                    .expect("the dtype guard selects this arm"),
+                op,
+            ),
+            DType::F64 => dispatch::ensure_resident_on_runtime(
+                rt,
+                output
+                    .as_typed::<f64>()
+                    .expect("the dtype guard selects this arm"),
+                op,
+            ),
+            DType::I32 => dispatch::ensure_resident_on_runtime(
+                rt,
+                output
+                    .as_typed::<i32>()
+                    .expect("the dtype guard selects this arm"),
+                op,
+            ),
+            DType::I64 => dispatch::ensure_resident_on_runtime(
+                rt,
+                output
+                    .as_typed::<i64>()
+                    .expect("the dtype guard selects this arm"),
+                op,
+            ),
+            DType::Bool => dispatch::ensure_resident_on_runtime(
+                rt,
+                output
+                    .as_typed::<bool>()
+                    .expect("the dtype guard selects this arm"),
+                op,
+            ),
+            DType::C32 => dispatch::ensure_resident_on_runtime(
+                rt,
+                output
+                    .as_typed::<Complex32>()
+                    .expect("the dtype guard selects this arm"),
+                op,
+            ),
+            DType::C64 => dispatch::ensure_resident_on_runtime(
+                rt,
+                output
+                    .as_typed::<Complex64>()
+                    .expect("the dtype guard selects this arm"),
+                op,
+            ),
             // A caller-owned payload has no GPU implementation for this operation.
-            crate::Tensor::External(..) => Err(crate::Error::unsupported(
+            _ => Err(crate::Error::unsupported(
                 "ensure_tensor_write_resident",
                 "an externally defined payload is not supported by this GPU operation",
             )),

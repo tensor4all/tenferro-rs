@@ -265,8 +265,9 @@ fn scatter_launch_meta_rejects_mismatched_update_batch_extents() {
 
 fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {
     assert_eq!(actual.shape(), expected.shape());
-    match (actual, expected) {
-        (Tensor::F32(_), Tensor::F32(_)) => {
+    assert_eq!(actual.dtype(), expected.dtype(), "dtypes must match");
+    match actual.dtype() {
+        DType::F32 => {
             let actual = actual.as_slice::<f32>().unwrap();
             let expected = expected.as_slice::<f32>().unwrap();
             for (lhs, rhs) in actual.iter().zip(expected.iter()) {
@@ -277,7 +278,7 @@ fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {
                 );
             }
         }
-        (Tensor::F64(_), Tensor::F64(_)) => {
+        DType::F64 => {
             let actual = actual.as_slice::<f64>().unwrap();
             let expected = expected.as_slice::<f64>().unwrap();
             for (idx, (lhs, rhs)) in actual.iter().zip(expected.iter()).enumerate() {
@@ -288,22 +289,22 @@ fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {
                 );
             }
         }
-        (Tensor::I64(_), Tensor::I64(_)) => {
+        DType::I64 => {
             let actual = actual.as_slice::<i64>().unwrap();
             let expected = expected.as_slice::<i64>().unwrap();
             assert_eq!(actual, expected);
         }
-        (Tensor::I32(_), Tensor::I32(_)) => {
+        DType::I32 => {
             let actual = actual.as_slice::<i32>().unwrap();
             let expected = expected.as_slice::<i32>().unwrap();
             assert_eq!(actual, expected);
         }
-        (Tensor::Bool(_), Tensor::Bool(_)) => {
+        DType::Bool => {
             let actual = actual.as_slice::<bool>().unwrap();
             let expected = expected.as_slice::<bool>().unwrap();
             assert_eq!(actual, expected);
         }
-        (Tensor::C32(_), Tensor::C32(_)) => {
+        DType::C32 => {
             let actual = actual.as_slice::<Complex32>().unwrap();
             let expected = expected.as_slice::<Complex32>().unwrap();
             for (lhs, rhs) in actual.iter().zip(expected.iter()) {
@@ -315,7 +316,7 @@ fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {
                 );
             }
         }
-        (Tensor::C64(_), Tensor::C64(_)) => {
+        DType::C64 => {
             let actual = actual.as_slice::<Complex64>().unwrap();
             let expected = expected.as_slice::<Complex64>().unwrap();
             for (lhs, rhs) in actual.iter().zip(expected.iter()) {
