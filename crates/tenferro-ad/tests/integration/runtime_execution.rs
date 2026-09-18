@@ -23,10 +23,12 @@ fn cpu_scoped_execution_returns_borrowed_identity_without_copy() {
         .unwrap();
     let runtime = cpu_runtime();
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let view = match &input {
-        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
-        other => panic!("unexpected input dtype: {:?}", other.dtype()),
-    };
+    let view = TensorView::F64(
+        input
+            .as_typed::<f64>()
+            .expect("unexpected input dtype")
+            .as_view(),
+    );
     let outcome = runtime
         .execute_scoped_read_only(&program, ScopedReadInputs::new(vec![view]))
         .unwrap();

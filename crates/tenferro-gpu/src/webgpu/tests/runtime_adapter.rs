@@ -212,9 +212,7 @@ fn webgpu_registration_ingress_accepts_backend_created_tensor() {
         allocation_domain,
     ));
 
-    let Tensor::F32(_typed) = &input else {
-        unreachable!("uploaded f32 tensor")
-    };
+    assert!(input.as_typed::<f32>().is_some(), "uploaded f32 tensor");
     let foreign_ordinal = ordinal.saturating_add(1);
     let relabeled: Tensor = TypedTensor::<f32>::from_buffer_col_major(
         vec![1],

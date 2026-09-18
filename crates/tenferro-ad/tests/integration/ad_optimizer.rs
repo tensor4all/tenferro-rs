@@ -13,10 +13,13 @@ fn eval_f64(tensor: &TracedTensor) -> Vec<f64> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor).unwrap();
     let executor = cpu_runtime();
-    match run_compiled_one(&executor, &program, &[]).unwrap() {
-        Tensor::F64(tensor) => tensor.host_data().unwrap().to_vec(),
-        other => panic!("expected f64 result, got {other:?}"),
-    }
+    run_compiled_one(&executor, &program, &[])
+        .unwrap()
+        .as_typed::<f64>()
+        .expect("expected f64 result")
+        .host_data()
+        .unwrap()
+        .to_vec()
 }
 
 fn op_count(tensor: &TracedTensor, op: StdTensorOp) -> usize {

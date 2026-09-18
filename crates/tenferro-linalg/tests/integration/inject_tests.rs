@@ -386,8 +386,12 @@ fn provider_inject_svd_uses_registered_lapack_gesvd() {
 
     assert_eq!(DGESVD_CALLS.load(Ordering::SeqCst), 2);
     assert_eq!(outputs.len(), 3);
-    match &outputs[1] {
-        Tensor::F64(inner) => assert_eq!(inner.host_data().unwrap(), &[3.0, 2.0]),
-        _ => panic!("expected f64 singular values"),
-    }
+    assert_eq!(
+        outputs[1]
+            .as_typed::<f64>()
+            .expect("expected f64 singular values")
+            .host_data()
+            .unwrap(),
+        &[3.0, 2.0]
+    );
 }

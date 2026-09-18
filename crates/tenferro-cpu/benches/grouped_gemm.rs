@@ -72,10 +72,12 @@ fn run_grouped_into(
 }
 
 fn f64_view(tensor: &Tensor) -> TensorView<'_> {
-    match tensor {
-        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
-        _ => unreachable!("grouped GEMM benchmark fixtures are F64"),
-    }
+    TensorView::F64(
+        tensor
+            .as_typed::<f64>()
+            .expect("grouped GEMM benchmark fixtures are F64")
+            .as_view(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -138,10 +140,10 @@ fn run_sequential(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor 
             rhs,
         )
         .unwrap();
-        let mut out_view = match &mut out {
-            Tensor::F64(tensor) => tensor.as_view_mut(),
-            _ => unreachable!("fixture output is F64"),
-        };
+        let mut out_view = out
+            .as_typed_mut::<f64>()
+            .expect("fixture output is F64")
+            .as_view_mut();
         let out_storage = out_view.host_storage_mut().unwrap();
         let out_matrix = tenferro_tensor::TypedTensorViewMut::from_slice(
             vec![job.rows(), job.cols()],

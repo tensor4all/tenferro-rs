@@ -242,12 +242,28 @@ fn backend(domain: &Arc<FakeDomain>) -> CpuBackend {
 }
 
 fn assert_managed_output(output: &Tensor, domain: &FakeDomain, input_id: Option<AllocationId>) {
-    let (output_domain, output_id) = match output {
-        Tensor::F32(output) => (output.allocation_domain(), output.allocation_id()),
-        Tensor::F64(output) => (output.allocation_domain(), output.allocation_id()),
-        Tensor::C32(output) => (output.allocation_domain(), output.allocation_id()),
-        Tensor::C64(output) => (output.allocation_domain(), output.allocation_id()),
-        other => panic!("unexpected managed FFT output dtype {:?}", other.dtype()),
+    let (output_domain, output_id) = match output.dtype() {
+        DType::F32 => {
+            let output = output.as_typed::<f32>().expect("managed FFT output");
+            (output.allocation_domain(), output.allocation_id())
+        }
+        DType::F64 => {
+            let output = output.as_typed::<f64>().expect("managed FFT output");
+            (output.allocation_domain(), output.allocation_id())
+        }
+        DType::C32 => {
+            let output = output
+                .as_typed::<num_complex::Complex32>()
+                .expect("managed FFT output");
+            (output.allocation_domain(), output.allocation_id())
+        }
+        DType::C64 => {
+            let output = output
+                .as_typed::<num_complex::Complex64>()
+                .expect("managed FFT output");
+            (output.allocation_domain(), output.allocation_id())
+        }
+        other => panic!("unexpected managed FFT output dtype {:?}", other),
     };
     assert_eq!(output_domain, Some(domain.id));
     assert_ne!(output_id, input_id);

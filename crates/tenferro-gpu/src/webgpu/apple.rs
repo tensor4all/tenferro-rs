@@ -304,10 +304,10 @@ impl AppleContext {
     /// match AppleContext::new() {
     ///     Ok(context) => {
     ///         let host = Tensor::from_vec_col_major([2], vec![1.0_f32, 2.0])?;
-    ///         let managed: TypedTensor<f32> = match context.upload_tensor(&host)? {
-    ///             Tensor::F32(typed) => typed,
-    ///             _ => unreachable!("expected f32 tensor"),
-    ///         };
+    ///         let managed: TypedTensor<f32> = context
+    ///             .upload_tensor(&host)?
+    ///             .into_typed::<f32>()
+    ///             .expect("expected f32 tensor");
     ///         assert_eq!(managed.allocation_domain(), Some(context.domain_id()));
     ///         assert_eq!(managed.with_host_read(|data| data.to_vec())?, [1.0, 2.0]);
     ///         assert_eq!(

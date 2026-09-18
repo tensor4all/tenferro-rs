@@ -642,8 +642,11 @@ fn scatter_negative_start_indices_clamp_like_dynamic_slice() {
         .scatter(&operand, &scatter_indices, &updates, &config)
         .unwrap();
 
-    match out {
-        Tensor::F64(inner) => assert_eq!(inner.host_data().unwrap(), &[5.0, 0.0, 0.0]),
-        other => panic!("unexpected output dtype: {:?}", other.dtype()),
-    }
+    assert_eq!(
+        out.as_typed::<f64>()
+            .expect("unexpected output dtype")
+            .host_data()
+            .unwrap(),
+        &[5.0, 0.0, 0.0]
+    );
 }

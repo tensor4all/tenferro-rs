@@ -15,10 +15,11 @@ fn f64_scalar(value: f64) -> Tensor {
 }
 
 fn get_f64_scalar(tensor: &Tensor) -> f64 {
-    match tensor {
-        Tensor::F64(inner) => inner.host_data().unwrap()[0],
-        other => panic!("expected F64 tensor, got {:?}", other.dtype()),
-    }
+    tensor
+        .as_typed::<f64>()
+        .expect("the dtype guard selects this arm")
+        .host_data()
+        .unwrap()[0]
 }
 
 #[test]

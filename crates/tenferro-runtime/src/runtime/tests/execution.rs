@@ -292,10 +292,12 @@ fn scoped_immediate_provider_returns_borrowed_output() -> Result<(), Box<dyn Std
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    let view = match &input {
-        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
-        other => return Err(format!("unexpected input dtype: {:?}", other.dtype()).into()),
-    };
+    let view = TensorView::F64(
+        input
+            .as_typed::<f64>()
+            .expect("unexpected input dtype")
+            .as_view(),
+    );
 
     let scoped = ScopedReadInputs::new(vec![view]);
     let outcome = match runtime.execute_scoped_read_only(&program, scoped) {
@@ -373,10 +375,12 @@ fn scoped_non_host_input_is_rejected_before_admission() -> Result<(), Box<dyn St
             cpu_affinity: None,
         },
     )?);
-    let view = match &input {
-        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
-        other => return Err(format!("unexpected input dtype: {:?}", other.dtype()).into()),
-    };
+    let view = TensorView::F64(
+        input
+            .as_typed::<f64>()
+            .expect("unexpected input dtype")
+            .as_view(),
+    );
     let rejected = runtime
         .execute_scoped_read_only(&program, ScopedReadInputs::new(vec![view]))
         .expect_err("non-host scoped input must be rejected before admission");

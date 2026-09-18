@@ -631,9 +631,9 @@ trait TropicalFloat: Float + TensorScalar {
 
 impl TropicalFloat for f32 {
     fn host_slice(tensor: &Tensor) -> tenferro_tensor::Result<&[Self]> {
-        match tensor {
-            Tensor::F32(tensor) => tensor.as_view().as_slice(),
-            _ => Err(invalid_config(format!(
+        match tensor.as_typed::<f32>() {
+            Some(tensor) => tensor.as_view().as_slice(),
+            None => Err(invalid_config(format!(
                 "expected F32 input, got {:?}",
                 tensor.dtype()
             ))),
@@ -643,9 +643,9 @@ impl TropicalFloat for f32 {
 
 impl TropicalFloat for f64 {
     fn host_slice(tensor: &Tensor) -> tenferro_tensor::Result<&[Self]> {
-        match tensor {
-            Tensor::F64(tensor) => tensor.as_view().as_slice(),
-            _ => Err(invalid_config(format!(
+        match tensor.as_typed::<f64>() {
+            Some(tensor) => tensor.as_view().as_slice(),
+            None => Err(invalid_config(format!(
                 "expected F64 input, got {:?}",
                 tensor.dtype()
             ))),

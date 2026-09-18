@@ -81,17 +81,19 @@ fn diag_c32_from_real(values: &[f32]) -> Vec<Complex32> {
 }
 
 fn f32_data(tensor: &Tensor) -> &[f32] {
-    match tensor {
-        Tensor::F32(inner) => inner.host_data().unwrap(),
-        other => panic!("expected F32 tensor, got {:?}", other.dtype()),
-    }
+    tensor
+        .as_typed::<f32>()
+        .expect("the dtype guard selects this arm")
+        .host_data()
+        .unwrap()
 }
 
 fn c32_data(tensor: &Tensor) -> &[Complex32] {
-    match tensor {
-        Tensor::C32(inner) => inner.host_data().unwrap(),
-        other => panic!("expected C32 tensor, got {:?}", other.dtype()),
-    }
+    tensor
+        .as_typed::<Complex32>()
+        .expect("the dtype guard selects this arm")
+        .host_data()
+        .unwrap()
 }
 
 fn assert_f32_close(actual: f32, expected: f32, tol: f32) {

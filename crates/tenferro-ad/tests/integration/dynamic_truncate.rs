@@ -47,17 +47,21 @@ fn backend_f64_scalar() -> Tensor {
 }
 
 fn get_f64_data(tensor: &Tensor) -> Vec<f64> {
-    match tensor {
-        Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
-        other => panic!("expected F64 tensor, got {:?}", other.dtype()),
-    }
+    tensor
+        .as_typed::<f64>()
+        .expect("the dtype guard selects this arm")
+        .host_data()
+        .unwrap()
+        .to_vec()
 }
 
 fn get_f32_data(tensor: &Tensor) -> Vec<f32> {
-    match tensor {
-        Tensor::F32(inner) => inner.host_data().unwrap().to_vec(),
-        other => panic!("expected F32 tensor, got {:?}", other.dtype()),
-    }
+    tensor
+        .as_typed::<f32>()
+        .expect("the dtype guard selects this arm")
+        .host_data()
+        .unwrap()
+        .to_vec()
 }
 
 #[test]

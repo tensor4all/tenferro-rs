@@ -36,17 +36,21 @@ fn i32_tensor(shape: Vec<usize>, data: Vec<i32>) -> Tensor {
 }
 
 fn f64_values(tensor: &Tensor) -> Vec<f64> {
-    match tensor {
-        Tensor::F64(tensor) => tensor.host_data().unwrap().to_vec(),
-        other => panic!("expected F64 tensor, got {:?}", other.dtype()),
-    }
+    tensor
+        .as_typed::<f64>()
+        .expect("the dtype guard selects this arm")
+        .host_data()
+        .unwrap()
+        .to_vec()
 }
 
 fn c64_values(tensor: &Tensor) -> Vec<Complex64> {
-    match tensor {
-        Tensor::C64(tensor) => tensor.host_data().unwrap().to_vec(),
-        other => panic!("expected C64 tensor, got {:?}", other.dtype()),
-    }
+    tensor
+        .as_typed::<Complex64>()
+        .expect("the dtype guard selects this arm")
+        .host_data()
+        .unwrap()
+        .to_vec()
 }
 
 fn opaque_backend_placement() -> Placement {

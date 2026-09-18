@@ -54,7 +54,7 @@ fn test_cubecl_full_axis_reductions_preserve_scalar_shape_and_values() {
             assert_tensor_close(&actual, &expected, 1e-5);
         }
 
-        if !matches!(input, crate::Tensor::C32(_) | crate::Tensor::C64(_)) {
+        if !matches!(input.dtype(), crate::DType::C32 | crate::DType::C64) {
             for (expected, gpu_out) in [
                 (
                     cpu.reduce_min(input, &[0, 1]).unwrap(),

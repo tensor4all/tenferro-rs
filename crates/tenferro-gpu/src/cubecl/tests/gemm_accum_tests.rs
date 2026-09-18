@@ -286,10 +286,12 @@ fn flat_f64(len: usize, seed: f64) -> Vec<f64> {
 }
 
 fn download_f64(gpu: &crate::cubecl::CudaBackend, tensor: &Tensor) -> Vec<f64> {
-    match download(gpu, tensor) {
-        Tensor::F64(host) => host.as_slice().unwrap().to_vec(),
-        other => panic!("expected f64 tensor, got {:?}", other.dtype()),
-    }
+    download(gpu, tensor)
+        .as_typed::<f64>()
+        .expect("the dtype guard selects this arm")
+        .as_slice()
+        .unwrap()
+        .to_vec()
 }
 
 #[test]

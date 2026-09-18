@@ -174,10 +174,12 @@ fn test_lu_zero_sized_batch_outputs_empty_parity() {
     assert_eq!(outputs[2].shape(), &[2, 2, 0]);
     assert_eq!(outputs[3].shape(), &[0]);
     for output in outputs {
-        match output {
-            Tensor::F64(inner) => assert!(inner.host_data().unwrap().is_empty()),
-            other => panic!("expected f64 tensor, got {:?}", other.dtype()),
-        }
+        assert!(output
+            .as_typed::<f64>()
+            .expect("expected f64 tensor")
+            .host_data()
+            .unwrap()
+            .is_empty());
     }
 }
 
