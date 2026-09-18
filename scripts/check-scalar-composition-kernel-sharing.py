@@ -39,7 +39,7 @@ PRESET_OP = "op5AddOp"
 EXTERNAL_OP = "7Df64Add"
 SHARED_KERNEL_CRATE = "tenferro_internal_cpu_kernels10scalar_ops18scalar_binary_into"
 
-DEFINITION = re.compile(r"^(_R[A-Za-z0-9_]+):$")
+DEFINITION = re.compile(r"^(_+R[A-Za-z0-9_]+):$")
 
 
 def target_root() -> Path:
