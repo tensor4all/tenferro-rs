@@ -18,8 +18,8 @@ fn external(values: Vec<Df64>) -> Tensor {
 }
 
 fn payload(tensor: &Tensor) -> Vec<Df64> {
-    match tensor {
-        Tensor::External(value, _) => value
+    match tensor.external_payload() {
+        Some(value) => value
             .downcast_ref::<Df64>()
             .expect("external element type")
             .as_slice()
@@ -92,7 +92,7 @@ fn the_runtime_retains_and_returns_a_caller_owned_payload() {
     // low-order component survives the round trip unchanged.
     let value = leaf.to_tensor().expect("round trip");
     assert_eq!(payload(&value), vec![original, Df64::from_f64(3.0)]);
-    assert!(matches!(value, Tensor::External(..)));
+    assert!(value.external_payload().is_some());
 }
 
 #[test]

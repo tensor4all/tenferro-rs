@@ -178,12 +178,12 @@ impl DescriptorRecord {
 fn into_group_parts(
     tensor: crate::Tensor,
 ) -> Result<(AllocationGroup, DescriptorSlot), GroupError> {
-    match tensor {
-        crate::Tensor::External(..) => Err(GroupError::InvalidDescriptor {
+    if tensor.external_payload().is_some() {
+        return Err(GroupError::InvalidDescriptor {
             message: "a caller-owned payload has no allocation group".to_owned(),
-        }),
-        tensor => Ok(tensor.into_group_parts()),
+        });
     }
+    Ok(tensor.into_group_parts())
 }
 
 /// Group construction and slot errors.

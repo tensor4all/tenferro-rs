@@ -2280,8 +2280,8 @@ fn an_external_payload_is_carried_by_the_value_type() {
     let mut duplicate = tensor.duplicate().expect("duplication copies the payload");
     assert_eq!(duplicate.dtype(), DType::External(element));
     assert_eq!(duplicate.shape(), &[2]);
-    match &mut duplicate {
-        Tensor::External(payload, _) => {
+    match duplicate.external_payload_mut() {
+        Some(payload) => {
             payload
                 .downcast_mut::<f64>()
                 .expect("payload type")
@@ -2291,23 +2291,15 @@ fn an_external_payload_is_carried_by_the_value_type() {
                 &[9.0, 2.0]
             );
         }
-        other => panic!("expected an external payload, found {:?}", other.dtype()),
+        None => panic!("expected an external payload"),
     }
-    match &tensor {
-        Tensor::External(payload, _) => {
-            assert_eq!(
-                payload.as_dense::<f64>().expect("dense payload").0,
-                &[1.0, 2.0]
-            );
-        }
-        other => panic!("expected an external payload, found {:?}", other.dtype()),
-    }
+    let payload = tensor.external_payload().expect("an external payload");
+    assert_eq!(
+        payload.as_dense::<f64>().expect("dense payload").0,
+        &[1.0, 2.0]
+    );
     // A metadata-only clone shares the payload instead of copying it.
-    match &tensor {
-        Tensor::External(original, _) => {
-            assert!(original.clone().shares_payload_with(original));
-            assert!(!original.duplicate().shares_payload_with(original));
-        }
-        other => panic!("expected an external payload, found {:?}", other.dtype()),
-    }
+    let original = tensor.external_payload().expect("an external payload");
+    assert!(original.clone().shares_payload_with(original));
+    assert!(!original.duplicate().shares_payload_with(original));
 }

@@ -1283,17 +1283,17 @@ fn external_payload<'a, T: Scalar>(
     op: &'static str,
     tensor: &'a Tensor,
 ) -> tenferro_tensor::Result<&'a HostTensor<T>> {
-    match tensor {
-        Tensor::External(payload, _) => payload.downcast_ref::<T>().ok_or_else(|| {
+    match tensor.external_payload() {
+        Some(payload) => payload.downcast_ref::<T>().ok_or_else(|| {
             tenferro_tensor::Error::unsupported_dtype(
                 op,
                 tensor.dtype(),
                 "the external payload does not hold the expected scalar",
             )
         }),
-        other => Err(tenferro_tensor::Error::unsupported_dtype(
+        None => Err(tenferro_tensor::Error::unsupported_dtype(
             op,
-            other.dtype(),
+            tensor.dtype(),
             "the operation takes an externally defined payload",
         )),
     }

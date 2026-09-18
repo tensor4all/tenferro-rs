@@ -1366,7 +1366,6 @@ mod tests {
         rhs: &tenferro_tensor::Tensor,
     ) -> f64 {
         use num_complex::Complex64;
-        use tenferro_tensor::Tensor;
 
         assert_eq!(lhs.dtype(), rhs.dtype());
         assert_eq!(lhs.shape(), rhs.shape());

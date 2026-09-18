@@ -22,8 +22,8 @@ fn payload<T>(tensor: &Tensor) -> &HostTensor<T>
 where
     T: tenferro_tensor_core::Scalar,
 {
-    match tensor {
-        Tensor::External(value, _) => value.downcast_ref::<T>().expect("external element type"),
+    match tensor.external_payload() {
+        Some(value) => value.downcast_ref::<T>().expect("external element type"),
         _ => panic!("expected an externally defined payload"),
     }
 }

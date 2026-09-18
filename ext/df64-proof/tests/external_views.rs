@@ -158,13 +158,13 @@ fn a_materialized_view_keeps_the_low_component_in_logical_order() {
     // erased read sees the permuted order without narrowing anything.
     let tensor = Tensor::external(contiguous);
     assert_eq!(tensor.shape(), &[2, 2]);
-    match &tensor {
-        Tensor::External(payload, _) => {
+    match &tensor.external_payload() {
+        Some(payload) => {
             assert!(payload.is_contiguous());
             assert_eq!(payload.element_count(), 4);
             assert_eq!(payload.element_at::<Df64>(&[0, 1]), Some(&value(2.0, 0.0)));
         }
-        other => panic!("expected an external payload, found {:?}", other.dtype()),
+        None => panic!("expected an external payload"),
     }
     assert_eq!(
         tensor.dtype(),

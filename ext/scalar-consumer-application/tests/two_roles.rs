@@ -156,7 +156,7 @@ fn the_same_algorithm_runs_with_the_contribution() {
         gradient.dtype(),
         DType::External(std::any::TypeId::of::<Df64>())
     );
-    let Tensor::External(payload, _) = &gradient else {
+    let Some(payload) = gradient.external_payload() else {
         panic!("expected an externally defined gradient");
     };
     let values = payload

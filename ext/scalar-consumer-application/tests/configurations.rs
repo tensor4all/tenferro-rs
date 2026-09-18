@@ -137,7 +137,7 @@ fn assert_extended_gradient(gradient: &Tensor) {
         gradient.dtype(),
         DType::External(std::any::TypeId::of::<Df64>())
     );
-    let Tensor::External(payload, _) = gradient else {
+    let Some(payload) = gradient.external_payload() else {
         panic!("expected an externally defined gradient");
     };
     let values = payload
@@ -429,7 +429,7 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
 }
 
 fn payload_of(tensor: &Tensor) -> Vec<Df64> {
-    let Tensor::External(payload, _) = tensor else {
+    let Some(payload) = tensor.external_payload() else {
         panic!(
             "expected an externally defined payload, found {:?}",
             tensor.dtype()

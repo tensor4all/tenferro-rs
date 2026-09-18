@@ -24,16 +24,13 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
 }
 
 fn payload(tensor: &Tensor) -> Vec<Df64> {
-    match tensor {
-        Tensor::External(value, _) => value
+    match tensor.external_payload() {
+        Some(value) => value
             .downcast_ref::<Df64>()
             .expect("external element type")
             .as_slice()
             .to_vec(),
-        other => panic!(
-            "expected an externally defined payload, found {:?}",
-            other.dtype()
-        ),
+        None => panic!("expected an externally defined payload"),
     }
 }
 
@@ -52,17 +49,14 @@ fn runtime() -> Runtime {
 
 /// Overwrite one element of a caller-owned payload, which only the storage's owner can do.
 fn overwrite(tensor: &mut Tensor, index: usize, value: Df64) {
-    match tensor {
-        Tensor::External(payload, _) => {
+    match tensor.external_payload_mut() {
+        Some(payload) => {
             payload
                 .downcast_mut::<Df64>()
                 .expect("external element type")
                 .as_mut_slice()[index] = value;
         }
-        other => panic!(
-            "expected an externally defined payload, found {:?}",
-            other.dtype()
-        ),
+        None => panic!("expected an externally defined payload"),
     }
 }
 

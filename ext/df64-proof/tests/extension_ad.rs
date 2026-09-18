@@ -24,8 +24,8 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
 }
 
 fn payload(tensor: &Tensor) -> Vec<Df64> {
-    match tensor {
-        Tensor::External(value, _) => value
+    match tensor.external_payload() {
+        Some(value) => value
             .downcast_ref::<Df64>()
             .expect("external element type")
             .as_slice()

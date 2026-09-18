@@ -16,8 +16,8 @@ use crate::Df64;
 /// Returns [`tenferro_tensor::Error::UnsupportedDType`] when the tensor is not an
 /// externally defined `Df64` value.
 fn df64_values<'a>(tensor: &'a Tensor, op: &'static str) -> tenferro_tensor::Result<&'a [Df64]> {
-    match tensor {
-        Tensor::External(payload, _) => payload
+    match tensor.external_payload() {
+        Some(payload) => payload
             .downcast_ref::<Df64>()
             .map(HostTensor::as_slice)
             .ok_or_else(|| {
@@ -27,9 +27,9 @@ fn df64_values<'a>(tensor: &'a Tensor, op: &'static str) -> tenferro_tensor::Res
                     "the payload holds a different external element type",
                 )
             }),
-        other => Err(tenferro_tensor::Error::unsupported_dtype(
+        None => Err(tenferro_tensor::Error::unsupported_dtype(
             op,
-            other.dtype(),
+            tensor.dtype(),
             "a directed Df64 conversion takes an externally defined Df64 tensor",
         )),
     }
@@ -123,11 +123,11 @@ pub fn to_f64(tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
 /// let widened = conversion::to_df64(&tensor)?;
 ///
 /// match &widened {
-///     Tensor::External(payload, _) => {
+///     Tensor::external_with_placement(payload, _) => {
 ///         let values = payload.downcast_ref::<Df64>().expect("the payload type");
 ///         assert_eq!(values.as_slice(), &[Df64::from_f64(1.0), Df64::from_f64(2.0)]);
 ///     }
-///     other => panic!("expected an external payload, found {:?}", other.dtype()),
+///     None => panic!("expected an external payload"),
 /// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```

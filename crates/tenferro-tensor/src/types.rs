@@ -3817,11 +3817,36 @@ impl Tensor {
     ///
     /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     /// let tensor = Tensor::external(payload);
-    /// assert!(tensor.external_payload().is_some());
+    /// assert!(tensor.external_payload_mut().is_some());
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     #[must_use]
     pub fn external_payload(&self) -> Option<&tenferro_tensor_core::ErasedHostTensor> {
+        match self {
+            Self::External(payload, _) => Some(payload),
+            _ => None,
+        }
+    }
+
+    /// Carry an externally defined payload with an explicit placement.
+    ///
+    /// [`Tensor::external`] defaults the placement to unpinned host memory, which is where
+    /// a caller-owned payload normally lives; this entry point is for a caller that knows
+    /// the placement it wants.
+    #[must_use]
+    pub fn external_with_placement(
+        payload: tenferro_tensor_core::ErasedHostTensor,
+        placement: Placement,
+    ) -> Self {
+        Self::External(payload, placement)
+    }
+
+    /// Mutably borrow the erased payload of an externally defined tensor.
+    ///
+    /// The counterpart of [`Tensor::external_payload`] for callers that update the payload
+    /// in place, such as a mutation test that checks the copy boundary.
+    #[must_use]
+    pub fn external_payload_mut(&mut self) -> Option<&mut tenferro_tensor_core::ErasedHostTensor> {
         match self {
             Self::External(payload, _) => Some(payload),
             _ => None,

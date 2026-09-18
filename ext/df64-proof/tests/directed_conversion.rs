@@ -18,9 +18,9 @@ fn external_df64(values: &[Df64]) -> Tensor {
 }
 
 fn payload_of(tensor: &Tensor) -> &HostTensor<Df64> {
-    match tensor {
-        Tensor::External(payload, _) => payload.downcast_ref::<Df64>().expect("df64 payload"),
-        other => panic!("expected an external payload, found {:?}", other.dtype()),
+    match tensor.external_payload() {
+        Some(payload) => payload.downcast_ref::<Df64>().expect("df64 payload"),
+        None => panic!("expected an external payload"),
     }
 }
 
@@ -31,9 +31,9 @@ fn values_of(tensor: &Tensor) -> &[Df64] {
 /// The mutable public projection reaches the payload, so a destination is filled
 /// without a copy back into the caller's tensor.
 fn destination_for(tensor: &mut Tensor) -> &mut HostTensor<Df64> {
-    match tensor {
-        Tensor::External(payload, _) => payload.downcast_mut::<Df64>().expect("df64 payload"),
-        other => panic!("expected an external payload, found {:?}", other.dtype()),
+    match tensor.external_payload_mut() {
+        Some(payload) => payload.downcast_mut::<Df64>().expect("df64 payload"),
+        None => panic!("expected an external payload"),
     }
 }
 

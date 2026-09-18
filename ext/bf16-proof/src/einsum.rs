@@ -274,8 +274,8 @@ fn offset_for(
 
 /// The stored values of a bfloat16 tensor, widened to `f32`.
 fn values_of(op: &'static str, tensor: &Tensor) -> tenferro_runtime::Result<Vec<f32>> {
-    match tensor {
-        Tensor::External(payload, _) => payload
+    match tensor.external_payload() {
+        Some(payload) => payload
             .downcast_ref::<Bf16>()
             .map(|stored| {
                 stored
@@ -291,10 +291,10 @@ fn values_of(op: &'static str, tensor: &Tensor) -> tenferro_runtime::Result<Vec<
                     "the operand does not carry a bfloat16 payload",
                 ))
             }),
-        other => Err(tenferro_runtime::Error::from(
+        None => Err(tenferro_runtime::Error::from(
             tenferro_tensor::Error::unsupported_dtype(
                 op,
-                other.dtype(),
+                tensor.dtype(),
                 "bf16_einsum takes an externally defined bfloat16 scalar",
             ),
         )),

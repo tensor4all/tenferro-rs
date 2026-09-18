@@ -36,15 +36,15 @@ fn external(values: &[f32], shape: Vec<usize>) -> Tensor {
 }
 
 fn values(tensor: &Tensor) -> Vec<f32> {
-    match tensor {
-        Tensor::External(payload, _) => payload
+    match tensor.external_payload() {
+        Some(payload) => payload
             .downcast_ref::<Bf16>()
             .expect("bfloat16 payload")
             .as_slice()
             .iter()
             .map(|value| value.to_f32())
             .collect(),
-        other => panic!("expected an external payload, found {:?}", other.dtype()),
+        None => panic!("expected an external payload"),
     }
 }
 
