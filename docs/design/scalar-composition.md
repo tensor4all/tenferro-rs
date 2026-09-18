@@ -1413,8 +1413,11 @@ What Step 5 still has to do, now that nothing outside depends on the variants:
 2. Give `OwnedTensorGroup<R>` a `dtype()` from a new crate-private
    `AllocationGroup::descriptor_dtype` in `storage/group.rs`, so `Native` needs no duplicate tag.
 3. Rewrite the `impl_tensor_scalar!` seam (five `Tensor::$variant` uses) to
-   `Tensor::from_core(tensor.core)` for construction and `tensor.as_typed::<T>()` for the matches; that
-   seam is the single place the seven names remain.
+   `Tensor::from_core(tensor.core)` for construction and `tensor.as_typed::<T>()` for the matches. It is
+   not the only seam: the per-scalar dispatch macros in `tenferro-cpu` (`gemm`, `provider`),
+   `tenferro-internal-cpu-kernels` (`dispatch_read_real_complex_scalar!`) and `ext/tenferro-cpu-tblis`
+   reach `Tensor::$owned`/`$variant`/`$real_variant` through a macro parameter, which a name-based search
+   cannot see. Those arms become the same bind-guard-rebind shape the readable sites already use.
 4. Rewrite the `Tensor` impls, whose ~277 variant mentions are the dtype-independent readers
    (`shape`, `strides`, `placement`, `layout_linear_offset`, `is_col_major_contiguous`, the placement
    and allocation accessors), the owned operations (`duplicate`, `as_read_only`, `into_group_parts`),
