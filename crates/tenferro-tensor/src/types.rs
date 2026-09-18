@@ -8945,8 +8945,10 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns the same refusal [`Tensor::into_vec_col_major`] reports when `T` does not match this
-    /// tensor's dtype, or when the matching tensor uses backend storage that has not been downloaded.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` is not this tensor's dtype.
+    /// A matching tensor is handed over as it is, including one whose storage lives in a backend
+    /// buffer.
     pub fn into_typed<T: TensorScalar>(self) -> crate::Result<TypedTensor<T>> {
         T::into_typed(self)
     }

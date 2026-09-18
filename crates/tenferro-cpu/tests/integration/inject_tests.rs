@@ -283,7 +283,8 @@ fn provider_inject_dot_general_uses_registered_blas() {
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::from_typed::<f64>(inner)) => {
+        Ok(tensor) => {
+            let inner = tensor.into_typed::<f64>().expect("expected f64 tensor");
             assert_eq!(inner.host_data().unwrap(), &[19.0, 43.0, 22.0, 50.0])
         }
         _ => panic!("expected f64 tensor"),
@@ -319,7 +320,8 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::from_typed::<f64>(inner)) => {
+        Ok(tensor) => {
+            let inner = tensor.into_typed::<f64>().expect("expected f64 tensor");
             assert_eq!(inner.host_data().unwrap(), &[3.0, 6.0, 4.0, 8.0])
         }
         _ => panic!("expected f64 tensor"),
@@ -353,7 +355,8 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::from_typed::<f64>(inner)) => {
+        Ok(tensor) => {
+            let inner = tensor.into_typed::<f64>().expect("expected f64 tensor");
             assert_eq!(inner.host_data().unwrap(), &[6.0, 8.0, 10.0, 12.0])
         }
         _ => panic!("expected f64 tensor"),

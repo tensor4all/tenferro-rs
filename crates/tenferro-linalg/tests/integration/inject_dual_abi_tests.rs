@@ -226,7 +226,8 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
 
     assert_eq!(DGEMM_ILP64_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::from_typed::<f64>(inner)) => {
+        Ok(tensor) => {
+            let inner = tensor.into_typed::<f64>().expect("expected f64 tensor");
             assert_eq!(inner.host_data().unwrap(), &[19.0, 43.0, 22.0, 50.0])
         }
         _ => panic!("expected f64 tensor"),
@@ -270,7 +271,12 @@ fn ilp64_lapack_full_piv_lu_bridges_integer_arrays() {
     assert_eq!(DGETC2_ILP64_CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(DGESC2_ILP64_CALLS.load(Ordering::SeqCst), 1);
     match x {
-        Ok(Tensor::from_typed::<f64>(inner)) => assert_eq!(inner.host_data().unwrap(), &[4.0, 8.0]),
+        Ok(tensor) => assert_eq!(
+            tensor
+                .into_typed::<f64>()
+                .expect("expected f64 tensor")
+                .host_data()
+                .unwrap(),.host_data().unwrap(), &[4.0, 8.0]),
         _ => panic!("expected f64 tensor"),
     }
 }

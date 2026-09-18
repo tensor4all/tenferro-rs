@@ -14,8 +14,8 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 }
 
 fn assert_f64_tensor_close(actual: &Tensor, expected: &Tensor, rtol: f64, atol: f64) {
-    match (actual, expected) {
-        (Tensor::from_typed::<f64>(actual), Tensor::from_typed::<f64>(expected)) => {
+    match (actual.as_typed::<f64>(), expected.as_typed::<f64>()) {
+        (Some(actual), Some(expected)) => {
             assert_eq!(actual.shape(), expected.shape());
             for (idx, (&actual, &expected)) in actual
                 .host_data()
