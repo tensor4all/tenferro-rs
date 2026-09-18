@@ -1025,8 +1025,8 @@ fn eig_read_returns_correct_outputs_for_diagonal_matrix() {
     .unwrap();
     assert_eq!(outputs.len(), 2);
     // eig on real returns complex outputs
-    assert!(matches!(outputs[0], Tensor::C64(_)));
-    assert!(matches!(outputs[1], Tensor::C64(_)));
+    assert!(matches!(outputs[0].dtype(), DType::C64));
+    assert!(matches!(outputs[1].dtype(), DType::C64));
     assert_eq!(outputs[0].shape(), &[2]);
     assert_eq!(outputs[1].shape(), &[2, 2]);
 }
@@ -1121,25 +1121,25 @@ fn cholesky_read_accepts_all_supported_linalg_view_dtypes() {
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::F32(spd_f32.as_view())))
             .unwrap();
-        assert!(matches!(out, Tensor::F32(_)));
+        assert!(matches!(out.dtype(), DType::F32));
         assert_eq!(out.shape(), &[2, 2]);
 
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::F64(spd_f64.as_view())))
             .unwrap();
-        assert!(matches!(out, Tensor::F64(_)));
+        assert!(matches!(out.dtype(), DType::F64));
         assert_eq!(out.shape(), &[2, 2]);
 
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::C32(spd_c32.as_view())))
             .unwrap();
-        assert!(matches!(out, Tensor::C32(_)));
+        assert!(matches!(out.dtype(), DType::C32));
         assert_eq!(out.shape(), &[2, 2]);
 
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::C64(spd_c64.as_view())))
             .unwrap();
-        assert!(matches!(out, Tensor::C64(_)));
+        assert!(matches!(out.dtype(), DType::C64));
         assert_eq!(out.shape(), &[2, 2]);
     });
 }
@@ -1179,25 +1179,25 @@ fn lu_read_accepts_all_supported_linalg_view_dtypes() {
             .lu_read(TensorRead::from_view(TensorView::F32(mat_f32.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 4);
-        assert!(matches!(outs[0], Tensor::F32(_)));
+        assert!(matches!(outs[0].dtype(), DType::F32));
 
         let outs = backend
             .lu_read(TensorRead::from_view(TensorView::F64(mat_f64.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 4);
-        assert!(matches!(outs[0], Tensor::F64(_)));
+        assert!(matches!(outs[0].dtype(), DType::F64));
 
         let outs = backend
             .lu_read(TensorRead::from_view(TensorView::C32(mat_c32.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 4);
-        assert!(matches!(outs[0], Tensor::C32(_)));
+        assert!(matches!(outs[0].dtype(), DType::C32));
 
         let outs = backend
             .lu_read(TensorRead::from_view(TensorView::C64(mat_c64.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 4);
-        assert!(matches!(outs[0], Tensor::C64(_)));
+        assert!(matches!(outs[0].dtype(), DType::C64));
     });
 }
 
@@ -1236,25 +1236,25 @@ fn full_piv_lu_read_accepts_all_supported_linalg_view_dtypes() {
             .full_piv_lu_read(TensorRead::from_view(TensorView::F32(mat_f32.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 5);
-        assert!(matches!(outs[0], Tensor::F32(_)));
+        assert!(matches!(outs[0].dtype(), DType::F32));
 
         let outs = backend
             .full_piv_lu_read(TensorRead::from_view(TensorView::F64(mat_f64.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 5);
-        assert!(matches!(outs[0], Tensor::F64(_)));
+        assert!(matches!(outs[0].dtype(), DType::F64));
 
         let outs = backend
             .full_piv_lu_read(TensorRead::from_view(TensorView::C32(mat_c32.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 5);
-        assert!(matches!(outs[0], Tensor::C32(_)));
+        assert!(matches!(outs[0].dtype(), DType::C32));
 
         let outs = backend
             .full_piv_lu_read(TensorRead::from_view(TensorView::C64(mat_c64.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 5);
-        assert!(matches!(outs[0], Tensor::C64(_)));
+        assert!(matches!(outs[0].dtype(), DType::C64));
     });
 }
 
@@ -1295,32 +1295,32 @@ fn eig_read_accepts_all_supported_linalg_view_dtypes() {
             .eig_read(TensorRead::from_view(TensorView::F32(mat_f32.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 2);
-        assert!(matches!(outs[0], Tensor::C32(_)));
-        assert!(matches!(outs[1], Tensor::C32(_)));
+        assert!(matches!(outs[0].dtype(), DType::C32));
+        assert!(matches!(outs[1].dtype(), DType::C32));
 
         // f64 -> C64 outputs
         let outs = backend
             .eig_read(TensorRead::from_view(TensorView::F64(mat_f64.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 2);
-        assert!(matches!(outs[0], Tensor::C64(_)));
-        assert!(matches!(outs[1], Tensor::C64(_)));
+        assert!(matches!(outs[0].dtype(), DType::C64));
+        assert!(matches!(outs[1].dtype(), DType::C64));
 
         // C32 -> C32 outputs
         let outs = backend
             .eig_read(TensorRead::from_view(TensorView::C32(mat_c32.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 2);
-        assert!(matches!(outs[0], Tensor::C32(_)));
-        assert!(matches!(outs[1], Tensor::C32(_)));
+        assert!(matches!(outs[0].dtype(), DType::C32));
+        assert!(matches!(outs[1].dtype(), DType::C32));
 
         // C64 -> C64 outputs
         let outs = backend
             .eig_read(TensorRead::from_view(TensorView::C64(mat_c64.as_view())))
             .unwrap();
         assert_eq!(outs.len(), 2);
-        assert!(matches!(outs[0], Tensor::C64(_)));
-        assert!(matches!(outs[1], Tensor::C64(_)));
+        assert!(matches!(outs[0].dtype(), DType::C64));
+        assert!(matches!(outs[1].dtype(), DType::C64));
     });
 }
 
@@ -2458,25 +2458,25 @@ fn cholesky_read_to_contiguous_fallback_rank3_all_dtypes() {
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::F32(f32_t.as_view())))
             .unwrap();
-        assert!(matches!(out, Tensor::F32(_)));
+        assert!(matches!(out.dtype(), DType::F32));
         assert_eq!(out.shape(), &[2, 2, 2]);
 
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::F64(f64_t.as_view())))
             .unwrap();
-        assert!(matches!(out, Tensor::F64(_)));
+        assert!(matches!(out.dtype(), DType::F64));
         assert_eq!(out.shape(), &[2, 2, 2]);
 
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::C32(c32_t.as_view())))
             .unwrap();
-        assert!(matches!(out, Tensor::C32(_)));
+        assert!(matches!(out.dtype(), DType::C32));
         assert_eq!(out.shape(), &[2, 2, 2]);
 
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::C64(c64_t.as_view())))
             .unwrap();
-        assert!(matches!(out, Tensor::C64(_)));
+        assert!(matches!(out.dtype(), DType::C64));
         assert_eq!(out.shape(), &[2, 2, 2]);
     });
 }

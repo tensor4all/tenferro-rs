@@ -3499,7 +3499,7 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     ///
     /// let typed = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0])?;
     /// let tensor = <f64 as TensorScalar>::typed_tensor_into_tensor(typed);
-    /// assert!(matches!(tensor, Tensor::F64(_)));
+    /// assert!(matches!(tensor.dtype(), DType::F64));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn typed_tensor_into_tensor(tensor: TypedTensor<Self>) -> Tensor;
