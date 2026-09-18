@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    ContractionScalar, DType, MemoryKind, Tensor, TensorRead, TensorViewMut, TensorWrite,
+    ContractionScalar, DType, MemoryKind, TensorRead, TensorViewMut, TensorWrite,
 };
 
 use crate::buffer_pool::BufferPool;

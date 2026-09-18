@@ -588,24 +588,35 @@ macro_rules! dispatch_read_presets {
 macro_rules! dispatch_read_real_complex_scalar {
     ($buffers:expr, $lhs:expr, $rhs:expr, $real_variant:ident, $complex_variant:ident, $func:ident) => {
         match (&$lhs, &$rhs) {
-            (
-                TensorRead::Tensor(Tensor::$real_variant(real)),
-                TensorRead::View(TensorView::$complex_variant(complex)),
-            ) if real.shape().is_empty() => {
+            (TensorRead::Tensor(real), TensorRead::View(TensorView::$complex_variant(complex)))
+                if real.dtype()
+                    == <preset_scalar!($real_variant) as tenferro_tensor::TensorScalar>::dtype(
+                    )
+                    && real.shape().is_empty() =>
+            {
+                let real = real
+                    .as_typed::<preset_scalar!($real_variant)>()
+                    .expect("the dtype guard selects this arm");
                 let scalar = complex_scalar_tensor_from_tensor(real)?;
                 let scalar = scalar.as_view();
-                return Ok(Tensor::$complex_variant($func($buffers, &scalar, complex)?));
+                return Ok(Tensor::from_typed::<preset_scalar!($complex_variant)>(
+                    $func($buffers, &scalar, complex)?,
+                ));
             }
-            (
-                TensorRead::View(TensorView::$real_variant(real)),
-                TensorRead::Tensor(Tensor::$complex_variant(complex)),
-            ) if real.shape().is_empty() => {
+            (TensorRead::View(TensorView::$real_variant(real)), TensorRead::Tensor(complex))
+                if complex.dtype()
+                    == <preset_scalar!($complex_variant) as tenferro_tensor::TensorScalar>::dtype()
+                    && real.shape().is_empty() =>
+            {
+                let complex = complex
+                    .as_typed::<preset_scalar!($complex_variant)>()
+                    .expect("the dtype guard selects this arm");
                 let scalar = complex_scalar_tensor_from_view(real)?;
                 let scalar = scalar.as_view();
                 let complex = complex.as_view();
-                return Ok(Tensor::$complex_variant($func(
-                    $buffers, &scalar, &complex,
-                )?));
+                return Ok(Tensor::from_typed::<preset_scalar!($complex_variant)>(
+                    $func($buffers, &scalar, &complex)?,
+                ));
             }
             (
                 TensorRead::View(TensorView::$real_variant(real)),
@@ -613,26 +624,39 @@ macro_rules! dispatch_read_real_complex_scalar {
             ) if real.shape().is_empty() => {
                 let scalar = complex_scalar_tensor_from_view(real)?;
                 let scalar = scalar.as_view();
-                return Ok(Tensor::$complex_variant($func($buffers, &scalar, complex)?));
+                return Ok(Tensor::from_typed::<preset_scalar!($complex_variant)>(
+                    $func($buffers, &scalar, complex)?,
+                ));
             }
-            (
-                TensorRead::Tensor(Tensor::$complex_variant(complex)),
-                TensorRead::View(TensorView::$real_variant(real)),
-            ) if real.shape().is_empty() => {
+            (TensorRead::Tensor(complex), TensorRead::View(TensorView::$real_variant(real)))
+                if complex.dtype()
+                    == <preset_scalar!($complex_variant) as tenferro_tensor::TensorScalar>::dtype()
+                    && real.shape().is_empty() =>
+            {
+                let complex = complex
+                    .as_typed::<preset_scalar!($complex_variant)>()
+                    .expect("the dtype guard selects this arm");
                 let complex = complex.as_view();
                 let scalar = complex_scalar_tensor_from_view(real)?;
                 let scalar = scalar.as_view();
-                return Ok(Tensor::$complex_variant($func(
-                    $buffers, &complex, &scalar,
-                )?));
+                return Ok(Tensor::from_typed::<preset_scalar!($complex_variant)>(
+                    $func($buffers, &complex, &scalar)?,
+                ));
             }
-            (
-                TensorRead::View(TensorView::$complex_variant(complex)),
-                TensorRead::Tensor(Tensor::$real_variant(real)),
-            ) if real.shape().is_empty() => {
+            (TensorRead::View(TensorView::$complex_variant(complex)), TensorRead::Tensor(real))
+                if real.dtype()
+                    == <preset_scalar!($real_variant) as tenferro_tensor::TensorScalar>::dtype(
+                    )
+                    && real.shape().is_empty() =>
+            {
+                let real = real
+                    .as_typed::<preset_scalar!($real_variant)>()
+                    .expect("the dtype guard selects this arm");
                 let scalar = complex_scalar_tensor_from_tensor(real)?;
                 let scalar = scalar.as_view();
-                return Ok(Tensor::$complex_variant($func($buffers, complex, &scalar)?));
+                return Ok(Tensor::from_typed::<preset_scalar!($complex_variant)>(
+                    $func($buffers, complex, &scalar)?,
+                ));
             }
             (
                 TensorRead::View(TensorView::$complex_variant(complex)),
@@ -640,7 +664,9 @@ macro_rules! dispatch_read_real_complex_scalar {
             ) if real.shape().is_empty() => {
                 let scalar = complex_scalar_tensor_from_view(real)?;
                 let scalar = scalar.as_view();
-                return Ok(Tensor::$complex_variant($func($buffers, complex, &scalar)?));
+                return Ok(Tensor::from_typed::<preset_scalar!($complex_variant)>(
+                    $func($buffers, complex, &scalar)?,
+                ));
             }
             _ => {}
         }

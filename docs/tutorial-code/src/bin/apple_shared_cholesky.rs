@@ -14,7 +14,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Column-major representation of the SPD matrix [[4, 2], [2, 3]].
     let host = Tensor::from_vec_col_major([2, 2], vec![4.0_f32, 2.0, 2.0, 3.0])?;
     let managed = context.upload_tensor(&host)?;
-    let Tensor::F32(managed_typed) = &managed else {
+    let Some(managed_typed) = managed.as_typed::<f32>() else {
         panic!("expected F32 input")
     };
     let input_domain = managed_typed.allocation_domain().expect("managed domain");
@@ -28,7 +28,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(managed_typed.allocation_domain(), Some(input_domain));
     assert_eq!(managed_typed.allocation_id(), Some(input_allocation));
-    let Tensor::F32(factor) = factor else {
+    let Ok(factor) = factor.into_typed::<f32>() else {
         panic!("expected F32 factor")
     };
     assert_eq!(factor.allocation_domain(), Some(context.domain_id()));

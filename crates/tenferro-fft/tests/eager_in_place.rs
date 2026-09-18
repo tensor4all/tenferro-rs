@@ -105,10 +105,11 @@ fn consuming_fft_respects_compact_slice_extent_and_offset() {
                 Complex64::new(-1., 0.)
             ]
         );
-        let Tensor::from_typed::<tenferro_tensor::Complex64>(root) = output.into_value().unwrap()
-        else {
-            unreachable!()
-        };
+        let root = output
+            .into_value()
+            .unwrap()
+            .into_typed::<tenferro_tensor::Complex64>()
+            .unwrap_or_else(|_| unreachable!());
         let mut expected: Vec<_> = (1..=4).map(|x| Complex64::new(x as f64, 0.)).collect();
         expected[start] = Complex64::new((2 * start + 3) as f64, 0.);
         expected[start + 1] = Complex64::new(-1., 0.);

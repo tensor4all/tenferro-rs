@@ -122,13 +122,9 @@ pub fn to_f64(tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
 /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// let widened = conversion::to_df64(&tensor)?;
 ///
-/// match &widened {
-///     Tensor::external_with_placement(payload, _) => {
-///         let values = payload.downcast_ref::<Df64>().expect("the payload type");
-///         assert_eq!(values.as_slice(), &[Df64::from_f64(1.0), Df64::from_f64(2.0)]);
-///     }
-///     None => panic!("expected an external payload"),
-/// }
+/// let payload = widened.external_payload().expect("an external payload");
+/// let values = payload.downcast_ref::<Df64>().expect("the payload type");
+/// assert_eq!(values.as_slice(), &[Df64::from_f64(1.0), Df64::from_f64(2.0)]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn to_df64(tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {

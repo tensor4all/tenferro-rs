@@ -169,7 +169,7 @@ fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
 
     macro_rules! check {
         ($ty:ty, $tensor_variant:ident, $view_variant:ident, $scalar_variant:ident, $one:expr, $two:expr) => {{
-            let x = Tensor::$tensor_variant(
+            let x = Tensor::from_typed::<preset_scalar!($tensor_variant)>(
                 TypedTensor::<$ty>::from_vec_col_major(vec![2], vec![$one, $two]).unwrap(),
             );
             let mut storage = vec![$two, $one];

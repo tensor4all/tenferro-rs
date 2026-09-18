@@ -20,7 +20,7 @@ fn managed_values<T: TensorScalar + Copy + Send + Sync + 'static>(
 
 #[cfg(target_os = "macos")]
 fn f32_identity(tensor: &Tensor) -> (AllocationDomainId, AllocationId) {
-    let Tensor::F32(tensor) = tensor else {
+    let Some(tensor) = tensor.as_typed::<f32>() else {
         panic!("expected F32 tensor")
     };
     (
@@ -56,9 +56,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         cpu.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))?;
     assert_eq!(f32_identity(&unified), input_identity);
 
-    let (Tensor::C32(cpu_first), Tensor::C32(metal_result), Tensor::C32(cpu_again)) =
-        (&cpu_first, &metal_result, &cpu_again)
-    else {
+    let (Some(cpu_first), Some(metal_result), Some(cpu_again)) = (
+        cpu_first.as_typed::<num_complex::Complex32>(),
+        metal_result.as_typed::<num_complex::Complex32>(),
+        cpu_again.as_typed::<num_complex::Complex32>(),
+    ) else {
         panic!("RFFT must return C32")
     };
     for tensor in [cpu_first, metal_result, cpu_again] {
@@ -100,7 +102,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut cpu = context.cpu_backend().clone();
     let cpu_c64 =
         cpu.with_backend_session(|session| c64.fft(None, 0, FftNorm::Backward, session))?;
-    let Tensor::C64(cpu_c64) = cpu_c64 else {
+    let Ok(cpu_c64) = cpu_c64.into_typed::<num_complex::Complex64>() else {
         panic!("C64 FFT must return C64")
     };
     assert_eq!(cpu_c64.allocation_domain(), Some(context.domain_id()));

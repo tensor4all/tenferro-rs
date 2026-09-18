@@ -1,3 +1,29 @@
+/// The Rust scalar type behind a preset variant name a macro received.
+#[allow(unused_macros)]
+macro_rules! preset_scalar {
+    (F32) => {
+        f32
+    };
+    (F64) => {
+        f64
+    };
+    (I32) => {
+        i32
+    };
+    (I64) => {
+        i64
+    };
+    (Bool) => {
+        bool
+    };
+    (C32) => {
+        num_complex::Complex32
+    };
+    (C64) => {
+        num_complex::Complex64
+    };
+}
+
 #[cfg(all(test, feature = "cpu-blas", not(feature = "provider-inject")))]
 mod blas_uninit_tests;
 
@@ -1109,10 +1135,19 @@ fn prepare_provider_gemm_kind_with_output(
     macro_rules! dispatch {
         ($owned:ident, $view:ident) => {
             match (lhs, rhs) {
-                (
-                    TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                    TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                ) => {
+                (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs))
+                    if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && rhs.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                {
+                    let lhs = lhs
+                        .as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let rhs = rhs
+                        .as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                     return prepare_provider_gemm_typed_with_output(
                         cache,
                         cache_slot,
@@ -1127,10 +1162,13 @@ fn prepare_provider_gemm_kind_with_output(
                         config,
                     );
                 }
-                (
-                    TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                    TensorRead::View(TensorView::$view(rhs)),
-                ) => {
+                (TensorRead::Tensor(lhs), TensorRead::View(TensorView::$view(rhs)))
+                    if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                {
+                    let lhs = lhs
+                        .as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                     return prepare_provider_gemm_typed_with_output(
                         cache,
                         cache_slot,
@@ -1145,10 +1183,13 @@ fn prepare_provider_gemm_kind_with_output(
                         config,
                     );
                 }
-                (
-                    TensorRead::View(TensorView::$view(lhs)),
-                    TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                ) => {
+                (TensorRead::View(TensorView::$view(lhs)), TensorRead::Tensor(rhs))
+                    if rhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                {
+                    let rhs = rhs
+                        .as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                     return prepare_provider_gemm_typed_with_output(
                         cache,
                         cache_slot,
@@ -1269,52 +1310,82 @@ fn grouped_gemm_faer_with_parallelism(
             {
                 match (lhs, rhs, &mut *out) {
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(a)),
-                        TensorRead::Tensor(crate::Tensor::$owned(b)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
-                    ) => {
+                        TensorRead::Tensor(a),
+                        TensorRead::Tensor(b),
+                        TensorWrite::Tensor(c),
+                    ) if c.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let c = c.as_typed_mut::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let a = a.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let b = b.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
                         return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, &mut c);
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(a),
                         TensorRead::View(TensorView::$view(b)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
-                    ) => {
+                        TensorWrite::Tensor(c),
+                    ) if c.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let c = c.as_typed_mut::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let a = a.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
                         return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, &mut c);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
-                        TensorRead::Tensor(crate::Tensor::$owned(b)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
-                    ) => {
+                        TensorRead::Tensor(b),
+                        TensorWrite::Tensor(c),
+                    ) if c.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let c = c.as_typed_mut::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let b = b.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
                         return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, &mut c);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::View(TensorView::$view(b)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
-                    ) => {
+                        TensorWrite::Tensor(c),
+                    ) if c.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                        let c = c.as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
                         return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, &mut c);
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(a)),
-                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorRead::Tensor(a),
+                        TensorRead::Tensor(b),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c),
+                    ) if a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                        let a = a.as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let b = b.as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c);
+                    }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(a),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c),
+                    ) if a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                        let a = a.as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c);
+                    }
                     (
                         TensorRead::View(TensorView::$view(a)),
-                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorRead::Tensor(b),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c),
+                    ) if b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                        let b = b.as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c);
+                    }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::View(TensorView::$view(b)),
@@ -1432,52 +1503,82 @@ pub(crate) fn grouped_gemm_blas_cached(
             {
                 match (lhs, rhs, &mut *out) {
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(a)),
-                        TensorRead::Tensor(crate::Tensor::$owned(b)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
-                    ) => {
+                        TensorRead::Tensor(a),
+                        TensorRead::Tensor(b),
+                        TensorWrite::Tensor(c),
+                    ) if c.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let c = c.as_typed_mut::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let a = a.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let b = b.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
                         return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(a),
                         TensorRead::View(TensorView::$view(b)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
-                    ) => {
+                        TensorWrite::Tensor(c),
+                    ) if c.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let c = c.as_typed_mut::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let a = a.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
                         return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
-                        TensorRead::Tensor(crate::Tensor::$owned(b)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
-                    ) => {
+                        TensorRead::Tensor(b),
+                        TensorWrite::Tensor(c),
+                    ) if c.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let c = c.as_typed_mut::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let b = b.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
                         return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::View(TensorView::$view(b)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
-                    ) => {
+                        TensorWrite::Tensor(c),
+                    ) if c.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                        let c = c.as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
                         return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(a)),
-                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorRead::Tensor(a),
+                        TensorRead::Tensor(b),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c),
+                    ) if a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                        let a = a.as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let b = b.as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c);
+                    }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(a),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c),
+                    ) if a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                        let a = a.as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c);
+                    }
                     (
                         TensorRead::View(TensorView::$view(a)),
-                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorRead::Tensor(b),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c),
+                    ) if b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                        let b = b.as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c);
+                    }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::View(TensorView::$view(b)),
@@ -1783,10 +1884,27 @@ pub(crate) fn execute_faer_gemm_request(
             {
                 match (lhs, rhs, &mut *output) {
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
+                        TensorRead::Tensor(lhs),
+                        TensorRead::Tensor(rhs),
+                        TensorWrite::Tensor(output),
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && rhs.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            )
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut output = output.as_view_mut();
                         execute_faer_request_typed(
                             context,
@@ -1800,10 +1918,21 @@ pub(crate) fn execute_faer_gemm_request(
                         return Ok(CpuProviderOutcome::Executed);
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(lhs),
                         TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
+                        TensorWrite::Tensor(output),
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut output = output.as_view_mut();
                         execute_faer_request_typed(
                             context,
@@ -1818,9 +1947,20 @@ pub(crate) fn execute_faer_gemm_request(
                     }
                     (
                         TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
+                        TensorRead::Tensor(rhs),
+                        TensorWrite::Tensor(output),
+                    ) if rhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut output = output.as_view_mut();
                         execute_faer_request_typed(
                             context,
@@ -1836,8 +1976,13 @@ pub(crate) fn execute_faer_gemm_request(
                     (
                         TensorRead::View(TensorView::$view(lhs)),
                         TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
+                        TensorWrite::Tensor(output),
+                    ) if output.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut output = output.as_view_mut();
                         execute_faer_request_typed(
                             context,
@@ -1851,20 +1996,36 @@ pub(crate) fn execute_faer_gemm_request(
                         return Ok(CpuProviderOutcome::Executed);
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorRead::Tensor(lhs),
+                        TensorRead::Tensor(rhs),
                         TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => {
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && rhs.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         execute_faer_request_typed(
                             context, descriptor, lhs, rhs, output, alpha, beta,
                         )?;
                         return Ok(CpuProviderOutcome::Executed);
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(lhs),
                         TensorRead::View(TensorView::$view(rhs)),
                         TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => {
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         execute_faer_request_typed(
                             context, descriptor, lhs, rhs, output, alpha, beta,
                         )?;
@@ -1872,9 +2033,14 @@ pub(crate) fn execute_faer_gemm_request(
                     }
                     (
                         TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorRead::Tensor(rhs),
                         TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => {
+                    ) if rhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         execute_faer_request_typed(
                             context, descriptor, lhs, rhs, output, alpha, beta,
                         )?;
@@ -2061,9 +2227,13 @@ macro_rules! define_uninit_gemm_dispatch {
                     {
                         match (lhs, rhs) {
                             (
-                                TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                                TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                            ) => {
+                                TensorRead::Tensor(lhs),
+                                TensorRead::Tensor(rhs),
+                            ) if lhs.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() && rhs.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let lhs = lhs.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                    let rhs = rhs.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                                 return $execute(
                                     context,
                                     descriptor,
@@ -2075,9 +2245,11 @@ macro_rules! define_uninit_gemm_dispatch {
                                 );
                             }
                             (
-                                TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                                TensorRead::Tensor(lhs),
                                 TensorRead::View(TensorView::$view(rhs)),
-                            ) => {
+                            ) if lhs.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let lhs = lhs.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                                 return $execute(
                                     context,
                                     descriptor,
@@ -2090,8 +2262,10 @@ macro_rules! define_uninit_gemm_dispatch {
                             }
                             (
                                 TensorRead::View(TensorView::$view(lhs)),
-                                TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                            ) => {
+                                TensorRead::Tensor(rhs),
+                            ) if rhs.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
+                    let rhs = rhs.as_typed::<preset_scalar!($owned)>()
+                        .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                                 return $execute(
                                     context,
                                     descriptor,
@@ -2357,10 +2531,27 @@ pub(crate) fn execute_blas_gemm_request(
             {
                 match (lhs, rhs, &mut *output) {
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
+                        TensorRead::Tensor(lhs),
+                        TensorRead::Tensor(rhs),
+                        TensorWrite::Tensor(output),
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && rhs.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            )
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut output = output.as_view_mut();
                         return execute_blas_request_typed(
                             descriptor,
@@ -2372,10 +2563,21 @@ pub(crate) fn execute_blas_gemm_request(
                         );
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(lhs),
                         TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
+                        TensorWrite::Tensor(output),
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut output = output.as_view_mut();
                         return execute_blas_request_typed(
                             descriptor,
@@ -2388,9 +2590,20 @@ pub(crate) fn execute_blas_gemm_request(
                     }
                     (
                         TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
+                        TensorRead::Tensor(rhs),
+                        TensorWrite::Tensor(output),
+                    ) if rhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && output.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut output = output.as_view_mut();
                         return execute_blas_request_typed(
                             descriptor,
@@ -2404,8 +2617,13 @@ pub(crate) fn execute_blas_gemm_request(
                     (
                         TensorRead::View(TensorView::$view(lhs)),
                         TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
+                        TensorWrite::Tensor(output),
+                    ) if output.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let output = output
+                            .as_typed_mut::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut output = output.as_view_mut();
                         return execute_blas_request_typed(
                             descriptor,
@@ -2417,31 +2635,52 @@ pub(crate) fn execute_blas_gemm_request(
                         );
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorRead::Tensor(lhs),
+                        TensorRead::Tensor(rhs),
                         TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => {
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype()
+                        && rhs.dtype()
+                            == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype(
+                            ) =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         return execute_blas_request_typed(
                             descriptor, lhs, rhs, output, alpha, beta,
-                        )
+                        );
                     }
                     (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(lhs),
                         TensorRead::View(TensorView::$view(rhs)),
                         TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => {
+                    ) if lhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let lhs = lhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         return execute_blas_request_typed(
                             descriptor, lhs, rhs, output, alpha, beta,
-                        )
+                        );
                     }
                     (
                         TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorRead::Tensor(rhs),
                         TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => {
+                    ) if rhs.dtype()
+                        == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() =>
+                    {
+                        let rhs = rhs
+                            .as_typed::<preset_scalar!($owned)>()
+                            .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         return execute_blas_request_typed(
                             descriptor, lhs, rhs, output, alpha, beta,
-                        )
+                        );
                     }
                     (
                         TensorRead::View(TensorView::$view(lhs)),

@@ -1040,7 +1040,7 @@ macro_rules! real_rotation_eig_residual_test {
     ($name:ident, $real:ty, $real_variant:ident, $get_complex:ident, $tol:expr) => {
         #[test]
         fn $name() {
-            let input = Tensor::$real_variant(
+            let input = Tensor::from_typed::<$real>(
                 TypedTensor::<$real>::from_vec_col_major(
                     vec![2, 2],
                     vec![0.0 as $real, 1.0 as $real, -1.0 as $real, 0.0 as $real],

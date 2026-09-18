@@ -38,6 +38,7 @@
 ///
 /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
 /// assert_eq!(tensor.dtype(), DType::F64);
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 pub fn scalar_operand<'a, T: crate::TensorScalar>(
     tensor: &'a crate::Tensor,

@@ -162,7 +162,7 @@ fn test_solve_with_regular_matrix_rhs() {
         .host_data()
         .unwrap()
         .to_vec();
-    let recon = matmul_f64(&[2.0, 1.0, 0.0, 3.0], &x_data, 2, 2, 2);
+    let recon = matmul_f64(&[2.0, 1.0, 0.0, 3.0], x_data, 2, 2, 2);
     assert_f64_close_tol(recon[0], 5.0, 1e-10);
     assert_f64_close_tol(recon[1], 7.0, 1e-10);
     assert_f64_close_tol(recon[2], 3.0, 1e-10);
