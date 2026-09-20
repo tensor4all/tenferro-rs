@@ -799,6 +799,12 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
         }
         LinalgOp::EighVals { .. } => return Ok(vec![session.eigh_values_read(inputs[0].clone())?]),
         LinalgOp::Eig { .. } => return session.eig_read(inputs[0].clone()),
+        LinalgOp::EigVals { .. } => return Ok(vec![session.eig_values_read(inputs[0].clone())?]),
+        LinalgOp::Solve => {
+            return Ok(vec![
+                session.solve_read(inputs[0].clone(), inputs[1].clone())?
+            ]);
+        }
         _ => {}
     }
     if let LinalgOp::TriangularSolve {

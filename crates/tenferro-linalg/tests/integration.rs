@@ -5,6 +5,8 @@ mod ad_support_manifest;
 mod apple_shared;
 #[path = "integration/backend_errors.rs"]
 mod backend_errors;
+#[path = "integration/borrowed_linalg_parity.rs"]
+mod borrowed_linalg_parity;
 #[path = "integration/concrete_surface.rs"]
 mod concrete_surface;
 #[path = "integration/cpu_linalg_source_contract.rs"]

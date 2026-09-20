@@ -416,6 +416,8 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
         ("svd_values_read", "svd_values_faer_view_entered"),
         ("qr_read", "qr_faer_view_entered"),
         ("eigh_read", "eigh_faer_view_entered"),
+        ("eig_read", "linalg::faer::eig_view"),
+        ("eig_values_read", "linalg::faer::eig_values_view"),
     ] {
         let section = rust_function_section(&source, read);
         let eligibility = section
@@ -448,6 +450,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
         ("lu_read", "lu_entered"),
         ("full_piv_lu_read", "full_piv_lu_entered"),
         ("eig_read", "eig_entered"),
+        ("eig_values_read", "eig_values_entered"),
     ];
     for (read, entered) in methods {
         let section = rust_function_section(&source, read);

@@ -891,6 +891,14 @@ pub trait LinalgBackend: BackendSession {
         ))
     }
 
+    #[doc(hidden)]
+    fn eig_values_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "eig_values",
+            "backend does not implement borrowed general eigenvalues-only decomposition",
+        ))
+    }
+
     /// Solve a dense linear system.
     ///
     /// # Errors

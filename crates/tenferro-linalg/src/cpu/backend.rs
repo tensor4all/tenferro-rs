@@ -688,8 +688,27 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_supported_linalg_dtype("eig", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "eig")?;
         self.with_linalg_pool_fresh(move |context, buffers| {
+            #[cfg(feature = "cpu-faer")]
+            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+                return linalg::faer::eig_view(context, buffers, input.tensor_view());
+            }
             context.with_materialized_tensor_read(buffers, "eig", input, |input, buffers| {
                 eig_entered(provider, context, buffers, input)
+            })
+        })
+    }
+
+    fn eig_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor_read("eig_values", &input)?;
+        ensure_supported_linalg_dtype("eig_values", input.dtype())?;
+        let provider = linalg_provider_kind(self.kind(), "eig_values")?;
+        self.with_linalg_pool_fresh(move |context, buffers| {
+            #[cfg(feature = "cpu-faer")]
+            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+                return linalg::faer::eig_values_view(context, buffers, input.tensor_view());
+            }
+            context.with_materialized_tensor_read(buffers, "eig_values", input, |input, buffers| {
+                eig_values_entered(provider, context, buffers, input)
             })
         })
     }
@@ -713,38 +732,11 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eig_values", input)?;
-        if !matches!(
-            input.dtype(),
-            DType::F32 | DType::F64 | DType::C32 | DType::C64
-        ) {
-            return Err(unsupported_dtype("eig_values", input.dtype()));
-        }
-        match linalg_provider_kind(self.kind(), "eig_values")? {
-            CpuLinalgProvider::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    self.with_linalg_pool_fresh(|ctx, buffers| {
-                        linalg::faer::eig_values(ctx, buffers, input)
-                    })
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(unsupported_provider("eig_values", self.kind()))
-                }
-            }
-            CpuLinalgProvider::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    self.with_linalg_pool_fresh(|_, buffers| {
-                        linalg::blas::eig_values(buffers, input)
-                    })
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(unsupported_provider("eig_values", self.kind()))
-                }
-            }
-        }
+        ensure_supported_linalg_dtype("eig_values", input.dtype())?;
+        let provider = linalg_provider_kind(self.kind(), "eig_values")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            eig_values_entered(provider, context, buffers, input)
+        })
     }
 
     fn lu_solve_prepared(
@@ -3093,6 +3085,39 @@ fn eigh_values_entered(
             {
                 let _ = (context, buffers, input);
                 Err(unsupported_provider("eigh_values", CpuBackendKind::Blas))
+            }
+        }
+    }
+}
+
+fn eig_values_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+) -> tenferro_tensor::Result<Tensor> {
+    match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                linalg::faer::eig_values(context, buffers, input)
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("eig_values", CpuBackendKind::Faer))
+            }
+        }
+        CpuLinalgProvider::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                linalg::blas::eig_values(buffers, input)
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("eig_values", CpuBackendKind::Blas))
             }
         }
     }

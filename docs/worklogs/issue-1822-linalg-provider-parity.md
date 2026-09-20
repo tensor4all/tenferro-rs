@@ -84,6 +84,34 @@ separate PR; this file is updated as each one lands.
 - Out of scope, unchanged: CUDA `eig` and `full_piv_lu` stay `Unsupported`,
   and the new admission test pins that they still are.
 
+### D1 — borrowed-input parity for the general eigensolver and the solve dispatch
+
+Slice D is split in two because its two halves have different shapes. D1 closes
+the structural borrowed-input gaps; D2 adds the remaining faer view fast paths
+for rank-revealing QR and triangular solve, which need a larger provider-kernel
+refactor and are independently mergeable.
+
+- `LinalgBackend::eig_values_read` is the missing counterpart of the hidden
+  `eig_values` hook, with the same `#[doc(hidden)]` shape as
+  `eigh_values_read`. `TensorReadLinalgExt::eigvals_read` and
+  `LinalgOp::EigVals` now route through it instead of packing the view and
+  calling the owned hook — the same fix #1703 made for SVD and EIGH.
+- `LinalgOp::Solve` is routed through `solve_read`, which already had a direct
+  two-view path (`solve_from_views_entered`); it was simply unreachable from
+  eager and traced callers.
+- The four faer eig kernels were split into `*_core` entry points over a
+  `MatRef` plus thin owned wrappers, mirroring `svd_core`. `eig_read` and
+  `eig_values_read` take a strided view straight to the eigensolver when
+  `faer_strided_read_ok` allows it. The complex cores keep taking
+  `MatRef<faer::cNN>`; the view adapters build that pointer through the layout
+  equivalence `impl_complex_faer_casts` already asserts.
+- `eig_values` on the CPU backend gained an already-entered
+  `eig_values_entered` helper so the owned and borrowed routes share provider
+  dispatch, matching every other op in that file.
+- Empty core dimensions are handled before faer is entered: general
+  eigendecomposition always returns complex factors, so the empty outputs are
+  tagged complex exactly as the owned entry point tags them.
+
 ## Verification conclusions and constraints
 
 ### A
@@ -148,3 +176,22 @@ separate PR; this file is updated as each one lands.
   factor data are unchanged in substance.
 - Not established by slice C: any wall-clock claim, and AD through the full
   variant, which stays `Unsupported`.
+
+### D1
+
+- Borrowed and owned `eig` / `eigvals` agree for all four dtypes, compared as
+  multisets: the solver may order a spectrum differently between the view and
+  the packed path, and neither order is a contract.
+- Layout coverage: compact owned read, transposed (faer-eligible), reversed
+  (negative stride, packs), and rank-3 batched (packs, keeps batch shapes).
+  The source bytes are compared before and after.
+- The pool-capacity differential witness from slice A is repeated for
+  `eigvals_read`: only the packing route retains the `n*n` input copy.
+- Two source contracts were updated rather than relaxed.
+  `linalg_internal_path_contract` pinned `eigvals_read` to "materialize then
+  call `eig_values`", which is exactly the behaviour this slice removes; it now
+  requires the borrowed hook and forbids the pack, matching the `eigvalsh_read`
+  assertion directly above it. The faer fast-path ordering contract gained the
+  two new read hooks.
+- Not established by D1: rank-revealing QR and triangular solve still pack
+  every borrowed view (slice D2), and no wall-clock claim is made.

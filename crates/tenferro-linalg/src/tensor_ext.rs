@@ -2102,8 +2102,7 @@ impl TensorReadLinalgExt for TensorRead<'_> {
     }
     fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
         with_linalg_backend(session, "eigvals_read", |backend| {
-            let materialized = backend.to_contiguous_read(self)?;
-            backend.eig_values(&materialized)
+            backend.eig_values_read(self)
         })
     }
     fn pinv_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {

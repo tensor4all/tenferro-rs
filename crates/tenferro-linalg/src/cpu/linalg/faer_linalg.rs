@@ -10,7 +10,7 @@ use std::ops::Range;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
 use tenferro_tensor::{
-    DType, Tensor, TensorScalar, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    DType, Tensor, TensorScalar, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 pub(crate) trait FaerLinalg:
@@ -4530,7 +4530,7 @@ pub(crate) fn full_piv_lu_view<T: FaerLinalg + 'static>(
 }
 
 macro_rules! impl_eig_real_2d {
-    ($name:ident, $real:ty, $complex:ty, $real_eig_to_complex_outputs:ident) => {
+    ($name:ident, $core:ident, $real:ty, $complex:ty, $real_eig_to_complex_outputs:ident) => {
         fn $name(
             ctx: &CpuExecutionContext<'_>,
             buffers: &mut BufferPool,
@@ -4538,6 +4538,16 @@ macro_rules! impl_eig_real_2d {
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let n = square_matrix_dim(input, "eig")?;
             let mat = MatRef::from_column_major_slice(input.host_data()?, n, n);
+            $core(ctx, buffers, mat, n, input.placement())
+        }
+
+        fn $core(
+            ctx: &CpuExecutionContext<'_>,
+            buffers: &mut BufferPool,
+            mat: MatRef<'_, $real>,
+            n: usize,
+            placement: &tenferro_tensor::Placement,
+        ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let mut u_real = Mat::zeros(n, n);
             let mut s_re = Diag::zeros(n);
             let mut s_im = Diag::zeros(n);
@@ -4568,15 +4578,15 @@ macro_rules! impl_eig_real_2d {
             )?;
 
             Ok(vec![
-                tensor_from_vec_with_template(vec![n], s, input.placement())?,
-                tensor_from_vec_with_template(vec![n, n], u, input.placement())?,
+                tensor_from_vec_with_template(vec![n], s, placement)?,
+                tensor_from_vec_with_template(vec![n, n], u, placement)?,
             ])
         }
     };
 }
 
 macro_rules! impl_eig_values_real_2d {
-    ($name:ident, $real:ty, $complex:ty, $real_eig_to_complex_values:ident) => {
+    ($name:ident, $core:ident, $real:ty, $complex:ty, $real_eig_to_complex_values:ident) => {
         fn $name(
             ctx: &CpuExecutionContext<'_>,
             buffers: &mut BufferPool,
@@ -4584,6 +4594,16 @@ macro_rules! impl_eig_values_real_2d {
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let n = square_matrix_dim(input, "eig_values")?;
             let mat = MatRef::from_column_major_slice(input.host_data()?, n, n);
+            $core(ctx, buffers, mat, n, input.placement())
+        }
+
+        fn $core(
+            ctx: &CpuExecutionContext<'_>,
+            buffers: &mut BufferPool,
+            mat: MatRef<'_, $real>,
+            n: usize,
+            placement: &tenferro_tensor::Placement,
+        ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let mut s_re = Diag::zeros(n);
             let mut s_im = Diag::zeros(n);
             let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$real>(
@@ -4607,7 +4627,7 @@ macro_rules! impl_eig_values_real_2d {
             .map_err(|_| decomposition_failed("eig_values"))?;
             let s = $real_eig_to_complex_values(buffers, s_re.as_ref(), s_im.as_ref());
 
-            tensor_from_vec_with_template(vec![n], s, input.placement())
+            tensor_from_vec_with_template(vec![n], s, placement)
         }
     };
 }
@@ -4615,6 +4635,7 @@ macro_rules! impl_eig_values_real_2d {
 macro_rules! impl_eig_complex_2d {
     (
         $name:ident,
+        $core:ident,
         $complex:ty,
         $faer_complex:ty,
         $to_faer_slice:ident,
@@ -4628,6 +4649,16 @@ macro_rules! impl_eig_complex_2d {
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let n = square_matrix_dim(input, "eig")?;
             let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), n, n);
+            $core(ctx, buffers, mat, n, input.placement())
+        }
+
+        fn $core(
+            ctx: &CpuExecutionContext<'_>,
+            buffers: &mut BufferPool,
+            mat: MatRef<'_, $faer_complex>,
+            n: usize,
+            placement: &tenferro_tensor::Placement,
+        ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let mut u = Mat::zeros(n, n);
             let mut s = Diag::zeros(n);
             let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$faer_complex>(
@@ -4653,12 +4684,12 @@ macro_rules! impl_eig_complex_2d {
                 tensor_from_vec_with_template(
                     vec![n],
                     $vec_from_diag(buffers, s.as_ref()),
-                    input.placement(),
+                    placement,
                 )?,
                 tensor_from_vec_with_template(
                     vec![n, n],
                     $vec_from_mat(buffers, u.as_ref())?,
-                    input.placement(),
+                    placement,
                 )?,
             ])
         }
@@ -4668,6 +4699,7 @@ macro_rules! impl_eig_complex_2d {
 macro_rules! impl_eig_values_complex_2d {
     (
         $name:ident,
+        $core:ident,
         $complex:ty,
         $faer_complex:ty,
         $to_faer_slice:ident,
@@ -4680,6 +4712,16 @@ macro_rules! impl_eig_values_complex_2d {
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let n = square_matrix_dim(input, "eig_values")?;
             let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), n, n);
+            $core(ctx, buffers, mat, n, input.placement())
+        }
+
+        fn $core(
+            ctx: &CpuExecutionContext<'_>,
+            buffers: &mut BufferPool,
+            mat: MatRef<'_, $faer_complex>,
+            n: usize,
+            placement: &tenferro_tensor::Placement,
+        ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let mut s = Diag::zeros(n);
             let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$faer_complex>(
                 n,
@@ -4700,31 +4742,42 @@ macro_rules! impl_eig_values_complex_2d {
             )
             .map_err(|_| decomposition_failed("eig_values"))?;
 
-            tensor_from_vec_with_template(
-                vec![n],
-                $vec_from_diag(buffers, s.as_ref()),
-                input.placement(),
-            )
+            tensor_from_vec_with_template(vec![n], $vec_from_diag(buffers, s.as_ref()), placement)
         }
     };
 }
 
-impl_eig_real_2d!(eig_real32_2d, f32, Complex32, real32_eig_to_complex_outputs);
-impl_eig_real_2d!(eig_real64_2d, f64, Complex64, real64_eig_to_complex_outputs);
+impl_eig_real_2d!(
+    eig_real32_2d,
+    eig_real32_core,
+    f32,
+    Complex32,
+    real32_eig_to_complex_outputs
+);
+impl_eig_real_2d!(
+    eig_real64_2d,
+    eig_real64_core,
+    f64,
+    Complex64,
+    real64_eig_to_complex_outputs
+);
 impl_eig_values_real_2d!(
     eig_values_real32_2d,
+    eig_values_real32_core,
     f32,
     Complex32,
     real32_eig_to_complex_values
 );
 impl_eig_values_real_2d!(
     eig_values_real64_2d,
+    eig_values_real64_core,
     f64,
     Complex64,
     real64_eig_to_complex_values
 );
 impl_eig_complex_2d!(
     eig_complex32_2d,
+    eig_complex32_core,
     Complex32,
     faer::c32,
     complex32_to_faer_slice,
@@ -4733,6 +4786,7 @@ impl_eig_complex_2d!(
 );
 impl_eig_complex_2d!(
     eig_complex64_2d,
+    eig_complex64_core,
     Complex64,
     faer::c64,
     complex64_to_faer_slice,
@@ -4741,6 +4795,7 @@ impl_eig_complex_2d!(
 );
 impl_eig_values_complex_2d!(
     eig_values_complex32_2d,
+    eig_values_complex32_core,
     Complex32,
     faer::c32,
     complex32_to_faer_slice,
@@ -4748,11 +4803,181 @@ impl_eig_values_complex_2d!(
 );
 impl_eig_values_complex_2d!(
     eig_values_complex64_2d,
+    eig_values_complex64_core,
     Complex64,
     faer::c64,
     complex64_to_faer_slice,
     complex64_vec_from_diag
 );
+
+/// Empty `(values, vectors)` for a square input with a zero core dimension.
+///
+/// General eigendecomposition always returns complex factors, so the empty
+/// outputs are tagged complex exactly as the owned entry point tags them.
+fn empty_eig_outputs(
+    shape: &[usize],
+    dtype: DType,
+    op: &'static str,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let (matrix_shape, batch_shape) = split_shape_core_and_batch(shape, 2, op)?;
+    let n = matrix_shape[0];
+    if matrix_shape[1] != n {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            op,
+            vec![n],
+            vec![matrix_shape[1]],
+        ));
+    }
+    let value_shape = vector_with_batch_shape(n, batch_shape);
+    let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
+    match dtype {
+        DType::F32 | DType::C32 => Ok(vec![
+            Tensor::from_typed::<Complex32>(TypedTensor::from_vec_col_major(
+                value_shape,
+                Vec::new(),
+            )?),
+            Tensor::from_typed::<Complex32>(TypedTensor::from_vec_col_major(
+                vector_shape,
+                Vec::new(),
+            )?),
+        ]),
+        DType::F64 | DType::C64 => Ok(vec![
+            Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(
+                value_shape,
+                Vec::new(),
+            )?),
+            Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(
+                vector_shape,
+                Vec::new(),
+            )?),
+        ]),
+        other => Err(crate::error::unsupported_dtype(op, other)),
+    }
+}
+
+/// Square dimension and validated strided base pointer of an eig view.
+///
+/// Returns the `n x n` core size plus the row/column strides the caller needs
+/// to build a faer `MatRef` without copying the view.
+fn eig_view_layout<T: 'static>(
+    view: &TypedTensorView<'_, T>,
+    op: &'static str,
+) -> tenferro_tensor::Result<(usize, *const T, isize, isize)> {
+    let n = square_matrix_dim_view(view, op)?;
+    let base = host_base_ptr(view)?;
+    Ok((n, base, view.strides()[0], view.strides()[1]))
+}
+
+/// General eigendecomposition of a borrowed 2-D host view.
+///
+/// The outputs are always complex, so this returns erased tensors like the
+/// owned [`eig`] entry point rather than a typed factor pair.
+pub(crate) fn eig_view(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    view: TensorView<'_>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    if view.shape().contains(&0) {
+        // The eigensolver has nothing to run on; mirror the owned entry
+        // point's empty complex outputs instead of entering faer.
+        return empty_eig_outputs(view.shape(), view.dtype(), "eig");
+    }
+    // SAFETY (each arm): `TypedTensorView` construction validated the
+    // shape/stride span and offset against the host allocation, and
+    // `faer_strided_ok` proved host placement, rank 2 and non-negative
+    // strides. `host_base_ptr` returns the aligned non-null element pointer at
+    // that offset; the complex arms additionally rely on the layout
+    // equivalence asserted by `impl_complex_faer_casts`.
+    match view {
+        TensorView::F32(view) => {
+            let (n, base, row, col) = eig_view_layout(&view, "eig")?;
+            let mat = unsafe { MatRef::from_raw_parts(base, n, n, row, col) };
+            eig_real32_core(ctx, buffers, mat, n, view.placement()).map(|outputs| {
+                outputs
+                    .into_iter()
+                    .map(Tensor::from_typed::<Complex32>)
+                    .collect()
+            })
+        }
+        TensorView::F64(view) => {
+            let (n, base, row, col) = eig_view_layout(&view, "eig")?;
+            let mat = unsafe { MatRef::from_raw_parts(base, n, n, row, col) };
+            eig_real64_core(ctx, buffers, mat, n, view.placement()).map(|outputs| {
+                outputs
+                    .into_iter()
+                    .map(Tensor::from_typed::<Complex64>)
+                    .collect()
+            })
+        }
+        TensorView::C32(view) => {
+            let (n, base, row, col) = eig_view_layout(&view, "eig")?;
+            let mat = unsafe { MatRef::from_raw_parts(base.cast::<faer::c32>(), n, n, row, col) };
+            eig_complex32_core(ctx, buffers, mat, n, view.placement()).map(|outputs| {
+                outputs
+                    .into_iter()
+                    .map(Tensor::from_typed::<Complex32>)
+                    .collect()
+            })
+        }
+        TensorView::C64(view) => {
+            let (n, base, row, col) = eig_view_layout(&view, "eig")?;
+            let mat = unsafe { MatRef::from_raw_parts(base.cast::<faer::c64>(), n, n, row, col) };
+            eig_complex64_core(ctx, buffers, mat, n, view.placement()).map(|outputs| {
+                outputs
+                    .into_iter()
+                    .map(Tensor::from_typed::<Complex64>)
+                    .collect()
+            })
+        }
+        unsupported => Err(crate::error::unsupported_dtype("eig", unsupported.dtype())),
+    }
+}
+
+/// Eigenvalues of a borrowed 2-D host view, without the eigenvector solve.
+pub(crate) fn eig_values_view(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    view: TensorView<'_>,
+) -> tenferro_tensor::Result<Tensor> {
+    if view.shape().contains(&0) {
+        let mut outputs = empty_eig_outputs(view.shape(), view.dtype(), "eig_values")?;
+        outputs.truncate(1);
+        return outputs.pop().ok_or_else(|| {
+            tenferro_tensor::Error::runtime_state("eig_values", "empty eigenvalue output missing")
+        });
+    }
+    // SAFETY: identical to `eig_view` above.
+    match view {
+        TensorView::F32(view) => {
+            let (n, base, row, col) = eig_view_layout(&view, "eig_values")?;
+            let mat = unsafe { MatRef::from_raw_parts(base, n, n, row, col) };
+            eig_values_real32_core(ctx, buffers, mat, n, view.placement())
+                .map(Tensor::from_typed::<Complex32>)
+        }
+        TensorView::F64(view) => {
+            let (n, base, row, col) = eig_view_layout(&view, "eig_values")?;
+            let mat = unsafe { MatRef::from_raw_parts(base, n, n, row, col) };
+            eig_values_real64_core(ctx, buffers, mat, n, view.placement())
+                .map(Tensor::from_typed::<Complex64>)
+        }
+        TensorView::C32(view) => {
+            let (n, base, row, col) = eig_view_layout(&view, "eig_values")?;
+            let mat = unsafe { MatRef::from_raw_parts(base.cast::<faer::c32>(), n, n, row, col) };
+            eig_values_complex32_core(ctx, buffers, mat, n, view.placement())
+                .map(Tensor::from_typed::<Complex32>)
+        }
+        TensorView::C64(view) => {
+            let (n, base, row, col) = eig_view_layout(&view, "eig_values")?;
+            let mat = unsafe { MatRef::from_raw_parts(base.cast::<faer::c64>(), n, n, row, col) };
+            eig_values_complex64_core(ctx, buffers, mat, n, view.placement())
+                .map(Tensor::from_typed::<Complex64>)
+        }
+        unsupported => Err(crate::error::unsupported_dtype(
+            "eig_values",
+            unsupported.dtype(),
+        )),
+    }
+}
 
 pub(crate) fn eig(
     ctx: &CpuExecutionContext<'_>,

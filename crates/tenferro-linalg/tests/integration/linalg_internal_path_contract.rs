@@ -326,8 +326,12 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
         "fn pinv_read",
     );
     assert!(
-        read_eigvals.contains("to_contiguous_read") && read_eigvals.contains("eig_values("),
-        "eigvals_read should materialize the read then call eig_values"
+        read_eigvals.contains("eig_values_read(self)"),
+        "eigvals_read should call the borrowed general values-only hook"
+    );
+    assert!(
+        !read_eigvals.contains("to_contiguous_read"),
+        "eigvals_read should not pack the view before a provider that can read it"
     );
     assert!(
         !read_eigvals.contains("eig_read(backend)?.0"),

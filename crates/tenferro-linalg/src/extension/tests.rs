@@ -169,6 +169,8 @@ fn read_capable_extension_ops_dispatch_before_owned_fallback() {
         "rank_revealing_qr_read",
         "eigh_read",
         "eigh_values_read",
+        "eig_values_read",
+        "solve_read",
         "lu_read",
         "full_piv_lu_read",
         "eig_read",
