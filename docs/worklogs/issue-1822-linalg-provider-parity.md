@@ -140,6 +140,25 @@ remaining faer view fast paths for rank-revealing QR and triangular solve.
   factoring. The view path applies the same two guards, read through the view's
   own indexing, and reuses a shape/placement-based zero-matrix result because
   there is no owned template tensor to copy metadata from.
+### E — full Q from compact Householder QR
+
+- The bound moves from `end > k` to `end > m` in faer, LAPACK, CUDA, and
+  `householder_qr_q_columns_meta`. No new provider routine was needed: all
+  three backends already build Q by applying the compact reflectors to the
+  matching identity columns, and that construction generalizes to the
+  complement columns unchanged. The issue sketched a separate `?orgqr` path for
+  LAPACK; the existing `?ormqr`-on-identity route reaches the same result and
+  keeps one code path per provider.
+- The `PositiveDiagonal` gauge comes from R's diagonal, so it applies to the
+  first `k` columns only. Each provider now stops at `k` explicitly. On CUDA
+  that was also a latent out-of-bounds: the phase kernel indexed
+  `phase[q_start + column]` against a vector of length `k`, so a full-Q request
+  would have read past it. The kernel now skips a column with no phase.
+- AD through a complement column returns a typed `Unsupported` rather than a
+  derivative. The thin `dQ` the linearize rule builds has no column there, and
+  the complement basis is defined only up to a rotation inside the nullspace.
+  The refusal fires when `k` is a known constant; with a symbolic `k` the rule
+  cannot prove the range exceeds it, which is recorded below as a residual.
 
 ## Verification conclusions and constraints
 
@@ -237,3 +256,22 @@ remaining faer view fast paths for rank-revealing QR and triangular solve.
 - Verified on the faer lane, the `blas-openblas` lane and CI-parity clippy.
   Slice D is complete: every borrowed CPU read hook the issue listed now either
   reaches faer directly or packs only what it must. No wall-clock claim is made.
+- Not established by D1: rank-revealing QR and triangular solve still pack
+  every borrowed view (slice D2), and no wall-clock claim is made.
+
+### E
+
+- `Qᴴ Q = I (m x m)` for tall inputs on both CPU providers, plus `Q[:, :k]`
+  equal to the thin factor, `Aᵀ Q[:, k..m] = 0`, a complement-only range equal
+  to the matching slice of full Q, square (`k = m`) and wide inputs, empty
+  ranges, and both range-validation errors. The same identities are verified on
+  the device through the traced surface and on a local A100.
+- The gauge contract is verified as a difference: the gauged and ungauged
+  complement columns are identical, while the full factor stays orthonormal.
+- The AD refusal is verified end to end through `AdContext::grad`, together
+  with the thin range still differentiating, and the manifest caveat naming the
+  value-only complement range is asserted by its own test.
+- Residual: with a symbolic `k` (a traced shape that is not a constant) the AD
+  rule cannot prove the range reaches past the thin width, so the refusal is
+  raised only for concrete shapes. That matches the pre-existing behaviour of
+  the symbolic column selector this rule already used.

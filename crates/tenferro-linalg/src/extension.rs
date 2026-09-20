@@ -1674,11 +1674,13 @@ fn householder_qr_q_columns_meta(
             format!("invalid Q-column range {start}..{end}"),
         ));
     }
-    if coeff[0].constant_value().is_some_and(|k| end > k) {
+    // The reachable width is full Q, not thin Q: columns `k..m` span the
+    // orthogonal complement of the input's column space.
+    if packed[0].constant_value().is_some_and(|rows| end > rows) {
         return Err(Error::invalid_argument(
             "tenferro-linalg.householder_qr_q_columns",
             "range",
-            format!("Q-column range {start}..{end} exceeds thin-Q width"),
+            format!("Q-column range {start}..{end} exceeds full-Q width"),
         ));
     }
     Ok((

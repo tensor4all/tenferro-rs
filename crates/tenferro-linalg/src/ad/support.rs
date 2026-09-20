@@ -380,6 +380,13 @@ static HOUSEHOLDER_QR_RESIDUAL_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
 )];
 static HOUSEHOLDER_QR_CAVEATS: [&str; 1] =
     ["Rank-deficient states are outside the differentiable domain."];
+static HOUSEHOLDER_QR_Q_COLUMNS_CAVEATS: [&str; 2] = [
+    "Rank-deficient states are outside the differentiable domain.",
+    "Column ranges reaching past the thin-Q width k = min(m, n) are \
+     value-only: the complement basis is defined only up to a rotation inside \
+     the nullspace, so the rule returns a typed Unsupported instead of a \
+     derivative.",
+];
 static EIGH_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "eigenvalues", LinalgAdRuleSupport::SupportedViaLinearize),
     output(
@@ -667,7 +674,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
         ),
         LinalgAdRuleSupport::Unsupported,
         &HOUSEHOLDER_QR_VALUE_OUTPUTS,
-        &HOUSEHOLDER_QR_CAVEATS,
+        &HOUSEHOLDER_QR_Q_COLUMNS_CAVEATS,
     ),
     support_entry(
         LinalgAdOpKind::HouseholderQrThinQ,

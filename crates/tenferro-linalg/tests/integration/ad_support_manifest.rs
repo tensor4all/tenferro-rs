@@ -347,3 +347,22 @@ fn assert_output_status(
         .unwrap_or_else(|| panic!("missing output {name} for {:?}", entry.kind));
     assert_eq!(output.status, expected);
 }
+
+#[test]
+fn q_columns_manifest_records_the_value_only_complement_range() {
+    // Slice E widened `q_columns` to the full-Q width; the manifest has to say
+    // that the extra columns are value-only rather than leave callers to infer
+    // it from the AD refusal at trace time.
+    let entry = linalg_ad_support(LinalgAdOpKind::HouseholderQrQColumns);
+    assert!(
+        entry
+            .caveats
+            .iter()
+            .any(|caveat| caveat.contains("thin-Q width") && caveat.contains("value-only")),
+        "q_columns caveats must name the value-only complement range: {:?}",
+        entry.caveats
+    );
+    // The thin range keeps its differentiable status.
+    assert_eq!(entry.jvp.status, LinalgAdRuleSupport::SupportedViaLinearize);
+    assert_eq!(entry.vjp.status, LinalgAdRuleSupport::SupportedViaLinearize);
+}

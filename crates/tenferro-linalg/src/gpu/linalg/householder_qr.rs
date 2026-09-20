@@ -628,12 +628,15 @@ pub(super) fn compact_qr_q_columns_typed<T>(
 where
     T: LinalgScalar + TensorScalar,
 {
-    let (m, _, k) = compact_qr_state_dims(packed, coeff, op)?;
-    if start > end || end > k {
+    let (m, _, _k) = compact_qr_state_dims(packed, coeff, op)?;
+    // Full-Q width: columns `k..m` span the orthogonal complement of the
+    // input's column space, reached by applying the same compact reflectors to
+    // the matching identity columns.
+    if start > end || end > m {
         return Err(Error::invalid_argument(
             op,
             "range",
-            format!("Q column range {start}..{end} exceeds 0..{k}"),
+            format!("Q column range {start}..{end} exceeds 0..{m}"),
         ));
     }
     let mut q = initialize_q_columns_typed::<T>(backend, m, start, end, op)?;

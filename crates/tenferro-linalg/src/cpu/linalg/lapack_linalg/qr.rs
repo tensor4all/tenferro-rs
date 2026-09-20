@@ -308,11 +308,14 @@ pub(crate) fn q_columns_2d<T: LapackQr>(
     positive_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let (m, n, k) = validate_state(packed, tau, "q_columns_2d")?;
-    if start > end || end > k {
+    // Full-Q width: columns `k..m` span the orthogonal complement of the
+    // input's column space. Applying the compact reflectors to those identity
+    // columns produces them directly, so no separate `?orgqr` path is needed.
+    if start > end || end > m {
         return Err(tenferro_tensor::Error::invalid_argument(
             "q_columns_2d",
             "range",
-            format!("range {start}..{end} is outside 0..{k}"),
+            format!("range {start}..{end} is outside 0..{m}"),
         ));
     }
     let columns = end - start;
@@ -333,8 +336,13 @@ pub(crate) fn q_columns_2d<T: LapackQr>(
         )?;
         if positive_diagonal {
             let packed_data = packed.host_data()?;
+            // The gauge is defined by R's diagonal, so it fixes only the first
+            // `k` columns; a complement column has no diagonal to fix.
             for col in 0..columns {
                 let diag = start + col;
+                if diag >= k {
+                    break;
+                }
                 let phase = T::q_phase(packed_data[diag + diag * m]);
                 for row in 0..m {
                     q[row + col * m] = q[row + col * m] * phase;

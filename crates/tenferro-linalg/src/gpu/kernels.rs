@@ -252,8 +252,12 @@ pub fn qr_apply_phase_real<E: CubePrimitive + core::ops::Mul<Output = E>>(
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < q.len() {
+        // `phase` has one entry per R diagonal, so a full-Q complement column
+        // (index >= k) has no phase to apply and is left untouched.
         let index = q_start + q.coordinate(pos, 1usize);
-        q[pos] = q[pos] * phase[qr_phase_offset(q, phase, pos, index, rank)];
+        if index < phase.shape(0usize) {
+            q[pos] = q[pos] * phase[qr_phase_offset(q, phase, pos, index, rank)];
+        }
     }
     if pos < r.len() {
         let index = r.coordinate(pos, 0usize);
@@ -271,8 +275,11 @@ pub fn qr_apply_phase_complex<C: ComplexCore>(
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < q.len() {
+        // Same complement-column guard as the real kernel above.
         let index = q_start + q.coordinate(pos, 1usize);
-        q[pos] = q[pos] * phase[qr_phase_offset(q, phase, pos, index, rank)];
+        if index < phase.shape(0usize) {
+            q[pos] = q[pos] * phase[qr_phase_offset(q, phase, pos, index, rank)];
+        }
     }
     if pos < r.len() {
         let index = r.coordinate(pos, 0usize);

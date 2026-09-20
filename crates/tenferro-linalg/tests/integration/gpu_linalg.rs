@@ -1899,3 +1899,151 @@ fn cuda_full_svd_wide_above_the_gesvdj_threshold_reuses_the_adjoint_trick() {
     let vt = download(&gpu, &outputs[2]);
     assert_full_svd_on_host(M, N, &source, &u, &s, &vt, 1.0e-9);
 }
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_full_q_columns_complete_the_thin_factor_and_span_the_complement() {
+    if !gpu_available() {
+        return;
+    }
+    // `q_columns` now reaches the full-Q width `m`, so the columns past
+    // `k = min(m, n)` must be orthonormal and orthogonal to the input.
+    let (m, n) = (5_usize, 3_usize);
+    let data: Vec<f64> = (0..m * n)
+        .map(|index| {
+            let row = (index % m) as f64;
+            let col = (index / m) as f64;
+            1.0 + row * 1.25 - col * 0.5 + row * col * 0.125
+        })
+        .collect();
+    let input = tensor_f64(vec![m, n], data.clone());
+    let mut gpu = gpu_backend();
+    let device_input = upload(&gpu, &input);
+
+    let (full, thin, complement) = with_cuda_linalg_session(&mut gpu, |session| {
+        let state = device_input.householder_qr(session).unwrap();
+        (
+            state
+                .q_columns(0..m, QrOptions::default(), session)
+                .unwrap(),
+            state
+                .q_columns(0..n, QrOptions::default(), session)
+                .unwrap(),
+            state
+                .q_columns(n..m, QrOptions::default(), session)
+                .unwrap(),
+        )
+    });
+    assert_eq!(full.shape(), &[m, m]);
+    assert_eq!(thin.shape(), &[m, n]);
+    assert_eq!(complement.shape(), &[m, m - n]);
+
+    let full = download(&gpu, &full);
+    let full_data = full.as_slice::<f64>().unwrap();
+    for left in 0..m {
+        for right in 0..m {
+            let inner: f64 = (0..m)
+                .map(|row| full_data[row + left * m] * full_data[row + right * m])
+                .sum();
+            let expected = if left == right { 1.0 } else { 0.0 };
+            assert!(
+                (inner - expected).abs() < 1.0e-9,
+                "device Q column pair ({left}, {right}) inner product {inner}"
+            );
+        }
+    }
+    for col in n..m {
+        for input_col in 0..n {
+            let inner: f64 = (0..m)
+                .map(|row| data[row + input_col * m] * full_data[row + col * m])
+                .sum();
+            assert!(
+                inner.abs() < 1.0e-9,
+                "device complement column {col} is not orthogonal to input column {input_col}"
+            );
+        }
+    }
+
+    let thin = download(&gpu, &thin);
+    assert_tensor_close(
+        &tensor_f64(vec![m, n], full_data[..m * n].to_vec()),
+        &thin,
+        1.0e-12,
+    );
+    let complement = download(&gpu, &complement);
+    assert_tensor_close(
+        &tensor_f64(vec![m, m - n], full_data[n * m..].to_vec()),
+        &complement,
+        1.0e-12,
+    );
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_full_q_positive_diagonal_gauge_leaves_complement_columns_alone() {
+    if !gpu_available() {
+        return;
+    }
+    // The gauge comes from R's diagonal, so it has nothing to apply to a
+    // complement column; the device kernel must skip it rather than index past
+    // the phase vector.
+    let (m, n) = (4_usize, 2_usize);
+    let input = tensor_f64(vec![m, n], vec![1.0, 2.0, 3.0, 4.0, 2.0, -1.0, 0.5, 3.0]);
+    let mut gpu = gpu_backend();
+    let device_input = upload(&gpu, &input);
+
+    let (raw, gauged) = with_cuda_linalg_session(&mut gpu, |session| {
+        let state = device_input.householder_qr(session).unwrap();
+        (
+            state
+                .q_columns(0..m, QrOptions::default(), session)
+                .unwrap(),
+            state
+                .q_columns(
+                    0..m,
+                    QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+                    session,
+                )
+                .unwrap(),
+        )
+    });
+    let raw = download(&gpu, &raw);
+    let gauged = download(&gpu, &gauged);
+    assert_eq!(gauged.shape(), &[m, m]);
+    let raw_data = raw.as_slice::<f64>().unwrap();
+    let gauged_data = gauged.as_slice::<f64>().unwrap();
+    assert_tensor_close(
+        &tensor_f64(vec![m, m - n], gauged_data[n * m..].to_vec()),
+        &tensor_f64(vec![m, m - n], raw_data[n * m..].to_vec()),
+        1.0e-12,
+    );
+    for col in 0..m {
+        let norm: f64 = (0..m).map(|row| gauged_data[row + col * m].powi(2)).sum();
+        assert!(
+            (norm - 1.0).abs() < 1.0e-9,
+            "gauged device column {col} norm {norm}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_q_column_ranges_past_the_full_q_width_are_rejected() {
+    if !gpu_available() {
+        return;
+    }
+    let (m, n) = (4_usize, 2_usize);
+    let input = tensor_f64(vec![m, n], vec![1.0, 2.0, 3.0, 4.0, 2.0, -1.0, 0.5, 3.0]);
+    let mut gpu = gpu_backend();
+    let device_input = upload(&gpu, &input);
+    let error = with_cuda_linalg_session(&mut gpu, |session| {
+        let state = device_input.householder_qr(session).unwrap();
+        state
+            .q_columns(0..m + 1, QrOptions::default(), session)
+            .unwrap_err()
+    });
+    assert!(
+        format!("{error}").contains("range"),
+        "expected a range validation error, got {error}"
+    );
+}

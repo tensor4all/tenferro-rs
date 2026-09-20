@@ -573,6 +573,12 @@ pub trait LinalgBackend: BackendSession {
         ))
     }
 
+    /// Materialize Q columns `columns` from compact Householder state.
+    ///
+    /// The reachable width is full Q: for an `m x n` input, `columns` may run
+    /// to `m`, and the columns past `k = min(m, n)` span the orthogonal
+    /// complement of the input's column space. `QrOptions::gauge` comes from
+    /// R's diagonal and therefore applies to the first `k` columns only.
     #[doc(hidden)]
     fn householder_qr_q_columns(
         &mut self,

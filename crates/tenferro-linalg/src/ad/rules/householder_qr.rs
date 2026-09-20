@@ -186,6 +186,16 @@ pub(crate) fn linearize_q_columns(
         (DimExpr::Const(m), DimExpr::Const(n)) => Some((*m).min(*n)),
         _ => None,
     };
+    // Differentiating a complement column is a different problem: the thin
+    // `dQ` this rule builds has no column there, and the complement basis is
+    // only defined up to a rotation inside the nullspace. Refuse explicitly
+    // instead of selecting columns that do not exist.
+    if concrete_k.is_some_and(|k| end > k) {
+        return Err(ADRuleError::unsupported(
+            "tenferro-linalg.householder_qr_q_columns",
+            ADRuleKind::Jvp,
+        ));
+    }
     if start == 0 && concrete_k == Some(end) {
         return Ok(vec![Some(dq)]);
     }

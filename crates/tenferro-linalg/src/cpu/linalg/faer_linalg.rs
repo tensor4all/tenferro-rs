@@ -783,10 +783,13 @@ pub(crate) fn q_columns_2d<T: FaerLinalg + 'static>(
     positive_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let (rows, _cols, k) = validate_compact_state(packed, coeff, "q_columns_2d")?;
-    if start > end || end > k {
+    // Full-Q width: columns `k..rows` span the orthogonal complement of the
+    // input's column space, which the compact reflectors represent exactly as
+    // well as the thin columns do.
+    if start > end || end > rows {
         return Err(invalid_config(
             "q_columns_2d",
-            format!("range: range {start}..{end} is outside 0..{k}"),
+            format!("range: range {start}..{end} is outside 0..{rows}"),
         ));
     }
     let columns = end - start;
@@ -810,8 +813,15 @@ pub(crate) fn q_columns_2d<T: FaerLinalg + 'static>(
         )?;
         if positive_diagonal {
             let packed_data = packed.host_data()?;
+            // The gauge is defined by R's diagonal, so it fixes only the first
+            // `k` columns; a complement column has no diagonal to fix and is
+            // left as the reflector product produced it.
             for col in 0..columns {
-                let phase = T::q_phase(packed_data[(start + col) + (start + col) * rows]);
+                let diagonal = start + col;
+                if diagonal >= k {
+                    break;
+                }
+                let phase = T::q_phase(packed_data[diagonal + diagonal * rows]);
                 for row in 0..rows {
                     q[row + col * rows] = q[row + col * rows] * phase;
                 }

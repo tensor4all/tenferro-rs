@@ -109,12 +109,19 @@ impl HouseholderQr<Tensor> {
         })
     }
 
-    /// Materialize a contiguous range of thin-Q columns.
+    /// Materialize a contiguous range of Q columns, up to the full-Q width.
+    ///
+    /// For an `m x n` input with `k = min(m, n)`, columns `0..k` are the thin-Q
+    /// factor and columns `k..m` span the orthogonal complement of the input's
+    /// column space — the cheaper route to a nullspace basis than a full SVD.
+    /// `QrOptions::gauge` is defined by R's diagonal, so `PositiveDiagonal`
+    /// fixes the first `k` columns only; a complement column has no diagonal to
+    /// fix and is returned as the reflector product produced it.
     ///
     /// # Errors
     ///
     /// Returns `tenferro_tensor::Error::Validation` when the range is outside
-    /// the thin-Q width or state metadata is malformed,
+    /// the full-Q width `0..m` or state metadata is malformed,
     /// `tenferro_tensor::Error::Unsupported` for an unavailable provider path,
     /// or `tenferro_tensor::Error::BackendSource` for execution failures.
     pub fn q_columns(
@@ -188,7 +195,13 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
         )
     }
 
-    /// Materialize eager thin-Q columns.
+    /// Materialize eager Q columns, up to the full-Q width.
+    ///
+    /// Columns `0..k` are the thin-Q factor; columns `k..m` span the orthogonal
+    /// complement of the input's column space. `PositiveDiagonal` fixes only
+    /// the first `k` columns, because the gauge comes from R's diagonal.
+    /// Differentiating through a range that reaches past `k` is unsupported and
+    /// surfaces a typed AD error rather than a silently wrong derivative.
     ///
     /// # Errors
     ///
@@ -318,7 +331,13 @@ impl HouseholderQr<tenferro_runtime::TracedTensor> {
         )
     }
 
-    /// Materialize traced thin-Q columns.
+    /// Materialize traced Q columns, up to the full-Q width.
+    ///
+    /// Columns `0..k` are the thin-Q factor; columns `k..m` span the orthogonal
+    /// complement of the input's column space. `PositiveDiagonal` fixes only
+    /// the first `k` columns, because the gauge comes from R's diagonal.
+    /// Differentiating through a range that reaches past `k` is unsupported and
+    /// surfaces a typed AD error rather than a silently wrong derivative.
     ///
     /// # Errors
     ///

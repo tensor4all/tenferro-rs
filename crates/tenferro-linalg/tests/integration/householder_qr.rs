@@ -378,3 +378,271 @@ fn eager_compact_qr_executes_on_cpu() {
         &[3, 2]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Full-Q width. Columns `k..m` of Q span the orthogonal complement of the
+// input's column space, which the thin factor cannot represent. They come from
+// the same compact reflectors, so no extra factorization is needed.
+// ---------------------------------------------------------------------------
+
+/// Every CPU linalg provider compiled into this build.
+fn full_q_providers() -> Vec<(&'static str, CpuBackend)> {
+    const KINDS: &[(&str, tenferro_cpu::CpuBackendKind)] = &[
+        #[cfg(feature = "cpu-faer")]
+        ("faer", tenferro_cpu::CpuBackendKind::Faer),
+        #[cfg(feature = "cpu-blas")]
+        ("blas", tenferro_cpu::CpuBackendKind::Blas),
+    ];
+    KINDS
+        .iter()
+        .map(|&(name, kind)| {
+            let backend = CpuBackend::with_threads_and_kind(1, kind)
+                .unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
+            (name, backend)
+        })
+        .collect()
+}
+
+/// A tall, full-column-rank sample whose complement is two-dimensional.
+fn tall_sample(m: usize, n: usize) -> Vec<f64> {
+    (0..m * n)
+        .map(|index| {
+            let row = (index % m) as f64;
+            let col = (index / m) as f64;
+            1.0 + row * 1.25 - col * 0.5 + row * col * 0.125
+        })
+        .collect()
+}
+
+#[test]
+fn full_q_columns_are_orthonormal_and_complete_the_thin_factor() {
+    let (m, n) = (5_usize, 3_usize);
+    let data = tall_sample(m, n);
+    for (provider, mut host) in full_q_providers() {
+        let input = Tensor::from_vec_col_major(vec![m, n], data.clone()).unwrap();
+        host.with_backend_session(|session| {
+            let state = input.householder_qr(session).unwrap();
+            let full = state
+                .q_columns(0..m, QrOptions::default(), session)
+                .unwrap();
+            assert_eq!(full.shape(), &[m, m], "{provider}: full-Q shape");
+            let full_data = full.as_slice::<f64>().unwrap();
+
+            // `Qᵀ Q = I (m x m)`: the identity a thin factor cannot satisfy.
+            for left in 0..m {
+                for right in 0..m {
+                    let inner: f64 = (0..m)
+                        .map(|row| full_data[row + left * m] * full_data[row + right * m])
+                        .sum();
+                    let expected = if left == right { 1.0 } else { 0.0 };
+                    assert!(
+                        (inner - expected).abs() < 1.0e-10,
+                        "{provider}: column pair ({left}, {right}) inner product {inner}"
+                    );
+                }
+            }
+
+            // The leading columns still are the thin factor.
+            let thin = state
+                .q_columns(0..n, QrOptions::default(), session)
+                .unwrap();
+            assert_eq!(thin.shape(), &[m, n]);
+            assert_close(thin.as_slice::<f64>().unwrap(), &full_data[..m * n]);
+
+            // `Aᵀ Q[:, k..m] = 0`: the complement is the input's left nullspace.
+            for col in n..m {
+                for input_col in 0..n {
+                    let inner: f64 = (0..m)
+                        .map(|row| data[row + input_col * m] * full_data[row + col * m])
+                        .sum();
+                    assert!(
+                        inner.abs() < 1.0e-10,
+                        "{provider}: complement column {col} is not orthogonal to input column \
+                         {input_col}: {inner}"
+                    );
+                }
+            }
+
+            // A complement-only range is reachable directly.
+            let complement = state
+                .q_columns(n..m, QrOptions::default(), session)
+                .unwrap();
+            assert_eq!(complement.shape(), &[m, m - n]);
+            assert_close(
+                complement.as_slice::<f64>().unwrap(),
+                &full_data[n * m..m * m],
+            );
+        });
+    }
+}
+
+#[test]
+fn full_q_positive_diagonal_gauge_fixes_only_the_thin_columns() {
+    // The gauge is defined by R's diagonal, so it is a no-op for the
+    // complement: the gauged and ungauged complement columns must be identical
+    // while the leading columns may be re-phased.
+    let (m, n) = (4_usize, 2_usize);
+    for (provider, mut host) in full_q_providers() {
+        let input = Tensor::from_vec_col_major(vec![m, n], tall_sample(m, n)).unwrap();
+        host.with_backend_session(|session| {
+            let state = input.householder_qr(session).unwrap();
+            let raw = state
+                .q_columns(0..m, QrOptions::default(), session)
+                .unwrap();
+            let gauged = state
+                .q_columns(
+                    0..m,
+                    QrOptions::default().gauge(tenferro_linalg::QrGauge::PositiveDiagonal),
+                    session,
+                )
+                .unwrap();
+            assert_eq!(gauged.shape(), &[m, m]);
+            assert_close(
+                &gauged.as_slice::<f64>().unwrap()[n * m..],
+                &raw.as_slice::<f64>().unwrap()[n * m..],
+            );
+
+            // The gauged full factor is still orthonormal.
+            let gauged_data = gauged.as_slice::<f64>().unwrap();
+            for col in 0..m {
+                let norm: f64 = (0..m).map(|row| gauged_data[row + col * m].powi(2)).sum();
+                assert!(
+                    (norm - 1.0).abs() < 1.0e-10,
+                    "{provider}: gauged column {col} norm {norm}"
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn square_and_empty_full_q_ranges_stay_consistent() {
+    for (provider, mut host) in full_q_providers() {
+        // Square input: full Q and thin Q coincide (k == m).
+        let square = Tensor::from_vec_col_major(vec![3, 3], tall_sample(3, 3)).unwrap();
+        host.with_backend_session(|session| {
+            let state = square.householder_qr(session).unwrap();
+            let full = state
+                .q_columns(0..3, QrOptions::default(), session)
+                .unwrap();
+            assert_eq!(full.shape(), &[3, 3], "{provider}: square full-Q shape");
+
+            // An empty range is still a valid request.
+            let empty = state
+                .q_columns(2..2, QrOptions::default(), session)
+                .unwrap();
+            assert_eq!(empty.shape(), &[3, 0]);
+        });
+
+        // Wide input: k == m, so the full-Q width is m and there is no complement.
+        let wide = Tensor::from_vec_col_major(vec![2, 4], tall_sample(2, 4)).unwrap();
+        host.with_backend_session(|session| {
+            let state = wide.householder_qr(session).unwrap();
+            let full = state
+                .q_columns(0..2, QrOptions::default(), session)
+                .unwrap();
+            assert_eq!(full.shape(), &[2, 2], "{provider}: wide full-Q shape");
+        });
+    }
+}
+
+#[test]
+fn q_column_ranges_past_the_full_q_width_are_rejected() {
+    let (m, n) = (4_usize, 2_usize);
+    for (provider, mut host) in full_q_providers() {
+        let input = Tensor::from_vec_col_major(vec![m, n], tall_sample(m, n)).unwrap();
+        host.with_backend_session(|session| {
+            let state = input.householder_qr(session).unwrap();
+            let error = state
+                .q_columns(0..m + 1, QrOptions::default(), session)
+                .unwrap_err();
+            assert!(
+                format!("{error}").contains("range"),
+                "{provider}: expected a range validation error, got {error}"
+            );
+            // An inverted range is still a range error, not a silent empty
+            // result. `Range` is built explicitly because a literal `3..1`
+            // trips the reversed-empty-range lint.
+            let inverted = state
+                .q_columns(
+                    std::ops::Range { start: 3, end: 1 },
+                    QrOptions::default(),
+                    session,
+                )
+                .unwrap_err();
+            assert!(format!("{inverted}").contains("range"));
+        });
+    }
+}
+
+#[test]
+fn traced_full_q_columns_carry_the_full_width_shape() {
+    use tenferro_linalg::TracedTensorLinalgExt;
+    use tenferro_runtime::{GraphCompiler, TracedTensor};
+
+    let a = TracedTensor::from_vec_col_major(
+        vec![4, 2],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0],
+    )
+    .unwrap();
+    let state = a.householder_qr().unwrap();
+    let full = state.q_columns(0..4, QrOptions::default()).unwrap();
+    let complement = state.q_columns(2..4, QrOptions::default()).unwrap();
+    let program = GraphCompiler::new()
+        .compile_many(&[&full, &complement])
+        .unwrap();
+    let outputs = super::support::run_all(&program, &[]).unwrap();
+    assert_eq!(outputs[0].shape(), &[4, 4]);
+    assert_eq!(outputs[1].shape(), &[4, 2]);
+
+    // `Aᵀ Q[:, 2..4] = 0` through the traced surface too.
+    let input = [1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0];
+    let complement = outputs[1].as_slice::<f64>().unwrap();
+    for col in 0..2 {
+        for input_col in 0..2 {
+            let inner: f64 = (0..4)
+                .map(|row| input[row + input_col * 4] * complement[row + col * 4])
+                .sum();
+            assert!(inner.abs() < 1.0e-10, "traced complement residual {inner}");
+        }
+    }
+}
+
+#[cfg(feature = "autodiff")]
+#[test]
+fn differentiating_through_complement_q_columns_is_refused() {
+    use tenferro_ad::AdContext;
+    use tenferro_linalg::TracedTensorLinalgExt;
+    use tenferro_runtime::TracedTensor;
+
+    // The complement basis is only defined up to a rotation inside the
+    // nullspace, and the thin `dQ` this rule builds has no column there, so the
+    // AD rule must refuse rather than return a silently wrong derivative.
+    let a = TracedTensor::from_vec_col_major(
+        vec![4, 2],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0],
+    )
+    .unwrap();
+    let state = a.householder_qr().unwrap();
+    let q = state.q_columns(0..4, QrOptions::default()).unwrap();
+    let loss = q.reduce_sum(Some(&[0, 1])).unwrap();
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+    let error = ad
+        .grad(&loss, &a)
+        .expect_err("full-Q differentiation must be refused");
+    let text = format!("{error}");
+    assert!(
+        text.contains("householder_qr_q_columns"),
+        "expected a typed q_columns AD refusal, got {text}"
+    );
+
+    // The thin range still differentiates.
+    let thin = state.q_columns(0..2, QrOptions::default()).unwrap();
+    let thin_loss = thin.reduce_sum(Some(&[0, 1])).unwrap();
+    ad.grad(&thin_loss, &a)
+        .expect("thin-Q differentiation must keep working");
+}
