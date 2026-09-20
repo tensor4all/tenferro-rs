@@ -418,6 +418,10 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
         ("eigh_read", "eigh_faer_view_entered"),
         ("eig_read", "linalg::faer::eig_view"),
         ("eig_values_read", "linalg::faer::eig_values_view"),
+        (
+            "rank_revealing_qr_read",
+            "rank_revealing_qr_faer_view_entered",
+        ),
     ] {
         let section = rust_function_section(&source, read);
         let eligibility = section
@@ -434,6 +438,27 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
             "{read} must take the faer view path before materializing"
         );
     }
+
+    // `triangular_solve_read` has two operands, so its eligibility test names
+    // both and the RHS predicate differs: the right-hand side is gathered
+    // element by element, so only host placement, rank and dtype matter there.
+    let section = rust_function_section(&source, "triangular_solve_read");
+    let eligibility = section
+        .find("faer_strided_read_ok(&a)")
+        .expect("triangular_solve_read must test the coefficient view");
+    let rhs_eligibility = section
+        .find("faer_rhs_read_ok(&b)")
+        .expect("triangular_solve_read must test the right-hand side view");
+    let view_return = section
+        .find("triangular_solve_faer_view_entered")
+        .expect("triangular_solve_read must return through its view adapter");
+    let materialization = section
+        .find("context.with_materialized_tensor_read(")
+        .expect("triangular_solve_read must keep a materializing fallback");
+    assert!(
+        eligibility < view_return && rhs_eligibility < view_return && view_return < materialization,
+        "triangular_solve_read must take the faer view path before materializing"
+    );
 }
 
 #[test]

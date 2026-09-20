@@ -169,6 +169,23 @@ impl LinalgBackend for CpuExecSession<'_> {
             unit_diagonal,
         };
         self.with_linalg_pool_fresh(move |context, buffers| {
+            // Both operands must be faer-eligible for the direct path: `a`
+            // reaches faer as a strided `MatRef` and `b` is gathered straight
+            // into the destructible right-hand side. If either is ineligible,
+            // the scoped materializer below packs only what it must.
+            #[cfg(feature = "cpu-faer")]
+            if provider == CpuLinalgProvider::Faer
+                && faer_strided_read_ok(&a)
+                && faer_rhs_read_ok(&b)
+            {
+                return triangular_solve_faer_view_entered(
+                    context,
+                    buffers,
+                    a.tensor_view(),
+                    b.tensor_view(),
+                    options,
+                );
+            }
             context.with_materialized_tensor_read(buffers, "triangular_solve", a, |a, buffers| {
                 context.with_materialized_tensor_read(
                     buffers,
@@ -509,6 +526,15 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "rank_revealing_qr")?;
         self.with_linalg_pool_fresh(move |context, buffers| {
+            #[cfg(feature = "cpu-faer")]
+            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+                return rank_revealing_qr_faer_view_entered(
+                    context,
+                    buffers,
+                    input.tensor_view(),
+                    options,
+                );
+            }
             context.with_materialized_tensor_read(
                 buffers,
                 "rank_revealing_qr",
@@ -3183,6 +3209,97 @@ fn faer_strided_read_ok(input: &TensorRead<'_>) -> bool {
         TensorRead::View(TensorView::I32(_))
         | TensorRead::View(TensorView::I64(_))
         | TensorRead::View(TensorView::Bool(_)) => false,
+    }
+}
+
+/// Can this right-hand side be gathered directly by the faer view path?
+///
+/// The RHS is copied element by element, so strides may be arbitrary; only host
+/// placement, the matrix rank every provider requires, and a supported dtype
+/// matter.
+#[cfg(feature = "cpu-faer")]
+fn faer_rhs_read_ok(input: &TensorRead<'_>) -> bool {
+    if input.backend_family().is_some() {
+        return false;
+    }
+    if input.shape().len() != 2 {
+        return false;
+    }
+    matches!(
+        input.dtype(),
+        DType::F32 | DType::F64 | DType::C32 | DType::C64
+    )
+}
+
+#[cfg(feature = "cpu-faer")]
+fn rank_revealing_qr_faer_view_entered(
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: TensorView<'_>,
+    options: crate::RankRevealingQrOptions,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    macro_rules! factor {
+        ($view:expr, $scalar:ty) => {
+            linalg::faer::rank_revealing_qr_view(context, buffers, $view, options).map(|result| {
+                vec![
+                    Tensor::from_typed::<$scalar>(result.q),
+                    Tensor::from_typed::<$scalar>(result.r),
+                    Tensor::from_typed::<i64>(result.column_permutation),
+                    Tensor::from_typed::<i64>(result.rank),
+                ]
+            })
+        };
+    }
+    let mut outputs = match input {
+        TensorView::F32(view) => factor!(view, f32),
+        TensorView::F64(view) => factor!(view, f64),
+        TensorView::C32(view) => factor!(view, Complex32),
+        TensorView::C64(view) => factor!(view, Complex64),
+        unsupported => Err(unsupported_dtype("rank_revealing_qr", unsupported.dtype())),
+    }?;
+    apply_qr_gauge(options.gauge, &mut outputs[..2])?;
+    Ok(outputs)
+}
+
+#[cfg(feature = "cpu-faer")]
+fn triangular_solve_faer_view_entered(
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    a: TensorView<'_>,
+    b: TensorView<'_>,
+    options: TriangularSolveOptions,
+) -> tenferro_tensor::Result<Tensor> {
+    let TriangularSolveOptions {
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+    } = options;
+    macro_rules! solve {
+        ($a:expr, $b:expr, $scalar:ty) => {
+            linalg::faer::triangular_solve_view(
+                context,
+                buffers,
+                $a,
+                $b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::from_typed::<$scalar>)
+        };
+    }
+    match (a, b) {
+        (TensorView::F32(a), TensorView::F32(b)) => solve!(a, b, f32),
+        (TensorView::F64(a), TensorView::F64(b)) => solve!(a, b, f64),
+        (TensorView::C32(a), TensorView::C32(b)) => solve!(a, b, Complex32),
+        (TensorView::C64(a), TensorView::C64(b)) => solve!(a, b, Complex64),
+        (a, b) => Err(Error::dtype_mismatch(
+            "triangular_solve",
+            a.dtype(),
+            b.dtype(),
+        )),
     }
 }
 

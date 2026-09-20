@@ -84,12 +84,12 @@ separate PR; this file is updated as each one lands.
 - Out of scope, unchanged: CUDA `eig` and `full_piv_lu` stay `Unsupported`,
   and the new admission test pins that they still are.
 
-### D1 — borrowed-input parity for the general eigensolver and the solve dispatch
+### D — borrowed-input parity for the remaining CPU read hooks
 
-Slice D is split in two because its two halves have different shapes. D1 closes
-the structural borrowed-input gaps; D2 adds the remaining faer view fast paths
-for rank-revealing QR and triangular solve, which need a larger provider-kernel
-refactor and are independently mergeable.
+Two halves with different shapes: the structural borrowed-input gaps, then the
+remaining faer view fast paths for rank-revealing QR and triangular solve.
+
+#### Structural gaps
 
 - `LinalgBackend::eig_values_read` is the missing counterpart of the hidden
   `eig_values` hook, with the same `#[doc(hidden)]` shape as
@@ -111,6 +111,35 @@ refactor and are independently mergeable.
 - Empty core dimensions are handled before faer is entered: general
   eigendecomposition always returns complex factors, so the empty outputs are
   tagged complex exactly as the owned entry point tags them.
+
+#### faer view paths for rank-revealing QR and triangular solve
+
+- Both operations are destructive: CPQR copies into its own work matrix, and a
+  triangular solve overwrites its right-hand side. They therefore always pay
+  one copy. What the borrowed path removes is the *second* one: the pooled
+  compact tensor the packing route built first. `rank_revealing_qr_core` and
+  `triangular_solve_core` take an already-prepared `MatRef` and, for the solve,
+  an owned destructible RHS, so the caller decides once where those elements
+  come from.
+- Extracting `triangular_solve_core` collapsed the eight-arm routine match that
+  was duplicated across the real and complex macros into one generic
+  `faer_triangular_solve_in_place`. Transposing `A` swaps which triangle is
+  stored, so the four faer routines cover all eight flag combinations once that
+  flip is applied, and a right-side solve is the left-side solve of the
+  transposed system with the flag flipped once more.
+- `triangular_solve_read` takes the direct path only when *both* operands are
+  eligible. The predicates differ on purpose: `a` becomes a strided `MatRef`, so
+  it needs `faer_strided_read_ok`; `b` is gathered element by element, so
+  arbitrary strides are fine and only host placement, the matrix rank every
+  provider requires, and a supported dtype matter.
+- The borrowed route must not accept shapes the owned route rejects. The first
+  draft let a rank-1 right-hand side through the view path while both providers'
+  owned paths require a matrix; the view path now uses the same rank check, and
+  a test pins that the two routes refuse alike.
+- The owned CPQR screens its input for non-finite and all-zero values before
+  factoring. The view path applies the same two guards, read through the view's
+  own indexing, and reuses a shape/placement-based zero-matrix result because
+  there is no owned template tensor to copy metadata from.
 
 ## Verification conclusions and constraints
 
@@ -177,7 +206,7 @@ refactor and are independently mergeable.
 - Not established by slice C: any wall-clock claim, and AD through the full
   variant, which stays `Unsupported`.
 
-### D1
+### D
 
 - Borrowed and owned `eig` / `eigvals` agree for all four dtypes, compared as
   multisets: the solver may order a spectrum differently between the view and
@@ -193,5 +222,18 @@ refactor and are independently mergeable.
   requires the borrowed hook and forbids the pack, matching the `eigvalsh_read`
   assertion directly above it. The faer fast-path ordering contract gained the
   two new read hooks.
-- Not established by D1: rank-revealing QR and triangular solve still pack
-  every borrowed view (slice D2), and no wall-clock claim is made.
+- Rank-revealing QR through a transposed view is checked against its own
+  contract — `Qᵀ Q = I` and `Q R = A P` — plus equal rank, equal permutation
+  and equal output shapes against the owned call, with the source bytes
+  compared before and after. The zero-matrix and non-finite guards are checked
+  through the borrowed route as well.
+- Triangular solve is checked against the owned call across four
+  triangle/transpose/unit combinations with a strided right-hand side, and once
+  more for the right-side orientation with a strided coefficient view. The
+  rank-1 refusal parity is its own test.
+- The faer fast-path source contract now covers `rank_revealing_qr_read`, and
+  `triangular_solve_read` gets its own two-operand assertion because its RHS
+  predicate is deliberately different from its coefficient predicate.
+- Verified on the faer lane, the `blas-openblas` lane and CI-parity clippy.
+  Slice D is complete: every borrowed CPU read hook the issue listed now either
+  reaches faer directly or packs only what it must. No wall-clock claim is made.

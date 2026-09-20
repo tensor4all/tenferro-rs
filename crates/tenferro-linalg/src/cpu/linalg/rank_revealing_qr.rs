@@ -81,6 +81,46 @@ where
     })
 }
 
+/// The zero-matrix result built from shape and placement alone.
+///
+/// The borrowed path has no owned template tensor to copy metadata from, so it
+/// passes the two pieces `zero_matrix_result` actually needs.
+#[cfg(feature = "cpu-faer")]
+pub(crate) fn zero_matrix_result_with_shape<T>(
+    m: usize,
+    n: usize,
+    one: T,
+    placement: &tenferro_tensor::Placement,
+) -> tenferro_tensor::Result<TypedRrqr<T>>
+where
+    T: Copy + Default + TensorScalar,
+{
+    let k = m.min(n);
+    let q_len = checked_product(&[m, k], "Q")?;
+    let r_len = checked_product(&[k, n], "R")?;
+    let mut q = vec![T::default(); q_len];
+    for diagonal in 0..k {
+        q[diagonal + diagonal * m] = one;
+    }
+    Ok(RankRevealingQrResult {
+        q: tensor_with_placement(vec![m, k], q, placement)?,
+        r: tensor_with_placement(vec![k, n], vec![T::default(); r_len], placement)?,
+        column_permutation: tensor_with_placement(vec![n], identity_permutation(n)?, placement)?,
+        rank: tensor_with_placement(vec![], vec![0_i64], placement)?,
+    })
+}
+
+#[cfg(feature = "cpu-faer")]
+fn tensor_with_placement<T: Clone + TensorScalar>(
+    shape: Vec<usize>,
+    data: Vec<T>,
+    placement: &tenferro_tensor::Placement,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
+    tensor.set_placement(placement.clone());
+    Ok(tensor)
+}
+
 pub(crate) fn batched<T, F>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,

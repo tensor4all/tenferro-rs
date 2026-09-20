@@ -131,6 +131,27 @@ pub(crate) trait FaerLinalg:
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> tenferro_tensor::Result<TypedTensor<Self>>;
+    /// Solve with an already-prepared coefficient `MatRef` and an owned,
+    /// destructible right-hand side.
+    ///
+    /// The RHS is consumed because every triangular solve overwrites it, so the
+    /// caller decides once where those elements come from: a compact tensor or
+    /// a borrowed view gathered straight into the pooled buffer.
+    #[allow(clippy::too_many_arguments)]
+    fn triangular_solve_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        a_mat: MatRef<'_, Self>,
+        n: usize,
+        rhs_data: Vec<Self>,
+        b_rows: usize,
+        b_cols: usize,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<Self>>;
     fn svd_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -152,6 +173,20 @@ pub(crate) trait FaerLinalg:
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
         options: crate::RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>>;
+    /// Column-pivoted QR from an already-prepared `MatRef`.
+    ///
+    /// CPQR is destructive, so it copies into its own work matrix; taking a
+    /// `MatRef` lets a borrowed view be that copy's source directly instead of
+    /// being packed into a compact tensor first.
+    fn rank_revealing_qr_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        options: crate::RankRevealingQrOptions,
+        placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>>;
     fn eigh_2d(
         ctx: &CpuExecutionContext<'_>,
@@ -241,6 +276,57 @@ pub(crate) trait FaerLinalg:
         n: usize,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+}
+
+/// Dispatch faer's triangular solve from the triangle/transpose/unit flags.
+///
+/// Transposing `A` swaps which triangle is stored, so the four faer routines
+/// cover all eight flag combinations once that flip is applied.
+fn faer_triangular_solve_in_place<E: faer::traits::ComplexField>(
+    a: MatRef<'_, E>,
+    rhs: MatMut<'_, E>,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+    par: faer::Par,
+) {
+    let effective_lower = lower != transpose_a;
+    let a = if transpose_a { a.transpose() } else { a };
+    match (effective_lower, unit_diagonal) {
+        (true, false) => {
+            faer::linalg::triangular_solve::solve_lower_triangular_in_place(a, rhs, par);
+        }
+        (true, true) => {
+            faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(a, rhs, par);
+        }
+        (false, false) => {
+            faer::linalg::triangular_solve::solve_upper_triangular_in_place(a, rhs, par);
+        }
+        (false, true) => {
+            faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(a, rhs, par);
+        }
+    }
+}
+
+/// Reinterpret a `MatRef` over a `num_complex` scalar as one over faer's own
+/// complex entity.
+///
+/// The two layouts are identical; `impl_complex_faer_casts` asserts that with
+/// const size/align/field-offset checks.
+fn faer_complex_mat_ref<'a, C, F>(mat: MatRef<'a, C>) -> MatRef<'a, F> {
+    // SAFETY: `C` and `F` have identical size, alignment and field offsets (see
+    // the const asserts in `impl_complex_faer_casts`), and the shape/stride
+    // metadata is copied unchanged from a MatRef that already described a live,
+    // correctly aligned allocation.
+    unsafe {
+        MatRef::from_raw_parts(
+            mat.as_ptr() as *const F,
+            mat.nrows(),
+            mat.ncols(),
+            mat.row_stride(),
+            mat.col_stride(),
+        )
+    }
 }
 
 fn matrix_dims<T>(
@@ -1979,144 +2065,84 @@ macro_rules! impl_faer_linalg_for_real {
         let n = square_matrix_dim(a, "triangular_solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
         let a_mat = MatRef::from_column_major_slice(a.host_data()?, n, n);
-
-        if left_side {
-            if b_rows != n {
-                return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_rows]));
-            }
-            let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
-            rhs_data.extend_from_slice(b.host_data()?);
-            let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
-            match (transpose_a, lower, unit_diagonal) {
-                (false, true, false) => {
-                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, true, true) => {
-                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, false, false) => {
-                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, false, true) => {
-                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, true, false) => {
-                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, true, true) => {
-                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, false, false) => {
-                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, false, true) => {
-                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-            }
-            Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())?)
-        } else {
-            if b_cols != n {
-                return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_cols]));
-            }
-            let nrhs = b_rows;
-            let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data()?, nrhs, n);
-            let rhs = MatMut::from_column_major_slice_mut(&mut rhs_transposed, n, nrhs);
-            match (transpose_a, lower, unit_diagonal) {
-                (false, true, false) => {
-                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, true, true) => {
-                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, false, false) => {
-                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, false, true) => {
-                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, true, false) => {
-                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, true, true) => {
-                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, false, false) => {
-                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, false, true) => {
-                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-            }
-            let result = transpose_col_major_data(buffers, &rhs_transposed, n, nrhs);
-            <Self as PoolScalar>::pool_release(buffers, rhs_transposed);
-            Ok(tensor_from_vec_with_template(vec![nrhs, n], result, b.placement())?)
-        }
+        let mut rhs = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
+        rhs.extend_from_slice(b.host_data()?);
+        Self::triangular_solve_core(
+            ctx,
+            buffers,
+            a_mat,
+            n,
+            rhs,
+            b_rows,
+            b_cols,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            b.placement(),
+        )
     }
 
+    fn triangular_solve_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        a_mat: MatRef<'_, Self>,
+        n: usize,
+        mut rhs_data: Vec<Self>,
+        b_rows: usize,
+        b_cols: usize,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<Self>> {
+        if left_side {
+            if b_rows != n {
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    "triangular_solve",
+                    vec![n],
+                    vec![b_rows],
+                ));
+            }
+            let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
+            faer_triangular_solve_in_place(
+                a_mat,
+                rhs,
+                lower,
+                transpose_a,
+                unit_diagonal,
+                ctx.faer_parallelism(),
+            );
+            tensor_from_vec_with_template(vec![n, b_cols], rhs_data, placement)
+        } else {
+            if b_cols != n {
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    "triangular_solve",
+                    vec![n],
+                    vec![b_cols],
+                ));
+            }
+            // Right-side solve `X A = B` is the left-side solve of the
+            // transposed system, so the RHS is transposed in and out and the
+            // triangle/transpose flags flip once.
+            let nrhs = b_rows;
+            let mut rhs_transposed = transpose_col_major_data(buffers, &rhs_data, nrhs, n);
+            <Self as PoolScalar>::pool_release(buffers, rhs_data);
+            let rhs = MatMut::from_column_major_slice_mut(&mut rhs_transposed, n, nrhs);
+            faer_triangular_solve_in_place(
+                a_mat,
+                rhs,
+                lower,
+                !transpose_a,
+                unit_diagonal,
+                ctx.faer_parallelism(),
+            );
+            let result = transpose_col_major_data(buffers, &rhs_transposed, n, nrhs);
+            <Self as PoolScalar>::pool_release(buffers, rhs_transposed);
+            tensor_from_vec_with_template(vec![nrhs, n], result, placement)
+        }
+    }
     fn svd_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -2188,11 +2214,24 @@ macro_rules! impl_faer_linalg_for_real {
         options: crate::RankRevealingQrOptions,
     ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>> {
         let (m, n) = matrix_dims(input, "rank_revealing_qr")?;
+        let mat = Self::faer_mat_ref_compact(input.host_data()?, m, n);
+        Self::rank_revealing_qr_core(ctx, buffers, mat, m, n, options, input.placement())
+    }
+
+    fn rank_revealing_qr_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        options: crate::RankRevealingQrOptions,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>> {
         let k = m.min(n);
         let block_size =
             faer::linalg::qr::no_pivoting::factor::recommended_block_size::<Self>(m, n);
         let mut qr = Mat::zeros(m, n);
-        qr.copy_from(Self::faer_mat_ref_compact(input.host_data()?, m, n));
+        qr.copy_from(mat);
         let mut coeff = Mat::zeros(block_size, k);
         let mut permutation = vec![0usize; n];
         let mut inverse_permutation = vec![0usize; n];
@@ -2251,19 +2290,15 @@ macro_rules! impl_faer_linalg_for_real {
             q: tensor_from_vec_with_template(
                 vec![m, k],
                 col_major_vec_from_mat(buffers, q.as_ref())?,
-                input.placement(),
+                placement,
             )?,
             r: tensor_from_vec_with_template(
                 vec![k, n],
                 upper_triangle_vec_from_mat(qr.as_ref().get(..k, ..))?,
-                input.placement(),
+                placement,
             )?,
-            column_permutation: tensor_from_vec_with_template(
-                vec![n],
-                permutation,
-                input.placement(),
-            )?,
-            rank: tensor_from_vec_with_template(vec![], vec![rank], input.placement())?,
+            column_permutation: tensor_from_vec_with_template(vec![n], permutation, placement)?,
+            rank: tensor_from_vec_with_template(vec![], vec![rank], placement)?,
         })
     }
 
@@ -3043,153 +3078,93 @@ macro_rules! impl_faer_linalg_for_complex {
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(a, "triangular_solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
-        let a_mat = MatRef::from_column_major_slice($to_faer_slice(a.host_data()?), n, n);
+        let a_mat = Self::faer_mat_ref_compact(a.host_data()?, n, n);
+        let mut rhs = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
+        rhs.extend_from_slice(b.host_data()?);
+        Self::triangular_solve_core(
+            ctx,
+            buffers,
+            a_mat,
+            n,
+            rhs,
+            b_rows,
+            b_cols,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            b.placement(),
+        )
+    }
 
+    fn triangular_solve_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        a_mat: MatRef<'_, Self>,
+        n: usize,
+        mut rhs_data: Vec<Self>,
+        b_rows: usize,
+        b_cols: usize,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         if left_side {
             if b_rows != n {
-                return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_rows]));
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    "triangular_solve",
+                    vec![n],
+                    vec![b_rows],
+                ));
             }
-            let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
-            rhs_data.extend_from_slice(b.host_data()?);
             let rhs = MatMut::from_column_major_slice_mut(
                 $to_faer_slice_mut(&mut rhs_data),
                 n,
                 b_cols,
             );
-            match (transpose_a, lower, unit_diagonal) {
-                (false, true, false) => {
-                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, true, true) => {
-                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, false, false) => {
-                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, false, true) => {
-                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, true, false) => {
-                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, true, true) => {
-                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, false, false) => {
-                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, false, true) => {
-                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-            }
-            Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())?)
+            faer_triangular_solve_in_place(
+                faer_complex_mat_ref::<Self, $faer_complex>(a_mat),
+                rhs,
+                lower,
+                transpose_a,
+                unit_diagonal,
+                ctx.faer_parallelism(),
+            );
+            tensor_from_vec_with_template(vec![n, b_cols], rhs_data, placement)
         } else {
             if b_cols != n {
-                return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_cols]));
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    "triangular_solve",
+                    vec![n],
+                    vec![b_cols],
+                ));
             }
+            // Right-side solve `X A = B` is the left-side solve of the
+            // transposed system, so the RHS is transposed in and out and the
+            // triangle/transpose flags flip once.
             let nrhs = b_rows;
-            let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data()?, nrhs, n);
+            let mut rhs_transposed = transpose_col_major_data(buffers, &rhs_data, nrhs, n);
+            <Self as PoolScalar>::pool_release(buffers, rhs_data);
             let rhs = MatMut::from_column_major_slice_mut(
                 $to_faer_slice_mut(&mut rhs_transposed),
                 n,
                 nrhs,
             );
-            match (transpose_a, lower, unit_diagonal) {
-                (false, true, false) => {
-                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, true, true) => {
-                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, false, false) => {
-                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (false, false, true) => {
-                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
-                        a_mat.transpose(),
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, true, false) => {
-                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, true, true) => {
-                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, false, false) => {
-                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-                (true, false, true) => {
-                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
-                        a_mat,
-                        rhs,
-                        ctx.faer_parallelism(),
-                    );
-                }
-            }
+            faer_triangular_solve_in_place(
+                faer_complex_mat_ref::<Self, $faer_complex>(a_mat),
+                rhs,
+                lower,
+                !transpose_a,
+                unit_diagonal,
+                ctx.faer_parallelism(),
+            );
             let result = transpose_col_major_data(buffers, &rhs_transposed, n, nrhs);
             <Self as PoolScalar>::pool_release(buffers, rhs_transposed);
-            Ok(tensor_from_vec_with_template(vec![nrhs, n], result, b.placement())?)
+            tensor_from_vec_with_template(vec![nrhs, n], result, placement)
         }
     }
-
     fn svd_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -3278,8 +3253,20 @@ macro_rules! impl_faer_linalg_for_complex {
         options: crate::RankRevealingQrOptions,
     ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>> {
         let (m, n) = matrix_dims(input, "rank_revealing_qr")?;
-        let k = m.min(n);
         let mat = Self::faer_mat_ref_compact(input.host_data()?, m, n);
+        Self::rank_revealing_qr_core(ctx, buffers, mat, m, n, options, input.placement())
+    }
+
+    fn rank_revealing_qr_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        options: crate::RankRevealingQrOptions,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<Self>> {
+        let k = m.min(n);
         // SAFETY: the compile-time layout checks in impl_complex_faer_casts
         // prove Self and faer's complex scalar have identical representation.
         let mat: MatRef<'_, $faer_complex> = unsafe {
@@ -3356,19 +3343,15 @@ macro_rules! impl_faer_linalg_for_complex {
             q: tensor_from_vec_with_template(
                 vec![m, k],
                 $vec_from_mat(buffers, q.as_ref())?,
-                input.placement(),
+                placement,
             )?,
             r: tensor_from_vec_with_template(
                 vec![k, n],
                 $matrix_from_predicate(qr.as_ref(), k, n, |row, col| row <= col)?,
-                input.placement(),
+                placement,
             )?,
-            column_permutation: tensor_from_vec_with_template(
-                vec![n],
-                permutation,
-                input.placement(),
-            )?,
-            rank: tensor_from_vec_with_template(vec![], vec![rank], input.placement())?,
+            column_permutation: tensor_from_vec_with_template(vec![n], permutation, placement)?,
+            rank: tensor_from_vec_with_template(vec![], vec![rank], placement)?,
         })
     }
 
@@ -4350,6 +4333,122 @@ fn matrix_dims_view<T: 'static>(
         ));
     }
     Ok((view.shape()[0], view.shape()[1]))
+}
+
+/// Gather a borrowed 2-D (or vector) view's logical elements into a pooled
+/// column-major buffer.
+///
+/// Every triangular solve overwrites its right-hand side, so this copy is the
+/// solve's single required preparation step rather than an adapter copy.
+fn gather_rhs_view<T: Copy + PoolScalar + 'static>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T>,
+    rows: usize,
+    cols: usize,
+    op: &'static str,
+) -> tenferro_tensor::Result<Vec<T>> {
+    let len = checked_product(op, "right-hand side", &[rows, cols])?;
+    let mut data = buffers.acquire_with_capacity::<T>(len);
+    for col in 0..cols {
+        for row in 0..rows {
+            let value = view.get(&[row, col]).ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(op, "RHS view is not host-addressable")
+            })?;
+            data.push(*value);
+        }
+    }
+    Ok(data)
+}
+
+/// Triangular solve with a borrowed coefficient matrix and right-hand side.
+///
+/// `a` reaches faer as a strided `MatRef` with no copy at all; `b` is gathered
+/// once into the destructible RHS buffer the solve needs anyway.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn triangular_solve_view<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    a: TypedTensorView<'_, T>,
+    b: TypedTensorView<'_, T>,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    const OP: &str = "triangular_solve";
+    let n = square_matrix_dim_view(&a, OP)?;
+    // Triangular solve takes a matrix right-hand side on every provider; the
+    // borrowed route must not accept a rank the owned route rejects.
+    let (b_rows, b_cols) = matrix_dims_view(&b, OP)?;
+    let placement = b.placement().clone();
+    let base = host_base_ptr(&a)?;
+    // SAFETY: `TypedTensorView` construction validated the shape/stride span and
+    // offset against the host allocation, and `faer_strided_ok` proved host
+    // placement, rank 2 and non-negative strides. `host_base_ptr` returns the
+    // aligned non-null element pointer at that offset.
+    let a_mat = unsafe { T::faer_mat_ref_strided(base, n, n, a.strides()[0], a.strides()[1]) };
+    let rhs = gather_rhs_view(buffers, &b, b_rows, b_cols, OP)?;
+    T::triangular_solve_core(
+        ctx,
+        buffers,
+        a_mat,
+        n,
+        rhs,
+        b_rows,
+        b_cols,
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+        &placement,
+    )
+}
+
+/// Column-pivoted QR of a borrowed 2-D host view.
+///
+/// CPQR is destructive, so it copies into a work matrix either way; taking the
+/// view as the source of that single copy removes the pooled compact tensor the
+/// packing path would have built first.
+pub(crate) fn rank_revealing_qr_view<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+    options: crate::RankRevealingQrOptions,
+) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<T>> {
+    const OP: &str = "rank_revealing_qr";
+    crate::rank_revealing_qr::validate_rank_revealing_qr_options(OP, options)?;
+    let (m, n) = matrix_dims_view(&view, OP)?;
+    let placement = view.placement().clone();
+    // The owned path screens the input before factoring; the same two guards
+    // apply here, read through the view's own indexing.
+    let mut all_zero = true;
+    for col in 0..n {
+        for row in 0..m {
+            let value = *view.get(&[row, col]).ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(OP, "input view is not host-addressable")
+            })?;
+            if !value.is_finite() {
+                return Err(crate::error::into_tensor_error(
+                    OP,
+                    crate::Error::NonFinite {
+                        op: OP,
+                        role: "input",
+                    },
+                ));
+            }
+            all_zero &= value.magnitude() == 0.0;
+        }
+    }
+    if all_zero {
+        return super::rank_revealing_qr::zero_matrix_result_with_shape(m, n, T::one(), &placement);
+    }
+    let base = host_base_ptr(&view)?;
+    // SAFETY: `TypedTensorView` construction validated the shape/stride span and
+    // offset against the host allocation, and `faer_strided_ok` proved host
+    // placement, rank 2 and non-negative strides. `host_base_ptr` returns the
+    // aligned non-null element pointer at that offset.
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::rank_revealing_qr_core(ctx, buffers, mat, m, n, options, &placement)
 }
 
 pub(crate) fn svd_view<T: FaerLinalg + 'static>(
