@@ -1362,3 +1362,41 @@ fn cuda_to_contiguous_read_materializes_offset_strided_region() {
     assert_eq!(actual.shape(), &[2, 3]);
     assert_eq!(actual.as_slice::<f64>().unwrap(), expected.as_slice());
 }
+
+/// Regression test for issue #1833: the triangular kernels' zero element must
+/// be expressible for complex dtypes, which a `u32` cast cannot lower to on the
+/// CUDA dialect.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_triangular_ops_match_cpu_for_complex_dtypes() {
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+
+    let matrix_c64 = tensor_c64(
+        vec![3, 3],
+        (1..=9)
+            .map(|value| Complex64::new(f64::from(value), -f64::from(value)))
+            .collect(),
+    );
+    let gpu_c64 = upload(&gpu, &matrix_c64);
+    let expected = cpu.tril(&matrix_c64, 0).unwrap();
+    let actual = gpu.tril(&gpu_c64, 0).unwrap();
+    assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
+    let expected = cpu.triu(&matrix_c64, -1).unwrap();
+    let actual = gpu.triu(&gpu_c64, -1).unwrap();
+    assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
+
+    let matrix_c32 = tensor_c32(
+        vec![2, 2],
+        (1..=4)
+            .map(|value| Complex32::new(value as f32, 0.5 * value as f32))
+            .collect(),
+    );
+    let gpu_c32 = upload(&gpu, &matrix_c32);
+    let expected = cpu.tril(&matrix_c32, 0).unwrap();
+    let actual = gpu.tril(&gpu_c32, 0).unwrap();
+    assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
+    let expected = cpu.triu(&matrix_c32, 1).unwrap();
+    let actual = gpu.triu(&gpu_c32, 1).unwrap();
+    assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
+}

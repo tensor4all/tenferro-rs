@@ -1093,16 +1093,21 @@ pub(crate) fn linearize_eigh_values(
         vec![false, true],
         matrix_rank,
     );
-    let projected = matmul_linear(
-        builder,
-        ValueRef::Local(tmp),
-        v,
-        vec![true, false],
-        matrix_rank,
-    );
+    // `diag(V^H dA V)` is the rowwise dot of `V^H dA` with the conjugate columns
+    // of `V`. A Hadamard product plus one reduction replaces the second matmul,
+    // and the pullback of that reduction then costs one matmul instead of two.
+    // This op has no eigenvector output, so the projection is never needed.
+    let scaled = hadamard_fixed_linear(builder, ValueRef::Local(vh), tmp);
+    let reduced = builder.add_operation(
+        StdTensorOp::ReduceSum { axes: vec![1] },
+        vec![ValueRef::Local(scaled)],
+        OperationRole::Linearized {
+            active_mask: vec![true],
+        },
+    )[0];
 
     let values_dtype = real_values_dtype(dtype);
-    let dw = extract_diag_linear(builder, projected);
+    let dw = reduced;
     Ok(vec![Some(convert_linear_to_dtype(
         builder,
         dw,

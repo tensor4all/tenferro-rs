@@ -1507,6 +1507,22 @@ fn semantic_linear_fragment_operation_output_shape(
                     _ => Ok(None),
                 },
                 LinalgOp::LuSolvePrepared { .. } => input_shape(3, cache),
+                // The eigenvalue-value rule re-emits `Eigh` inside the linear
+                // fragment to reach the eigenvectors, so the fragment shape
+                // resolver must describe both outputs: the eigenvector matrix
+                // keeps the input shape, and the eigenvalues drop the column
+                // axis of the matrix core.
+                LinalgOp::Eigh { .. } => match output_index {
+                    0 => Ok(input_shape(0, cache)?.map(|shape| {
+                        shape
+                            .into_iter()
+                            .enumerate()
+                            .filter_map(|(axis, dim)| (axis != 1).then_some(dim))
+                            .collect()
+                    })),
+                    1 => input_shape(0, cache),
+                    _ => Ok(None),
+                },
                 _ => Ok(None),
             }
         }
@@ -1528,6 +1544,10 @@ fn semantic_linear_fragment_operation_output_shape(
             CoreSemanticOp::Convert { .. }
             | CoreSemanticOp::Neg
             | CoreSemanticOp::Conj
+            // Hadamard products in a linalg linear fragment keep the operand
+            // shape; the eigenvalue path emits one before its reduction, and the
+            // transposed reduction needs that shape to restore the operands.
+            | CoreSemanticOp::Mul
             | CoreSemanticOp::Tril { .. }
             | CoreSemanticOp::Triu { .. },
         ) => input_shape(0, cache),
