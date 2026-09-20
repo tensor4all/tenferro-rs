@@ -830,7 +830,9 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
     execute_linalg(op.op(), &input_refs, session)
 }
 
-fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp) -> bool {
+fn linalg_session_supported<B: BackendSession + 'static>(
+    #[cfg_attr(not(feature = "cuda"), allow(unused_variables))] op: &LinalgExtensionOp,
+) -> bool {
     // The `supports_session` contract (capability.rs) requires that an op is
     // admitted to a scheduler session only when the session executor genuinely
     // executes it without returning `Unsupported`. Admission is exactly
@@ -838,12 +840,10 @@ fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp)
     // every op the session can actually run (issue #1665).
     let type_id = std::any::TypeId::of::<B>();
     if type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() {
-        // The CPU backend type does not carry its provider kind (faer vs BLAS)
-        // at this type-only seam, and the BLAS provider does not implement
-        // in-session full-matrices SVD, so SvdFull is conservatively rejected
-        // and falls back to the compiled path. Every other CPU linalg kernel
-        // runs in-session on both faer and BLAS providers.
-        return op.op() != LinalgOp::SvdFull;
+        // Every CPU linalg kernel, including full-matrices SVD, runs in-session
+        // on both the faer and the BLAS provider, so the type-only seam can
+        // admit the whole family without inspecting the provider kind.
+        return true;
     }
     #[cfg(feature = "cuda")]
     {

@@ -84,14 +84,10 @@ pub trait EagerTensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # #[cfg(feature = "cpu-faer")]
-    /// # {
     /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::EagerTensorLinalgExt;
-    /// # let faer = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
-    /// #     .expect("faer CPU backend");
-    /// # let ctx = EagerRuntime::with_cpu_backend(faer)?;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// # let a = EagerTensor::from_tensor_in(
     /// #     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
     /// #     ctx,
@@ -102,25 +98,6 @@ pub trait EagerTensorLinalgExt {
     /// assert_eq!(vh.shape(), &[2, 2]);
     /// let singular_values = s.value()?.as_slice::<f64>()?;
     /// assert!((singular_values[0] - 2.0_f64.sqrt()).abs() < 1e-12);
-    /// # }
-    /// # #[cfg(all(feature = "cpu-blas", not(feature = "cpu-faer")))]
-    /// # {
-    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
-    /// # use tenferro_linalg::EagerTensorLinalgExt;
-    /// # let blas = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas)
-    /// #     .expect("BLAS CPU backend");
-    /// # let ctx = EagerRuntime::with_cpu_backend(blas)?;
-    /// # let a = EagerTensor::from_tensor_in(
-    /// #     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
-    /// #     ctx,
-    /// # )?;
-    /// # let error = match a.svd_full() {
-    /// #     Ok(_) => panic!("expected full-matrices SVD to be unsupported for BLAS"),
-    /// #     Err(error) => error,
-    /// # };
-    /// # assert!(error.to_string().contains("full-matrices SVD"));
-    /// # }
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     fn svd_full(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
@@ -916,14 +893,10 @@ pub fn svd_with_options(
 /// # Examples
 ///
 /// ```rust
-/// # #[cfg(feature = "cpu-faer")]
-/// # {
 /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-/// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+/// # use tenferro_cpu::CpuBackend;
 /// # use tenferro_linalg::EagerTensorLinalgExt;
-/// # let faer = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
-/// #     .expect("faer CPU backend");
-/// # let ctx = EagerRuntime::with_cpu_backend(faer)?;
+/// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// # let a = EagerTensor::from_tensor_in(
 /// #     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
 /// #     ctx,
@@ -934,25 +907,6 @@ pub fn svd_with_options(
 /// assert_eq!(vh.shape(), &[2, 2]);
 /// let singular_values = s.value()?.as_slice::<f64>()?;
 /// assert!((singular_values[0] - 2.0_f64.sqrt()).abs() < 1e-12);
-/// # }
-/// # #[cfg(all(feature = "cpu-blas", not(feature = "cpu-faer")))]
-/// # {
-/// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-/// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
-/// # let blas = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas)
-/// #     .expect("BLAS CPU backend");
-/// # let ctx = EagerRuntime::with_cpu_backend(blas)?;
-/// # let a = EagerTensor::from_tensor_in(
-/// #     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
-/// #     ctx,
-/// # )?;
-/// # use tenferro_linalg::EagerTensorLinalgExt;
-/// # let error = match a.svd_full() {
-/// #     Ok(_) => panic!("expected full-matrices SVD to be unsupported for BLAS"),
-/// #     Err(error) => error,
-/// # };
-/// # assert!(error.to_string().contains("full-matrices SVD"));
-/// # }
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 ///
@@ -960,9 +914,9 @@ pub fn svd_with_options(
 ///
 /// Returns `Error::Validation` for an invalid rank and `Error::Extension` with
 /// an unsupported-operation source when the active backend does not implement
-/// full-matrices SVD (the CPU faer provider supports it; the LAPACK provider
-/// and GPU backends are unsupported in this slice). AD through the full variant
-/// is unsupported and surfaces a typed error, not a silent thin fallback.
+/// full-matrices SVD (both CPU providers support it; GPU backends do not yet).
+/// AD through the full variant is unsupported and surfaces a typed error, not a
+/// silent thin fallback.
 pub fn svd_full(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
     let mut outputs = apply_linalg_eager(LinalgOp::SvdFull, &[a])?.into_iter();
     match (

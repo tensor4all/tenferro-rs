@@ -41,7 +41,7 @@ fn c64_data(tensor: &Tensor) -> Vec<Complex64> {
 }
 
 /// Column-major reconstruction `A = U[:, :k] diag(S) Vh[:k, :]` for real inputs.
-#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 fn reconstruct_real(m: usize, n: usize, u: &[f64], s: &[f64], vh: &[f64]) -> Vec<f64> {
     let k = m.min(n);
     let mut a = vec![0.0_f64; m * n];
@@ -57,7 +57,7 @@ fn reconstruct_real(m: usize, n: usize, u: &[f64], s: &[f64], vh: &[f64]) -> Vec
     a
 }
 
-#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 fn reconstruct_complex(
     m: usize,
     n: usize,
@@ -87,10 +87,12 @@ fn max_abs_diff_real(lhs: &[f64], rhs: &[f64]) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// Full-matrices SVD (faer provider).
+// Full-matrices SVD. Both CPU providers implement it, and these traced tests
+// assert only provider-neutral properties (shapes, reconstruction, nullspace),
+// so they run on whichever provider the default backend selects.
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 #[test]
 fn svd_full_tall_real_returns_square_factors_and_reconstructs() {
     let m = 3;
@@ -117,7 +119,7 @@ fn svd_full_tall_real_returns_square_factors_and_reconstructs() {
     );
 }
 
-#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 #[test]
 fn svd_full_wide_real_reconstructs_and_recovers_nullspace() {
     // rank-2 wide matrix (2 x 3): the trailing Vh row spans the 1-D kernel.
@@ -150,7 +152,7 @@ fn svd_full_wide_real_reconstructs_and_recovers_nullspace() {
     }
 }
 
-#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 #[test]
 fn svd_full_1x2_recovers_one_dimensional_nullspace() {
     // Smallest wide system: thin SVD would drop the kernel row entirely.
@@ -170,7 +172,7 @@ fn svd_full_1x2_recovers_one_dimensional_nullspace() {
     assert!((v0 * v0 + v1 * v1 - 1.0).abs() < 1e-10);
 }
 
-#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 #[test]
 fn svd_full_random_wide_recovers_nullspace_dimension() {
     // Deterministic rank-3 (3 x 5) matrix: rows are 3 independent vectors, so
@@ -206,7 +208,7 @@ fn svd_full_random_wide_recovers_nullspace_dimension() {
     }
 }
 
-#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 #[test]
 fn svd_full_complex_tall_reconstructs() {
     let m = 3;
@@ -243,7 +245,7 @@ fn svd_full_complex_tall_reconstructs() {
     );
 }
 
-#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 #[test]
 fn svd_full_batch_returns_square_factor_shapes() {
     // Leading matrix dims [m, n], trailing batch dim.
@@ -261,20 +263,50 @@ fn svd_full_batch_returns_square_factor_shapes() {
     assert_eq!(out[2].shape(), &[n, n, batch]);
 }
 
-// The LAPACK provider does not implement full-matrices SVD in this slice; it
-// must surface a typed error rather than silently returning a thin factor.
-#[cfg(all(feature = "cpu-blas", not(feature = "cpu-faer")))]
+// The LAPACK provider now executes full-matrices SVD itself. This test replaces
+// the boundary test that pinned it as unsupported: it must return genuinely
+// square factors, not a thin decomposition widened after the fact.
+#[cfg(feature = "cpu-blas")]
 #[test]
-fn svd_full_lapack_provider_is_unsupported() {
-    let a = f64_tensor(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 7.0]);
+fn svd_full_lapack_provider_returns_square_unitary_factors() {
+    let m = 3;
+    let n = 2;
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 7.0];
+    let a = f64_tensor(vec![m, n], data.clone());
     let (u, s, vh) = a.svd_full().unwrap();
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_many(&[&u, &s, &vh]).unwrap();
-    let err = support::run_all(&program, &[]).unwrap_err();
-    assert!(
-        format!("{err}").contains("full-matrices SVD"),
-        "expected typed unsupported error, got {err}"
-    );
+    let out = run_many(&[&u, &s, &vh]);
+    assert_eq!(out[0].shape(), &[m, m]);
+    assert_eq!(out[1].shape(), &[n.min(m)]);
+    assert_eq!(out[2].shape(), &[n, n]);
+
+    let u = f64_data(&out[0]);
+    let vh = f64_data(&out[2]);
+    let recon = reconstruct_real(m, n, &u, &f64_data(&out[1]), &vh);
+    assert!(max_abs_diff_real(&recon, &data) < 1e-10);
+
+    // The extra `m - k` left columns only exist in the full variant, so
+    // `Uᵀ U = I (m x m)` is what distinguishes it from a thin factor.
+    for left in 0..m {
+        for right in 0..m {
+            let inner: f64 = (0..m)
+                .map(|row| u[row + left * m] * u[row + right * m])
+                .sum();
+            let expected = if left == right { 1.0 } else { 0.0 };
+            assert!(
+                (inner - expected).abs() < 1e-10,
+                "U column pair ({left}, {right}) inner product {inner} is not {expected}"
+            );
+        }
+    }
+    for left in 0..n {
+        for right in 0..n {
+            let inner: f64 = (0..n)
+                .map(|row| vh[row + left * n] * vh[row + right * n])
+                .sum();
+            let expected = if left == right { 1.0 } else { 0.0 };
+            assert!((inner - expected).abs() < 1e-10);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

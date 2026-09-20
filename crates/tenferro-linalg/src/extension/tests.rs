@@ -98,13 +98,12 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
         );
     }
 
-    // SvdFull is conservatively rejected on CPU: the backend type does not
-    // carry its provider kind (faer vs BLAS), and BLAS has no in-session
-    // full-matrices SVD, so admission must not over-claim.
+    // Full-matrices SVD is now implemented by both CPU providers, so the
+    // type-only seam admits it like every other CPU linalg kernel.
     let svd_full = LinalgExtensionOp::new(LinalgOp::SvdFull);
     assert!(
-        !super::linalg_session_supported::<CpuBackend>(&svd_full),
-        "SvdFull must not be admitted on CPU (BLAS has no in-session full SVD)"
+        super::linalg_session_supported::<CpuBackend>(&svd_full),
+        "SvdFull must be admitted on CPU: faer and BLAS both execute it in-session"
     );
 }
 

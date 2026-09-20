@@ -22,5 +22,5 @@ pub(crate) use qr::{
     rank_revealing_qr, raw_r_2d as householder_qr_r,
 };
 pub(crate) use solve::{solve, solve_from_views, solve_into};
-pub(crate) use svd::{svd, svd_values};
+pub(crate) use svd::{svd, svd_full, svd_values};
 pub(crate) use triangular_solve::triangular_solve;

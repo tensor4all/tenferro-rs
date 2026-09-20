@@ -215,19 +215,15 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # #[cfg(feature = "cpu-faer")]
-    /// # {
-    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
-    /// # let mut host = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
-    /// #     .expect("faer CPU backend");
+    /// # let mut host = CpuBackend::new();
     /// let (u, s, vt) = host.with_backend_session(|session| a.svd_full(session))?;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(s.shape(), &[1]);
     /// assert_eq!(vt.shape(), &[2, 2]);
-    /// # }
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn svd_full(
@@ -751,21 +747,17 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # #[cfg(feature = "cpu-faer")]
-    /// # {
-    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
-    /// # let mut host = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
-    /// #     .expect("faer CPU backend");
+    /// # let mut host = CpuBackend::new();
     /// let (u, s, vt) = host.with_backend_session(|session| {
     ///     TensorRead::from_tensor(&a).svd_full_read(session)
     /// })?;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(s.shape(), &[1]);
     /// assert_eq!(vt.shape(), &[2, 2]);
-    /// # }
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn svd_full_read(
@@ -1321,19 +1313,15 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # #[cfg(feature = "cpu-faer")]
-    /// # {
-    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![1, 2], vec![1.0, 1.0])?;
-    /// # let mut host = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
-    /// #     .expect("faer CPU backend");
+    /// # let mut host = CpuBackend::new();
     /// let (u, s, vt) = host.with_backend_session(|session| a.svd_full(session))?;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(vt.shape(), &[2, 2]);
     /// assert!((s.as_slice()?[0] - 2.0_f64.sqrt()).abs() < 1e-12);
-    /// # }
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn svd_full(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedSvd<T>>;

@@ -269,15 +269,12 @@ pub trait LinalgBackend: BackendSession {
     /// # Examples
     ///
     /// ```rust
-    /// # #[cfg(feature = "cpu-faer")]
-    /// # {
-    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBackendKind};
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
     /// use tenferro_linalg::LinalgBackend;
     /// use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![1, 2], vec![1.0, 1.0])?;
-    /// let mut host = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
-    ///     .expect("faer CPU backend");
+    /// let mut host = CpuBackend::new();
     /// let outputs = host.with_backend_session(|session| {
     ///     with_cpu_exec_session(session, |backend| {
     ///         backend.svd_full_read(TensorRead::from_view(TensorView::F64(input.as_view())))
@@ -287,7 +284,6 @@ pub trait LinalgBackend: BackendSession {
     /// assert_eq!(outputs[0].shape(), &[1, 1]);
     /// assert_eq!(outputs[1].shape(), &[1]);
     /// assert_eq!(outputs[2].shape(), &[2, 2]);
-    /// # }
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///

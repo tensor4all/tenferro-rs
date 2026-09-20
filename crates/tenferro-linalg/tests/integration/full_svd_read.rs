@@ -1,11 +1,12 @@
 //! Public borrowed and concrete full-matrices SVD (`svd_full` / `svd_full_read`).
 //!
-//! Full SVD is currently implemented by the CPU faer provider only, so the
-//! numeric tests build a faer backend explicitly instead of relying on the
-//! default provider selection. The LAPACK boundary is covered separately in
-//! `full_svd_lstsq.rs`.
+//! One public call must behave the same on every compiled CPU provider, so the
+//! numeric tests select each provider explicitly instead of relying on the
+//! default selection: a build with both `cpu-faer` and `cpu-blas` exercises the
+//! same assertions twice. Only the pool-ownership witness is faer-specific,
+//! because packing at the provider boundary is what it measures.
 
-#![cfg(feature = "cpu-faer")]
+#![cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{CpuBackend, CpuBackendKind};
@@ -15,6 +16,25 @@ use tenferro_tensor::{
     TypedTensor,
 };
 
+/// Every CPU linalg provider compiled into this build.
+fn providers() -> Vec<(&'static str, CpuBackend)> {
+    const KINDS: &[(&str, CpuBackendKind)] = &[
+        #[cfg(feature = "cpu-faer")]
+        ("faer", CpuBackendKind::Faer),
+        #[cfg(feature = "cpu-blas")]
+        ("blas", CpuBackendKind::Blas),
+    ];
+    KINDS
+        .iter()
+        .map(|&(name, kind)| {
+            let backend = CpuBackend::with_threads_and_kind(1, kind)
+                .unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
+            (name, backend)
+        })
+        .collect()
+}
+
+#[cfg(feature = "cpu-faer")]
 fn faer_backend() -> CpuBackend {
     CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).expect("faer CPU backend")
 }
@@ -202,35 +222,37 @@ const SHAPES: [(usize, usize); 5] = [(4, 2), (2, 4), (3, 3), (1, 3), (3, 1)];
 
 #[test]
 fn owned_and_borrowed_full_svd_agree_for_every_dtype_and_shape() {
-    let mut host = faer_backend();
-    for dtype in DTYPES {
-        for (m, n) in SHAPES {
-            let real = sample_real(m, n);
-            let imag = sample_imag(m, n);
-            let input = tensor_of(dtype, &[m, n], &real, &imag);
-            let source = complex_values(&input);
+    for (provider, mut host) in providers() {
+        eprintln!("provider: {provider}");
+        for dtype in DTYPES {
+            for (m, n) in SHAPES {
+                let real = sample_real(m, n);
+                let imag = sample_imag(m, n);
+                let input = tensor_of(dtype, &[m, n], &real, &imag);
+                let source = complex_values(&input);
 
-            host.with_backend_session(|session| {
-                let (u, s, vt) = input.svd_full(session).unwrap();
-                assert_full_svd(dtype, m, n, &source, &u, &s, &vt);
+                host.with_backend_session(|session| {
+                    let (u, s, vt) = input.svd_full(session).unwrap();
+                    assert_full_svd(dtype, m, n, &source, &u, &s, &vt);
 
-                let (ru, rs, rvt) = TensorRead::from_tensor(&input)
-                    .svd_full_read(session)
-                    .unwrap();
-                assert_full_svd(dtype, m, n, &source, &ru, &rs, &rvt);
+                    let (ru, rs, rvt) = TensorRead::from_tensor(&input)
+                        .svd_full_read(session)
+                        .unwrap();
+                    assert_full_svd(dtype, m, n, &source, &ru, &rs, &rvt);
 
-                // The borrowed and owned entry points must produce the same
-                // spectrum, and it must match the thin decomposition's.
-                assert_eq!(real_values(&s), real_values(&rs));
-                let thin = input.svdvals(session).unwrap();
-                let tol = tolerance(dtype);
-                for (full, thin) in real_values(&s).iter().zip(real_values(&thin)) {
-                    assert!(
-                        (full - thin).abs() < tol,
-                        "full and thin spectra disagree: {full} vs {thin}"
-                    );
-                }
-            });
+                    // The borrowed and owned entry points must produce the same
+                    // spectrum, and it must match the thin decomposition's.
+                    assert_eq!(real_values(&s), real_values(&rs));
+                    let thin = input.svdvals(session).unwrap();
+                    let tol = tolerance(dtype);
+                    for (full, thin) in real_values(&s).iter().zip(real_values(&thin)) {
+                        assert!(
+                            (full - thin).abs() < tol,
+                            "full and thin spectra disagree: {full} vs {thin}"
+                        );
+                    }
+                });
+            }
         }
     }
 }
@@ -240,95 +262,98 @@ fn full_svd_read_consumes_strided_offset_and_reversed_views_unchanged() {
     // Three borrowed layouts with one eligibility story each: the transposed
     // view reaches faer directly, the offset slice keeps positive strides and
     // also reaches faer, and the reversed view has negative strides so the
-    // provider must pack it first. All three must agree with the owned path
-    // and leave the source bytes untouched.
-    let mut host = faer_backend();
-    let base = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], sample_real(3, 4)).unwrap();
-    let original = base.host_data().unwrap().to_vec();
+    // provider must pack it first. The LAPACK provider packs all three. Every
+    // combination must agree with the owned path and leave the source bytes
+    // untouched.
+    for (_provider, mut host) in providers() {
+        let base = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], sample_real(3, 4)).unwrap();
+        let original = base.host_data().unwrap().to_vec();
 
-    let transposed = base.as_view().transpose_view([1, 0]).unwrap();
-    let offset = base
-        .as_view()
-        .try_slice(&[
-            StridedSliceSpec::new(1, Some(3), 1),
-            StridedSliceSpec::new(1, Some(4), 1),
-        ])
-        .unwrap();
-    let reversed = base
-        .as_view()
-        .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
-        .unwrap();
+        let transposed = base.as_view().transpose_view([1, 0]).unwrap();
+        let offset = base
+            .as_view()
+            .try_slice(&[
+                StridedSliceSpec::new(1, Some(3), 1),
+                StridedSliceSpec::new(1, Some(4), 1),
+            ])
+            .unwrap();
+        let reversed = base
+            .as_view()
+            .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+            .unwrap();
 
-    for (label, view, m, n) in [
-        ("transposed", transposed, 4, 3),
-        ("offset", offset, 2, 3),
-        ("reversed", reversed, 3, 4),
-    ] {
-        let expected = {
-            // Materialize the same elements into a compact tensor so the owned
-            // path sees exactly the values the view exposes.
-            let mut data = vec![0.0_f64; m * n];
-            for col in 0..n {
-                for row in 0..m {
-                    data[row + col * m] = *view.get(&[row, col]).unwrap();
+        for (label, view, m, n) in [
+            ("transposed", transposed, 4, 3),
+            ("offset", offset, 2, 3),
+            ("reversed", reversed, 3, 4),
+        ] {
+            let expected = {
+                // Materialize the same elements into a compact tensor so the owned
+                // path sees exactly the values the view exposes.
+                let mut data = vec![0.0_f64; m * n];
+                for col in 0..n {
+                    for row in 0..m {
+                        data[row + col * m] = *view.get(&[row, col]).unwrap();
+                    }
                 }
-            }
-            Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![m, n], data.clone()).unwrap(),
-            )
-        };
-        let source = complex_values(&expected);
+                Tensor::from_typed::<f64>(
+                    TypedTensor::from_vec_col_major(vec![m, n], data.clone()).unwrap(),
+                )
+            };
+            let source = complex_values(&expected);
 
-        host.with_backend_session(|session| {
-            let (u, s, vt) = TensorRead::from_view(TensorView::F64(view.clone()))
-                .svd_full_read(session)
-                .unwrap();
-            assert_full_svd(DType::F64, m, n, &source, &u, &s, &vt);
+            host.with_backend_session(|session| {
+                let (u, s, vt) = TensorRead::from_view(TensorView::F64(view.clone()))
+                    .svd_full_read(session)
+                    .unwrap();
+                assert_full_svd(DType::F64, m, n, &source, &u, &s, &vt);
 
-            let owned = expected.svd_full(session).unwrap();
-            for (borrowed, owned) in real_values(&s).iter().zip(real_values(&owned.1)) {
-                assert!(
-                    (borrowed - owned).abs() < 1.0e-10,
-                    "{label}: borrowed and owned spectra disagree"
-                );
-            }
-        });
+                let owned = expected.svd_full(session).unwrap();
+                for (borrowed, owned) in real_values(&s).iter().zip(real_values(&owned.1)) {
+                    assert!(
+                        (borrowed - owned).abs() < 1.0e-10,
+                        "{label}: borrowed and owned spectra disagree"
+                    );
+                }
+            });
+        }
+
+        assert_eq!(
+            base.host_data().unwrap(),
+            original.as_slice(),
+            "full_svd_read must not modify its borrowed source"
+        );
     }
-
-    assert_eq!(
-        base.host_data().unwrap(),
-        original.as_slice(),
-        "full_svd_read must not modify its borrowed source"
-    );
 }
 
 #[test]
 fn full_svd_keeps_square_factors_when_a_core_dimension_is_empty() {
     // The full variant keeps `m x m` and `n x n` shapes even when the other
     // core dimension is zero, so the non-degenerate factor is the identity
-    // rather than an empty tensor.
-    let mut host = faer_backend();
-    for (m, n) in [(0_usize, 3_usize), (3, 0), (0, 0)] {
-        let input = tensor_of(DType::F64, &[m, n], &[], &[]);
-        host.with_backend_session(|session| {
-            for (label, (u, s, vt)) in [
-                ("owned", input.svd_full(session).unwrap()),
-                (
-                    "borrowed",
-                    TensorRead::from_tensor(&input)
-                        .svd_full_read(session)
-                        .unwrap(),
-                ),
-            ] {
-                assert_eq!(u.shape(), &[m, m], "{label}: U shape");
-                assert_eq!(s.shape(), &[m.min(n)], "{label}: S shape");
-                assert_eq!(vt.shape(), &[n, n], "{label}: Vt shape");
-                let u = complex_values(&u);
-                let vt = complex_values(&vt);
-                assert_isometric(&u, m, m, 1.0e-12, "empty U");
-                assert_isometric(&vt, n, n, 1.0e-12, "empty Vt");
-            }
-        });
+    // rather than an empty tensor. Both providers owe the same shapes.
+    for (_provider, mut host) in providers() {
+        for (m, n) in [(0_usize, 3_usize), (3, 0), (0, 0)] {
+            let input = tensor_of(DType::F64, &[m, n], &[], &[]);
+            host.with_backend_session(|session| {
+                for (label, (u, s, vt)) in [
+                    ("owned", input.svd_full(session).unwrap()),
+                    (
+                        "borrowed",
+                        TensorRead::from_tensor(&input)
+                            .svd_full_read(session)
+                            .unwrap(),
+                    ),
+                ] {
+                    assert_eq!(u.shape(), &[m, m], "{label}: U shape");
+                    assert_eq!(s.shape(), &[m.min(n)], "{label}: S shape");
+                    assert_eq!(vt.shape(), &[n, n], "{label}: Vt shape");
+                    let u = complex_values(&u);
+                    let vt = complex_values(&vt);
+                    assert_isometric(&u, m, m, 1.0e-12, "empty U");
+                    assert_isometric(&vt, n, n, 1.0e-12, "empty Vt");
+                }
+            });
+        }
     }
 }
 
@@ -336,85 +361,90 @@ fn full_svd_keeps_square_factors_when_a_core_dimension_is_empty() {
 fn full_svd_handles_batched_inputs_per_matrix() {
     // Shape `[m, n, batch]`: each trailing slab is decomposed independently and
     // the outputs carry the same batch suffix.
-    let mut host = faer_backend();
-    let (m, n, batch) = (3_usize, 2_usize, 2_usize);
-    let real = sample_real(m, n * batch);
-    let input = tensor_of(DType::F64, &[m, n, batch], &real, &[]);
+    for (_provider, mut host) in providers() {
+        let (m, n, batch) = (3_usize, 2_usize, 2_usize);
+        let real = sample_real(m, n * batch);
+        let input = tensor_of(DType::F64, &[m, n, batch], &real, &[]);
 
-    host.with_backend_session(|session| {
-        let (u, s, vt) = input.svd_full(session).unwrap();
-        assert_eq!(u.shape(), &[m, m, batch]);
-        assert_eq!(s.shape(), &[m.min(n), batch]);
-        assert_eq!(vt.shape(), &[n, n, batch]);
+        host.with_backend_session(|session| {
+            let (u, s, vt) = input.svd_full(session).unwrap();
+            assert_eq!(u.shape(), &[m, m, batch]);
+            assert_eq!(s.shape(), &[m.min(n), batch]);
+            assert_eq!(vt.shape(), &[n, n, batch]);
 
-        let (ru, rs, rvt) = TensorRead::from_tensor(&input)
-            .svd_full_read(session)
-            .unwrap();
-        assert_eq!(ru.shape(), u.shape());
-        assert_eq!(rs.shape(), s.shape());
-        assert_eq!(rvt.shape(), vt.shape());
+            let (ru, rs, rvt) = TensorRead::from_tensor(&input)
+                .svd_full_read(session)
+                .unwrap();
+            assert_eq!(ru.shape(), u.shape());
+            assert_eq!(rs.shape(), s.shape());
+            assert_eq!(rvt.shape(), vt.shape());
 
-        let source = complex_values(&input);
-        let u = complex_values(&u);
-        let s = real_values(&s);
-        let vt = complex_values(&vt);
-        for slab in 0..batch {
-            let slab_source = source[slab * m * n..(slab + 1) * m * n].to_vec();
-            let slab_u = &u[slab * m * m..(slab + 1) * m * m];
-            let slab_vt = &vt[slab * n * n..(slab + 1) * n * n];
-            let slab_s = &s[slab * m.min(n)..(slab + 1) * m.min(n)];
-            assert_isometric(slab_u, m, m, 1.0e-10, "batched U");
-            assert_isometric(slab_vt, n, n, 1.0e-10, "batched Vt");
-            for col in 0..n {
-                for row in 0..m {
-                    let reconstructed: Complex64 = (0..m.min(n))
-                        .map(|index| {
-                            slab_u[row + index * m] * slab_s[index] * slab_vt[index + col * n]
-                        })
-                        .sum();
-                    assert!((reconstructed - slab_source[row + col * m]).norm() < 1.0e-10);
+            let source = complex_values(&input);
+            let u = complex_values(&u);
+            let s = real_values(&s);
+            let vt = complex_values(&vt);
+            for slab in 0..batch {
+                let slab_source = source[slab * m * n..(slab + 1) * m * n].to_vec();
+                let slab_u = &u[slab * m * m..(slab + 1) * m * m];
+                let slab_vt = &vt[slab * n * n..(slab + 1) * n * n];
+                let slab_s = &s[slab * m.min(n)..(slab + 1) * m.min(n)];
+                assert_isometric(slab_u, m, m, 1.0e-10, "batched U");
+                assert_isometric(slab_vt, n, n, 1.0e-10, "batched Vt");
+                for col in 0..n {
+                    for row in 0..m {
+                        let reconstructed: Complex64 = (0..m.min(n))
+                            .map(|index| {
+                                slab_u[row + index * m] * slab_s[index] * slab_vt[index + col * n]
+                            })
+                            .sum();
+                        assert!((reconstructed - slab_source[row + col * m]).norm() < 1.0e-10);
+                    }
                 }
             }
-        }
-    });
+        });
+    }
 }
 
 #[test]
 fn typed_full_svd_returns_real_singular_values() {
-    let mut host = faer_backend();
-    let input = TypedTensor::<Complex64>::from_vec_col_major(
-        vec![3, 2],
-        sample_real(3, 2)
-            .iter()
-            .zip(sample_imag(3, 2))
-            .map(|(&re, im)| Complex64::new(re, im))
-            .collect(),
-    )
-    .unwrap();
+    for (_provider, mut host) in providers() {
+        let input = TypedTensor::<Complex64>::from_vec_col_major(
+            vec![3, 2],
+            sample_real(3, 2)
+                .iter()
+                .zip(sample_imag(3, 2))
+                .map(|(&re, im)| Complex64::new(re, im))
+                .collect(),
+        )
+        .unwrap();
 
-    host.with_backend_session(|session| {
-        let (u, s, vt) = input.svd_full(session).unwrap();
-        assert_eq!(u.shape(), &[3, 3]);
-        assert_eq!(s.shape(), &[2]);
-        assert_eq!(vt.shape(), &[2, 2]);
-        // `TypedSvd<Complex64>` types the singular values as f64.
-        let values: &[f64] = s.as_slice().unwrap();
-        assert!(values[0] >= values[1] && values[1] >= 0.0);
-    });
+        host.with_backend_session(|session| {
+            let (u, s, vt) = input.svd_full(session).unwrap();
+            assert_eq!(u.shape(), &[3, 3]);
+            assert_eq!(s.shape(), &[2]);
+            assert_eq!(vt.shape(), &[2, 2]);
+            // `TypedSvd<Complex64>` types the singular values as f64.
+            let values: &[f64] = s.as_slice().unwrap();
+            assert!(values[0] >= values[1] && values[1] >= 0.0);
+        });
+    }
 }
 
 #[test]
 fn full_svd_read_rejects_unsupported_dtypes_before_provider_entry() {
-    let mut host = faer_backend();
-    let input = TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
-    host.with_backend_session(|session| {
-        let error = TensorRead::from_view(TensorView::I64(input.as_view()))
-            .svd_full_read(session)
-            .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Unsupported);
-    });
+    for (_provider, mut host) in providers() {
+        let input =
+            TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
+        host.with_backend_session(|session| {
+            let error = TensorRead::from_view(TensorView::I64(input.as_view()))
+                .svd_full_read(session)
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Unsupported);
+        });
+    }
 }
 
+#[cfg(feature = "cpu-faer")]
 #[test]
 fn faer_view_path_does_not_pool_an_input_copy() {
     // Same shape, same outputs, two eligibility stories. A compact owned read
@@ -462,13 +492,14 @@ fn faer_view_path_does_not_pool_an_input_copy() {
 #[test]
 fn owned_full_svd_reports_unsupported_dtypes_from_the_provider_boundary() {
     // The owned entry point has no dtype pre-check, so an integer tensor must
-    // be rejected by the provider dispatch itself rather than reaching faer.
-    let mut host = faer_backend();
-    let input = Tensor::from_typed::<i64>(
-        TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap(),
-    );
-    host.with_backend_session(|session| {
-        let error = input.svd_full(session).unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Unsupported);
-    });
+    // be rejected by the provider dispatch itself rather than reaching a kernel.
+    for (_provider, mut host) in providers() {
+        let input = Tensor::from_typed::<i64>(
+            TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap(),
+        );
+        host.with_backend_session(|session| {
+            let error = input.svd_full(session).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Unsupported);
+        });
+    }
 }

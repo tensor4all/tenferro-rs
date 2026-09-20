@@ -2049,17 +2049,47 @@ fn svd_full_entered(
                 Err(unsupported_provider("svd_full", CpuBackendKind::Faer))
             }
         }
-        // The LAPACK provider is intentionally not wired for full-matrices SVD
-        // yet; it returns a typed error instead of silently computing a thin
-        // decomposition or switching to faer. Full-SVD callers select the faer
-        // provider (the default) or download to host and use it explicitly.
         CpuLinalgProvider::Blas => {
-            let _ = (context, buffers, input);
-            Err(tenferro_tensor::Error::unsupported(
-                "svd_full",
-                "CPU LAPACK provider does not implement full-matrices SVD; \
-                 use the faer provider for full SVD",
-            ))
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                match input.dtype() {
+                    DType::F32 => linalg::blas::svd_full(
+                        buffers,
+                        input
+                            .as_typed::<f32>()
+                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
+                    )
+                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    DType::F64 => linalg::blas::svd_full(
+                        buffers,
+                        input
+                            .as_typed::<f64>()
+                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
+                    )
+                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    DType::C32 => {
+                        let t = input
+                            .as_typed::<Complex32>()
+                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?;
+                        linalg::blas::svd_full(buffers, t)
+                            .and_then(svd_c32_outputs_to_public_tensors)
+                    }
+                    DType::C64 => {
+                        let t = input
+                            .as_typed::<Complex64>()
+                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?;
+                        linalg::blas::svd_full(buffers, t)
+                            .and_then(svd_c64_outputs_to_public_tensors)
+                    }
+                    _ => Err(unsupported_dtype("svd_full", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("svd_full", CpuBackendKind::Blas))
+            }
         }
     }
 }

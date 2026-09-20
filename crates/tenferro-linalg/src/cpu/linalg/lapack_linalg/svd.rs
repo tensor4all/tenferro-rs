@@ -12,7 +12,17 @@ use super::helpers::{
 pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
     type Real: Clone + Copy + Default + tenferro_tensor::TensorScalar;
 
+    /// The multiplicative unit, used to build the identity factor a full
+    /// decomposition still owes for an empty core dimension.
+    fn unit() -> Self;
+
     fn svd_2d(
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    /// Full-matrices variant: `U` is `m x m` and `Vt` is `n x n`, so the
+    /// trailing columns and rows span the left and right nullspaces.
+    fn svd_full_2d(
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
@@ -64,6 +74,10 @@ macro_rules! impl_real_svd {
         impl LapackSvd for $scalar {
             type Real = $scalar;
 
+            fn unit() -> Self {
+                1.0
+            }
+
             fn svd_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
@@ -107,6 +121,52 @@ macro_rules! impl_real_svd {
                     tensor_from_vec_with_template(vec![m, k], u, input)?,
                     tensor_from_vec_with_template(vec![k], s, input)?,
                     tensor_from_vec_with_template(vec![k, n], vt, input)?,
+                ])
+            }
+
+            fn svd_full_2d(
+                _buffers: &mut BufferPool,
+                input: &TypedTensor<Self>,
+            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
+                let (m, n) = matrix_dims(input, "svd_full")?;
+                let k = m.min(n);
+                let m_i32 = dim_i32(m, "svd_full")?;
+                let n_i32 = dim_i32(n, "svd_full")?;
+
+                let mut a = input.host_data()?.to_vec();
+                let mut s = vec![0.0 as $scalar; k];
+                let u_len = checked_product("svd_full", "left singular vectors", &[m, m])?;
+                let mut u = vec![0.0 as $scalar; u_len];
+                let vt_len = checked_product("svd_full", "right singular vectors", &[n, n])?;
+                let mut vt = vec![0.0 as $scalar; vt_len];
+                let mut query = vec![0.0 as $scalar; 1];
+                let mut info = 0;
+                // SAFETY: `a`, `s`, `u`, and `vt` match the validated
+                // full-matrices SVD dimensions (`ldu = m`, `ldvt = n`), and
+                // `lwork = -1` makes `query` the workspace output.
+                unsafe {
+                    $gesvd(
+                        b'A', b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
+                        n_i32, &mut query, -1, &mut info,
+                    );
+                }
+                check_lapack_info("svd_full", concat!($routine, "(work query)"), info)?;
+                let lwork = work_len(query[0] as f64, "svd_full", $routine)?;
+                let mut work = vec![0.0 as $scalar; lwork as usize];
+                // SAFETY: buffers and leading dimensions match the validated
+                // full-matrices SVD problem, and `work` uses the queried length.
+                unsafe {
+                    $gesvd(
+                        b'A', b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
+                        n_i32, &mut work, lwork, &mut info,
+                    );
+                }
+                check_lapack_info("svd_full", $routine, info)?;
+
+                Ok(vec![
+                    tensor_from_vec_with_template(vec![m, m], u, input)?,
+                    tensor_from_vec_with_template(vec![k], s, input)?,
+                    tensor_from_vec_with_template(vec![n, n], vt, input)?,
                 ])
             }
 
@@ -180,6 +240,10 @@ macro_rules! impl_real_svd {
         impl LapackSvd for $scalar {
             type Real = $scalar;
 
+            fn unit() -> Self {
+                1.0
+            }
+
             fn svd_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
@@ -224,6 +288,53 @@ macro_rules! impl_real_svd {
                     tensor_from_vec_with_template(vec![m, k], u, input)?,
                     tensor_from_vec_with_template(vec![k], s, input)?,
                     tensor_from_vec_with_template(vec![k, n], vt, input)?,
+                ])
+            }
+
+            fn svd_full_2d(
+                _buffers: &mut BufferPool,
+                input: &TypedTensor<Self>,
+            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
+                let (m, n) = matrix_dims(input, "svd_full")?;
+                let k = m.min(n);
+                let m_i32 = dim_i32(m, "svd_full")?;
+                let n_i32 = dim_i32(n, "svd_full")?;
+
+                let mut a = input.host_data()?.to_vec();
+                let mut s = vec![0.0 as $scalar; k];
+                let u_len = checked_product("svd_full", "left singular vectors", &[m, m])?;
+                let mut u = vec![0.0 as $scalar; u_len];
+                let vt_len = checked_product("svd_full", "right singular vectors", &[n, n])?;
+                let mut vt = vec![0.0 as $scalar; vt_len];
+                let mut query = vec![0.0 as $scalar; 1];
+                let mut iwork = vec![0; gesdd_iwork_len(k)?];
+                let mut info = 0;
+                // SAFETY: `a`, `s`, `u`, and `vt` match the validated
+                // full-matrices SVD dimensions (`ldu = m`, `ldvt = n`), and
+                // `lwork = -1` makes `query` the workspace output.
+                unsafe {
+                    $gesdd(
+                        b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, n_i32,
+                        &mut query, -1, &mut iwork, &mut info,
+                    );
+                }
+                check_lapack_info("svd_full", concat!($routine, "(work query)"), info)?;
+                let lwork = work_len(query[0] as f64, "svd_full", $routine)?;
+                let mut work = vec![0.0 as $scalar; lwork as usize];
+                // SAFETY: buffers and leading dimensions match the validated
+                // full-matrices SVD problem, and `work` uses the queried length.
+                unsafe {
+                    $gesdd(
+                        b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, n_i32,
+                        &mut work, lwork, &mut iwork, &mut info,
+                    );
+                }
+                check_lapack_info("svd_full", $routine, info)?;
+
+                Ok(vec![
+                    tensor_from_vec_with_template(vec![m, m], u, input)?,
+                    tensor_from_vec_with_template(vec![k], s, input)?,
+                    tensor_from_vec_with_template(vec![n, n], vt, input)?,
                 ])
             }
 
@@ -298,6 +409,10 @@ macro_rules! impl_complex_svd {
         impl LapackSvd for $complex {
             type Real = $real;
 
+            fn unit() -> Self {
+                <$complex>::new(1.0, 0.0)
+            }
+
             fn svd_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
@@ -349,6 +464,61 @@ macro_rules! impl_complex_svd {
                         input,
                     )?,
                     tensor_from_vec_with_template(vec![k, n], vt, input)?,
+                ])
+            }
+
+            fn svd_full_2d(
+                _buffers: &mut BufferPool,
+                input: &TypedTensor<Self>,
+            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
+                let (m, n) = matrix_dims(input, "svd_full")?;
+                let k = m.min(n);
+                let m_i32 = dim_i32(m, "svd_full")?;
+                let n_i32 = dim_i32(n, "svd_full")?;
+
+                let mut a = input.host_data()?.to_vec();
+                let mut s = vec![0.0 as $real; k];
+                let u_len = checked_product("svd_full", "left singular vectors", &[m, m])?;
+                let mut u = vec![<$complex>::new(0.0, 0.0); u_len];
+                let vt_len = checked_product("svd_full", "right singular vectors", &[n, n])?;
+                let mut vt = vec![<$complex>::new(0.0, 0.0); vt_len];
+                let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+                let rwork_len = checked_product("svd_full", "real workspace", &[5, k.max(1)])?;
+                let mut rwork = vec![0.0 as $real; rwork_len];
+                let mut info = 0;
+                // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the validated
+                // complex full-matrices SVD dimensions (`ldu = m`, `ldvt = n`),
+                // and `lwork = -1` queries workspace.
+                unsafe {
+                    $gesvd(
+                        b'A', b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
+                        n_i32, &mut query, -1, &mut rwork, &mut info,
+                    );
+                }
+                check_lapack_info("svd_full", concat!($routine, "(work query)"), info)?;
+                let lwork = work_len(query[0].re as f64, "svd_full", $routine)?;
+                let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                // SAFETY: buffers, real workspace, and leading dimensions match
+                // the validated complex full-matrices SVD problem and the
+                // queried workspace length.
+                unsafe {
+                    $gesvd(
+                        b'A', b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
+                        n_i32, &mut work, lwork, &mut rwork, &mut info,
+                    );
+                }
+                check_lapack_info("svd_full", $routine, info)?;
+
+                Ok(vec![
+                    tensor_from_vec_with_template(vec![m, m], u, input)?,
+                    tensor_from_vec_with_template(
+                        vec![k],
+                        s.into_iter()
+                            .map(|value| <$complex>::new(value, 0.0))
+                            .collect(),
+                        input,
+                    )?,
+                    tensor_from_vec_with_template(vec![n, n], vt, input)?,
                 ])
             }
 
@@ -426,6 +596,10 @@ macro_rules! impl_complex_svd {
         impl LapackSvd for $complex {
             type Real = $real;
 
+            fn unit() -> Self {
+                <$complex>::new(1.0, 0.0)
+            }
+
             fn svd_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
@@ -477,6 +651,63 @@ macro_rules! impl_complex_svd {
                         input,
                     )?,
                     tensor_from_vec_with_template(vec![k, n], vt, input)?,
+                ])
+            }
+
+            fn svd_full_2d(
+                _buffers: &mut BufferPool,
+                input: &TypedTensor<Self>,
+            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
+                let (m, n) = matrix_dims(input, "svd_full")?;
+                let k = m.min(n);
+                let m_i32 = dim_i32(m, "svd_full")?;
+                let n_i32 = dim_i32(n, "svd_full")?;
+
+                let mut a = input.host_data()?.to_vec();
+                let mut s = vec![0.0 as $real; k];
+                let u_len = checked_product("svd_full", "left singular vectors", &[m, m])?;
+                let mut u = vec![<$complex>::new(0.0, 0.0); u_len];
+                let vt_len = checked_product("svd_full", "right singular vectors", &[n, n])?;
+                let mut vt = vec![<$complex>::new(0.0, 0.0); vt_len];
+                let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+                // LAPACK states one LRWORK bound for JOBZ = 'S' or 'A', so the
+                // vectors branch of the shared helper covers full mode too.
+                let mut rwork = vec![0.0 as $real; complex_gesdd_rwork_len(b'A', m, n)?];
+                let mut iwork = vec![0; gesdd_iwork_len(k)?];
+                let mut info = 0;
+                // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the validated
+                // complex full-matrices SVD dimensions (`ldu = m`, `ldvt = n`),
+                // and `lwork = -1` queries workspace.
+                unsafe {
+                    $gesdd(
+                        b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, n_i32,
+                        &mut query, -1, &mut rwork, &mut iwork, &mut info,
+                    );
+                }
+                check_lapack_info("svd_full", concat!($routine, "(work query)"), info)?;
+                let lwork = work_len(query[0].re as f64, "svd_full", $routine)?;
+                let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                // SAFETY: buffers, real workspace, and leading dimensions match
+                // the validated complex full-matrices SVD problem and the
+                // queried workspace length.
+                unsafe {
+                    $gesdd(
+                        b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, n_i32,
+                        &mut work, lwork, &mut rwork, &mut iwork, &mut info,
+                    );
+                }
+                check_lapack_info("svd_full", $routine, info)?;
+
+                Ok(vec![
+                    tensor_from_vec_with_template(vec![m, m], u, input)?,
+                    tensor_from_vec_with_template(
+                        vec![k],
+                        s.into_iter()
+                            .map(|value| <$complex>::new(value, 0.0))
+                            .collect(),
+                        input,
+                    )?,
+                    tensor_from_vec_with_template(vec![n, n], vt, input)?,
                 ])
             }
 
@@ -601,6 +832,81 @@ pub(crate) fn svd<T: LapackSvd>(
         ]);
     }
     batched_multi("svd", buffers, input, svd_2d)
+}
+
+fn svd_full_2d<T: LapackSvd>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    T::svd_full_2d(buffers, input)
+}
+
+pub(crate) fn svd_full<T: LapackSvd>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    if has_zero_dim(input.shape()) {
+        let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_full")?;
+        return empty_full_svd_outputs(
+            "svd_full",
+            matrix_shape[0],
+            matrix_shape[1],
+            batch_shape,
+            input,
+        );
+    }
+    batched_multi("svd_full", buffers, input, svd_full_2d)
+}
+
+/// Full-SVD factors for an input with an empty core dimension.
+///
+/// The full variant keeps its `m x m` and `n x n` output shapes even when the
+/// other core dimension is zero, so the factor for the non-empty dimension is
+/// the identity rather than an empty tensor. This mirrors the faer provider so
+/// one public call has one shape and unitarity contract.
+fn empty_full_svd_outputs<T: LapackSvd, U>(
+    op: &'static str,
+    m: usize,
+    n: usize,
+    batch_shape: &[usize],
+    template: &TypedTensor<U>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let blocks = checked_product(op, "batch shape", batch_shape)?;
+    Ok(vec![
+        tensor_from_vec_with_template(
+            matrix_with_batch_shape(m, m, batch_shape),
+            identity_blocks::<T>(op, m, blocks)?,
+            template,
+        )?,
+        tensor_from_vec_with_template(
+            vector_with_batch_shape(m.min(n), batch_shape),
+            Vec::new(),
+            template,
+        )?,
+        tensor_from_vec_with_template(
+            matrix_with_batch_shape(n, n, batch_shape),
+            identity_blocks::<T>(op, n, blocks)?,
+            template,
+        )?,
+    ])
+}
+
+/// `blocks` column-major `dim x dim` identity matrices laid out back to back.
+fn identity_blocks<T: LapackSvd>(
+    op: &'static str,
+    dim: usize,
+    blocks: usize,
+) -> tenferro_tensor::Result<Vec<T>> {
+    let per_block = checked_product(op, "identity block", &[dim, dim])?;
+    let len = checked_product(op, "identity stack", &[per_block, blocks])?;
+    let mut data = vec![T::default(); len];
+    for block in 0..blocks {
+        let base = block * per_block;
+        for index in 0..dim {
+            data[base + index + index * dim] = T::unit();
+        }
+    }
+    Ok(data)
 }
 
 fn svd_values_2d<T: LapackSvd>(
