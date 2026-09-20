@@ -5,7 +5,7 @@ use tenferro_tensor::{TypedTensor, TypedTensorView, TypedTensorViewMut};
 
 use super::helpers::{
     check_lapack_info, checked_product, dim_i32, has_zero_dim, matrix_core_and_batch_result,
-    square_core_and_batch_result, tensor_from_vec_with_template,
+    pooled_zeroed, square_core_and_batch_result, tensor_from_vec_with_template,
 };
 
 #[cfg(test)]
@@ -187,7 +187,7 @@ pub(crate) fn solve<T: LapackSolve + 'static>(
     let n_i32 = dim_i32(n, "solve")?;
     let nrhs = dim_i32(b_cols, "solve")?;
     let mut lu = buffers.acquire_with_capacity::<T>(matrix_len);
-    let mut ipiv = vec![0_i32; n];
+    let mut ipiv = pooled_zeroed::<i32>(buffers, n);
     let mut output = buffers.acquire_with_capacity::<T>(b.n_elements());
     output.extend_from_slice(b.host_data()?);
     // INVARIANT: owned tensors are compact column-major; validated matching batch
@@ -301,7 +301,7 @@ fn solve_in_place<T: LapackSolve + 'static>(
 
     let n_i32 = dim_i32(n, op)?;
     let b_cols_i32 = dim_i32(b_cols, op)?;
-    let mut ipiv = vec![0_i32; n];
+    let mut ipiv = pooled_zeroed::<i32>(buffers, n);
     let mut info = 0;
     T::getrf(n_i32, n_i32, &mut lu, n_i32, &mut ipiv, &mut info);
     check_lapack_info(op, "getrf", info.min(0))?;

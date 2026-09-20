@@ -988,8 +988,8 @@ macro_rules! impl_managed_cholesky_scalar {
                     CpuLinalgProvider::Blas => {
                         #[cfg(feature = "cpu-blas")]
                         {
-                            let _ = (context, buffers);
-                            linalg::blas::cholesky_compact_data(data, n)
+                            let _ = context;
+                            linalg::blas::cholesky_compact_data(buffers, data, n)
                         }
                         #[cfg(not(feature = "cpu-blas"))]
                         {
@@ -2806,7 +2806,7 @@ fn householder_qr_r_entered(
 fn householder_qr_q_columns_entered(
     provider: CpuLinalgProvider,
     _context: &CpuExecutionContext<'_>,
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     packed: &Tensor,
     coeff: &Tensor,
     columns: std::ops::Range<usize>,
@@ -2820,7 +2820,7 @@ fn householder_qr_q_columns_entered(
                 let (p, c) = q_columns_operands::<f32>(packed, coeff)?;
                 linalg::faer::q_columns_2d(
                     _context,
-                    _buffers,
+                    buffers,
                     p,
                     c,
                     columns.start,
@@ -2833,7 +2833,7 @@ fn householder_qr_q_columns_entered(
                 let (p, c) = q_columns_operands::<f64>(packed, coeff)?;
                 linalg::faer::q_columns_2d(
                     _context,
-                    _buffers,
+                    buffers,
                     p,
                     c,
                     columns.start,
@@ -2846,7 +2846,7 @@ fn householder_qr_q_columns_entered(
                 let (p, c) = q_columns_operands::<Complex32>(packed, coeff)?;
                 linalg::faer::q_columns_2d(
                     _context,
-                    _buffers,
+                    buffers,
                     p,
                     c,
                     columns.start,
@@ -2859,7 +2859,7 @@ fn householder_qr_q_columns_entered(
                 let (p, c) = q_columns_operands::<Complex64>(packed, coeff)?;
                 linalg::faer::q_columns_2d(
                     _context,
-                    _buffers,
+                    buffers,
                     p,
                     c,
                     columns.start,
@@ -2885,6 +2885,7 @@ fn householder_qr_q_columns_entered(
         macro_rules! columns {
             ($packed:expr, $coeff:expr, $variant:ident) => {
                 linalg::blas::householder_qr_q_columns(
+                    buffers,
                     $packed,
                     $coeff,
                     columns.start,

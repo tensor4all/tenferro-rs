@@ -5,8 +5,8 @@ use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
     batched_single, check_lapack_info, dim_i32, has_zero_dim, lower_triangle_from_lapack,
-    matrix_with_batch_shape, square_core_and_batch_result, square_matrix_dim,
-    tensor_from_vec_with_template,
+    matrix_with_batch_shape, pooled_copy, release_scratch, square_core_and_batch_result,
+    square_matrix_dim, tensor_from_vec_with_template,
 };
 
 pub(crate) trait LapackCholesky: Clone + Copy + Default + PoolScalar {
@@ -54,18 +54,19 @@ impl LapackCholesky for Complex64 {
 }
 
 fn cholesky_2d<T: LapackCholesky>(
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let n = square_matrix_dim(input, "cholesky")?;
     tensor_from_vec_with_template(
         vec![n, n],
-        cholesky_compact_data(input.host_data()?, n)?,
+        cholesky_compact_data(buffers, input.host_data()?, n)?,
         input,
     )
 }
 
 pub(crate) fn cholesky_compact_data<T: LapackCholesky>(
+    buffers: &mut BufferPool,
     input: &[T],
     n: usize,
 ) -> tenferro_tensor::Result<Vec<T>> {
@@ -84,7 +85,7 @@ pub(crate) fn cholesky_compact_data<T: LapackCholesky>(
             format!("expected {expected_len} elements, got {}", input.len()),
         ));
     }
-    let mut factor = input.to_vec();
+    let mut factor = pooled_copy(buffers, input);
     let mut info = 0;
     T::potrf(b'L', n_i32, &mut factor, n_i32, &mut info);
     if info > 0 {
@@ -94,7 +95,9 @@ pub(crate) fn cholesky_compact_data<T: LapackCholesky>(
         ));
     }
     check_lapack_info("cholesky", "dpotrf", info)?;
-    lower_triangle_from_lapack(&factor, n, n)
+    let lower = lower_triangle_from_lapack(&factor, n, n);
+    release_scratch(buffers, factor);
+    lower
 }
 
 pub(crate) fn cholesky<T: LapackCholesky>(

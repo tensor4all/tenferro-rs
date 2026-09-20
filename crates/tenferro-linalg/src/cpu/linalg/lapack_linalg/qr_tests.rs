@@ -112,7 +112,7 @@ fn compact_factor_and_append_reconstruct_without_refactoring_old_columns() {
     let (packed, tau) = compact_factor_2d(&mut buffers, &a).unwrap();
     let (packed, tau) = append_2d(&mut buffers, &packed, &tau, &b).unwrap();
     let r = raw_r_2d(&packed, &tau, false).unwrap();
-    let q = q_columns_2d(&packed, &tau, 0, 4, false).unwrap();
+    let q = q_columns_2d(&mut buffers, &packed, &tau, 0, 4, false).unwrap();
 
     let expected = [
         1.0, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0, 3.0, -1.0, 2.0, 1.0, 0.5, 2.0, -2.0, 4.0,
@@ -134,7 +134,7 @@ fn from_factors_reconstructs_product_without_forming_dense_qr_product() {
 
     let (packed, tau) = from_factors_2d(&mut buffers, &q, &r).unwrap();
     let extracted_r = raw_r_2d(&packed, &tau, false).unwrap();
-    let extracted_q = q_columns_2d(&packed, &tau, 0, 3, false).unwrap();
+    let extracted_q = q_columns_2d(&mut buffers, &packed, &tau, 0, 3, false).unwrap();
 
     let expected = product(q.host_data().unwrap(), 4, 2, r.host_data().unwrap(), 3);
     assert_close(

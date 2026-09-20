@@ -7,6 +7,31 @@ use tenferro_tensor::{Complex32, Complex64, DType, Tensor, TypedTensor};
 #[path = "helpers/tests.rs"]
 mod tests;
 
+/// Acquire a zero-filled scratch buffer from the session buffer pool.
+///
+/// LAPACK kernels need vendor scratch (`work`, `iwork`, `rwork`) and a
+/// destructible copy of `A` on every call. Those buffers are unavoidable; what
+/// is avoidable is paying the allocator for them each time, so they come from
+/// the pool the kernels already receive and go back with [`release_scratch`].
+pub(crate) fn pooled_zeroed<T: PoolScalar>(buffers: &mut BufferPool, len: usize) -> Vec<T> {
+    <T as PoolScalar>::pool_acquire_zeroed(buffers, len)
+}
+
+/// Acquire a pooled copy of a compact host slice.
+///
+/// This is the single preparation copy a destructive LAPACK kernel needs, not
+/// an adapter copy: `?gesdd`, `?geqrf` and friends overwrite `A` in place.
+pub(crate) fn pooled_copy<T: PoolScalar>(buffers: &mut BufferPool, source: &[T]) -> Vec<T> {
+    let mut data = buffers.acquire_with_capacity::<T>(source.len());
+    data.extend_from_slice(source);
+    data
+}
+
+/// Return a scratch buffer to the pool for the next call to reuse.
+pub(crate) fn release_scratch<T: PoolScalar>(buffers: &mut BufferPool, data: Vec<T>) {
+    <T as PoolScalar>::pool_release(buffers, data);
+}
+
 pub(crate) fn matrix_dims<T>(
     input: &TypedTensor<T>,
     op: &'static str,

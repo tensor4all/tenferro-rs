@@ -5,8 +5,8 @@ use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
     check_lapack_info, checked_product, dim_i32, has_zero_dim, leading_upper_triangle_from_lapack,
-    matrix_dims, matrix_with_batch_shape, split_core_and_batch_result,
-    tensor_from_vec_with_template, work_len,
+    matrix_dims, matrix_with_batch_shape, pooled_zeroed, release_scratch,
+    split_core_and_batch_result, tensor_from_vec_with_template, work_len,
 };
 
 type CompactQrResult<T> = (TypedTensor<T>, TypedTensor<T>);
@@ -14,9 +14,20 @@ type CompactQrResult<T> = (TypedTensor<T>, TypedTensor<T>);
 pub(crate) trait LapackQr:
     Clone + Copy + Default + PartialEq + PoolScalar + std::ops::Mul<Output = Self>
 {
-    fn geqrf_2d(data: &mut [Self], rows: usize, cols: usize) -> tenferro_tensor::Result<Vec<Self>>;
+    fn geqrf_2d(
+        buffers: &mut BufferPool,
+        data: &mut [Self],
+        rows: usize,
+        cols: usize,
+    ) -> tenferro_tensor::Result<Vec<Self>>;
 
+    /// Apply the compact reflectors to `c` in place.
+    ///
+    /// The workspace query and `work` buffer come from `buffers`, so a repeated
+    /// QR does not pay the allocator for vendor scratch on every call.
+    #[allow(clippy::too_many_arguments)]
     fn apply_reflectors_2d(
+        buffers: &mut BufferPool,
         a: &[Self],
         a_cols: usize,
         tau: &[Self],
@@ -113,7 +124,7 @@ pub(crate) fn compact_factor_2d<T: LapackQr>(
     let tau = if has_zero_dim(input.shape()) {
         Vec::new()
     } else {
-        T::geqrf_2d(&mut packed, m, n)?
+        T::geqrf_2d(buffers, &mut packed, m, n)?
     };
     Ok((
         tensor_from_vec_with_template(vec![m, n], packed, input)?,
@@ -154,6 +165,7 @@ pub(crate) fn append_2d<T: LapackQr>(
     let mut transformed = buffers.acquire_with_capacity::<T>(input_data.len());
     transformed.extend_from_slice(input_data);
     T::apply_reflectors_2d(
+        buffers,
         packed.host_data()?,
         old_n,
         tau.host_data()?,
@@ -176,7 +188,7 @@ pub(crate) fn append_2d<T: LapackQr>(
     let new_tau = if trailing_rows == 0 {
         Vec::new()
     } else {
-        T::geqrf_2d(&mut trailing, trailing_rows, p)?
+        T::geqrf_2d(buffers, &mut trailing, trailing_rows, p)?
     };
 
     let packed_len = checked_product("append_2d", "packed state", &[m, new_n])?;
@@ -249,7 +261,7 @@ pub(crate) fn from_factors_2d<T: LapackQr>(
     let q_data = q.host_data()?;
     let mut q_packed = buffers.acquire_with_capacity::<T>(q_data.len());
     q_packed.extend_from_slice(q_data);
-    let q_tau = T::geqrf_2d(&mut q_packed, m, s)?;
+    let q_tau = T::geqrf_2d(buffers, &mut q_packed, m, s)?;
     let t = leading_upper_triangle_from_lapack(&q_packed, m, s, s)?;
     let mut folded =
         buffers.acquire_zeroed::<T>(checked_product("from_factors_2d", "folded R", &[s, n])?);
@@ -301,6 +313,7 @@ pub(crate) fn raw_r_2d<T: LapackQr>(
 }
 
 pub(crate) fn q_columns_2d<T: LapackQr>(
+    buffers: &mut BufferPool,
     packed: &TypedTensor<T>,
     tau: &TypedTensor<T>,
     start: usize,
@@ -325,6 +338,7 @@ pub(crate) fn q_columns_2d<T: LapackQr>(
     }
     if columns != 0 {
         T::apply_reflectors_2d(
+            buffers,
             packed.host_data()?,
             n,
             tau.host_data()?,
@@ -357,6 +371,7 @@ macro_rules! impl_real_qr {
     ($scalar:ty, $geqrf:path, $orgqr:path, $ormqr:path, $gemm:path, $geqrf_name:literal, $orgqr_name:literal, $ormqr_name:literal) => {
         impl LapackQr for $scalar {
             fn geqrf_2d(
+                buffers: &mut BufferPool,
                 data: &mut [Self],
                 rows: usize,
                 cols: usize,
@@ -373,8 +388,8 @@ macro_rules! impl_real_qr {
                 }
                 let rows_i32 = dim_i32(rows, "compact_factor_2d")?;
                 let cols_i32 = dim_i32(cols, "compact_factor_2d")?;
-                let mut tau = vec![0.0 as $scalar; k];
-                let mut query = vec![0.0 as $scalar; 1];
+                let mut tau = pooled_zeroed::<$scalar>(buffers, k);
+                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
                 let mut info = 0;
                 // SAFETY: validated column-major storage covers rows*cols, tau has
                 // min(rows, cols) entries, and lwork=-1 writes only the query slot.
@@ -389,7 +404,7 @@ macro_rules! impl_real_qr {
                     info,
                 )?;
                 let lwork = work_len(query[0] as f64, "compact_factor_2d", $geqrf_name)?;
-                let mut work = vec![0.0 as $scalar; lwork as usize];
+                let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
                 // SAFETY: dimensions and workspace come from checked input and the
                 // successful LAPACK query; all mutable slices remain live and disjoint.
                 unsafe {
@@ -398,10 +413,14 @@ macro_rules! impl_real_qr {
                     );
                 }
                 check_lapack_info("compact_factor_2d", $geqrf_name, info)?;
+                release_scratch(buffers, query);
+                release_scratch(buffers, work);
                 Ok(tau)
             }
 
+            #[allow(clippy::too_many_arguments)]
             fn apply_reflectors_2d(
+                buffers: &mut BufferPool,
                 a: &[Self],
                 a_cols: usize,
                 tau: &[Self],
@@ -437,7 +456,7 @@ macro_rules! impl_real_qr {
                 let m_i32 = dim_i32(m, "apply_reflectors_2d")?;
                 let p_i32 = dim_i32(p, "apply_reflectors_2d")?;
                 let k_i32 = dim_i32(k, "apply_reflectors_2d")?;
-                let mut query = vec![0.0 as $scalar; 1];
+                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
                 let mut info = 0;
                 let trans = if transpose { b'T' } else { b'N' };
                 // SAFETY: validated A, tau, and C slices satisfy LAPACK dimensions;
@@ -454,7 +473,7 @@ macro_rules! impl_real_qr {
                     info,
                 )?;
                 let lwork = work_len(query[0] as f64, "apply_reflectors_2d", $ormqr_name)?;
-                let mut work = vec![0.0 as $scalar; lwork as usize];
+                let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
                 // SAFETY: checked dimensions and queried workspace cover the full
                 // reflector application; A/tau are read-only and C is uniquely mutable.
                 unsafe {
@@ -463,7 +482,10 @@ macro_rules! impl_real_qr {
                         lwork, &mut info,
                     );
                 }
-                check_lapack_info("apply_reflectors_2d", $ormqr_name, info)
+                let result = check_lapack_info("apply_reflectors_2d", $ormqr_name, info);
+                release_scratch(buffers, query);
+                release_scratch(buffers, work);
+                result
             }
 
             fn gemm_2d(
@@ -577,6 +599,7 @@ macro_rules! impl_complex_qr {
     ($complex:ty, $geqrf:path, $ungqr:path, $unmqr:path, $gemm:path, $geqrf_name:literal, $ungqr_name:literal, $unmqr_name:literal) => {
         impl LapackQr for $complex {
             fn geqrf_2d(
+                buffers: &mut BufferPool,
                 data: &mut [Self],
                 rows: usize,
                 cols: usize,
@@ -593,8 +616,8 @@ macro_rules! impl_complex_qr {
                 }
                 let rows_i32 = dim_i32(rows, "compact_factor_2d")?;
                 let cols_i32 = dim_i32(cols, "compact_factor_2d")?;
-                let mut tau = vec![<$complex>::new(0.0, 0.0); k];
-                let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+                let mut tau = pooled_zeroed::<$complex>(buffers, k);
+                let mut query = pooled_zeroed::<$complex>(buffers, 1);
                 let mut info = 0;
                 // SAFETY: validated column-major storage covers rows*cols, tau has
                 // min(rows, cols) entries, and lwork=-1 writes only the query slot.
@@ -609,7 +632,7 @@ macro_rules! impl_complex_qr {
                     info,
                 )?;
                 let lwork = work_len(query[0].re as f64, "compact_factor_2d", $geqrf_name)?;
-                let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
                 // SAFETY: dimensions and workspace come from checked input and the
                 // successful LAPACK query; all mutable slices remain live and disjoint.
                 unsafe {
@@ -618,10 +641,14 @@ macro_rules! impl_complex_qr {
                     );
                 }
                 check_lapack_info("compact_factor_2d", $geqrf_name, info)?;
+                release_scratch(buffers, query);
+                release_scratch(buffers, work);
                 Ok(tau)
             }
 
+            #[allow(clippy::too_many_arguments)]
             fn apply_reflectors_2d(
+                buffers: &mut BufferPool,
                 a: &[Self],
                 a_cols: usize,
                 tau: &[Self],
@@ -657,7 +684,7 @@ macro_rules! impl_complex_qr {
                 let m_i32 = dim_i32(m, "apply_reflectors_2d")?;
                 let p_i32 = dim_i32(p, "apply_reflectors_2d")?;
                 let k_i32 = dim_i32(k, "apply_reflectors_2d")?;
-                let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+                let mut query = pooled_zeroed::<$complex>(buffers, 1);
                 let mut info = 0;
                 let trans = if transpose { b'C' } else { b'N' };
                 // SAFETY: validated A, tau, and C slices satisfy LAPACK dimensions;
@@ -674,7 +701,7 @@ macro_rules! impl_complex_qr {
                     info,
                 )?;
                 let lwork = work_len(query[0].re as f64, "apply_reflectors_2d", $unmqr_name)?;
-                let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
                 // SAFETY: checked dimensions and queried workspace cover the full
                 // reflector application; A/tau are read-only and C is uniquely mutable.
                 unsafe {
@@ -683,7 +710,10 @@ macro_rules! impl_complex_qr {
                         lwork, &mut info,
                     );
                 }
-                check_lapack_info("apply_reflectors_2d", $unmqr_name, info)
+                let result = check_lapack_info("apply_reflectors_2d", $unmqr_name, info);
+                release_scratch(buffers, query);
+                release_scratch(buffers, work);
+                result
             }
 
             fn gemm_2d(
@@ -1173,13 +1203,13 @@ pub(crate) fn qr<T: LapackQr>(
     let data = input.host_data()?;
     let mut packed = buffers.acquire_with_capacity::<T>(matrix_len);
     packed.extend_from_slice(&data[..matrix_len]);
-    let mut tau = vec![T::default(); k];
+    let mut tau = pooled_zeroed::<T>(buffers, k);
     let mut query = [T::default()];
     T::factor_work(mi, ni, &mut packed, &mut tau, &mut query, -1)?;
     let factor_len = T::qr_work_len(query[0])?;
     T::generate_work(mi, ki, &mut packed[..q_len], &tau, &mut query, -1)?;
     let lwork = factor_len.max(T::qr_work_len(query[0])?);
-    let mut work = vec![T::default(); lwork as usize];
+    let mut work = pooled_zeroed::<T>(buffers, lwork as usize);
     // INVARIANT: validated nonempty compact input has complete m*n chunks;
     // reduced Q occupies the first m*k entries, k<=n. All batches share the
     // queried dimensions and scratch, but never alias the original input.
@@ -1191,6 +1221,9 @@ pub(crate) fn qr<T: LapackQr>(
         T::generate_work(mi, ki, &mut packed[..q_len], &tau, &mut work, lwork)?;
         q.extend_from_slice(&packed[..q_len]);
     }
+    release_scratch(buffers, packed);
+    release_scratch(buffers, tau);
+    release_scratch(buffers, work);
     Ok(vec![
         tensor_from_vec_with_template(q_shape, q, input)?,
         tensor_from_vec_with_template(r_shape, r, input)?,

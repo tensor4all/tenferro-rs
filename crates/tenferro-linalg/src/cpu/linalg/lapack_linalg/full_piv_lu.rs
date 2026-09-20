@@ -6,7 +6,7 @@ use tenferro_tensor::TypedTensor;
 use super::helpers::{
     batch_element_count, batched_binary_result, check_lapack_info, checked_product, dim_i32,
     has_zero_dim, leading_upper_triangle_from_lapack, lower_triangle_from_lapack,
-    matrix_core_and_batch_result, matrix_dims, matrix_with_batch_shape,
+    matrix_core_and_batch_result, matrix_dims, matrix_with_batch_shape, pooled_copy, pooled_zeroed,
     square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
     transpose_col_major_data,
 };
@@ -434,11 +434,12 @@ fn permutation_from_lapack_pivots(
 }
 
 fn permutation_matrix<T: LapackFullPivLu>(
+    buffers: &mut BufferPool,
     permutation: &[usize],
 ) -> tenferro_tensor::Result<Vec<T>> {
     let n = permutation.len();
     let len = checked_product("full_piv_lu", "permutation matrix", &[n, n])?;
-    let mut data = vec![T::default(); len];
+    let mut data = pooled_zeroed::<T>(buffers, len);
     for (row, &source) in permutation.iter().enumerate() {
         data[row + source * n] = T::one();
     }
@@ -446,13 +447,14 @@ fn permutation_matrix<T: LapackFullPivLu>(
 }
 
 fn factor_getc2<T: LapackFullPivLu>(
+    buffers: &mut BufferPool,
     op: &'static str,
     data: &mut [T],
     n: usize,
 ) -> tenferro_tensor::Result<(Vec<i32>, Vec<i32>, i32)> {
     let n_i32 = dim_i32(n, op)?;
-    let mut ipiv = vec![0_i32; n];
-    let mut jpiv = vec![0_i32; n];
+    let mut ipiv = pooled_zeroed::<i32>(buffers, n);
+    let mut jpiv = pooled_zeroed::<i32>(buffers, n);
     let mut info = 0;
     T::getc2(n_i32, data, n_i32, &mut ipiv, &mut jpiv, &mut info);
     check_lapack_info(op, "getc2", info.min(0))?;
@@ -466,17 +468,17 @@ fn factor_getc2<T: LapackFullPivLu>(
 }
 
 fn full_piv_lu_2d<T: LapackFullPivLu>(
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let n = square_matrix_dim(input, "full_piv_lu")?;
-    let mut lu = input.host_data()?.to_vec();
-    let (ipiv, jpiv, _info) = factor_getc2("full_piv_lu", &mut lu, n)?;
+    let mut lu = pooled_copy(buffers, input.host_data()?);
+    let (ipiv, jpiv, _info) = factor_getc2(buffers, "full_piv_lu", &mut lu, n)?;
 
     let row_perm = permutation_from_lapack_pivots(&ipiv, "full_piv_lu")?;
     let col_perm = permutation_from_lapack_pivots(&jpiv, "full_piv_lu")?;
-    let p_data = permutation_matrix::<T>(&row_perm)?;
-    let q_data = permutation_matrix::<T>(&col_perm)?;
+    let p_data = permutation_matrix::<T>(buffers, &row_perm)?;
+    let q_data = permutation_matrix::<T>(buffers, &col_perm)?;
     let mut l_data = lower_triangle_from_lapack(&lu, n, n)?;
     for index in 0..n {
         l_data[index + index * n] = T::one();
@@ -508,7 +510,7 @@ fn full_piv_lu_2d<T: LapackFullPivLu>(
 }
 
 fn solve_2d<T: LapackFullPivLu>(
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     transpose_a: bool,
@@ -528,7 +530,7 @@ fn solve_2d<T: LapackFullPivLu>(
     } else {
         a.host_data()?.to_vec()
     };
-    let (ipiv, jpiv, info) = factor_getc2("full_piv_lu_solve", &mut lu, n)?;
+    let (ipiv, jpiv, info) = factor_getc2(buffers, "full_piv_lu_solve", &mut lu, n)?;
     if info > 0 {
         return Err(crate::error::into_tensor_error(
             "full_piv_lu_solve",
@@ -538,7 +540,7 @@ fn solve_2d<T: LapackFullPivLu>(
         ));
     }
 
-    let mut rhs = b.host_data()?.to_vec();
+    let mut rhs = pooled_copy(buffers, b.host_data()?);
     let n_i32 = dim_i32(n, "full_piv_lu_solve")?;
     for col in 0..b_cols {
         let start = col * n;

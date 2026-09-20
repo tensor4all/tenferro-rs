@@ -7,7 +7,8 @@ use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
     batched_binary_result, check_lapack_info, dim_i32, has_zero_dim, matrix_core_and_batch_result,
-    matrix_dims, square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
+    matrix_dims, pooled_copy, square_core_and_batch_result, square_matrix_dim,
+    tensor_from_vec_with_template,
 };
 
 pub(crate) trait LapackTriangularSolve:
@@ -314,6 +315,7 @@ fn validate_non_unit_diagonal<T: LapackTriangularSolve>(
 }
 
 fn solve_left<T: LapackTriangularSolve>(
+    buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     lower: bool,
@@ -330,7 +332,7 @@ fn solve_left<T: LapackTriangularSolve>(
         ));
     }
 
-    let mut rhs = b.host_data()?.to_vec();
+    let mut rhs = pooled_copy(buffers, b.host_data()?);
     let mut info = 0;
     T::trtrs(TrtrsArgs {
         uplo: if lower { b'L' } else { b'U' },
@@ -349,6 +351,7 @@ fn solve_left<T: LapackTriangularSolve>(
 }
 
 fn solve_right<T: LapackTriangularSolve>(
+    buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     lower: bool,
@@ -366,7 +369,7 @@ fn solve_right<T: LapackTriangularSolve>(
     }
 
     validate_non_unit_diagonal(a, n, unit_diagonal)?;
-    let mut rhs = b.host_data()?.to_vec();
+    let mut rhs = pooled_copy(buffers, b.host_data()?);
     T::trsm(TrsmArgs {
         side: CBLAS_SIDE::CblasRight,
         uplo: cblas_uplo(lower),
@@ -383,7 +386,7 @@ fn solve_right<T: LapackTriangularSolve>(
 }
 
 fn triangular_solve_2d<T: LapackTriangularSolve>(
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -392,9 +395,9 @@ fn triangular_solve_2d<T: LapackTriangularSolve>(
     unit_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     if left_side {
-        solve_left(a, b, lower, transpose_a, unit_diagonal)
+        solve_left(buffers, a, b, lower, transpose_a, unit_diagonal)
     } else {
-        solve_right(a, b, lower, transpose_a, unit_diagonal)
+        solve_right(buffers, a, b, lower, transpose_a, unit_diagonal)
     }
 }
 

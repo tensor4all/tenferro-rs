@@ -292,7 +292,14 @@ fn pooled_uninit_guard_keeps_unrelated_dtype_markers_untouched() {
     {
         let _output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
     }
-    assert_eq!(super::lock_pool(&pool.state).f64_in_flight, marker_before);
+    // The unrelated 8-capacity checkout keeps its count of one. A retained
+    // zero entry may also appear for the 16-capacity buffer the guard took and
+    // returned; that is bookkeeping, not a checkout.
+    let after = super::lock_pool(&pool.state).f64_in_flight.clone();
+    assert_eq!(after.get(&8), marker_before.get(&8));
+    assert!(after
+        .iter()
+        .all(|(capacity, count)| *capacity == 8 || *count == 0));
     drop(unrelated);
     pool.clear_in_flight_retained();
 }
@@ -307,9 +314,12 @@ fn pooled_uninit_guard_bool_invalid_byte_error_drops_without_typed_read() {
         panic!("invalid bool partial panic");
     }));
     assert!(result.is_err());
-    assert!(super::lock_pool(&pool.state).bool_in_flight.is_empty());
+    assert!(pool.in_flight_is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert!(!super::lock_pool(&pool.state).bool_pool.contains_key(&8));
+    assert!(super::lock_pool(&pool.state)
+        .bool_pool
+        .get(&8)
+        .is_none_or(Vec::is_empty));
 }
 
 #[test]
@@ -333,7 +343,7 @@ fn pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity() {
         Some(&1)
     );
     pool.replenish_in_flight_retained();
-    assert!(super::lock_pool(&pool.state).f64_in_flight.is_empty());
+    assert!(pool.in_flight_is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
     assert_eq!(
         super::lock_pool(&pool.state).f64_pool.get(&8).map(Vec::len),
@@ -348,7 +358,7 @@ fn pooled_uninit_guard_reused_error_discards_exact_capacity() {
     let output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
     let error = unsafe { output.assume_init_as::<tenferro_tensor::Rank<2>>() }.unwrap_err();
     assert!(error.to_string().contains("pooled_uninit_output"));
-    assert!(super::lock_pool(&pool.state).f64_in_flight.is_empty());
+    assert!(pool.in_flight_is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 0);
 }
 
@@ -363,9 +373,12 @@ fn pooled_uninit_guard_reused_partial_panic_discards_exact_capacity() {
         panic!("partial reused C>len panic");
     }));
     assert!(result.is_err());
-    assert!(super::lock_pool(&pool.state).f64_in_flight.is_empty());
+    assert!(pool.in_flight_is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert!(!super::lock_pool(&pool.state).f64_pool.contains_key(&8));
+    assert!(super::lock_pool(&pool.state)
+        .f64_pool
+        .get(&8)
+        .is_none_or(Vec::is_empty));
 }
 
 #[test]

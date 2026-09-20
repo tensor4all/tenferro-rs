@@ -5,8 +5,9 @@ use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
     batched_multi, batched_multi_convert, check_lapack_info, checked_product, dim_i32,
-    has_zero_dim, matrix_with_batch_shape, square_core_and_batch_result, square_matrix_dim,
-    tensor_from_vec_with_template, vector_with_batch_shape, work_len,
+    has_zero_dim, matrix_with_batch_shape, pooled_copy, pooled_zeroed, release_scratch,
+    square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
+    vector_with_batch_shape, work_len,
 };
 
 pub(crate) trait LapackEigh: Clone + Copy + Default + PoolScalar {
@@ -71,14 +72,14 @@ macro_rules! impl_real_eigh {
             type Real = $scalar;
 
             fn eigh_2d(
-                _buffers: &mut BufferPool,
+                buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
             ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
                 let n = square_matrix_dim(input, "eigh")?;
                 let n_i32 = dim_i32(n, "eigh")?;
-                let mut vectors = input.host_data()?.to_vec();
-                let mut values = vec![0.0 as $scalar; n];
-                let mut query = vec![0.0 as $scalar; 1];
+                let mut vectors = pooled_copy(buffers, input.host_data()?);
+                let mut values = pooled_zeroed::<$scalar>(buffers, n);
+                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
                 let mut iquery = vec![0; 1];
                 let mut info = 0;
                 // SAFETY: `vectors` is a mutable column-major `n x n` buffer,
@@ -103,8 +104,8 @@ macro_rules! impl_real_eigh {
                 let lwork = work_len(query[0] as f64, "eigh", $routine)?;
                 let liwork = queried_iwork_len(&iquery, "eigh", $routine)?;
                 let liwork_capacity = iwork_capacity(liwork, "eigh", $routine)?;
-                let mut work = vec![0.0 as $scalar; lwork as usize];
-                let mut iwork = vec![0; liwork_capacity];
+                let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
+                let mut iwork = pooled_zeroed::<i32>(buffers, liwork_capacity);
                 // SAFETY: dimensions and workspace lengths come from validated
                 // shape metadata plus the LAPACK query; all mutable buffers are live.
                 unsafe {
@@ -124,6 +125,12 @@ macro_rules! impl_real_eigh {
                 }
                 check_lapack_info("eigh", $routine, info)?;
 
+                release_scratch(buffers, query);
+
+                release_scratch(buffers, work);
+
+                release_scratch(buffers, iwork);
+
                 Ok(vec![
                     tensor_from_vec_with_template(vec![n], values, input)?,
                     tensor_from_vec_with_template(vec![n, n], vectors, input)?,
@@ -131,14 +138,14 @@ macro_rules! impl_real_eigh {
             }
 
             fn eigh_values_2d(
-                _buffers: &mut BufferPool,
+                buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
             ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackEigh>::Real>> {
                 let n = square_matrix_dim(input, "eigh_values")?;
                 let n_i32 = dim_i32(n, "eigh_values")?;
-                let mut work_matrix = input.host_data()?.to_vec();
-                let mut values = vec![0.0 as $scalar; n];
-                let mut query = vec![0.0 as $scalar; 1];
+                let mut work_matrix = pooled_copy(buffers, input.host_data()?);
+                let mut values = pooled_zeroed::<$scalar>(buffers, n);
+                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
                 let mut iquery = vec![0; 1];
                 let mut info = 0;
                 // SAFETY: `work_matrix` is a mutable column-major `n x n`
@@ -163,8 +170,8 @@ macro_rules! impl_real_eigh {
                 let lwork = work_len(query[0] as f64, "eigh_values", $routine)?;
                 let liwork = queried_iwork_len(&iquery, "eigh_values", $routine)?;
                 let liwork_capacity = iwork_capacity(liwork, "eigh_values", $routine)?;
-                let mut work = vec![0.0 as $scalar; lwork as usize];
-                let mut iwork = vec![0; liwork_capacity];
+                let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
+                let mut iwork = pooled_zeroed::<i32>(buffers, liwork_capacity);
                 // SAFETY: dimensions and workspace lengths come from validated
                 // shape metadata plus the LAPACK query; all mutable buffers are live.
                 unsafe {
@@ -184,6 +191,12 @@ macro_rules! impl_real_eigh {
                 }
                 check_lapack_info("eigh_values", $routine, info)?;
 
+                release_scratch(buffers, query);
+
+                release_scratch(buffers, work);
+
+                release_scratch(buffers, iwork);
+
                 tensor_from_vec_with_template(vec![n], values, input)
             }
         }
@@ -196,19 +209,19 @@ macro_rules! impl_complex_eigh {
             type Real = $real;
 
             fn eigh_2d(
-                _buffers: &mut BufferPool,
+                buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
             ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
                 let n = square_matrix_dim(input, "eigh")?;
                 let n_i32 = dim_i32(n, "eigh")?;
-                let mut vectors = input.host_data()?.to_vec();
-                let mut values = vec![0.0 as $real; n];
-                let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+                let mut vectors = pooled_copy(buffers, input.host_data()?);
+                let mut values = pooled_zeroed::<$real>(buffers, n);
+                let mut query = pooled_zeroed::<$complex>(buffers, 1);
                 let rwork_len = checked_product("eigh", "real workspace", &[3, n])?
                     .checked_sub(2)
                     .unwrap_or(1)
                     .max(1);
-                let mut rwork = vec![0.0 as $real; rwork_len];
+                let mut rwork = pooled_zeroed::<$real>(buffers, rwork_len);
                 let mut info = 0;
                 // SAFETY: `vectors`, `values`, and `rwork` satisfy LAPACK's
                 // Hermitian eigensolver dimensions; `lwork = -1` writes only `query`.
@@ -228,7 +241,7 @@ macro_rules! impl_complex_eigh {
                 }
                 check_lapack_info("eigh", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0].re as f64, "eigh", $routine)?;
-                let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
                 // SAFETY: `vectors`, `values`, `work`, and `rwork` match the
                 // validated `n x n` problem and queried workspace length.
                 unsafe {
@@ -247,6 +260,12 @@ macro_rules! impl_complex_eigh {
                 }
                 check_lapack_info("eigh", $routine, info)?;
 
+                release_scratch(buffers, query);
+
+                release_scratch(buffers, rwork);
+
+                release_scratch(buffers, work);
+
                 Ok(vec![
                     tensor_from_vec_with_template(
                         vec![n],
@@ -261,19 +280,19 @@ macro_rules! impl_complex_eigh {
             }
 
             fn eigh_values_2d(
-                _buffers: &mut BufferPool,
+                buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
             ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackEigh>::Real>> {
                 let n = square_matrix_dim(input, "eigh_values")?;
                 let n_i32 = dim_i32(n, "eigh_values")?;
-                let mut work_matrix = input.host_data()?.to_vec();
-                let mut values = vec![0.0 as $real; n];
-                let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+                let mut work_matrix = pooled_copy(buffers, input.host_data()?);
+                let mut values = pooled_zeroed::<$real>(buffers, n);
+                let mut query = pooled_zeroed::<$complex>(buffers, 1);
                 let rwork_len = checked_product("eigh_values", "real workspace", &[3, n])?
                     .checked_sub(2)
                     .unwrap_or(1)
                     .max(1);
-                let mut rwork = vec![0.0 as $real; rwork_len];
+                let mut rwork = pooled_zeroed::<$real>(buffers, rwork_len);
                 let mut info = 0;
                 // SAFETY: `work_matrix`, `values`, and `rwork` satisfy LAPACK's
                 // Hermitian eigensolver dimensions; `lwork = -1` writes only `query`.
@@ -293,7 +312,7 @@ macro_rules! impl_complex_eigh {
                 }
                 check_lapack_info("eigh_values", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0].re as f64, "eigh_values", $routine)?;
-                let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
                 // SAFETY: `work_matrix`, `values`, `work`, and `rwork` match
                 // the validated `n x n` problem and queried workspace length.
                 unsafe {
@@ -311,6 +330,12 @@ macro_rules! impl_complex_eigh {
                     );
                 }
                 check_lapack_info("eigh_values", $routine, info)?;
+
+                release_scratch(buffers, query);
+
+                release_scratch(buffers, rwork);
+
+                release_scratch(buffers, work);
 
                 tensor_from_vec_with_template(vec![n], values, input)
             }

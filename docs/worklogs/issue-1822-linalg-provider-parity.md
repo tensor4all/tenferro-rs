@@ -160,6 +160,41 @@ remaining faer view fast paths for rank-revealing QR and triangular solve.
   The refusal fires when `k` is a known constant; with a symbolic `k` the rule
   cannot prove the range exceeds it, which is recorded below as a residual.
 
+### F — pooled LAPACK scratch
+
+Performance-gated work, so the need measurement came first, before any code
+change. A counting global allocator
+(`crates/tenferro-linalg/tests/lapack_allocation.rs`) reports steady-state
+allocations per call on the BLAS lane, one thread, with the pool primed by four
+warm-up calls. Predeclared primary metric: allocations per steady-state call;
+predeclared gate: no more than the outputs handed back plus a fixed margin of
+eight. Baseline: `svd` on a 48x48 f64 matrix allocated 12 times and 124,008
+bytes while owing three outputs, so the measured candidate path was the whole
+of that call's allocator traffic. The gate was worth pursuing.
+
+- The kernels already received the session `BufferPool` as `_buffers` and never
+  used it. Their destructible `A` copy and all vendor scratch (`work`, `iwork`,
+  `rwork`, workspace queries) now come from that pool through `pooled_copy` /
+  `pooled_zeroed` and go back through `release_scratch`. A handful of private
+  helpers (`permutation_matrix`, `factor_getc2`, `lu_factor_2d`, `solve_left`,
+  `solve_right`, `cholesky_compact_data`, `geqrf_2d`, `apply_reflectors_2d`,
+  `q_columns_2d`) gained the pool parameter so the buffers they own are pooled
+  too.
+- The first candidate cut bytes but made the allocation *count worse*, and the
+  cause was outside the kernels: `BufferPool` removed a capacity's map entry as
+  soon as its free list emptied, and an in-flight entry as soon as its count
+  reached zero. A steady acquire/release cycle therefore re-inserted those
+  `BTreeMap` nodes on every call, and each re-insert is itself an allocation —
+  precisely what the pool exists to avoid. The bins and in-flight entries are
+  now retained. Empty bins hold no buffers, so `pool_len`, the retained-bytes
+  accounting and `stats()` are unchanged; `clear` still drops them, eviction
+  skips them, and `decrement_in_flight` saturates because a caller may release
+  a buffer the pool never handed out.
+- Two `tenferro-cpu-basic` tests asserted on map-key presence rather than on
+  behaviour. They now assert what the pool actually promises — nothing checked
+  out, no buffer retained at that capacity — which is the property the retained
+  empty entry preserves.
+
 ## Verification conclusions and constraints
 
 ### A
@@ -275,3 +310,61 @@ remaining faer view fast paths for rank-revealing QR and triangular solve.
   rule cannot prove the range reaches past the thin width, so the refusal is
   raised only for concrete shapes. That matches the pre-existing behaviour of
   the symbolic column selector this rule already used.
+
+### F
+
+Paired steady-state measurement, BLAS lane (`blas-openblas`), one thread, pool
+primed, same harness for both sides:
+
+| case | allocations | bytes |
+| --- | --- | --- |
+| svd/square (48x48 f64) | 12 -> 10 | 124,008 -> 104,032 |
+| svdvals/square | 7 -> 5 | 47,552 -> 27,576 |
+| qr/square | 10 -> 8 | 92,272 -> 61,360 |
+| svd/tall (64x24) | 12 -> 10 | 58,728 -> 45,856 |
+| svdvals/tall | 7 -> 5 | 27,584 -> 14,712 |
+| qr/tall | 10 -> 8 | 46,000 -> 29,104 |
+| svd/complex (32x32 c64) | 16 -> 14 | 136,056 -> 102,568 |
+| svdvals/complex | 8 -> 6 | 54,216 -> 3,320 |
+| qr/complex | 10 -> 8 | 88,304 -> 55,216 |
+| eigh/square | 10 -> 9 | 64,840 -> 45,812 |
+| eigh/complex | 12 -> 11 | 40,944 -> 24,672 |
+| lu/square | 12 -> 12 | 86,040 -> 67,800 |
+| lu/complex | 12 -> 12 | 77,664 -> 61,536 |
+
+- Every case improves or holds on both metrics. Allocated bytes fall by 16% to
+  94%; allocation counts fall in eleven of thirteen cases and hold in the two
+  `lu` cases.
+- **The predeclared gate is met in eleven of thirteen cases.** `svd/complex`
+  (14 against a budget of 11) and `eigh/complex` (11 against 10) still exceed
+  it. The cause is named rather than excluded: the complex LAPACK path returns
+  its real singular values and eigenvalues through a complex intermediate, and
+  the shared complex-to-real output adapter in `cpu/backend.rs` allocates a
+  fresh buffer for the real part. That adapter is on the faer path too, so it
+  is not LAPACK scratch and is outside this slice's stated scope
+  (`lapack_linalg` plus `helpers.rs`). Both cases still improve against their
+  baseline.
+- The committed test asserts a per-case allocation ceiling equal to the
+  measured candidate, so the kernels cannot quietly reacquire per-call scratch
+  again. Byte totals are printed, not asserted: `lwork` is chosen by the linked
+  LAPACK, so exact sizes are implementation-specific while the number of
+  allocations is structural.
+- No wall-clock or instruction-count claim is made. This host is not quiet, and
+  the protocol classifies a paired timing experiment under a failed host-noise
+  gate as `INCONCLUSIVE`; allocation counting is deterministic and needs no
+  such gate.
+- Numerical parity: the full `blas-openblas` suite and the whole faer-lane
+  workspace pass unchanged, as do CI-parity clippy on both lanes (the BLAS lane
+  also loses a pre-existing `too_many_arguments` error, because
+  `apply_reflectors_2d` now documents why it takes the pool) and the
+  `provider-inject` library build.
+- Residual: a capacity keeps its map entry for the life of the pool once it
+  has been used, so a workload that cycles through many distinct scratch sizes
+  accumulates empty bins. Each is one small `BTreeMap` node holding no buffer,
+  `stats()` and the retained-byte accounting ignore them, and `clear()` drops
+  them; the alternative is the per-call re-insert this change exists to remove.
+- Not done: the single-preparation copy for borrowed inputs. A view still
+  materializes into a pooled compact tensor which the kernel then copies into
+  its destructible buffer. Collapsing those two into one would change the 2-D
+  kernel signatures across all nine modules to consume a donated buffer, which
+  is a separate change from pooling the scratch.

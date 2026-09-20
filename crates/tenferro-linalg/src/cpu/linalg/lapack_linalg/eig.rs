@@ -5,9 +5,9 @@ use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::{Tensor, TypedTensor};
 
 use super::helpers::{
-    batched_multi_convert, check_lapack_info, checked_product, dim_i32, has_zero_dim,
-    square_matrix_dim, tensor_from_vec_with_template, vector_with_batch_shape, work_len,
-    zero_dim_eig_outputs,
+    batched_multi_convert, check_lapack_info, checked_product, dim_i32, has_zero_dim, pooled_copy,
+    pooled_zeroed, square_matrix_dim, tensor_from_vec_with_template, vector_with_batch_shape,
+    work_len, zero_dim_eig_outputs,
 };
 use super::unsupported_dtype;
 
@@ -24,6 +24,8 @@ macro_rules! impl_real_eig_to_complex_outputs {
             n: usize,
         ) -> tenferro_tensor::Result<(Vec<$complex>, Vec<$complex>)> {
             let vector_len = checked_product("eig", "eigenvector matrix", &[n, n])?;
+            // This conversion helper is not handed the session pool; its two
+            // buffers are outputs that become tensors, not reusable scratch.
             let mut vectors = vec![<$complex>::new(0.0, 0.0); vector_len];
             let mut values = vec![<$complex>::new(0.0, 0.0); n];
             let mut col = 0;
@@ -77,18 +79,18 @@ macro_rules! impl_real_eig_to_complex_values {
 macro_rules! impl_eig_real_2d {
     ($name:ident, $real:ty, $complex:ty, $geev:path, $routine:literal, $convert:ident) => {
         fn $name(
-            _buffers: &mut BufferPool,
+            buffers: &mut BufferPool,
             input: &TypedTensor<$real>,
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let n = square_matrix_dim(input, "eig")?;
             let n_i32 = dim_i32(n, "eig")?;
-            let mut a = input.host_data()?.to_vec();
-            let mut values_re = vec![0.0 as $real; n];
-            let mut values_im = vec![0.0 as $real; n];
-            let mut vl = vec![0.0 as $real; 1];
+            let mut a = pooled_copy(buffers, input.host_data()?);
+            let mut values_re = pooled_zeroed::<$real>(buffers, n);
+            let mut values_im = pooled_zeroed::<$real>(buffers, n);
+            let mut vl = pooled_zeroed::<$real>(buffers, 1);
             let vector_len = checked_product("eig", "eigenvector matrix", &[n, n])?;
-            let mut vectors_real = vec![0.0 as $real; vector_len];
-            let mut query = vec![0.0 as $real; 1];
+            let mut vectors_real = pooled_zeroed::<$real>(buffers, vector_len);
+            let mut query = pooled_zeroed::<$real>(buffers, 1);
             let mut info = 0;
             // SAFETY: all matrix/vector buffers match the validated `n x n`
             // problem, and `lwork = -1` makes `query` the only workspace output.
@@ -112,7 +114,7 @@ macro_rules! impl_eig_real_2d {
             }
             check_lapack_info("eig", concat!($routine, "(work query)"), info)?;
             let lwork = work_len(query[0] as f64, "eig", $routine)?;
-            let mut work = vec![0.0 as $real; lwork as usize];
+            let mut work = pooled_zeroed::<$real>(buffers, lwork as usize);
             // SAFETY: buffers and leading dimensions match the validated
             // problem, and `work` uses the length returned by the LAPACK query.
             unsafe {
@@ -152,12 +154,12 @@ macro_rules! impl_eig_values_real_2d {
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let n = square_matrix_dim(input, "eig_values")?;
             let n_i32 = dim_i32(n, "eig_values")?;
-            let mut a = input.host_data()?.to_vec();
-            let mut values_re = vec![0.0 as $real; n];
-            let mut values_im = vec![0.0 as $real; n];
-            let mut vl = vec![0.0 as $real; 1];
-            let mut vr = vec![0.0 as $real; 1];
-            let mut query = vec![0.0 as $real; 1];
+            let mut a = pooled_copy(buffers, input.host_data()?);
+            let mut values_re = pooled_zeroed::<$real>(buffers, n);
+            let mut values_im = pooled_zeroed::<$real>(buffers, n);
+            let mut vl = pooled_zeroed::<$real>(buffers, 1);
+            let mut vr = pooled_zeroed::<$real>(buffers, 1);
+            let mut query = pooled_zeroed::<$real>(buffers, 1);
             let mut info = 0;
             // SAFETY: all matrix/vector buffers match the validated `n x n`
             // problem, and `lwork = -1` makes `query` the only workspace output.
@@ -181,7 +183,7 @@ macro_rules! impl_eig_values_real_2d {
             }
             check_lapack_info("eig_values", concat!($routine, "(work query)"), info)?;
             let lwork = work_len(query[0] as f64, "eig_values", $routine)?;
-            let mut work = vec![0.0 as $real; lwork as usize];
+            let mut work = pooled_zeroed::<$real>(buffers, lwork as usize);
             // SAFETY: buffers and leading dimensions match the validated
             // problem, and `work` uses the length returned by the LAPACK query.
             unsafe {
@@ -213,19 +215,19 @@ macro_rules! impl_eig_values_real_2d {
 macro_rules! impl_eig_complex_2d {
     ($name:ident, $complex:ty, $real:ty, $geev:path, $routine:literal) => {
         fn $name(
-            _buffers: &mut BufferPool,
+            buffers: &mut BufferPool,
             input: &TypedTensor<$complex>,
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let n = square_matrix_dim(input, "eig")?;
             let n_i32 = dim_i32(n, "eig")?;
-            let mut a = input.host_data()?.to_vec();
-            let mut values = vec![<$complex>::new(0.0, 0.0); n];
-            let mut vl = vec![<$complex>::new(0.0, 0.0); 1];
+            let mut a = pooled_copy(buffers, input.host_data()?);
+            let mut values = pooled_zeroed::<$complex>(buffers, n);
+            let mut vl = pooled_zeroed::<$complex>(buffers, 1);
             let vector_len = checked_product("eig", "eigenvector matrix", &[n, n])?;
-            let mut vectors = vec![<$complex>::new(0.0, 0.0); vector_len];
-            let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+            let mut vectors = pooled_zeroed::<$complex>(buffers, vector_len);
+            let mut query = pooled_zeroed::<$complex>(buffers, 1);
             let rwork_len = checked_product("eig", "real workspace", &[2, n.max(1)])?;
-            let mut rwork = vec![0.0 as $real; rwork_len];
+            let mut rwork = pooled_zeroed::<$real>(buffers, rwork_len);
             let mut info = 0;
             // SAFETY: all complex matrix/vector buffers and real workspace
             // match the validated `n x n` problem; `lwork = -1` queries workspace.
@@ -249,7 +251,7 @@ macro_rules! impl_eig_complex_2d {
             }
             check_lapack_info("eig", concat!($routine, "(work query)"), info)?;
             let lwork = work_len(query[0].re as f64, "eig", $routine)?;
-            let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+            let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
             // SAFETY: buffers, real workspace, and leading dimensions match
             // the validated problem, and `work` has the queried length.
             unsafe {
@@ -283,18 +285,18 @@ macro_rules! impl_eig_complex_2d {
 macro_rules! impl_eig_values_complex_2d {
     ($name:ident, $complex:ty, $real:ty, $geev:path, $routine:literal) => {
         fn $name(
-            _buffers: &mut BufferPool,
+            buffers: &mut BufferPool,
             input: &TypedTensor<$complex>,
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let n = square_matrix_dim(input, "eig_values")?;
             let n_i32 = dim_i32(n, "eig_values")?;
-            let mut a = input.host_data()?.to_vec();
-            let mut values = vec![<$complex>::new(0.0, 0.0); n];
-            let mut vl = vec![<$complex>::new(0.0, 0.0); 1];
-            let mut vr = vec![<$complex>::new(0.0, 0.0); 1];
-            let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+            let mut a = pooled_copy(buffers, input.host_data()?);
+            let mut values = pooled_zeroed::<$complex>(buffers, n);
+            let mut vl = pooled_zeroed::<$complex>(buffers, 1);
+            let mut vr = pooled_zeroed::<$complex>(buffers, 1);
+            let mut query = pooled_zeroed::<$complex>(buffers, 1);
             let rwork_len = checked_product("eig_values", "real workspace", &[2, n.max(1)])?;
-            let mut rwork = vec![0.0 as $real; rwork_len];
+            let mut rwork = pooled_zeroed::<$real>(buffers, rwork_len);
             let mut info = 0;
             // SAFETY: all complex matrix/vector buffers and real workspace
             // match the validated `n x n` problem; `lwork = -1` queries workspace.
@@ -318,7 +320,7 @@ macro_rules! impl_eig_values_complex_2d {
             }
             check_lapack_info("eig_values", concat!($routine, "(work query)"), info)?;
             let lwork = work_len(query[0].re as f64, "eig_values", $routine)?;
-            let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+            let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
             // SAFETY: buffers, real workspace, and leading dimensions match
             // the validated problem, and `work` has the queried length.
             unsafe {

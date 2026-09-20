@@ -137,6 +137,11 @@ name = "prelude"
 path = "tests/prelude.rs"
 
 [[test]]
+name = "lapack_allocation"
+path = "tests/lapack_allocation.rs"
+required-features = ["cpu-blas"]
+
+[[test]]
 name = "apple_accelerate"
 path = "tests/apple_accelerate.rs"
 required-features = ["blas-accelerate", "webgpu", "autodiff"]

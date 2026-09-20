@@ -209,15 +209,14 @@ pub(crate) mod private {
 }
 
 fn take_best_fit<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>, len: usize) -> Option<Vec<T>> {
-    let key = *pool.range(len..).next()?.0;
-    let buf = {
-        let vecs = pool.get_mut(&key)?;
-        vecs.pop()
-    };
-    if pool.get(&key).is_some_and(Vec::is_empty) {
-        pool.remove(&key);
-    }
-    buf
+    // Keep the capacity bin after it empties. A kernel that acquires and
+    // releases the same scratch size every call would otherwise remove and
+    // re-insert this map node on every call, and each re-insert is itself an
+    // allocation — which is what the pool exists to avoid. Empty bins hold no
+    // buffers, so `pool_len` and the retained-bytes accounting are unaffected,
+    // and `clear` still drops them.
+    let key = *pool.range(len..).find(|(_, vecs)| !vecs.is_empty())?.0;
+    pool.get_mut(&key)?.pop()
 }
 
 fn pool_len<T>(pool: &BTreeMap<usize, Vec<Vec<T>>>) -> usize {
@@ -225,10 +224,14 @@ fn pool_len<T>(pool: &BTreeMap<usize, Vec<Vec<T>>>) -> usize {
 }
 
 fn evict_one_from_pool<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>) -> Option<usize> {
-    let key = *pool.keys().next()?;
+    // Retained bins may be empty (see `take_best_fit`), and an empty bin has
+    // nothing to evict.
+    let key = *pool.iter().find(|(_, vecs)| !vecs.is_empty())?.0;
     let vecs = pool.get_mut(&key)?;
     let _ = vecs.pop()?;
     if vecs.is_empty() {
+        // Eviction runs because the pool is over its retention limit, so here
+        // the bin is dropped rather than kept for reuse.
         pool.remove(&key);
     }
     Some(key.saturating_mul(size_of::<T>()))
@@ -249,9 +252,10 @@ fn smallest_pool_candidate<T>(
     pool: &BTreeMap<usize, Vec<Vec<T>>>,
     kind: TypedPoolKind,
 ) -> Option<(usize, TypedPoolKind)> {
-    pool.keys()
-        .next()
-        .map(|&capacity| (capacity.saturating_mul(size_of::<T>()), kind))
+    // Only a bin that still holds a buffer is an eviction candidate.
+    pool.iter()
+        .find(|(_, vecs)| !vecs.is_empty())
+        .map(|(&capacity, _)| (capacity.saturating_mul(size_of::<T>()), kind))
 }
 
 fn increment_in_flight(in_flight: &mut BTreeMap<usize, usize>, cap: usize) {
@@ -267,10 +271,15 @@ fn decrement_in_flight(in_flight: &mut BTreeMap<usize, usize>, cap: usize) {
     let Some(count) = in_flight.get_mut(&cap) else {
         return;
     };
-    *count -= 1;
-    if *count == 0 {
-        in_flight.remove(&cap);
-    }
+    // Keep the zero entry for the same reason `take_best_fit` keeps an empty
+    // bin: a steady acquire/release cycle must not re-insert this node every
+    // call. `replenish_in_flight_for` skips zero counts, and
+    // `clear_in_flight_retained` still drops them.
+    //
+    // The decrement saturates because a caller may release a buffer this pool
+    // never handed out. That used to be a no-op only because the entry was
+    // removed at zero; with the entry retained it has to stay a no-op here.
+    *count = count.saturating_sub(1);
 }
 
 fn replenish_in_flight_for<T>(
@@ -421,14 +430,20 @@ impl_pool_scalar!(Complex32, c32_pool, c32_in_flight, Complex32::new(0.0, 0.0));
 impl BufferPool {
     #[cfg(test)]
     pub(crate) fn in_flight_is_empty(&self) -> bool {
+        // A capacity keeps its bookkeeping entry after its last checkout is
+        // returned (see `decrement_in_flight`), so "nothing is checked out"
+        // means every count is zero, not that the maps are empty.
+        fn none_in_flight(in_flight: &BTreeMap<usize, usize>) -> bool {
+            in_flight.values().all(|&count| count == 0)
+        }
         let state = lock_pool(&self.state);
-        state.f64_in_flight.is_empty()
-            && state.f32_in_flight.is_empty()
-            && state.i32_in_flight.is_empty()
-            && state.i64_in_flight.is_empty()
-            && state.bool_in_flight.is_empty()
-            && state.c64_in_flight.is_empty()
-            && state.c32_in_flight.is_empty()
+        none_in_flight(&state.f64_in_flight)
+            && none_in_flight(&state.f32_in_flight)
+            && none_in_flight(&state.i32_in_flight)
+            && none_in_flight(&state.i64_in_flight)
+            && none_in_flight(&state.bool_in_flight)
+            && none_in_flight(&state.c64_in_flight)
+            && none_in_flight(&state.c32_in_flight)
     }
     /// Create an empty typed buffer pool.
     ///

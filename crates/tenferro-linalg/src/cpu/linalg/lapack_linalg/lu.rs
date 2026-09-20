@@ -6,8 +6,9 @@ use tenferro_tensor::TypedTensor;
 use super::helpers::{
     batch_element_count, batched_multi, check_lapack_info, checked_product, checked_slice_range,
     dim_i32, has_zero_dim, leading_upper_triangle_from_lapack, matrix_core_and_batch_result,
-    matrix_dims, matrix_with_batch_shape, refill_tensor_from_slice,
-    tensor_from_pooled_slice_with_template, tensor_from_vec_with_template, vector_with_batch_shape,
+    matrix_dims, matrix_with_batch_shape, pooled_copy, pooled_zeroed, refill_tensor_from_slice,
+    release_scratch, tensor_from_pooled_slice_with_template, tensor_from_vec_with_template,
+    vector_with_batch_shape,
 };
 
 pub(crate) trait LapackLu: Clone + Copy + Default + PoolScalar {
@@ -89,15 +90,15 @@ impl LapackLu for Complex64 {
 }
 
 fn lu_2d<T: LapackLu>(
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let (m, n) = matrix_dims(input, "lu")?;
     let k = m.min(n);
     let m_i32 = dim_i32(m, "lu")?;
     let n_i32 = dim_i32(n, "lu")?;
-    let mut lu = input.host_data()?.to_vec();
-    let mut ipiv = vec![0_i32; k];
+    let mut lu = pooled_copy(buffers, input.host_data()?);
+    let mut ipiv = pooled_zeroed::<i32>(buffers, k);
     let mut info = 0;
     T::getrf(m_i32, n_i32, &mut lu, m_i32, &mut ipiv, &mut info);
     check_lapack_info("lu", "getrf", info.min(0))?;
@@ -125,7 +126,7 @@ fn lu_2d<T: LapackLu>(
     }
 
     let p_len = checked_product("lu", "permutation matrix", &[m, m])?;
-    let mut p_data = vec![T::default(); p_len];
+    let mut p_data = pooled_zeroed::<T>(buffers, p_len);
     for (row, &source_row) in permutation.iter().enumerate() {
         p_data[row + source_row * m] = T::one();
     }
@@ -136,7 +137,7 @@ fn lu_2d<T: LapackLu>(
     };
 
     let l_len = checked_product("lu", "lower factor", &[m, k])?;
-    let mut l_data = vec![T::default(); l_len];
+    let mut l_data = pooled_zeroed::<T>(buffers, l_len);
     for col in 0..k {
         for row in col..m {
             l_data[row + col * m] = lu[row + col * m];
@@ -144,6 +145,8 @@ fn lu_2d<T: LapackLu>(
         l_data[col + col * m] = T::one();
     }
     let u_data = leading_upper_triangle_from_lapack(&lu, m, k, n)?;
+    release_scratch(buffers, lu);
+    release_scratch(buffers, ipiv);
 
     Ok(vec![
         tensor_from_vec_with_template(vec![m, m], p_data, input)?,
@@ -154,14 +157,15 @@ fn lu_2d<T: LapackLu>(
 }
 
 fn lu_factor_2d<T: LapackLu>(
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
     let (m, n) = matrix_dims(input, "lu_factor")?;
     let k = m.min(n);
     let m_i32 = dim_i32(m, "lu_factor")?;
     let n_i32 = dim_i32(n, "lu_factor")?;
-    let mut lu = input.host_data()?.to_vec();
-    let mut ipiv = vec![0_i32; k];
+    let mut lu = pooled_copy(buffers, input.host_data()?);
+    let mut ipiv = pooled_zeroed::<i32>(buffers, k);
     let mut info = 0;
     T::getrf(m_i32, n_i32, &mut lu, m_i32, &mut ipiv, &mut info);
     check_lapack_info("lu_factor", "getrf", info.min(0))?;
@@ -270,7 +274,7 @@ pub(crate) fn lu_factor<T: LapackLu>(
             let range = checked_slice_range("lu_factor", batch, matrix_len)?;
             refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
         }
-        let (packed, pivots, parity) = lu_factor_2d(&batch_input)?;
+        let (packed, pivots, parity) = lu_factor_2d(buffers, &batch_input)?;
         lu_data.extend_from_slice(packed.host_data()?);
         pivot_data.extend_from_slice(pivots.host_data()?);
         parity_data.extend_from_slice(parity.host_data()?);
