@@ -263,14 +263,31 @@ Audit hints:
   needed, and pin thread counts when comparing CPU behavior.
 - Benchmark scaling across representative sizes, shapes, layouts, and thread
   counts. A single fixed-size speedup is not enough evidence.
+- Audit AD residual reuse end to end, not just the rule's residual declaration:
+  verify that eager forward's saved values actually reach backward execution.
+  Distinguish eager forward-plus-backward, backward-only, and prepared trace
+  timing. Use provider-call counters or execution spies to detect repeated
+  decompositions and per-target replay of shared derivative work; numerical
+  gradient tests alone do not establish reuse.
+- Do not default to recomputing `exp`, `tanh`, or other elementwise residuals
+  merely because they are cheaper than decompositions. Preserve only the
+  declared required residuals. Recomputation must follow an explicit checkpoint
+  policy or a measured memory/fusion tradeoff, with its scope documented and
+  first- and higher-order derivatives preserved. Cover both dropped forward
+  output handles and multiple differentiated inputs when testing reuse.
 
 Audit hints:
 
 - Detect: element-wise reference loops that re-run contraction or graph
   execution per element; debug-mode timing claims; missing `black_box`;
   benchmarks at one size or thread count only.
+- Detect: AD rules declare residuals but eager execution rebinds only original
+  inputs and replays their producer graph; separate backward executions per
+  leaf; unconditional elementwise rematerialization without measured benefit.
 - Fix: materialize once and compare whole results, release-mode Criterion
-  benchmarks with pinned threads across representative sizes.
+  benchmarks with pinned threads across representative sizes. Connect saved
+  residual values to backward execution and add call-count regression tests;
+  keep intentional checkpoint/rematerialization cases separately labeled.
 
 ## Performance-Gated Experiment Protocol
 

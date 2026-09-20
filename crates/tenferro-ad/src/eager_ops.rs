@@ -1204,14 +1204,16 @@ impl EagerTensor {
         })?;
         let semantic_trace = recorded.semantic_traces.pop().flatten();
 
-        Self::new_result_value(
+        let result = Self::new_result_value(
             ctx,
             trace.key,
             value,
             trace.requires_grad,
             trace.trace,
             semantic_trace,
-        )
+        )?;
+        crate::eager::finish_residuals(&op, tensors, &[&result])?;
+        Ok(result)
     }
 
     pub(crate) fn nary_op(tensors: &[&Self], op: StdTensorOp) -> Result<Self> {
@@ -1292,12 +1294,13 @@ impl EagerTensor {
                 trace.trace,
                 semantic_trace,
             )
-        });
+        })?;
+        crate::eager::finish_residuals(&op, tensors, &[&result])?;
         if let Some(total_started) = total_started {
             record_eager_op_profile("nary_op.total", total_started.elapsed());
             maybe_print_eager_op_profile();
         }
-        result
+        Ok(result)
     }
 }
 

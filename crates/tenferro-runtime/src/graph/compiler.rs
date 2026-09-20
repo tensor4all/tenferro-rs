@@ -270,15 +270,15 @@ impl GraphCompiler {
     }
 
     pub(crate) fn compile_ad_source(&mut self, output: &TracedTensor) -> Result<CompiledGraph> {
-        let all_inputs = collect_default_inputs(&[output])?;
-        self.compile_many_with_descriptors(
-            &[output],
-            &HashMap::new(),
-            &all_inputs,
-            None,
-            true,
-            true,
-        )
+        self.compile_ad_source_many(&[output])
+    }
+
+    pub(crate) fn compile_ad_source_many(
+        &mut self,
+        outputs: &[&TracedTensor],
+    ) -> Result<CompiledGraph> {
+        let all_inputs = collect_default_inputs(outputs)?;
+        self.compile_many_with_descriptors(outputs, &HashMap::new(), &all_inputs, None, true, true)
     }
 
     /// Compile one traced output with concrete placeholder specs.

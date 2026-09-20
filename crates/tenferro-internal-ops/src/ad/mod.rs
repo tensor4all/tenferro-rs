@@ -435,6 +435,22 @@ pub fn transpose_rule(
     rule.transpose_rule(op, builder_dyn, cotangent_out, &transpose_inputs, mode, ctx)
 }
 
+/// Return the tensor retention declaration for a registered core primitive.
+/// Extension declarations remain owned by their context's rule set.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::{ad::primitive_residual_spec, std_tensor_op::StdTensorOp};
+/// assert!(primitive_residual_spec(&StdTensorOp::Add).unwrap().is_empty());
+/// ```
+#[cfg(feature = "autodiff")]
+pub fn primitive_residual_spec(op: &StdTensorOp) -> Option<ResidualSpec> {
+    op.primitive_kind()
+        .and_then(registry::primitive_ad_rule)
+        .map(|rule| rule.residual_mask())
+}
+
 #[cfg(test)]
 mod tests;
 

@@ -70,8 +70,8 @@ use crate::AdContext;
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<AdValueRecord>>>>;
 pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<AdValueRecord>>>>;
 
-#[derive(Clone, Debug)]
-pub(crate) struct EagerTrace;
+mod residuals;
+pub(crate) use residuals::{finish_residuals, EagerTrace};
 
 #[cfg(test)]
 pub(crate) static CPU_RUNTIME_SELECTION_REFRESHES: AtomicUsize = AtomicUsize::new(0);
@@ -2400,11 +2400,9 @@ impl EagerRuntime {
         validate_same_runtime(self, wrt, "vjp wrt")?;
         validate_same_runtime(self, cotangent, "vjp cotangent")?;
         validate_seed_tensor("vjp", output, cotangent)?;
-        // Unification 7: semantic path is the only VJP path.
-        match semantic_eager_vjp_optional(self, output, wrt, cotangent)? {
-            Some(result) => Ok(result),
-            None => Ok(None),
-        }
+        Ok(semantic_eager_vjp_many(self, output, &[wrt], cotangent)?
+            .pop()
+            .flatten())
     }
 
     /// Forward-mode Jacobian-vector product for eager tensors.
@@ -2556,7 +2554,7 @@ impl EagerRuntime {
 struct PreparedDerivativeCacheKey {
     semantic_fingerprint: SemanticFingerprint,
     runtime_epoch: RuntimeEpoch,
-    wrt_input_index: usize,
+    active_inputs: Box<[bool]>,
     input_metadata: Box<[ProgramValueMetadata]>,
 }
 
@@ -2564,9 +2562,11 @@ struct PreparedDerivativeCacheKey {
 #[derive(Debug)]
 struct PreparedDerivative {
     program: Arc<CompiledGraph>,
+    execution_program: Arc<CompiledGraph>,
+    saved_input_indices: Vec<usize>,
     prepared: Arc<PreparedCompiledGraph>,
     seed_input_index: usize,
-    derivative_output_index: usize,
+    derivative_output_indices: Box<[Option<usize>]>,
 }
 
 #[derive(Debug)]
@@ -2670,6 +2670,12 @@ fn prepared_derivative_cache_entry_retained_bytes(
     value: &PreparedDerivative,
 ) -> usize {
     size_of::<PreparedDerivativeCacheKey>()
+        .saturating_add(size_of_val(key.active_inputs.as_ref()))
+        .saturating_add(size_of_val(value.derivative_output_indices.as_ref()))
+        .saturating_add(size_of_val(value.saved_input_indices.as_slice()))
+        .saturating_add(compiled_graph_retained_bytes(
+            value.execution_program.as_ref(),
+        ))
         .saturating_add(
             key.input_metadata
                 .len()
@@ -2715,25 +2721,25 @@ fn semantic_program_retained_bytes(program: &SemanticProgram) -> usize {
         )
 }
 
-fn semantic_eager_vjp_optional(
+fn semantic_eager_vjp_many(
     ctx: &Arc<EagerRuntime>,
     output: &EagerTensor,
-    wrt: &EagerTensor,
+    wrts: &[&EagerTensor],
     cotangent: &EagerTensor,
-) -> Result<Option<Option<EagerTensor>>> {
-    if !eager_semantic_vjp_enabled() {
-        return Ok(None);
+) -> Result<Vec<Option<EagerTensor>>> {
+    if !eager_semantic_vjp_enabled() || wrts.is_empty() {
+        return Ok(vec![None; wrts.len()]);
     }
-    let (Some(raw_output_trace), Some(wrt_trace)) =
-        (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
-    else {
-        return Ok(None);
+    let Some(raw_output_trace) = output.semantic_trace.as_ref() else {
+        return Ok(vec![None; wrts.len()]);
     };
-    let Some(wrt_key) = wrt_trace.input_key() else {
-        return Ok(None);
-    };
-    if !raw_output_trace.has_attached_input_key(&wrt_key) {
-        return Ok(None);
+    if !wrts.iter().any(|wrt| {
+        wrt.semantic_trace
+            .as_ref()
+            .and_then(TracedTensor::input_key)
+            .is_some_and(|key| raw_output_trace.has_attached_input_key(&key))
+    }) {
+        return Ok(vec![None; wrts.len()]);
     }
 
     // First AD request on this output: run the deferred graph analysis over
@@ -2741,82 +2747,129 @@ fn semantic_eager_vjp_optional(
     // scopes), so `compile_ad_source` sees the same analyzed graph the eager
     // forward used to append.
     let output_trace = analyze_deferred_semantic_trace(raw_output_trace)?;
+    let saved = output
+        .trace
+        .as_ref()
+        .map(EagerTrace::collect)
+        .unwrap_or_default();
+    let mut source_outputs = vec![&output_trace];
+    source_outputs.extend(saved.iter().map(|value| &value.trace));
 
-    // First compile the trace to get bindings and wrt_input_index.
-    // (The compile step is needed even for cache hits to extract tensor bindings.)
+    // Residual roots keep the semantic producers available to differentiation;
+    // only the execution-only derivative replaces their numerical values.
     let mut compiler = GraphCompiler::new();
-    let source = compile_ad_source(&mut compiler, &output_trace)?;
-    if source.output_count() != 1
+    let source =
+        tenferro_runtime::ad_support::compile_ad_source_many(&mut compiler, &source_outputs)?;
+    if source.output_count() != source_outputs.len()
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
     {
-        return Ok(None);
+        return Ok(vec![None; wrts.len()]);
     }
-    let Some(wrt_input_index) = source.input_key_index(&wrt_key) else {
-        return Ok(None);
-    };
+    let wrt_input_indices = wrts
+        .iter()
+        .map(|wrt| {
+            let key = wrt.semantic_trace.as_ref()?.input_key()?;
+            source.input_key_index(&key)
+        })
+        .collect::<Vec<_>>();
+    let mut active_inputs = vec![false; source.input_count()];
+    for &index in wrt_input_indices.iter().flatten() {
+        active_inputs[index] = true;
+    }
+    if !active_inputs.iter().any(|&active| active) {
+        return Ok(vec![None; wrts.len()]);
+    }
 
+    // One transform and execution for the complete active set shares primal
+    // work and cotangents between leaves instead of replaying them per target.
     // S2: check prepared-derivative cache before AD transform + compile_frozen.
     let cache_key = PreparedDerivativeCacheKey {
         semantic_fingerprint: source.program().semantic_fingerprint(),
         runtime_epoch: ctx.runtime.epoch().map_err(|source| {
             Error::runtime_state_source("semantic_eager_vjp", ErrorPhase::Execution, source)
         })?,
-        wrt_input_index,
+        active_inputs: active_inputs.clone().into_boxed_slice(),
         input_metadata: source.frozen_program().input_metadata_with_bound_shapes(),
     };
     let prepared = { ctx.lock_prepared_derivative_cache()?.get(&cache_key) };
-    let (seed_input_index, derivative_output_index, derivative_program, prepared_runtime) =
-        if let Some(prepared) = prepared {
-            (
-                prepared.seed_input_index,
-                prepared.derivative_output_index,
-                Arc::clone(&prepared.program),
-                Some(Arc::clone(&prepared.prepared)),
-            )
-        } else {
-            let mut active_inputs = vec![false; source.input_count()];
-            if let Some(active) = active_inputs.get_mut(wrt_input_index) {
-                *active = true;
-            } else {
-                return Ok(None);
-            }
-            let active_outputs = vec![true; source.output_count()];
-            let ad = AdContext::with_rules_and_transform_cache(
-                ctx.semantic_extension_rules.clone(),
-                Arc::clone(&ctx.ad_transform_cache),
-            );
-            let derivative = ad
-                .vjp_program(source.frozen_program(), &active_inputs, &active_outputs)
-                .map_err(|source| {
-                    Error::runtime_state_source(
-                        "semantic_eager_vjp",
-                        ErrorPhase::GraphBuild,
-                        source,
-                    )
-                })?;
-            let seed_input_index = derivative
-                .derivative_input_indices()
-                .first()
-                .copied()
-                .flatten();
-            let derivative_output_index = derivative
-                .derivative_output_indices()
-                .get(wrt_input_index)
-                .copied()
-                .flatten();
-            let (Some(seed_input_index), Some(derivative_output_index)) =
-                (seed_input_index, derivative_output_index)
-            else {
-                return Ok(Some(None));
-            };
-            let program = Arc::new(compiler.compile_frozen_program(derivative.frozen())?);
-            (seed_input_index, derivative_output_index, program, None)
+    let (
+        seed_input_index,
+        derivative_output_indices,
+        derivative_program,
+        execution_program,
+        saved_input_indices,
+        prepared_runtime,
+    ) = if let Some(prepared) = prepared {
+        (
+            prepared.seed_input_index,
+            prepared.derivative_output_indices.clone(),
+            Arc::clone(&prepared.program),
+            Arc::clone(&prepared.execution_program),
+            prepared.saved_input_indices.clone(),
+            Some(Arc::clone(&prepared.prepared)),
+        )
+    } else {
+        let mut active_outputs = vec![false; source.output_count()];
+        active_outputs[0] = true;
+        let ad = AdContext::with_rules_and_transform_cache(
+            ctx.semantic_extension_rules.clone(),
+            Arc::clone(&ctx.ad_transform_cache),
+        );
+        let derivative = ad
+            .vjp_program(source.frozen_program(), &active_inputs, &active_outputs)
+            .map_err(|source| {
+                Error::runtime_state_source("semantic_eager_vjp", ErrorPhase::GraphBuild, source)
+            })?;
+        let seed_input_index = derivative
+            .derivative_input_indices()
+            .first()
+            .copied()
+            .flatten();
+        let Some(seed_input_index) = seed_input_index else {
+            return Ok(vec![None; wrts.len()]);
         };
+        let derivative_output_indices = derivative
+            .derivative_output_indices()
+            .to_vec()
+            .into_boxed_slice();
+        let program = Arc::new(compiler.compile_frozen_program(derivative.frozen())?);
+        let (execution_program, saved_input_indices) = if saved.is_empty() {
+            (Arc::clone(&program), Vec::new())
+        } else {
+            let (execution, indices) = crate::semantic_transform::semantic_vjp_with_saved_outputs(
+                source.frozen_program(),
+                &active_inputs,
+                &active_outputs,
+                &ctx.semantic_extension_rules,
+                &(1..source.output_count()).collect::<Vec<_>>(),
+            )
+            .map_err(|source| {
+                Error::runtime_state_source("semantic_eager_vjp", ErrorPhase::GraphBuild, source)
+            })?;
+            (
+                Arc::new(compiler.compile_frozen_program(execution.frozen())?),
+                indices,
+            )
+        };
+        (
+            seed_input_index,
+            derivative_output_indices,
+            program,
+            execution_program,
+            saved_input_indices,
+            None,
+        )
+    };
 
     let cotangent_tensor = Arc::new(RetainedValue::from_tensor(cotangent.to_tensor()?));
-    let input_count = derivative_program.input_count();
+    let input_count = execution_program.input_count();
     let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
+    for (value, &index) in saved.iter().zip(&saved_input_indices) {
+        let read = value.value.tensor_read("eager residual")?;
+        let tensor = ctx.with_execution_session(|session| session.to_contiguous_read(read))??;
+        owned_inputs[index] = Some(tensor);
+    }
     for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
         let Some(slot) = owned_inputs.get_mut(source_input_index) else {
             return Err(Error::Internal(format!(
@@ -2848,49 +2901,70 @@ fn semantic_eager_vjp_optional(
     } else {
         let prepared_runtime = Arc::new(
             ctx.runtime
-                .prepare_compiled(&derivative_program, &input_refs)?,
+                .prepare_compiled(&execution_program, &input_refs)?,
         );
         let entry = Arc::new(PreparedDerivative {
             program: Arc::clone(&derivative_program),
+            execution_program: Arc::clone(&execution_program),
+            saved_input_indices: saved_input_indices.clone(),
             prepared: Arc::clone(&prepared_runtime),
             seed_input_index,
-            derivative_output_index,
+            derivative_output_indices: derivative_output_indices.clone(),
         });
         ctx.lock_prepared_derivative_cache()?
             .insert(cache_key, entry);
         prepared_runtime
     };
-    let outputs = ctx.runtime.run_prepared(&prepared_runtime, &input_refs)?;
-    let output_count = outputs.len();
-    let Some(result) = outputs.into_iter().nth(derivative_output_index) else {
-        return Err(Error::Internal(format!(
-            "semantic eager VJP derivative output index {derivative_output_index} is outside {} outputs",
-            output_count
-        )));
-    };
+    let mut outputs = ctx
+        .runtime
+        .run_prepared(&prepared_runtime, &input_refs)?
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
     let cotangent_trace =
         TracedTensor::from_shared_tensor_value_symbolic_shape(Arc::clone(&cotangent_tensor))?;
-    let semantic_trace = derivative_trace_from_frozen_program(
-        &source,
-        derivative_program.frozen_program(),
-        derivative_output_index,
-        &[(seed_input_index, Arc::clone(&cotangent_tensor))],
-        &[&output_trace, wrt_trace, &cotangent_trace],
-        None,
-        "semantic_eager_vjp",
-    )?;
 
     #[cfg(test)]
     EAGER_SEMANTIC_VJP_EXECUTIONS.fetch_add(1, Ordering::Relaxed);
 
-    Ok(Some(Some(EagerTensor::new_result_with_semantic_trace(
-        Arc::clone(ctx),
-        eager_val_key(),
-        result,
-        true,
-        None,
-        Some(semantic_trace),
-    )?)))
+    wrts.iter()
+        .zip(wrt_input_indices)
+        .map(|(wrt, input_index)| {
+            let Some(derivative_output_index) = input_index
+                .and_then(|index| derivative_output_indices.get(index).copied().flatten())
+            else {
+                return Ok(None);
+            };
+            let result = outputs
+                .get_mut(derivative_output_index)
+                .and_then(Option::take)
+                .ok_or_else(|| {
+                    Error::Internal(format!(
+                "semantic eager VJP derivative output {derivative_output_index} unavailable"
+            ))
+                })?;
+            let wrt_trace = wrt.semantic_trace.as_ref().ok_or_else(|| {
+                Error::Internal("active eager VJP input has no semantic trace".into())
+            })?;
+            let semantic_trace = derivative_trace_from_frozen_program(
+                &source,
+                derivative_program.frozen_program(),
+                derivative_output_index,
+                &[(seed_input_index, Arc::clone(&cotangent_tensor))],
+                &[&output_trace, wrt_trace, &cotangent_trace],
+                None,
+                "semantic_eager_vjp",
+            )?;
+            Ok(Some(EagerTensor::new_result_with_semantic_trace(
+                Arc::clone(ctx),
+                eager_val_key(),
+                result,
+                true,
+                output.trace.clone(),
+                Some(semantic_trace),
+            )?))
+        })
+        .collect()
 }
 
 fn semantic_eager_jvp_optional(
@@ -4037,7 +4111,7 @@ impl EagerTensor {
             keys
         };
 
-        let mut cotangents = HashMap::new();
+        let mut targets = Vec::new();
         for key in candidate_keys {
             let Some(record) = self.ctx.value_record(&key)? else {
                 continue;
@@ -4045,8 +4119,13 @@ impl EagerTensor {
             if !record.requires_grad {
                 continue;
             }
-            let wrt = EagerTensor::from_record(record);
-            let Some(grad) = self.ctx.vjp_optional(self, &wrt, &cotangent)? else {
+            targets.push((key, EagerTensor::from_record(record)));
+        }
+        let wrts = targets.iter().map(|(_, wrt)| wrt).collect::<Vec<_>>();
+        let gradients = semantic_eager_vjp_many(&self.ctx, self, &wrts, &cotangent)?;
+        let mut cotangents = HashMap::new();
+        for ((key, _), grad) in targets.into_iter().zip(gradients) {
+            let Some(grad) = grad else {
                 continue;
             };
             let tensor = match grad.into_value() {
@@ -4307,10 +4386,11 @@ fn record_eager_outputs_from_metadata(
     let requires_grad =
         eager_grad_recording_enabled() && inputs.iter().any(|input| input.requires_grad);
     let trace_count = output_metadata.len();
+    let residual_trace = EagerTrace::new(inputs);
     let traces = (0..trace_count)
         .map(|_| RecordedEagerTrace {
             key: eager_val_key(),
-            trace: None,
+            trace: Some(residual_trace.clone()),
             requires_grad,
         })
         .collect();

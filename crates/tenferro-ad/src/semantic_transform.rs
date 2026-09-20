@@ -250,6 +250,20 @@ pub fn semantic_vjp(
     active_outputs: &[bool],
     rules: &SemanticExtensionRuleSet,
 ) -> Result<SemanticAdProgram, SemanticAdTransformError> {
+    semantic_vjp_with_saved_outputs(input, active_inputs, active_outputs, rules, &[])
+        .map(|(program, _)| program)
+}
+
+// Execution-only specialization: saved primal values are coefficients of the
+// VJP, not new differentiation targets. Keep the unspecialized derivative
+// program for functional gradients so higher-order AD retains their producers.
+pub(crate) fn semantic_vjp_with_saved_outputs(
+    input: &FrozenProgram,
+    active_inputs: &[bool],
+    active_outputs: &[bool],
+    rules: &SemanticExtensionRuleSet,
+    saved_outputs: &[usize],
+) -> Result<(SemanticAdProgram, Vec<usize>), SemanticAdTransformError> {
     validate_activity(
         SemanticTransformRole::Vjp,
         "active_inputs",
@@ -263,7 +277,7 @@ pub fn semantic_vjp(
         active_outputs.len(),
     )?;
     let mut builder = SemanticProgramBuilder::new();
-    let values = import_source(input, &mut builder)?;
+    let mut values = import_source(input, &mut builder)?;
     let forward_active = requested_input_reachability(input, active_inputs);
     let mut cotangents = HashMap::new();
     let mut derivative_input_indices = vec![None; input.program.outputs().len()];
@@ -278,6 +292,20 @@ pub fn semantic_vjp(
             next_input += 1;
             accumulate_cotangent(&mut builder, &mut cotangents, source, cotangent)?;
         }
+    }
+
+    let mut saved_input_indices = Vec::with_capacity(saved_outputs.len());
+    for &output_index in saved_outputs {
+        // INVARIANT: the eager caller supplies indices of the residual roots it
+        // appended to this source program, never user-provided indices.
+        let source = input.program.outputs()[output_index];
+        let imported = values[&source];
+        let saved = builder.input(ProgramInputSpec::from_metadata(
+            builder.value_metadata(imported)?.clone(),
+        ))?;
+        saved_input_indices.push(next_input);
+        next_input += 1;
+        values.insert(source, saved);
     }
 
     let operations: Vec<_> = input.program.operations().collect();
@@ -345,6 +373,7 @@ pub fn semantic_vjp(
             SemanticOpRef::Core(op) => vjp_core(
                 op,
                 &mapped_values(operation.inputs(), &values),
+                &mapped_values(operation.outputs(), &values),
                 &cotangent_outputs,
                 &active_operation_inputs,
                 &mut builder,
@@ -378,7 +407,10 @@ pub fn semantic_vjp(
             }
         })
         .collect();
-    finish_derivative(builder, derivative_input_indices, outputs)
+    Ok((
+        finish_derivative(builder, derivative_input_indices, outputs)?,
+        saved_input_indices,
+    ))
 }
 
 fn import_source(
@@ -602,9 +634,22 @@ fn linearize_core(
     Ok([output].into())
 }
 
+// These direct semantic VJPs consume outputs, unlike the lower-level linear
+// transpose adapters, whose residual contract exposes only their inputs.
+pub(crate) fn eager_core_residual_spec(
+    op: &tenferro_ops::std_tensor_op::StdTensorOp,
+) -> crate::semantic_extension::ResidualSpec {
+    use tenferro_ops::std_tensor_op::StdTensorOp;
+    match op {
+        StdTensorOp::Exp | StdTensorOp::Tanh => crate::semantic_extension::ResidualSpec::output(0),
+        _ => tenferro_ops::ad::primitive_residual_spec(op).unwrap_or_default(),
+    }
+}
+
 fn vjp_core(
     op: &CoreSemanticOp,
     primal_inputs: &[ProgramValue],
+    primal_outputs: &[ProgramValue],
     cotangent_outputs: &[AdValue],
     active_inputs: &[bool],
     builder: &mut SemanticProgramBuilder,
@@ -737,12 +782,21 @@ fn vjp_core(
         | CoreSemanticOp::Rsqrt
         | CoreSemanticOp::Expm1
         | CoreSemanticOp::Log1p => {
-            let coefficient = analytic_unary_coefficient(
-                builder,
-                op,
-                primal_inputs[0],
-                SemanticTransformRole::Vjp,
-            )?;
+            let coefficient = match op {
+                CoreSemanticOp::Exp => primal_outputs[0],
+                CoreSemanticOp::Tanh => {
+                    let y = primal_outputs[0];
+                    let square = builder.add_op(CoreSemanticOp::Mul, &[y, y])?[0];
+                    let one = one_like(builder, y, SemanticTransformRole::Vjp)?;
+                    builder.add_op(CoreSemanticOp::Sub, &[one, square])?[0]
+                }
+                _ => analytic_unary_coefficient(
+                    builder,
+                    op,
+                    primal_inputs[0],
+                    SemanticTransformRole::Vjp,
+                )?,
+            };
             let coefficient = conjugate_if_complex(builder, coefficient)?;
             let cotangent = multiply_ad_value(builder, cotangent, coefficient)?;
             vec![normalize_ad_value(
