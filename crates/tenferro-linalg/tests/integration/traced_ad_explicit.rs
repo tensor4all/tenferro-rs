@@ -1172,15 +1172,21 @@ fn eigvalsh_sum_grad_compiled_program_does_not_retain_tangent_sweep() {
     );
     assert_eq!(
         summary.counts.get("DotGeneral").copied().unwrap_or(0),
-        2,
-        "compiled eigvalsh VJP should not retain the zero tangent matmul chain: {summary:?}"
+        1,
+        "compiled eigvalsh VJP should pull the eigenvalue coefficient back with one \
+matmul and a Hadamard scale, not two matmuls: {summary:?}"
+    );
+    assert_eq!(
+        summary.counts.get("Mul").copied().unwrap_or(0),
+        1,
+        "compiled eigvalsh VJP should scale by the eigenvector Hadamard factor once: {summary:?}"
     );
     assert!(
         summary.counts.get("Extension").copied().unwrap_or(0) <= 2,
         "compiled eigvalsh VJP should not retain extra extension ops from the zero tangent chain: {summary:?}"
     );
     assert!(
-        summary.instruction_count <= 16,
+        summary.instruction_count <= 13,
         "compiled eigvalsh VJP should stay compact after linearize+transpose: {summary:?}"
     );
 }
@@ -1284,18 +1290,24 @@ fn eigvalsh_sum_grad_optimized_graph_is_structurally_compact() {
     );
     let expected = expected_counts(&[
         ("Add", 2),
-        ("BroadcastInDim", 1),
-        ("DotGeneral", 2),
-        ("EmbedDiag", 2),
+        ("BroadcastInDim", 2),
+        ("DotGeneral", 1),
+        ("EmbedDiag", 1),
         ("ExtractDiag", 1),
-        ("Reshape", 1),
-        ("Transpose", 1),
+        ("Mul", 1),
+        ("Transpose", 3),
         ("Tril", 1),
     ]);
     assert_eq!(
         summary.counts.get("DotGeneral").copied().unwrap_or(0),
         expected.get("DotGeneral").copied().unwrap(),
-        "eigvalsh VJP should keep the same two-matmul numerical pullback"
+        "eigvalsh VJP should pull the eigenvalue coefficient back with one matmul \
+and a Hadamard scale instead of two matmuls"
+    );
+    assert_eq!(
+        summary.counts.get("Mul").copied().unwrap_or(0),
+        expected.get("Mul").copied().unwrap(),
+        "eigvalsh VJP should apply the eigenvector Hadamard factor exactly once"
     );
 }
 
