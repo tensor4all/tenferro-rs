@@ -105,3 +105,42 @@ jobs:
           else
             echo "Oracle replay requested: ${REASON}"
           fi
+
+  notify-failure:
+    name: File issue on failure
+    needs: [recent-commits, oracle-replay]
+    if: failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the nightly failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          title="oracle-replay-nightly is failing"
+          failed_jobs="$(gh run view "${GITHUB_RUN_ID}" --json jobs \
+            --jq '.jobs[] | select(.conclusion == "failure") | "- \(.name)"' \
+            || echo '- (failed job list unavailable)')"
+          body="$(printf '%s\n' \
+            "The scheduled \`oracle-replay-nightly\` run failed." \
+            "" \
+            "- Run: ${RUN_URL}" \
+            "- Commit: \`${HEAD_SHA}\`" \
+            "- Failed jobs:" \
+            "${failed_jobs}" \
+            "" \
+            "See the run log and its \`oracle-replay-*\` artifact for the failing case.")"
+          issue_number="$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title == \"${title}\")][0].number // empty")"
+          if [ -n "${issue_number}" ]; then
+            gh issue comment "${issue_number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
