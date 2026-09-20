@@ -15,6 +15,9 @@ use tenferro_gpu::cuda::with_cuda_exec_session;
 use crate::backend::LinalgBackend;
 use crate::RankRevealingQrOptions;
 
+#[cfg(all(test, feature = "cuda"))]
+#[path = "extension/cuda_tests.rs"]
+mod cuda_tests;
 mod gauge;
 #[cfg(all(test, not(feature = "cuda")))]
 mod tests;
@@ -857,9 +860,6 @@ fn linalg_session_supported<B: BackendSession + 'static>(
                 // (`gpu/linalg.rs::solve` = lu_factor + lu_solve_prepared, no
                 // Unsupported path for F32/F64/C32/C64), so it is admitted.
                 LinalgOp::Solve => true,
-                // Full-matrices SVD falls back to the default `svd_full`
-                // impl, which reports `Unsupported`.
-                LinalgOp::SvdFull => false,
                 // Conjugate-only prepared LU solve is unsupported on CUDA.
                 LinalgOp::LuSolvePrepared {
                     transpose_a: false,

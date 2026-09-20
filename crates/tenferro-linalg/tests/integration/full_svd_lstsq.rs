@@ -1,10 +1,10 @@
 //! Full-matrices SVD and least-squares behavior tests.
 //!
-//! The full-SVD numeric tests exercise the CPU faer provider and are gated on
-//! `cpu-faer`; the LAPACK provider is intentionally unsupported for the full
-//! variant in this slice and is covered by a separate boundary test. The
-//! `lstsq` tests are provider-agnostic because `lstsq` composes `qr` and
-//! `triangular_solve`, which both providers implement.
+//! The full-SVD numeric tests assert only provider-neutral properties (output
+//! shapes, reconstruction, nullspace), so they run on whichever CPU provider
+//! the default backend selects. The `lstsq` tests are provider-agnostic for
+//! the same reason: `lstsq` composes `qr` and `triangular_solve`, which both
+//! providers implement.
 
 use num_complex::Complex64;
 use tenferro_linalg::TracedTensorLinalgExt;

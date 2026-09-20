@@ -76,9 +76,8 @@ pub trait EagerTensorLinalgExt {
     ///
     /// Returns `Error::Validation` for an invalid rank, and `Error::Extension`
     /// with an unsupported-operation source when the active backend does not
-    /// implement full-matrices SVD (the CPU faer provider supports it; the
-    /// LAPACK provider and GPU backends return an unsupported error in this
-    /// slice). Automatic differentiation through the full variant is
+    /// implement full-matrices SVD. Both CPU providers and the CUDA backend
+    /// implement it. Automatic differentiation through the full variant is
     /// unsupported and surfaces a typed error rather than a silent thin
     /// fallback.
     /// # Examples
@@ -914,7 +913,7 @@ pub fn svd_with_options(
 ///
 /// Returns `Error::Validation` for an invalid rank and `Error::Extension` with
 /// an unsupported-operation source when the active backend does not implement
-/// full-matrices SVD (both CPU providers support it; GPU backends do not yet).
+/// full-matrices SVD. Both CPU providers and the CUDA backend implement it.
 /// AD through the full variant is unsupported and surfaces a typed error, not a
 /// silent thin fallback.
 pub fn svd_full(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {

@@ -61,11 +61,10 @@ pub trait TracedTensorLinalgExt {
     ///
     /// The active backend returns `Error::Extension` with
     /// `ErrorKind::Unsupported` at execution if it does not implement
-    /// full-matrices SVD (only the CPU faer provider does in this slice; the
-    /// LAPACK provider and GPU backends are unsupported). Automatic
-    /// differentiation is intentionally unsupported for the full variant (see
-    /// the linalg AD support manifest) and surfaces a typed AD error rather
-    /// than a silent thin-SVD fallback.
+    /// full-matrices SVD; both CPU providers and the CUDA backend implement
+    /// it. Automatic differentiation is intentionally unsupported for the full
+    /// variant (see the linalg AD support manifest) and surfaces a typed AD
+    /// error rather than a silent thin-SVD fallback.
     fn svd_full(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
 
     /// Build a traced QR operation.
@@ -632,8 +631,8 @@ pub fn svd_with_options(
 /// # Deferred errors
 ///
 /// The active backend returns `Error::Extension` with `ErrorKind::Unsupported`
-/// during execution if it does not implement full-matrices SVD (only the CPU
-/// faer provider does in this slice). Automatic differentiation is
+/// during execution if it does not implement full-matrices SVD; both CPU
+/// providers and the CUDA backend implement it. Automatic differentiation is
 /// intentionally unsupported for the full variant (see the linalg AD support
 /// manifest) and surfaces a typed AD error, not a silent thin-SVD fallback.
 pub fn svd_full(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {

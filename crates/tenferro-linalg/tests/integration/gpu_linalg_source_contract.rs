@@ -465,9 +465,11 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
         ),
         (
             "fn svd_typed",
-            "fn svd_values_typed",
+            "fn empty_svd_outputs",
             "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
-            "raw.download_tensor::<i32>(&info, OP)?",
+            // `svd_typed` serves both the thin and the full variant, so its op
+            // tag is a runtime binding rather than the module-level constant.
+            "raw.download_tensor::<i32>(&info, op)?",
         ),
         (
             "fn svd_values_typed",
@@ -573,7 +575,7 @@ fn gpu_solve_paths_validate_residency_before_dtype_and_zero_fast_paths() {
 #[test]
 fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     let source = linalg_source();
-    let svd = source_section(&source, "fn svd_typed", "fn svd_values_typed");
+    let svd = source_section(&source, "fn svd_typed", "fn empty_svd_outputs");
     let svd_values = source_section(&source, "fn svd_values_typed", "fn qr_typed");
     let ffi = read_workspace_source("tenferro-linalg/src/gpu/ffi/cusolver.rs");
     let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
@@ -590,18 +592,18 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
         );
     }
 
-    for section in [svd, svd_values] {
+    for (section, op_tag) in [(svd, "op"), (svd_values, "OP")] {
         for needle in [
-            "match select_svd_driver(m, n)",
-            "SvdDriver::Gesvdj",
-            "SvdDriver::Gesvd",
-            "handles.cusolver().gesvdj(",
-            "handles.cusolver().gesvd(",
-            "check_solver_info(OP, \"cusolverDn*gesvdj\"",
-            "check_solver_info(OP, \"cusolverDn*gesvd\"",
+            "match select_svd_driver(m, n)".to_string(),
+            "SvdDriver::Gesvdj".to_string(),
+            "SvdDriver::Gesvd".to_string(),
+            "handles.cusolver().gesvdj(".to_string(),
+            "handles.cusolver().gesvd(".to_string(),
+            format!("check_solver_info({op_tag}, \"cusolverDn*gesvdj\""),
+            format!("check_solver_info({op_tag}, \"cusolverDn*gesvd\""),
         ] {
             assert!(
-                section.contains(needle),
+                section.contains(&needle),
                 "GPU SVD driver path should contain {needle}"
             );
         }
@@ -621,7 +623,7 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     }
 
     for needle in [
-        "T::copy_matrix_adjoint(backend, &v, &vt_shape, OP)",
+        "T::copy_matrix_adjoint(backend, &v, &vt_shape, op)",
         "copy_matrix_adjoint_real",
         "copy_matrix_adjoint_complex",
     ] {
@@ -648,12 +650,12 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
 
     for needle in [
         "let transpose_for_gesvd = m < n;",
-        "T::copy_matrix_adjoint(backend, input, &work_shape, OP)?",
+        "T::copy_matrix_adjoint(backend, input, &work_shape, op)?",
         "handles.cusolver().gesvd_buffer_size(",
         "gesvd_m_i32",
         "gesvd_n_i32",
-        "T::copy_matrix_adjoint(backend, &gesvd_vt, &u_shape, OP)?",
-        "T::copy_matrix_adjoint(backend, &gesvd_u, &vt_shape, OP)?",
+        "T::copy_matrix_adjoint(backend, &gesvd_vt, &u_shape, op)?",
+        "T::copy_matrix_adjoint(backend, &gesvd_u, &vt_shape, op)?",
     ] {
         assert!(
             svd.contains(needle),
@@ -770,9 +772,18 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
             "ensure_cubecl_resident_typed(OP, input)?;",
             "if has_zero_dim",
         ),
+        // SVD's zero-dim contract is split across two functions: `svd_typed`
+        // must reach the fast path before any allocation, and the fast path
+        // itself probes residency before allocating.
         (
             "fn svd_typed",
-            "fn qr_typed",
+            "fn empty_svd_outputs",
+            "ensure_cubecl_resident_typed(op, input)?;",
+            "if has_zero_dim",
+        ),
+        (
+            "fn empty_svd_outputs",
+            "fn upload_identity_stack",
             "raw.tensor(input)?;",
             "raw.alloc_output",
         ),

@@ -22,8 +22,8 @@ use tenferro_gpu::{
 };
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    DType, Error, StorageBuffer, Tensor, TensorElementwise, TensorRead, TensorReduction,
-    TensorScalar, TensorStructural, TypedTensor, ValidationError,
+    DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorElementwise, TensorRead,
+    TensorReduction, TensorScalar, TensorStructural, TypedTensor, ValidationError,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -423,15 +423,29 @@ pub(super) fn full_piv_lu_solve(
 }
 
 pub(super) fn svd(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
+    svd_dispatch(backend, input, false)
+}
+
+/// Full-matrices SVD: `U` is `m x m` and `Vt` is `n x n`.
+pub(super) fn svd_full(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
+    svd_dispatch(backend, input, true)
+}
+
+fn svd_dispatch(
+    backend: &mut CudaExecSession<'_>,
+    input: &Tensor,
+    full: bool,
+) -> Result<Vec<Tensor>> {
+    let op: &'static str = if full { "svd_full" } else { "svd" };
     match input.dtype() {
-        DType::F32 => svd_typed(backend, typed_host::<f32>("svd", input)?).map(|(u, s, vt)| {
+        DType::F32 => svd_typed(backend, typed_host::<f32>(op, input)?, full).map(|(u, s, vt)| {
             vec![
                 Tensor::from_typed::<f32>(u),
                 Tensor::from_typed::<f32>(s),
                 Tensor::from_typed::<f32>(vt),
             ]
         }),
-        DType::F64 => svd_typed(backend, typed_host::<f64>("svd", input)?).map(|(u, s, vt)| {
+        DType::F64 => svd_typed(backend, typed_host::<f64>(op, input)?, full).map(|(u, s, vt)| {
             vec![
                 Tensor::from_typed::<f64>(u),
                 Tensor::from_typed::<f64>(s),
@@ -439,7 +453,7 @@ pub(super) fn svd(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<V
             ]
         }),
         DType::C32 => {
-            svd_typed(backend, typed_host::<Complex32>("svd", input)?).map(|(u, s, vt)| {
+            svd_typed(backend, typed_host::<Complex32>(op, input)?, full).map(|(u, s, vt)| {
                 vec![
                     Tensor::from_typed::<Complex32>(u),
                     Tensor::from_typed::<f32>(s),
@@ -448,7 +462,7 @@ pub(super) fn svd(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<V
             })
         }
         DType::C64 => {
-            svd_typed(backend, typed_host::<Complex64>("svd", input)?).map(|(u, s, vt)| {
+            svd_typed(backend, typed_host::<Complex64>(op, input)?, full).map(|(u, s, vt)| {
                 vec![
                     Tensor::from_typed::<Complex64>(u),
                     Tensor::from_typed::<f64>(s),
@@ -456,8 +470,8 @@ pub(super) fn svd(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<V
                 ]
             })
         }
-        DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype("svd", input)),
-        DType::External(_) => Err(unsupported_linalg_dtype("svd", input)),
+        DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype(op, input)),
+        DType::External(_) => Err(unsupported_linalg_dtype(op, input)),
     }
 }
 
@@ -1969,6 +1983,7 @@ where
 fn svd_typed<T>(
     backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
+    full: bool,
 ) -> Result<(
     TypedTensor<T>,
     TypedTensor<<T as LinalgScalar>::Real>,
@@ -1977,44 +1992,44 @@ fn svd_typed<T>(
 where
     T: LinalgScalar + TensorScalar,
 {
-    const OP: &str = "svd";
+    let op: &'static str = if full { "svd_full" } else { "svd" };
 
-    ensure_cubecl_resident_typed(OP, input)?;
-    let (m, n) = matrix_dims(OP, input.shape())?;
+    ensure_cubecl_resident_typed(op, input)?;
+    let (m, n) = matrix_dims(op, input.shape())?;
     let k = m.min(n);
+    // The full variant keeps square factors: `U` is `m x m` and `Vt` is
+    // `n x n`, so the trailing columns and rows span the left and right
+    // nullspaces the thin decomposition cannot represent.
+    let u_cols = if full { m } else { k };
+    let vt_rows = if full { n } else { k };
     let batch_shape = &input.shape()[2..];
-    let mut u_shape = vec![m, k];
+    let mut u_shape = vec![m, u_cols];
     u_shape.extend_from_slice(batch_shape);
     let mut s_shape = vec![k];
     s_shape.extend_from_slice(batch_shape);
-    let mut vt_shape = vec![k, n];
+    let mut vt_shape = vec![vt_rows, n];
     vt_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
-        return Ok(backend.with_raw(OP, |raw| {
-            // The fast path still validates residency before allocating the
-            // empty outputs: `raw.tensor` checks the tensor is resident.
-            raw.tensor(input)?;
-            Ok((
-                raw.alloc_output::<T>(&u_shape)?,
-                raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?,
-                raw.alloc_output::<T>(&vt_shape)?,
-            ))
-        })?);
+        return empty_svd_outputs(backend, input, full, &u_shape, &s_shape, &vt_shape, op);
     }
-    let batch_total = batch_count(OP, batch_shape)?;
-    let a_stride = checked_mul_usize(OP, "svd input stride", m, n)?;
+    let batch_total = batch_count(op, batch_shape)?;
+    let a_stride = checked_mul_usize(op, "svd input stride", m, n)?;
     let s_stride = k;
 
     match select_svd_driver(m, n) {
         SvdDriver::Gesvdj => {
-            let mut v_shape = vec![n, k];
+            let mut v_shape = vec![n, vt_rows];
             v_shape.extend_from_slice(batch_shape);
-            let (u, s, v) = backend.with_raw(OP, |raw| {
+            // `econ = 0` asks gesvdj for the full square factors; `econ = 1`
+            // is the economy (thin) form. cuSOLVER places no `m`/`n` ordering
+            // constraint on gesvdj, so no transpose trick is needed here.
+            let econ = if full { 0 } else { 1 };
+            let (u, s, v) = backend.with_raw(op, |raw| {
                 let handles = raw.resource(CudaLinalgHandles::load)?;
                 // SAFETY: the stream handle is valid only for this raw-session
                 // scope; it is used immediately to bind cuSOLVER and not retained.
                 let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
-                handles.cusolver().set_stream(stream, OP)?;
+                handles.cusolver().set_stream(stream, op)?;
 
                 // Clone `input` into a fresh work matrix on the session stream.
                 let mut work = raw.alloc_output::<T>(input.shape())?;
@@ -2028,7 +2043,7 @@ where
                             dst.raw_ptr(),
                             src.raw_ptr() as *const _,
                             src.byte_len(),
-                            OP,
+                            op,
                         )?
                     };
                 }
@@ -2037,12 +2052,12 @@ where
                 let mut v = raw.alloc_output::<T>(&v_shape)?;
                 let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
 
-                let m_i32 = as_i32(m, OP, "m")?;
-                let n_i32 = as_i32(n, OP, "n")?;
-                let lda = as_i32(m, OP, "lda")?;
-                let ldu = as_i32(m, OP, "ldu")?;
-                let ldv = as_i32(n, OP, "ldv")?;
-                let params = handles.cusolver().create_gesvdj_info(OP)?;
+                let m_i32 = as_i32(m, op, "m")?;
+                let n_i32 = as_i32(n, op, "n")?;
+                let lda = as_i32(m, op, "lda")?;
+                let ldu = as_i32(m, op, "ldu")?;
+                let ldv = as_i32(n, op, "ldv")?;
+                let params = handles.cusolver().create_gesvdj_info(op)?;
                 let lwork = {
                     let a_ref = raw.tensor(&work)?;
                     let u_ref = raw.tensor(&u)?;
@@ -2051,7 +2066,7 @@ where
                     handles.cusolver().gesvdj_buffer_size(
                         T::DATA_TYPE,
                         CusolverEigMode::Vector,
-                        1,
+                        econ,
                         m_i32,
                         n_i32,
                         // SAFETY: all spans are validated device allocations on
@@ -2067,22 +2082,22 @@ where
                         unsafe { v_ref.raw_ptr().cast_const() },
                         ldv,
                         &params,
-                        OP,
+                        op,
                     )?
                 };
                 let workspace_nbytes = {
                     let lwork = usize::try_from(lwork).map_err(|_| {
                         Error::invalid_argument(
-                            OP,
+                            op,
                             "workspace_length",
                             format!("must be non-negative, got {lwork}"),
                         )
                     })?;
                     lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
-                        Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                        Error::invalid_argument(op, "workspace_length", "byte size overflowed")
                     })?
                 };
-                let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+                let workspace = raw.alloc_bytes(workspace_nbytes, op)?;
                 let mut workspace_ptr = std::ptr::null_mut::<c_void>();
                 workspace.with_ptr(|ptr| workspace_ptr = ptr);
 
@@ -2102,20 +2117,20 @@ where
                 let info_ref = raw.tensor_mut(&mut info)?;
                 // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
                 let info_ptr = unsafe { info_ref.raw_ptr() };
-                let u_stride = checked_mul_usize(OP, "svd u stride", m, k)?;
-                let v_stride = checked_mul_usize(OP, "svd v stride", n, k)?;
+                let u_stride = checked_mul_usize(op, "svd u stride", m, u_cols)?;
+                let v_stride = checked_mul_usize(op, "svd v stride", n, vt_rows)?;
 
                 for batch in 0..batch_total {
                     let a_offset =
-                        checked_batch_offset(OP, "svd input batch offset", batch, a_stride)?;
+                        checked_batch_offset(op, "svd input batch offset", batch, a_stride)?;
                     let s_offset = checked_batch_offset(
-                        OP,
+                        op,
                         "svd singular value batch offset",
                         batch,
                         s_stride,
                     )?;
-                    let u_offset = checked_batch_offset(OP, "svd u batch offset", batch, u_stride)?;
-                    let v_offset = checked_batch_offset(OP, "svd v batch offset", batch, v_stride)?;
+                    let u_offset = checked_batch_offset(op, "svd u batch offset", batch, u_stride)?;
+                    let v_offset = checked_batch_offset(op, "svd v batch offset", batch, v_stride)?;
                     // SAFETY: all offsets are checked against their per-batch
                     // strides and each base pointer belongs to a live device tensor.
                     let (batch_a, batch_s, batch_u, batch_v, batch_info) = unsafe {
@@ -2133,7 +2148,7 @@ where
                         handles.cusolver().gesvdj(
                             T::DATA_TYPE,
                             CusolverEigMode::Vector,
-                            1,
+                            econ,
                             m_i32,
                             n_i32,
                             batch_a,
@@ -2147,27 +2162,33 @@ where
                             lwork,
                             batch_info,
                             &params,
-                            OP,
+                            op,
                         )?;
                     }
                 }
 
                 // Host barrier (only for reading the solver diagnostics).
-                let host_info = raw.download_tensor::<i32>(&info, OP)?;
+                let host_info = raw.download_tensor::<i32>(&info, op)?;
                 for &value in host_info.host_data()? {
-                    check_solver_info(OP, "cusolverDn*gesvdj", value)?;
+                    check_solver_info(op, "cusolverDn*gesvdj", value)?;
                 }
                 Ok((u, s, v))
             })?;
-            let vt = T::copy_matrix_adjoint(backend, &v, &vt_shape, OP)?;
+            let vt = T::copy_matrix_adjoint(backend, &v, &vt_shape, op)?;
             Ok((u, s, vt))
         }
         SvdDriver::Gesvd => {
             let transpose_for_gesvd = m < n;
             let (gesvd_m, gesvd_n) = if transpose_for_gesvd { (n, m) } else { (m, n) };
-            let mut gesvd_u_shape = vec![gesvd_m, k];
+            // `jobu = jobvt = 'A'` returns `gesvd_m x gesvd_m` and
+            // `gesvd_n x gesvd_n` factors. With the wide-matrix adjoint trick
+            // those become `Vt` and `U` respectively after the final adjoint,
+            // which is exactly the full contract for the original orientation.
+            let gesvd_u_cols = if full { gesvd_m } else { k };
+            let gesvd_vt_rows = if full { gesvd_n } else { k };
+            let mut gesvd_u_shape = vec![gesvd_m, gesvd_u_cols];
             gesvd_u_shape.extend_from_slice(batch_shape);
-            let mut gesvd_vt_shape = vec![k, gesvd_n];
+            let mut gesvd_vt_shape = vec![gesvd_vt_rows, gesvd_n];
             gesvd_vt_shape.extend_from_slice(batch_shape);
 
             // When `m < n` gesvd factors `adjoint(input)` (n×m); the CubeCL
@@ -2176,17 +2197,17 @@ where
             let transposed_work = if transpose_for_gesvd {
                 let mut work_shape = vec![n, m];
                 work_shape.extend_from_slice(batch_shape);
-                Some(T::copy_matrix_adjoint(backend, input, &work_shape, OP)?)
+                Some(T::copy_matrix_adjoint(backend, input, &work_shape, op)?)
             } else {
                 None
             };
 
-            let (gesvd_u, s, gesvd_vt) = backend.with_raw(OP, |raw| {
+            let (gesvd_u, s, gesvd_vt) = backend.with_raw(op, |raw| {
                 let handles = raw.resource(CudaLinalgHandles::load)?;
                 // SAFETY: the stream handle is valid only for this raw-session
                 // scope; it is used immediately to bind cuSOLVER and not retained.
                 let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
-                handles.cusolver().set_stream(stream, OP)?;
+                handles.cusolver().set_stream(stream, op)?;
 
                 // `work` is either the CubeCL-adjointed input (m < n) or a
                 // clone of `input` made on the session stream.
@@ -2205,7 +2226,7 @@ where
                                     dst.raw_ptr(),
                                     src.raw_ptr() as *const _,
                                     src.byte_len(),
-                                    OP,
+                                    op,
                                 )?
                             };
                         }
@@ -2228,70 +2249,71 @@ where
                 let vt_ref = raw.tensor_mut(&mut gesvd_vt)?;
                 // SAFETY: `vt_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
                 let vt_ptr = unsafe { vt_ref.raw_ptr() };
-                let gesvd_m_i32 = as_i32(gesvd_m, OP, "gesvd m")?;
-                let gesvd_n_i32 = as_i32(gesvd_n, OP, "gesvd n")?;
+                let gesvd_m_i32 = as_i32(gesvd_m, op, "gesvd m")?;
+                let gesvd_n_i32 = as_i32(gesvd_n, op, "gesvd n")?;
                 let lda = gesvd_m_i32;
                 let ldu = gesvd_m_i32;
-                let ldvt = as_i32(k, OP, "ldvt")?;
+                let ldvt = as_i32(gesvd_vt_rows, op, "ldvt")?;
                 let lwork = handles.cusolver().gesvd_buffer_size(
                     T::DATA_TYPE,
                     gesvd_m_i32,
                     gesvd_n_i32,
-                    OP,
+                    op,
                 )?;
                 let workspace_nbytes = {
                     let lwork = usize::try_from(lwork).map_err(|_| {
                         Error::invalid_argument(
-                            OP,
+                            op,
                             "workspace_length",
                             format!("must be non-negative, got {lwork}"),
                         )
                     })?;
                     lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
-                        Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                        Error::invalid_argument(op, "workspace_length", "byte size overflowed")
                     })?
                 };
-                let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+                let workspace = raw.alloc_bytes(workspace_nbytes, op)?;
                 let mut workspace_ptr = std::ptr::null_mut::<c_void>();
                 workspace.with_ptr(|ptr| workspace_ptr = ptr);
                 let mut rwork_ptr = std::ptr::null_mut::<c_void>();
                 if T::NEEDS_RWORK {
                     let rwork_len = as_i32(
-                        checked_mul_usize(OP, "svd rwork length", 5, k)?,
-                        OP,
+                        checked_mul_usize(op, "svd rwork length", 5, k)?,
+                        op,
                         "rwork",
                     )?;
                     let rwork_nbytes = usize::try_from(rwork_len)
                         .map_err(|_| {
-                            Error::invalid_argument(OP, "rwork_length", "must be non-negative")
+                            Error::invalid_argument(op, "rwork_length", "must be non-negative")
                         })?
                         .checked_mul(std::mem::size_of::<<T as LinalgScalar>::Real>())
                         .ok_or_else(|| {
-                            Error::invalid_argument(OP, "rwork_length", "byte size overflowed")
+                            Error::invalid_argument(op, "rwork_length", "byte size overflowed")
                         })?;
-                    let rwork = raw.alloc_bytes(rwork_nbytes, OP)?;
+                    let rwork = raw.alloc_bytes(rwork_nbytes, op)?;
                     rwork.with_ptr(|ptr| rwork_ptr = ptr);
                 }
                 let mut info = raw.alloc_output::<i32>(&[batch_total])?;
                 let info_ref = raw.tensor_mut(&mut info)?;
                 // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
                 let info_ptr = unsafe { info_ref.raw_ptr() };
-                let u_stride = checked_mul_usize(OP, "svd gesvd u stride", gesvd_m, k)?;
-                let vt_stride = checked_mul_usize(OP, "svd gesvd vt stride", k, gesvd_n)?;
-                let job = b'S' as c_char;
+                let u_stride = checked_mul_usize(op, "svd gesvd u stride", gesvd_m, gesvd_u_cols)?;
+                let vt_stride =
+                    checked_mul_usize(op, "svd gesvd vt stride", gesvd_vt_rows, gesvd_n)?;
+                let job = if full { b'A' } else { b'S' } as c_char;
 
                 for batch in 0..batch_total {
                     let a_offset =
-                        checked_batch_offset(OP, "svd input batch offset", batch, a_stride)?;
+                        checked_batch_offset(op, "svd input batch offset", batch, a_stride)?;
                     let s_offset = checked_batch_offset(
-                        OP,
+                        op,
                         "svd singular value batch offset",
                         batch,
                         s_stride,
                     )?;
-                    let u_offset = checked_batch_offset(OP, "svd u batch offset", batch, u_stride)?;
+                    let u_offset = checked_batch_offset(op, "svd u batch offset", batch, u_stride)?;
                     let vt_offset =
-                        checked_batch_offset(OP, "svd vt batch offset", batch, vt_stride)?;
+                        checked_batch_offset(op, "svd vt batch offset", batch, vt_stride)?;
                     // SAFETY: all offsets are checked against their per-batch
                     // strides and each base pointer belongs to a live device tensor.
                     let (batch_a, batch_s, batch_u, batch_vt, batch_info) = unsafe {
@@ -2304,7 +2326,8 @@ where
                         )
                     };
                     // SAFETY: batch pointers, workspace/rwork, dimensions, and
-                    // stream-bound handle satisfy cuSOLVER gesvd's thin SVD contract.
+                    // stream-bound handle satisfy cuSOLVER gesvd's SVD contract
+                    // for the selected `job` mode.
                     unsafe {
                         handles.cusolver().gesvd(
                             T::DATA_TYPE,
@@ -2323,28 +2346,107 @@ where
                             lwork,
                             rwork_ptr,
                             batch_info,
-                            OP,
+                            op,
                         )?;
                     }
                 }
 
                 // Host barrier (only for reading the solver diagnostics).
-                let host_info = raw.download_tensor::<i32>(&info, OP)?;
+                let host_info = raw.download_tensor::<i32>(&info, op)?;
                 for &value in host_info.host_data()? {
-                    check_solver_info(OP, "cusolverDn*gesvd", value)?;
+                    check_solver_info(op, "cusolverDn*gesvd", value)?;
                 }
                 Ok((gesvd_u, s, gesvd_vt))
             })?;
 
             if transpose_for_gesvd {
-                let u = T::copy_matrix_adjoint(backend, &gesvd_vt, &u_shape, OP)?;
-                let vt = T::copy_matrix_adjoint(backend, &gesvd_u, &vt_shape, OP)?;
+                let u = T::copy_matrix_adjoint(backend, &gesvd_vt, &u_shape, op)?;
+                let vt = T::copy_matrix_adjoint(backend, &gesvd_u, &vt_shape, op)?;
                 Ok((u, s, vt))
             } else {
                 Ok((gesvd_u, s, gesvd_vt))
             }
         }
     }
+}
+
+/// SVD factors for a device input with an empty core dimension.
+///
+/// The thin variant's factors are all empty, so uninitialized allocations are
+/// correct there. The full variant is not: `U` stays `m x m` and `Vt` stays
+/// `n x n`, so when only the other core dimension is zero the surviving factor
+/// still owes a unitary matrix. The identity is the canonical choice — it keeps
+/// `U Uᴴ = I` and `Vᴴ V = I` true and reconstructs the (empty) input exactly —
+/// and matches the CPU providers, so one public call has one shape and one
+/// unitarity contract on every backend.
+///
+/// The identity is materialized on the host and uploaded. Nothing is read back
+/// from the device: the input carries no elements, so this is a constant
+/// upload, not a device-to-host-to-device roundtrip of computed values.
+fn empty_svd_outputs<T>(
+    backend: &mut CudaExecSession<'_>,
+    input: &TypedTensor<T>,
+    full: bool,
+    u_shape: &[usize],
+    s_shape: &[usize],
+    vt_shape: &[usize],
+    op: &'static str,
+) -> Result<(
+    TypedTensor<T>,
+    TypedTensor<<T as LinalgScalar>::Real>,
+    TypedTensor<T>,
+)>
+where
+    T: LinalgScalar + TensorScalar,
+{
+    let (s, allocated) = backend.with_raw(op, |raw| {
+        // The fast path still validates residency before allocating the
+        // outputs: `raw.tensor` checks the tensor is resident.
+        raw.tensor(input)?;
+        let s = raw.alloc_output::<<T as LinalgScalar>::Real>(s_shape)?;
+        if full {
+            return Ok((s, None));
+        }
+        Ok((
+            s,
+            Some((
+                raw.alloc_output::<T>(u_shape)?,
+                raw.alloc_output::<T>(vt_shape)?,
+            )),
+        ))
+    })?;
+    if let Some((u, vt)) = allocated {
+        return Ok((u, s, vt));
+    }
+    let u = upload_identity_stack::<T>(backend, u_shape, op)?;
+    let vt = upload_identity_stack::<T>(backend, vt_shape, op)?;
+    Ok((u, s, vt))
+}
+
+/// Upload a stack of column-major identity matrices shaped `[dim, dim, ..batch]`.
+fn upload_identity_stack<T>(
+    backend: &mut CudaExecSession<'_>,
+    shape: &[usize],
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar + TensorScalar,
+{
+    let dim = shape[0];
+    let blocks = checked_shape_product(op, "identity batch", &shape[2..])?;
+    let per_block = checked_mul_usize(op, "identity block", dim, dim)?;
+    let len = checked_mul_usize(op, "identity stack", per_block, blocks)?;
+    let mut data = vec![T::zero(); len];
+    for block in 0..blocks {
+        let base = block * per_block;
+        for index in 0..dim {
+            data[base + index + index * dim] = T::one();
+        }
+    }
+    let host = TypedTensor::<T>::from_vec_col_major(shape.to_vec(), data)?;
+    let uploaded =
+        backend.upload_host_tensor(TensorRead::from_tensor(&Tensor::from_typed::<T>(host)))?;
+    uploaded.into_typed::<T>()
 }
 
 fn svd_values_typed<T>(

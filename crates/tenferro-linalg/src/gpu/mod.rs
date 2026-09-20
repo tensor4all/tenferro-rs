@@ -50,8 +50,44 @@ impl LinalgBackend for CudaExecSession<'_> {
         linalg::svd(self, input)
     }
 
+    fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        linalg::svd_full(self, input)
+    }
+
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         linalg::svd_values(self, input)
+    }
+
+    fn svd_full_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        // Matches the existing CUDA `svd_read` contract: cuSOLVER needs compact
+        // column-major device storage, so a view is canonicalized on the device
+        // (never transferred across the host boundary) and then decomposed.
+        let input = input.tensor_view();
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::from_typed::<f32>(compact);
+                self.svd_full(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::from_typed::<f64>(compact);
+                self.svd_full(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::from_typed::<num_complex::Complex32>(compact);
+                self.svd_full(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::from_typed::<num_complex::Complex64>(compact);
+                self.svd_full(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("svd_full", input.dtype()))
+            }
+        }
     }
 
     fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {

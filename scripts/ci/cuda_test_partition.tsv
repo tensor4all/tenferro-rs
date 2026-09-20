@@ -918,6 +918,7 @@ host	tenferro-linalg	cpu::tests::single_entry::solve_read_two_noncompact_views_e
 host	tenferro-linalg	cpu::tests::single_entry::solve_read_vector_rhs_reshape_stays_inside_one_entry
 host	tenferro-linalg	cpu::tests::single_entry::triangular_solve_read_two_noncompact_views_enters_once
 host	tenferro-linalg	error::tests::provider_status_keeps_typed_backend_source
+host	tenferro-linalg	extension::cuda_tests::session_support_admits_cuda_full_svd_and_still_rejects_the_missing_kernels
 host	tenferro-linalg	gpu::ffi::tests::cusolver_cuda_data_type_has_c_abi_integer_layout
 host	tenferro-linalg	traced::tests::p_norm_rejects_zero_and_non_finite_orders
 host	tenferro-linalg::integration	backend_errors::cholesky_rejects_rank_less_than_two_even_when_zero_dim
@@ -1003,6 +1004,14 @@ host	tenferro-linalg::integration	full_svd_read::full_svd_read_rejects_unsupport
 host	tenferro-linalg::integration	full_svd_read::owned_and_borrowed_full_svd_agree_for_every_dtype_and_shape
 host	tenferro-linalg::integration	full_svd_read::owned_full_svd_reports_unsupported_dtypes_from_the_provider_boundary
 host	tenferro-linalg::integration	full_svd_read::typed_full_svd_returns_real_singular_values
+gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_covers_every_dtype_and_orientation_through_gesvdj
+gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_handles_batched_inputs
+gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_keeps_square_factors_when_a_core_dimension_is_empty
+gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_matches_the_cpu_spectrum
+gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_read_accepts_a_strided_device_view
+gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_rejects_unsupported_dtypes
+gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_tall_above_the_gesvdj_threshold_uses_gesvd
+gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_wide_above_the_gesvdj_threshold_reuses_the_adjoint_trick
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_cholesky_batched_f64_matches_cpu
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_c32_returns_unsupported_error
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_f32_returns_unsupported_error

@@ -57,6 +57,33 @@ separate PR; this file is updated as each one lands.
   not identical basis bytes. The tests assert exactly that; they never compare
   faer and LAPACK factors elementwise.
 
+### C — CUDA full SVD
+
+- `svd_typed` gained a `full` flag instead of a parallel function, so the thin
+  and full variants cannot drift in driver selection, batching, solver-info
+  handling, or the wide-matrix adjoint trick. Its op tag became a runtime
+  binding (`op`) rather than the module constant, so errors name `svd_full`
+  when that is what the caller asked for.
+- `gesvdj` takes `econ = 0` for the full variant (`U` is `m x m`, `V` is
+  `n x n`); cuSOLVER places no `m`/`n` ordering constraint on it, so no
+  transpose is needed. `gesvd` takes `jobu = jobvt = 'A'` and keeps the
+  existing adjoint trick: for `m < n` it factors `Aᴴ`, whose full `'A'` outputs
+  are `n x n` and `m x m`, and the final adjoint maps them back to `U` and
+  `Vt`.
+- The degenerate case needed a decision the thin variant never faced. When only
+  one core dimension is zero, the full variant still owes a square unitary for
+  the other, so uninitialized `alloc_output` is wrong. `empty_svd_outputs`
+  materializes the identity on the host and uploads it. Nothing is read back
+  from the device: the input carries no elements, so this is a constant upload,
+  not a device-to-host-to-device roundtrip of computed values, and it matches
+  the CPU contract exactly.
+- `linalg_session_supported::<CudaBackend>` drops its `SvdFull => false` arm.
+  The CUDA admission table needed its own test module: `extension::tests` is
+  compiled with `not(feature = "cuda")`, so a `cfg(cuda)` arm inside it would
+  never build.
+- Out of scope, unchanged: CUDA `eig` and `full_piv_lu` stay `Unsupported`,
+  and the new admission test pins that they still are.
+
 ## Verification conclusions and constraints
 
 ### A
@@ -100,3 +127,24 @@ separate PR; this file is updated as each one lands.
   not compile at `origin/main` for reasons unrelated to this work, and hosted
   CI's `blas-inject` profile builds `-p tenferro-cpu`, not this target.
 - Not established by slice B: CUDA full SVD (slice C) and any wall-clock claim.
+
+### C
+
+- Verified on a local A100 80GB with CUDA 12.6: all four dtypes across tall,
+  wide and square through `gesvdj`; batched inputs; a strided device view
+  through `svd_full_read`; empty core dimensions; unsupported-dtype refusal;
+  and both `gesvd` orientations above the 1024 `gesvdj` threshold (tall
+  `1025 x 4` and wide `4 x 1025`). Each case checks both unitarity directions
+  on `U` and `Vt`, rank-`k` reconstruction, a non-increasing spectrum, and
+  device residency of the outputs. The existing thin-SVD GPU tests still pass
+  unchanged.
+- Cross-backend equality is checked as the spectrum plus output shapes, not as
+  basis bytes: the device and host bases legitimately differ by phase and
+  inside the null subspace.
+- The GPU source contracts were updated, not relaxed. They now follow
+  `svd_typed`'s runtime op tag and point the zero-dimension residency rule at
+  `empty_svd_outputs`, where that fast path now lives; the batched solver-info
+  rule, the JAX-compatible driver selection rule, and the ban on downloading
+  factor data are unchanged in substance.
+- Not established by slice C: any wall-clock claim, and AD through the full
+  variant, which stays `Unsupported`.

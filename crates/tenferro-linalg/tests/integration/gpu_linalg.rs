@@ -1506,3 +1506,396 @@ fn test_cubecl_solve_f64_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-9);
 }
+
+// ---------------------------------------------------------------------------
+// Full-matrices SVD on CUDA: `U` is `m x m` and `Vt` is `n x n`, so the
+// trailing columns and rows span the left and right nullspaces. The device
+// results must satisfy the same identities the CPU providers owe; equality
+// across providers is reconstruction, unitarity and spectra, never identical
+// basis bytes in degenerate or null subspaces.
+// ---------------------------------------------------------------------------
+
+/// Read any supported factor dtype off the host as complex values.
+fn complex_values(tensor: &Tensor) -> Vec<Complex64> {
+    match tensor.dtype() {
+        DType::F32 => tensor
+            .as_slice::<f32>()
+            .unwrap()
+            .iter()
+            .map(|&value| Complex64::new(value as f64, 0.0))
+            .collect(),
+        DType::F64 => tensor
+            .as_slice::<f64>()
+            .unwrap()
+            .iter()
+            .map(|&value| Complex64::new(value, 0.0))
+            .collect(),
+        DType::C32 => tensor
+            .as_slice::<Complex32>()
+            .unwrap()
+            .iter()
+            .map(|value| Complex64::new(value.re as f64, value.im as f64))
+            .collect(),
+        DType::C64 => tensor.as_slice::<Complex64>().unwrap().to_vec(),
+        other => panic!("unsupported factor dtype {other:?}"),
+    }
+}
+
+fn real_values(tensor: &Tensor) -> Vec<f64> {
+    match tensor.dtype() {
+        DType::F32 => tensor
+            .as_slice::<f32>()
+            .unwrap()
+            .iter()
+            .map(|&value| value as f64)
+            .collect(),
+        DType::F64 => tensor.as_slice::<f64>().unwrap().to_vec(),
+        other => panic!("singular values must be real, got {other:?}"),
+    }
+}
+
+/// `matrix^H matrix == I` for a `rows x cols` column-major matrix.
+fn assert_isometric(matrix: &[Complex64], rows: usize, cols: usize, tol: f64, label: &str) {
+    for left in 0..cols {
+        for right in 0..cols {
+            let inner: Complex64 = (0..rows)
+                .map(|row| matrix[row + left * rows].conj() * matrix[row + right * rows])
+                .sum();
+            let expected = if left == right { 1.0 } else { 0.0 };
+            assert!(
+                (inner - Complex64::new(expected, 0.0)).norm() < tol,
+                "{label}: column pair ({left}, {right}) inner product {inner} is not {expected}"
+            );
+        }
+    }
+}
+
+fn adjoint_square(matrix: &[Complex64], dim: usize) -> Vec<Complex64> {
+    (0..dim * dim)
+        .map(|index| matrix[index / dim + (index % dim) * dim].conj())
+        .collect()
+}
+
+/// Every acceptance identity of the full decomposition, checked on host copies.
+fn assert_full_svd_on_host(
+    m: usize,
+    n: usize,
+    source: &[Complex64],
+    u: &Tensor,
+    s: &Tensor,
+    vt: &Tensor,
+    tol: f64,
+) {
+    let k = m.min(n);
+    assert_eq!(u.shape(), &[m, m], "U must be square m x m");
+    assert_eq!(s.shape(), &[k], "S must hold min(m, n) singular values");
+    assert_eq!(vt.shape(), &[n, n], "Vt must be square n x n");
+
+    let u = complex_values(u);
+    let vt = complex_values(vt);
+    let values = real_values(s);
+
+    assert_isometric(&u, m, m, tol, "U^H U");
+    assert_isometric(&adjoint_square(&u, m), m, m, tol, "U U^H");
+    assert_isometric(&vt, n, n, tol, "Vt^H Vt");
+    assert_isometric(&adjoint_square(&vt, n), n, n, tol, "Vt Vt^H");
+    assert!(
+        values.windows(2).all(|pair| pair[0] >= pair[1] - tol),
+        "singular values must be non-increasing: {values:?}"
+    );
+
+    for col in 0..n {
+        for row in 0..m {
+            let reconstructed: Complex64 = (0..k)
+                .map(|index| u[row + index * m] * values[index] * vt[index + col * n])
+                .sum();
+            assert!(
+                (reconstructed - source[row + col * m]).norm() < tol,
+                "reconstruction mismatch at ({row}, {col}): {reconstructed} != {}",
+                source[row + col * m]
+            );
+        }
+    }
+}
+
+/// Deterministic, well-conditioned column-major data with distinct spectra.
+fn full_svd_sample(m: usize, n: usize) -> Vec<f64> {
+    (0..m * n)
+        .map(|index| {
+            let row = (index % m) as f64;
+            let col = (index / m) as f64;
+            1.0 + row * 1.5 - col * 0.75 + row * col * 0.25
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_full_svd_covers_every_dtype_and_orientation_through_gesvdj() {
+    if !gpu_available() {
+        return;
+    }
+    let mut gpu = gpu_backend();
+    for (m, n) in [(4_usize, 2_usize), (2, 4), (3, 3)] {
+        let real = full_svd_sample(m, n);
+        let imaginary: Vec<f64> = (0..m * n)
+            .map(|index| 0.5 - (index % m) as f64 * 0.25 + (index / m) as f64 * 0.375)
+            .collect();
+
+        let inputs: Vec<(Tensor, f64)> = vec![
+            (
+                tensor_f32(vec![m, n], real.iter().map(|&value| value as f32).collect()),
+                3.0e-4,
+            ),
+            (tensor_f64(vec![m, n], real.clone()), 1.0e-10),
+            (
+                tensor_c32(
+                    vec![m, n],
+                    real.iter()
+                        .zip(&imaginary)
+                        .map(|(&re, &im)| Complex32::new(re as f32, im as f32))
+                        .collect(),
+                ),
+                3.0e-4,
+            ),
+            (
+                tensor_c64(
+                    vec![m, n],
+                    real.iter()
+                        .zip(&imaginary)
+                        .map(|(&re, &im)| Complex64::new(re, im))
+                        .collect(),
+                ),
+                1.0e-10,
+            ),
+        ];
+
+        for (input, tol) in inputs {
+            let source = complex_values(&input);
+            let gpu_input = upload(&gpu, &input);
+            let outputs =
+                with_cuda_linalg_session(&mut gpu, |session| session.svd_full(&gpu_input)).unwrap();
+            for output in &outputs {
+                assert_eq!(
+                    output.placement().memory_kind,
+                    tenferro_tensor::MemoryKind::Device,
+                    "full-SVD outputs must stay resident on the device"
+                );
+            }
+            let u = download(&gpu, &outputs[0]);
+            let s = download(&gpu, &outputs[1]);
+            let vt = download(&gpu, &outputs[2]);
+            assert_full_svd_on_host(m, n, &source, &u, &s, &vt, tol);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_full_svd_matches_the_cpu_spectrum() {
+    if !gpu_available() {
+        return;
+    }
+    let (m, n) = (5_usize, 3_usize);
+    let input = tensor_f64(vec![m, n], full_svd_sample(m, n));
+    let mut cpu = cpu_backend();
+    let expected = with_cpu_linalg_session(&mut cpu, |session| session.svd_full(&input)).unwrap();
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs =
+        with_cuda_linalg_session(&mut gpu, |session| session.svd_full(&gpu_input)).unwrap();
+    let s = download(&gpu, &outputs[1]);
+    // Only the spectrum is provider-independent; the bases may differ by phase
+    // and in the null subspace.
+    for (device, host) in real_values(&s).iter().zip(real_values(&expected[1])) {
+        assert!(
+            (device - host).abs() < 1.0e-9,
+            "device and host spectra disagree: {device} vs {host}"
+        );
+    }
+    assert_eq!(outputs[0].shape(), expected[0].shape());
+    assert_eq!(outputs[2].shape(), expected[2].shape());
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_full_svd_handles_batched_inputs() {
+    if !gpu_available() {
+        return;
+    }
+    let (m, n, batch) = (3_usize, 2_usize, 2_usize);
+    let input = tensor_f64(vec![m, n, batch], full_svd_sample(m, n * batch));
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs =
+        with_cuda_linalg_session(&mut gpu, |session| session.svd_full(&gpu_input)).unwrap();
+    assert_eq!(outputs[0].shape(), &[m, m, batch]);
+    assert_eq!(outputs[1].shape(), &[m.min(n), batch]);
+    assert_eq!(outputs[2].shape(), &[n, n, batch]);
+
+    let source = complex_values(&input);
+    let u = complex_values(&download(&gpu, &outputs[0]));
+    let s = real_values(&download(&gpu, &outputs[1]));
+    let vt = complex_values(&download(&gpu, &outputs[2]));
+    for slab in 0..batch {
+        let slab_source = &source[slab * m * n..(slab + 1) * m * n];
+        let slab_u = &u[slab * m * m..(slab + 1) * m * m];
+        let slab_vt = &vt[slab * n * n..(slab + 1) * n * n];
+        let slab_s = &s[slab * m.min(n)..(slab + 1) * m.min(n)];
+        assert_isometric(slab_u, m, m, 1.0e-10, "batched U");
+        assert_isometric(slab_vt, n, n, 1.0e-10, "batched Vt");
+        for col in 0..n {
+            for row in 0..m {
+                let reconstructed: Complex64 = (0..m.min(n))
+                    .map(|index| slab_u[row + index * m] * slab_s[index] * slab_vt[index + col * n])
+                    .sum();
+                assert!((reconstructed - slab_source[row + col * m]).norm() < 1.0e-10);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_full_svd_read_accepts_a_strided_device_view() {
+    if !gpu_available() {
+        return;
+    }
+    let (m, n) = (2_usize, 3_usize);
+    let base = tensor_f64(vec![m, n], full_svd_sample(m, n));
+    let mut gpu = gpu_backend();
+    let gpu_base = upload(&gpu, &base);
+    let Some(typed) = gpu_base.as_typed::<f64>() else {
+        panic!("uploaded tensor should keep its f64 tag")
+    };
+    let transposed = typed.as_view().transpose_view([1, 0]).unwrap();
+
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.svd_full_read(TensorRead::from_view(tenferro_tensor::TensorView::F64(
+            transposed,
+        )))
+    })
+    .unwrap();
+    // The view is the transpose, so the decomposed matrix is `n x m`.
+    assert_eq!(outputs[0].shape(), &[n, n]);
+    assert_eq!(outputs[1].shape(), &[m.min(n)]);
+    assert_eq!(outputs[2].shape(), &[m, m]);
+
+    let source_transposed: Vec<Complex64> = (0..m * n)
+        .map(|index| {
+            let row = index % n;
+            let col = index / n;
+            Complex64::new(base.as_slice::<f64>().unwrap()[col + row * m], 0.0)
+        })
+        .collect();
+    let u = download(&gpu, &outputs[0]);
+    let s = download(&gpu, &outputs[1]);
+    let vt = download(&gpu, &outputs[2]);
+    assert_full_svd_on_host(n, m, &source_transposed, &u, &s, &vt, 1.0e-10);
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_full_svd_keeps_square_factors_when_a_core_dimension_is_empty() {
+    if !gpu_available() {
+        return;
+    }
+    let mut gpu = gpu_backend();
+    for (m, n) in [(0_usize, 3_usize), (3, 0)] {
+        let input = tensor_f64(vec![m, n], Vec::new());
+        let gpu_input = upload(&gpu, &input);
+        let outputs =
+            with_cuda_linalg_session(&mut gpu, |session| session.svd_full(&gpu_input)).unwrap();
+        assert_eq!(outputs[0].shape(), &[m, m]);
+        assert_eq!(outputs[1].shape(), &[m.min(n)]);
+        assert_eq!(outputs[2].shape(), &[n, n]);
+        let u = complex_values(&download(&gpu, &outputs[0]));
+        let vt = complex_values(&download(&gpu, &outputs[2]));
+        assert_isometric(&u, m, m, 1.0e-12, "empty U");
+        assert_isometric(&vt, n, n, 1.0e-12, "empty Vt");
+    }
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn cuda_full_svd_rejects_unsupported_dtypes() {
+    if !gpu_available() {
+        return;
+    }
+    let input = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap(),
+    );
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let error =
+        with_cuda_linalg_session(&mut gpu, |session| session.svd_full(&gpu_input)).unwrap_err();
+    assert!(matches!(error, Error::Extension { .. }), "got {error:?}");
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU and exercises legacy gesvd above 1024"]
+fn cuda_full_svd_tall_above_the_gesvdj_threshold_uses_gesvd() {
+    if !gpu_available() {
+        return;
+    }
+    // A leading dimension above 1024 selects the legacy gesvd driver, where the
+    // full variant asks for `jobu = jobvt = 'A'` instead of `'S'`.
+    const M: usize = 1025;
+    const N: usize = 4;
+    let data = (0..N)
+        .flat_map(|col| {
+            (0..M).map(move |row| {
+                let patterned = ((row * 17 + col * 13 + 3) % 31) as f64 / 31.0 - 0.5;
+                patterned + if col == row { 2.0 } else { 0.0 }
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = tensor_f64(vec![M, N], data);
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs =
+        with_cuda_linalg_session(&mut gpu, |session| session.svd_full(&gpu_input)).unwrap();
+    assert_eq!(outputs[0].shape(), &[M, M]);
+    assert_eq!(outputs[1].shape(), &[N]);
+    assert_eq!(outputs[2].shape(), &[N, N]);
+
+    let source = complex_values(&input);
+    let u = download(&gpu, &outputs[0]);
+    let s = download(&gpu, &outputs[1]);
+    let vt = download(&gpu, &outputs[2]);
+    assert_full_svd_on_host(M, N, &source, &u, &s, &vt, 1.0e-9);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU and exercises legacy gesvd above 1024"]
+fn cuda_full_svd_wide_above_the_gesvdj_threshold_reuses_the_adjoint_trick() {
+    if !gpu_available() {
+        return;
+    }
+    // `m < n` with `n > 1024`: gesvd factors the adjoint, so the full-`A` outputs
+    // come back as `n x n` and `m x m` and are adjointed into place.
+    const M: usize = 4;
+    const N: usize = 1025;
+    let data = (0..N)
+        .flat_map(|col| {
+            (0..M).map(move |row| {
+                let patterned = ((row * 11 + col * 7 + 5) % 29) as f64 / 29.0 - 0.5;
+                patterned + if col == row { 2.0 } else { 0.0 }
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = tensor_f64(vec![M, N], data);
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs =
+        with_cuda_linalg_session(&mut gpu, |session| session.svd_full(&gpu_input)).unwrap();
+    assert_eq!(outputs[0].shape(), &[M, M]);
+    assert_eq!(outputs[1].shape(), &[M]);
+    assert_eq!(outputs[2].shape(), &[N, N]);
+
+    let source = complex_values(&input);
+    let u = download(&gpu, &outputs[0]);
+    let s = download(&gpu, &outputs[1]);
+    let vt = download(&gpu, &outputs[2]);
+    assert_full_svd_on_host(M, N, &source, &u, &s, &vt, 1.0e-9);
+}
