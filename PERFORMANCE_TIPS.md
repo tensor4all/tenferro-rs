@@ -377,6 +377,16 @@ Audit hints:
 - For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.
 - Do not derive faer parallelism independently inside individual ops or helpers.
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
+- Entered worker pools reserve `DEFAULT_WORKER_STACK_BYTES` (16 MiB) per worker
+  rather than the `std::thread` default of 2 MiB, because provider kernels recurse
+  with large private frames: a `NUM_THREADS=64` OpenBLAS build keeps about 541 KiB
+  per `dgetrf_parallel` level, which overflowed a 2 MiB worker at n>=256. A second
+  pool constructor that installs a custom `spawn_handler` must forward
+  `rayon::ThreadBuilder::stack_size` to its own `std::thread::Builder`, since
+  Rayon applies the configured size only in its default spawn path. Configure the
+  value per context with `CpuContext::with_threads_and_worker_stack` or globally
+  with `TENFERRO_CPU_WORKER_STACK_BYTES`; `CpuContext::worker_stack_bytes` reports
+  the effective value.
 - Use `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` from the
   configured `CpuContext` degree for multi-thread contexts. Do not derive the
   policy from an ambient Rayon pool during plan or session setup.

@@ -172,7 +172,7 @@ pub use backend::{
 };
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
-pub use context::{CpuContext, CpuContextError};
+pub use context::{CpuContext, CpuContextError, DEFAULT_WORKER_STACK_BYTES};
 pub use domain_executor::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
     CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, RayonCpuDomainExecutor,

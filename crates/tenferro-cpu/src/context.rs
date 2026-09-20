@@ -16,6 +16,53 @@ use crate::domain_executor::{
 };
 use crate::{CpuId, CpuSet, Error, ErrorKind, Result, ValidationKind};
 
+/// Stack size reserved for every Tenferro CPU worker thread.
+///
+/// Rust's `std::thread` default is 2 MiB, but provider code can recurse with
+/// large private frames: a `NUM_THREADS=64` OpenBLAS build keeps a
+/// `job_t job[64]` (about 541 KiB per level, measured) on the stack of every
+/// recursive `dgetrf_parallel` frame, so 2 MiB allowed only three levels and
+/// aborted with a stack overflow at n>=256. Sixteen MiB leaves room for about
+/// thirty such frames, which is the order of the 8 MiB main-thread default that
+/// provider calls receive outside a pool.
+///
+/// Override it per context with [`CpuContext::with_threads_and_worker_stack`],
+/// or for the environment-configured path with the
+/// `TENFERRO_CPU_WORKER_STACK_BYTES` environment variable.
+pub const DEFAULT_WORKER_STACK_BYTES: usize = 16 << 20;
+
+/// Smallest accepted worker stack size.
+///
+/// A smaller stack cannot run a nontrivial provider call, so rejecting it while
+/// configuring the pool replaces an eventual stack-overflow abort with a typed
+/// configuration error.
+const MIN_WORKER_STACK_BYTES: usize = 64 << 10;
+
+/// Resolve the worker stack size, honoring `TENFERRO_CPU_WORKER_STACK_BYTES`.
+///
+/// A malformed or unreadable variable is a configuration error rather than a
+/// silent fallback, so a deployment that configures the wrong value finds out at
+/// context construction instead of through an eventual stack overflow.
+fn worker_stack_bytes_from_env() -> Result<usize> {
+    match env::var("TENFERRO_CPU_WORKER_STACK_BYTES") {
+        Ok(value) => value.parse::<usize>().map_err(|err| {
+            Error::extension(
+                "CpuContext::with_threads",
+                "cpu",
+                ErrorKind::Validation(ValidationKind::InvalidArgument),
+                err,
+            )
+        }),
+        Err(env::VarError::NotPresent) => Ok(DEFAULT_WORKER_STACK_BYTES),
+        Err(err) => Err(Error::extension(
+            "CpuContext::with_threads",
+            "cpu",
+            ErrorKind::Validation(ValidationKind::InvalidArgument),
+            err,
+        )),
+    }
+}
+
 /// Failure to construct a CPU context with pinned Rayon workers.
 ///
 /// # Examples
@@ -38,6 +85,13 @@ pub enum CpuContextError {
         workers: usize,
         /// Number of logical CPUs in the execution domain.
         cpus: usize,
+    },
+    /// The environment worker stack configuration was rejected.
+    #[error("invalid worker stack configuration")]
+    InvalidWorkerStack {
+        /// Underlying configuration failure.
+        #[source]
+        source: Error,
     },
     /// Rayon could not construct the custom thread pool.
     #[error("failed to build pinned CPU thread pool: {source}")]
@@ -84,6 +138,7 @@ pub enum CpuContextError {
 #[derive(Clone, Debug)]
 pub struct CpuContext {
     num_threads: usize,
+    worker_stack_bytes: usize,
     pool: Option<Arc<rayon::ThreadPool>>,
     pinned_cpus: Option<CpuSet>,
     execution_scope: Arc<ExecutionScopeState>,
@@ -139,12 +194,13 @@ impl CpuContext {
                         err,
                     )
                 })?;
-                Self::with_threads(num_threads).map_err(|err| match err {
-                    Error::Validation { source, .. } => {
-                        Error::validation("CpuContext::try_from_env", source)
-                    }
-                    err => err,
-                })
+                Self::with_threads_and_worker_stack(num_threads, worker_stack_bytes_from_env()?)
+                    .map_err(|err| match err {
+                        Error::Validation { source, .. } => {
+                            Error::validation("CpuContext::try_from_env", source)
+                        }
+                        err => err,
+                    })
             }
             Err(env::VarError::NotPresent) => {
                 Self::with_threads(super::affinity::available_parallelism())
@@ -160,6 +216,11 @@ impl CpuContext {
 
     /// Create a CPU context with a fixed parallelism hint.
     ///
+    /// The worker stack size comes from `TENFERRO_CPU_WORKER_STACK_BYTES` when
+    /// that variable is present, and from [`DEFAULT_WORKER_STACK_BYTES`]
+    /// otherwise. Use [`CpuContext::with_threads_and_worker_stack`] to choose it
+    /// programmatically.
+    ///
     /// # Examples
     ///
     /// ```
@@ -172,14 +233,51 @@ impl CpuContext {
     /// # Errors
     ///
     /// Returns [`CpuContextError::InvalidThreadCount`] through
-    /// [`Error::Validation`] when `num_threads` is zero, or
-    /// [`Error::BackendSource`] when Rayon rejects the thread pool.
+    /// [`Error::Validation`] when `num_threads` is zero, a
+    /// [`Error::Validation`] error when the environment worker stack size is
+    /// malformed or too small, or [`Error::BackendSource`] when Rayon rejects
+    /// the thread pool.
     pub fn with_threads(num_threads: usize) -> Result<Self> {
+        Self::with_threads_and_worker_stack(num_threads, worker_stack_bytes_from_env()?)
+    }
+
+    /// Create a CPU context with an explicit worker stack size.
+    ///
+    /// Provider calls run on pool workers, so the pool's stack bounds how deeply
+    /// a recursive provider implementation such as OpenBLAS's threaded LU can
+    /// descend; see [`DEFAULT_WORKER_STACK_BYTES`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuContext;
+    ///
+    /// let ctx = CpuContext::with_threads_and_worker_stack(2, 32 << 20).unwrap();
+    /// assert_eq!(ctx.num_threads(), 2);
+    /// assert_eq!(ctx.worker_stack_bytes(), 32 << 20);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] when `num_threads` is zero or
+    /// `worker_stack_bytes` is below the minimum accepted stack, or
+    /// [`Error::BackendSource`] when Rayon rejects the thread pool.
+    pub fn with_threads_and_worker_stack(
+        num_threads: usize,
+        worker_stack_bytes: usize,
+    ) -> Result<Self> {
         if num_threads == 0 {
             return Err(Error::invalid_argument(
                 "CpuContext::with_threads",
                 "configuration",
                 "thread count must be at least 1",
+            ));
+        }
+        if worker_stack_bytes < MIN_WORKER_STACK_BYTES {
+            return Err(Error::invalid_argument(
+                "CpuContext::with_threads_and_worker_stack",
+                "configuration",
+                "worker stack size must be at least 65536 bytes",
             ));
         }
         let execution_scope = Arc::new(ExecutionScopeState::default());
@@ -190,6 +288,7 @@ impl CpuContext {
             let worker_scope = Arc::clone(&execution_scope);
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(num_threads)
+                .stack_size(worker_stack_bytes)
                 .start_handler(move |_| {
                     register_worker_execution_scope(Arc::clone(&worker_scope));
                     let _ = startup_tx.send(());
@@ -205,6 +304,7 @@ impl CpuContext {
         };
         Ok(Self {
             num_threads,
+            worker_stack_bytes,
             pool,
             pinned_cpus: None,
             execution_scope,
@@ -240,14 +340,42 @@ impl CpuContext {
         cpus: CpuSet,
         num_threads: usize,
     ) -> std::result::Result<Self, CpuContextError> {
-        Self::with_pinned_cpus_using(cpus, num_threads, SystemThreadAffinity)
+        let worker_stack_bytes = worker_stack_bytes_from_env()
+            .map_err(|source| CpuContextError::InvalidWorkerStack { source })?;
+        Self::with_pinned_cpus_and_worker_stack(
+            cpus,
+            num_threads,
+            worker_stack_bytes,
+            SystemThreadAffinity,
+        )
     }
 
+    #[cfg(test)]
     pub(crate) fn with_pinned_cpus_using<A: ThreadAffinity>(
         cpus: CpuSet,
         num_threads: usize,
         affinity: A,
     ) -> std::result::Result<Self, CpuContextError> {
+        let worker_stack_bytes = worker_stack_bytes_from_env()
+            .map_err(|source| CpuContextError::InvalidWorkerStack { source })?;
+        Self::with_pinned_cpus_and_worker_stack(cpus, num_threads, worker_stack_bytes, affinity)
+    }
+
+    pub(crate) fn with_pinned_cpus_and_worker_stack<A: ThreadAffinity>(
+        cpus: CpuSet,
+        num_threads: usize,
+        worker_stack_bytes: usize,
+        affinity: A,
+    ) -> std::result::Result<Self, CpuContextError> {
+        if worker_stack_bytes < MIN_WORKER_STACK_BYTES {
+            return Err(CpuContextError::InvalidWorkerStack {
+                source: Error::invalid_argument(
+                    "CpuContext::with_pinned_cpus",
+                    "configuration",
+                    "worker stack size must be at least 65536 bytes",
+                ),
+            });
+        }
         if num_threads == 0 {
             return Err(CpuContextError::InvalidThreadCount);
         }
@@ -265,14 +393,20 @@ impl CpuContext {
         let worker_scope = Arc::clone(&execution_scope);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
+            .stack_size(worker_stack_bytes)
             .spawn_handler(move |thread| {
                 let worker = thread.index();
                 let cpu = pool_assigned_cpus[worker];
                 let startup_tx = startup_tx.clone();
                 let affinity = affinity.clone();
                 let worker_scope = Arc::clone(&worker_scope);
-                std::thread::Builder::new()
-                    .name(format!("tenferro-cpu-{cpu}"))
+                let mut builder = std::thread::Builder::new().name(format!("tenferro-cpu-{cpu}"));
+                // Rayon applies its configured stack size only in its own spawn
+                // path, so a custom handler has to carry it to the OS thread.
+                if let Some(size) = thread.stack_size() {
+                    builder = builder.stack_size(size);
+                }
+                builder
                     .spawn(move || {
                         register_worker_execution_scope(Arc::clone(&worker_scope));
                         let result = affinity.pin_current(cpu).and_then(|observed| {
@@ -304,6 +438,7 @@ impl CpuContext {
         }
         Ok(Self {
             num_threads,
+            worker_stack_bytes,
             pool: Some(pool),
             pinned_cpus: Some(cpus),
             execution_scope,
@@ -315,12 +450,30 @@ impl CpuContext {
     fn single_threaded() -> Self {
         Self {
             num_threads: 1,
+            worker_stack_bytes: DEFAULT_WORKER_STACK_BYTES,
             pool: None,
             pinned_cpus: None,
             execution_scope: Arc::new(ExecutionScopeState::default()),
             #[cfg(test)]
             executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    /// Return the stack size reserved for pool workers.
+    ///
+    /// A context that runs on the calling thread has no pool, so the reported
+    /// value is the size its workers would receive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuContext, DEFAULT_WORKER_STACK_BYTES};
+    ///
+    /// let ctx = CpuContext::with_threads(2).unwrap();
+    /// assert!(ctx.worker_stack_bytes() >= DEFAULT_WORKER_STACK_BYTES);
+    /// ```
+    pub fn worker_stack_bytes(&self) -> usize {
+        self.worker_stack_bytes
     }
 
     /// Return this context's CPU parallelism hint.

@@ -1,4 +1,4 @@
-use super::{select_worker_cpus, CpuContext, CpuContextError};
+use super::{select_worker_cpus, CpuContext, CpuContextError, DEFAULT_WORKER_STACK_BYTES};
 #[cfg(target_os = "linux")]
 use crate::affinity::current_cpu;
 use crate::affinity::{CpuAffinityError, ThreadAffinity};
@@ -8,7 +8,7 @@ use crate::domain_executor::{indexed_jobs, scoped_job};
 use crate::process_cpu_affinity;
 use crate::{
     CpuDomainExecutor, CpuDomainExecutorError, CpuExecutorAffinity, CpuExecutorReentrancy,
-    CpuExecutorShutdown, CpuId, CpuInnerParallelism, CpuSet, ScopedCpuJob,
+    CpuExecutorShutdown, CpuId, CpuInnerParallelism, CpuSet, Error, ScopedCpuJob,
 };
 #[cfg(target_os = "linux")]
 use rayon::prelude::*;
@@ -243,6 +243,68 @@ fn worker_assignment_spreads_a_reduced_budget_across_the_domain() {
         vec![CpuId::new(0), CpuId::new(2), CpuId::new(4), CpuId::new(7)]
     );
     assert_eq!(select_worker_cpus(&cpus, 1), vec![CpuId::new(4)]);
+}
+
+/// Recursion that keeps about one MiB of its own frame per level.
+///
+/// Provider implementations recurse with large private frames (a `NUM_THREADS=64`
+/// OpenBLAS build reserves roughly 541 KiB per level of its threaded LU), so this
+/// shape reproduces the failure the worker stack size exists to prevent: on the
+/// `std::thread` default of 2 MiB a dozen levels abort the process.
+#[inline(never)]
+fn consume_one_mib_frames(depth: usize) -> usize {
+    let mut frame = [0u8; 1 << 20];
+    frame.fill(depth as u8);
+    let observed = std::hint::black_box(&frame)[depth & 0xff] ^ frame[(1 << 20) - 1];
+    std::hint::black_box(observed);
+    if depth == 0 {
+        0
+    } else {
+        1 + consume_one_mib_frames(depth - 1)
+    }
+}
+
+#[test]
+fn context_defaults_to_the_documented_worker_stack() {
+    let ctx = CpuContext::with_threads(2).unwrap();
+    assert_eq!(ctx.worker_stack_bytes(), DEFAULT_WORKER_STACK_BYTES);
+}
+
+#[test]
+fn context_worker_stack_is_configurable_per_context() {
+    let ctx = CpuContext::with_threads_and_worker_stack(2, 8 << 20).unwrap();
+    assert_eq!(ctx.worker_stack_bytes(), 8 << 20);
+    assert_eq!(ctx.install(|| 1 + 1), 2);
+}
+
+#[test]
+fn context_rejects_unusable_worker_stacks() {
+    for bytes in [0usize, 1, 1024] {
+        assert!(
+            matches!(
+                CpuContext::with_threads_and_worker_stack(2, bytes),
+                Err(Error::Validation { .. })
+            ),
+            "worker stack {bytes} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn worker_pool_runs_recursion_beyond_the_std_default_stack() {
+    let ctx = CpuContext::with_threads(2).unwrap();
+    assert_eq!(ctx.install(|| consume_one_mib_frames(12)), 12);
+}
+
+#[test]
+fn pinned_worker_pool_runs_recursion_beyond_the_std_default_stack() {
+    // The pinned path installs a custom spawn handler, which must forward the
+    // Rayon stack size to the OS thread itself.
+    let cpus = CpuSet::new([CpuId::new(17)]).unwrap();
+    let ctx = CpuContext::with_pinned_cpus_and_worker_stack(cpus, 1, 16 << 20, ExactAffinitySetter)
+        .unwrap();
+    assert_eq!(ctx.worker_stack_bytes(), 16 << 20);
+    assert_eq!(ctx.install(|| consume_one_mib_frames(12)), 12);
 }
 
 #[derive(Clone)]

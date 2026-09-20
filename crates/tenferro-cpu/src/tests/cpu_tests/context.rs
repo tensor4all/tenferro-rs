@@ -38,7 +38,7 @@ fn cpu_context_try_from_env_rejects_invalid_rayon_num_threads() {
 fn cpu_context_try_from_env_rejects_non_unicode_rayon_num_threads() {
     use std::os::unix::ffi::OsStringExt;
 
-    let _guard = RayonNumThreadsEnvGuard::new(None);
+    let _guard = EnvVarGuard::new("RAYON_NUM_THREADS", None);
     std::env::set_var("RAYON_NUM_THREADS", OsString::from_vec(vec![0xff]));
 
     let err = CpuContext::try_from_env().unwrap_err();
@@ -228,6 +228,23 @@ fn cpu_context_install_executes_closure() {
     assert_eq!(seen, 2);
 }
 
+#[test]
+fn cpu_context_reads_the_worker_stack_from_env() {
+    with_env_var(WORKER_STACK_ENV, Some("8388608"), || {
+        let ctx = CpuContext::try_from_env().unwrap();
+        assert_eq!(ctx.worker_stack_bytes(), 8 << 20);
+    });
+}
+
+#[test]
+fn cpu_context_rejects_a_malformed_worker_stack_env_value() {
+    with_env_var(WORKER_STACK_ENV, Some("not-a-number"), || {
+        assert!(CpuContext::try_from_env().is_err());
+        // `from_env` keeps its documented lenient fallback.
+        assert_eq!(CpuContext::from_env().num_threads(), 1);
+    });
+}
+
 fn env_lock() -> MutexGuard<'static, ()> {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     ENV_LOCK
@@ -236,35 +253,46 @@ fn env_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-struct RayonNumThreadsEnvGuard {
+const WORKER_STACK_ENV: &str = "TENFERRO_CPU_WORKER_STACK_BYTES";
+
+struct EnvVarGuard {
     _lock: MutexGuard<'static, ()>,
+    name: &'static str,
     prev: Option<OsString>,
 }
 
-impl RayonNumThreadsEnvGuard {
-    fn new(value: Option<&str>) -> Self {
+impl EnvVarGuard {
+    fn new(name: &'static str, value: Option<&str>) -> Self {
         let lock = env_lock();
-        let prev = std::env::var_os("RAYON_NUM_THREADS");
+        let prev = std::env::var_os(name);
 
         match value {
-            Some(value) => std::env::set_var("RAYON_NUM_THREADS", value),
-            None => std::env::remove_var("RAYON_NUM_THREADS"),
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
         }
 
-        Self { _lock: lock, prev }
+        Self {
+            _lock: lock,
+            name,
+            prev,
+        }
     }
 }
 
-impl Drop for RayonNumThreadsEnvGuard {
+fn with_env_var<T>(name: &'static str, value: Option<&str>, f: impl FnOnce() -> T) -> T {
+    let _guard = EnvVarGuard::new(name, value);
+    f()
+}
+
+impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         match self.prev.take() {
-            Some(value) => std::env::set_var("RAYON_NUM_THREADS", value),
-            None => std::env::remove_var("RAYON_NUM_THREADS"),
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
         }
     }
 }
 
 fn with_rayon_num_threads<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
-    let _guard = RayonNumThreadsEnvGuard::new(value);
-    f()
+    with_env_var("RAYON_NUM_THREADS", value, f)
 }
