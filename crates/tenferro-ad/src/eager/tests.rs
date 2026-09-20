@@ -1,3 +1,6 @@
+mod multi_input;
+mod residuals;
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::hash::Hasher;

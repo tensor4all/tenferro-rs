@@ -1,3 +1,6 @@
+// Solve residual policy reference: PyTorch 8dd3b763, FunctionsManual.cpp,
+// linalg_solve_backward (saved LU/pivots for gB, saved X for gA).
+// Emission below reuses tenferro's existing prepared-solve and cotangent helpers.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -176,20 +179,58 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
                 transpose_a,
                 unit_diagonal,
             ),
-            LinalgOp::LuSolvePrepared { .. } => {
+            LinalgOp::LuSolvePrepared {
+                transpose_a,
+                conjugate_a,
+            } => {
                 let active_inputs = lu_solve_prepared_transpose_active_inputs(
                     request.active_inputs(),
                     SemanticAdRuleRole::LinearTranspose,
                 )?;
-                semantic_custom_transpose(
-                    request.op(),
-                    &primal_inputs,
-                    &primal_outputs,
-                    request.cotangent_outputs(),
-                    &active_inputs,
-                    builder,
-                    SemanticAdRuleRole::LinearTranspose,
-                )
+                let mut result = vec![AdValue::Absent; 4];
+                let Some(ct) = request
+                    .cotangent_outputs()
+                    .first()
+                    .copied()
+                    .and_then(AdValue::value)
+                else {
+                    return Ok(result.into_boxed_slice());
+                };
+                if active_inputs[0] || active_inputs[3] {
+                    let rhs_cotangent = builder.add_extension(
+                        Arc::new(LinalgExtensionOp::new(LinalgOp::LuSolvePrepared {
+                            transpose_a: !transpose_a,
+                            conjugate_a: !conjugate_a,
+                        })),
+                        &[primal_inputs[0], primal_inputs[1], primal_inputs[2], ct],
+                    )?[0];
+                    if active_inputs[0] {
+                        let solution = primal_outputs.first().copied().ok_or_else(|| {
+                            semantic_internal(
+                                SemanticAdRuleRole::LinearTranspose,
+                                "lu_solve_prepared transpose requires its primal solution",
+                            )
+                        })?;
+                        let rank = builder.value_metadata(primal_inputs[0])?.shape().len();
+                        let matrix_cotangent = semantic_solve_matrix_cotangent(
+                            builder,
+                            rhs_cotangent,
+                            solution,
+                            true,
+                            transpose_a,
+                            rank,
+                        )?;
+                        result[0] = AdValue::Value(if conjugate_a {
+                            conjugate_if_complex(builder, matrix_cotangent)?
+                        } else {
+                            matrix_cotangent
+                        });
+                    }
+                    if active_inputs[3] {
+                        result[3] = AdValue::Value(rhs_cotangent);
+                    }
+                }
+                Ok(result.into_boxed_slice())
             }
             LinalgOp::FullPivLuSolve { .. } => semantic_custom_transpose(
                 request.op(),

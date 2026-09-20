@@ -457,7 +457,7 @@ fn finish_eager_extension_outputs(
             recorded.traces.len()
         )));
     }
-    recorded
+    let results = recorded
         .traces
         .into_iter()
         .zip(recorded.semantic_traces)
@@ -483,7 +483,9 @@ fn finish_eager_extension_outputs(
                 )
             }
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    crate::eager::finish_residuals(&op, inputs, &results.iter().collect::<Vec<_>>())?;
+    Ok(results)
 }
 
 /// Apply one standard tensor op eagerly and record it for AD when needed.

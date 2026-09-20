@@ -800,19 +800,22 @@ impl LinalgBackend for CpuExecSession<'_> {
 
         validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), rhs.shape())?;
         validate_nonsingular_u(packed_lu)?;
-        let lu_op = if conjugate_a {
-            self.conj(packed_lu)?
+        // Triangular solves only read LU. Real adjoints need no conjugation,
+        // and ordinary solves can borrow the saved factors without a dense copy.
+        let conjugated_lu = if conjugate_a && matches!(packed_lu.dtype(), DType::C32 | DType::C64) {
+            Some(self.conj(packed_lu)?)
         } else {
-            packed_lu.duplicate()?
+            None
         };
+        let lu_op = conjugated_lu.as_ref().unwrap_or(packed_lu);
         let mut result = if transpose_a {
-            let z = self.triangular_solve(&lu_op, &rhs, true, false, true, false)?;
-            let y = self.triangular_solve(&lu_op, &z, true, true, true, true)?;
+            let z = self.triangular_solve(lu_op, &rhs, true, false, true, false)?;
+            let y = self.triangular_solve(lu_op, &z, true, true, true, true)?;
             apply_lu_pivots_cpu(&y, pivots, true)?
         } else {
             let pb = apply_lu_pivots_cpu(&rhs, pivots, false)?;
-            let y = self.triangular_solve(&lu_op, &pb, true, true, false, true)?;
-            self.triangular_solve(&lu_op, &y, true, false, false, false)?
+            let y = self.triangular_solve(lu_op, &pb, true, true, false, true)?;
+            self.triangular_solve(lu_op, &y, true, false, false, false)?
         };
         result.tag_fresh(self.domain_id());
 

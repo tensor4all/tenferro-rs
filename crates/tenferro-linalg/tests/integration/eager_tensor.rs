@@ -411,6 +411,63 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
 }
 
 #[test]
+fn svd_saved_outputs_preserve_higher_order_derivatives_after_handles_drop() {
+    let ctx = ad_test_ctx();
+    let values = vec![3.0_f64, 0.2, 0.4, 1.5];
+    let direction = vec![0.1_f64, -0.2, 0.3, 0.4];
+    let make_input = |values| {
+        EagerTensor::requires_grad_in(
+            Tensor::from_vec_col_major(vec![2, 2], values).unwrap(),
+            Arc::clone(&ctx),
+        )
+        .unwrap()
+    };
+    let a = make_input(values.clone());
+    let (_, s, _) = a.svd().unwrap();
+    let loss = s.reduce_sum(Some(&[0])).unwrap();
+    drop(s);
+    let gradient = ctx.grad(&loss, &a).unwrap();
+    let tangent = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], direction.clone()).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let hvp = ctx.jvp(&gradient, &a, &tangent).unwrap();
+    let gradient_at = |sign: f64| {
+        let input = make_input(
+            values
+                .iter()
+                .zip(&direction)
+                .map(|(x, d)| x + sign * 1e-5 * d)
+                .collect(),
+        );
+        let (_, s, _) = input.svd().unwrap();
+        let loss = s.reduce_sum(Some(&[0])).unwrap();
+        ctx.grad(&loss, &input)
+            .unwrap()
+            .value()
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap()
+            .to_vec()
+    };
+    let plus = gradient_at(1.0);
+    let minus = gradient_at(-1.0);
+    for ((actual, plus), minus) in hvp
+        .value()
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap()
+        .iter()
+        .zip(plus)
+        .zip(minus)
+    {
+        let expected = (plus - minus) / 2e-5;
+        assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+    }
+}
+
+#[test]
 fn svd_singular_value_sum_backward_does_not_panic() {
     let ctx = ad_test_ctx();
     let a = EagerTensor::requires_grad_in(

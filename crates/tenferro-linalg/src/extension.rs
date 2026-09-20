@@ -292,8 +292,8 @@ pub(crate) enum LinalgOp {
     },
     /// Solve `a @ x = b` with partial-pivot LU (same kernel as
     /// `LinalgBackend::solve`). Two inputs (matrix, rhs) to one output.
-    /// Only the eager surface (autodiff feature) constructs this variant;
-    /// the traced `solve` composite stays LuFactor + LuSolvePrepared.
+    /// The untracked eager surface (autodiff feature) constructs this variant;
+    /// tracked eager and traced `solve` use LuFactor + LuSolvePrepared.
     #[cfg_attr(not(feature = "autodiff"), allow(dead_code))]
     Solve,
     Svd {
@@ -828,14 +828,21 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
         }
     }
 
-    // Linalg kernels operate on compact tensors; materialization is explicit
-    // here so borrowed views cannot bypass provider errors.
+    // The owned-only hooks need materialized views, not copies of inputs that
+    // are already owned tensors (notably the saved matrix and LU in backward).
     let materialized_inputs = inputs
         .iter()
+        .filter(|input| input.as_tensor().is_none())
         .cloned()
         .map(|input| session.to_contiguous_read(input))
         .collect::<tenferro_tensor::Result<Vec<_>>>()?;
-    let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+    let mut views = materialized_inputs.iter();
+    // INVARIANT: exactly one materialized tensor was produced per View, in
+    // input order; every input therefore contributes exactly one reference.
+    let input_refs: Vec<&Tensor> = inputs
+        .iter()
+        .filter_map(|input| input.as_tensor().or_else(|| views.next()))
+        .collect();
     execute_linalg(op.op(), &input_refs, session)
 }
 

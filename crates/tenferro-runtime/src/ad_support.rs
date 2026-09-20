@@ -474,6 +474,22 @@ pub fn compile_ad_source(
     compiler.compile_ad_source(output)
 }
 
+/// Compile an AD source with additional residual roots, preserving checkpoint aliases.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] when the graph metadata or resolved shape
+/// constraints are invalid, [`Error::RuntimeState`] when a referenced value,
+/// input key, or registration table is missing or inconsistent, and
+/// [`Error::Internal`] when the graph violates a compiler invariant. Extension
+/// lowering failures retain their typed [`Error::Extension`] source.
+pub fn compile_ad_source_many(
+    compiler: &mut GraphCompiler,
+    outputs: &[&TracedTensor],
+) -> Result<CompiledGraph> {
+    compiler.compile_ad_source_many(outputs)
+}
+
 ///
 /// # Errors
 ///
