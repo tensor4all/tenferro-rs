@@ -674,6 +674,7 @@ gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_to_contiguous_host_view_r
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_to_contiguous_keeps_tensor_on_cuda
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_to_contiguous_preserves_negative_stride_view
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_to_contiguous_rank_zero_scalar_stays_on_cuda
+gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_triangular_ops_match_cpu_for_complex_dtypes
 gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cubecl_bool_reshape_round_trips
 gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cubecl_convert_matches_cpu
 gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cubecl_i32_structural_ops_match_cpu

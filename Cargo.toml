@@ -81,14 +81,14 @@ lapack-inject = "0.1.2"
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
 # Pre-publish staging: Cargo uses these fork commits locally, while packaged
 # manifests retain only the crates.io version requirements.
-cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c", version = "=0.10.0", default-features = false }
-cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c", version = "=0.10.0" }
-cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c", version = "=0.10.0" }
-cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c", version = "=0.10.0" }
-cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c", version = "=0.10.0" }
-cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "739dbfb414dffb27d44af3ec369f1e8bead9cccf", version = "=0.2.0", default-features = false }
-cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "739dbfb414dffb27d44af3ec369f1e8bead9cccf", version = "=0.2.0", default-features = false }
-cubek-fft = { package = "cubek-fft", git = "https://github.com/tensor4all/cubek.git", rev = "739dbfb414dffb27d44af3ec369f1e8bead9cccf", version = "=0.2.0", default-features = false }
+cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885", version = "=0.10.1", default-features = false }
+cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885", version = "=0.10.1" }
+cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885", version = "=0.10.1" }
+cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885", version = "=0.10.1" }
+cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885", version = "=0.10.1" }
+cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "db5df6752c2728e307a518599eaf536d1c2e3516", version = "=0.2.1", default-features = false }
+cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "db5df6752c2728e307a518599eaf536d1c2e3516", version = "=0.2.1", default-features = false }
+cubek-fft = { package = "cubek-fft", git = "https://github.com/tensor4all/cubek.git", rev = "db5df6752c2728e307a518599eaf536d1c2e3516", version = "=0.2.0", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }

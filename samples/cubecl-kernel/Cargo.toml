@@ -10,11 +10,11 @@ resolver = "2"
 
 [dependencies]
 # Downstream-style package line: downstream extern kernel crates depend on the
-# published crates.io `t4a-cubecl = =0.10.0`, never a git rev. The
+# published crates.io `t4a-cubecl = =0.10.1`, never a git rev. The
 # `[patch.crates-io]` below redirects this standalone workspace to the same
 # fork revision tenferro-gpu pins, so all crates share one CubeCL runtime type.
-cubecl = { package = "t4a-cubecl", version = "=0.10.0", features = ["cuda"] }
-cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.10.0" }
+cubecl = { package = "t4a-cubecl", version = "=0.10.1", features = ["cuda"] }
+cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.10.1" }
 tenferro-gpu = { path = "../../crates/tenferro-gpu", features = ["cuda"] }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 
@@ -23,11 +23,11 @@ tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 # revision the tenferro workspace deps pin, keeping a single CubeCL runtime
 # type across the sample and tenferro-gpu.
 [patch.crates-io]
-t4a-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c" }
-t4a-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c" }
-t4a-cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c" }
-t4a-cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c" }
-t4a-cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "a2adda17affd40494393a1f40d90980e1235617c" }
+t4a-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885" }
+t4a-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885" }
+t4a-cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885" }
+t4a-cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885" }
+t4a-cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885" }
 
 # Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
 [profile.ci]
