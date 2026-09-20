@@ -458,3 +458,17 @@ fn faer_view_path_does_not_pool_an_input_copy() {
         packed_stats.capacity_bytes
     );
 }
+
+#[test]
+fn owned_full_svd_reports_unsupported_dtypes_from_the_provider_boundary() {
+    // The owned entry point has no dtype pre-check, so an integer tensor must
+    // be rejected by the provider dispatch itself rather than reaching faer.
+    let mut host = faer_backend();
+    let input = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap(),
+    );
+    host.with_backend_session(|session| {
+        let error = input.svd_full(session).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Unsupported);
+    });
+}
