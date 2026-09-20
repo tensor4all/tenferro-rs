@@ -303,6 +303,45 @@ fn device_bytes_from_handle(
     })
 }
 
+/// Resolve a view region to `base + offset * size_of::<T>()`.
+///
+/// The prepared access covers the whole root allocation, so vendor and raw
+/// stream calls fold the view's element offset into the operand pointer
+/// instead of requiring a canonicalized operand.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] when the offset is negative or its
+/// byte product overflows, or [`crate::Error::BackendSource`] when the backend
+/// resource cannot be resolved.
+pub(crate) fn offset_device_ptr<T: 'static>(
+    rt: &CudaRuntime,
+    prepared: dispatch::CubeclPreparedAccess,
+    offset: isize,
+    op: &'static str,
+) -> crate::Result<*mut std::ffi::c_void> {
+    let offset = usize::try_from(offset).map_err(|_| {
+        crate::Error::invalid_argument(op, "layout", "view offset must be nonnegative")
+    })?;
+    let resource = rt
+        .client()
+        .get_resource(prepared.into_handle())
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+    let offset_bytes = offset
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(op, "layout", "view byte offset overflows")
+        })?;
+    let addr = resource
+        .resource()
+        .ptr
+        .checked_add(offset_bytes as u64)
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(op, "layout", "view device address overflows")
+        })?;
+    cuda_device_ptr_from_addr(addr, op)
+}
+
 const SCALE_OP: &str = "scale_tensor_write";
 
 /// Scale a writable CUDA tensor in place by a real device-resident factor.
@@ -817,7 +856,7 @@ fn fill_zero_span<T: 'static>(
         crate::Error::invalid_argument(FILL_ZERO_OP, "shape", "destination byte length overflows")
     })?;
     rt.set_current_cuda_context(FILL_ZERO_OP)?;
-    let ptr = dispatch::offset_device_ptr::<T>(rt, prepared, offset, FILL_ZERO_OP)?;
+    let ptr = offset_device_ptr::<T>(rt, prepared, offset, FILL_ZERO_OP)?;
     rt.flush_cubecl(FILL_ZERO_OP)?;
     let stream = rt.raw_cuda_stream()?;
     let cross_stream = if rt.is_current_stream_slot(&handle) {

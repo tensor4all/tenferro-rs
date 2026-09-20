@@ -48,13 +48,13 @@ use tenferro_tensor::{ContractionScalar, DType, TensorRead, TensorWrite};
 use super::dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, cubecl_buffer,
     cubecl_view_buffer, cubecl_view_mut_buffer, ensure_resident_on_runtime,
-    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, offset_device_ptr,
-    prepared_view_access, prepared_view_mut_access, typed_tensor_array_arg,
-    typed_tensor_mut_array_arg, typed_view_array_arg, typed_view_mut_array_arg,
+    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, prepared_view_access,
+    prepared_view_mut_access, typed_tensor_array_arg, typed_tensor_mut_array_arg,
+    typed_view_array_arg, typed_view_mut_array_arg,
 };
 use super::error::unsupported_dtype;
 use super::gemm::typed_device_ptr;
-use super::interop::{alloc_zero_output, upload_typed_tensor};
+use super::interop::{alloc_zero_output, offset_device_ptr, upload_typed_tensor};
 use super::runtime::check_cublas;
 use super::{CudaBackend, CudaRuntime};
 use crate::backend::TensorStructural;
