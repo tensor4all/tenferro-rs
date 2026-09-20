@@ -94,6 +94,10 @@ host	tenferro-ad	semantic_extension::tests::rule_set_registration_lookup_debug_a
 host	tenferro-ad	shape_packing::tests::axis_normalization_handles_ranks_larger_than_isize_max
 host	tenferro-ad	traced::semantic_transform_error_tests::missing_semantic_rule_maps_to_public_transform_error
 host	tenferro-ad	traced::semantic_transform_error_tests::unsupported_semantic_rule_maps_to_public_transform_error
+host	tenferro-ad	eager::tests::multi_input::backward_shares_one_vjp_across_leaves_and_separates_active_masks
+host	tenferro-ad	eager::tests::residuals::cached_execution_rebinds_residuals_for_each_forward
+host	tenferro-ad	eager::tests::residuals::exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivatives
+host	tenferro-ad	eager::tests::residuals::intermediate_inputs_are_retained_without_retaining_all_outputs
 host	tenferro-ad::integration	ad_api_naming_contract::optional_ad_apis_use_optional_suffix_without_try_aliases
 host	tenferro-ad::integration	ad_optimizer::traced_jvp_optimizer_removes_identity_chain_before_compile
 host	tenferro-ad::integration	ad_optimizer::traced_jvp_zero_propagation_returns_none_without_dead_graph

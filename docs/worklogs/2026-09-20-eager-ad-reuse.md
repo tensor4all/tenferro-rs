@@ -30,11 +30,12 @@ preserve that dependency; its semantic transpose now consumes the saved solution
 instead of emitting a second primal solve. Untracked eager solve keeps the direct
 path.
 
-`getrf` overwrites its operand, so the LU kernels need exactly one destructive copy
-of the input. That copy is now taken from the shared buffer pool and factored in
-place (`lu_factor_in_place`) for `lu_factor`, its batched loop, and `lu`. A fresh
-dense `Vec` per call was the located cost at large sizes; the factorization
-algorithm, pivoting, and dtype handling are unchanged.
+The LU kernels' destructive-`getrf` input copy was the located cost at large
+sizes. That fix is not part of this change: `main` already took the LAPACK scratch
+from the session buffer pool (`pooled_copy`/`pooled_zeroed`/`release_scratch`,
+landed as the LAPACK scratch-pool change), so an earlier local variant of the same
+optimization was dropped during rebase rather than duplicated. This change keeps
+only the residual reuse and the eager solve reuse above.
 
 ## Verification conclusions and constraints
 
@@ -53,12 +54,13 @@ gate of 2.0x was missed at 1.978x, and the earlier intermediate pair missed at
 or selectively rerun. The accepted change is the reuse itself plus the located
 data-movement fix.
 
-The LU pooled-copy fix is measured by an interleaved A/B on the solve row (the two
-binaries alternate) and by provider probes that separate the LAPACK call from the
-kernel's own overhead; a full-suite pair is used only as regression evidence,
-because two sequential suite runs drift more than the interleaved pair. Measured
-LU overhead above the `dgetrf` floor dropped from about 6.6 ms to about 1 ms at
-n=1024. See the benchmark report and raw archive for the tables and protocols.
+LU overhead above the `dgetrf` floor was measured with an interleaved A/B on the
+solve row plus provider probes separating the LAPACK call from the kernel's own
+overhead; it dropped from about 6.6 ms to about 1 ms at n=1024 once the destructive
+copy came from the pooled scratch instead of a fresh dense `Vec`. That measurement
+justified the pool change that `main` now carries; a locally identical variant was
+dropped here during rebase. See the benchmark report and raw archive for the tables
+and protocols.
 
 Remaining gap, measured rather than assumed. The suite's eager rows are slower
 than their prepared-trace counterparts, but a dedicated probe of the n=1024 solve
