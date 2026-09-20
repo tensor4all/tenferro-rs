@@ -164,6 +164,7 @@ fn read_capable_extension_ops_dispatch_before_owned_fallback() {
         .unwrap();
     for hook in [
         "svd_read",
+        "svd_full_read",
         "svd_values_read",
         "qr_with_options_read",
         "rank_revealing_qr_read",

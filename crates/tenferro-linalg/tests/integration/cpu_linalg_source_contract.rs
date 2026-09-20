@@ -403,12 +403,45 @@ fn cpu_backend_overrides_solve_read_into_hook() {
 }
 
 #[test]
+fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
+    // Evidence for the borrowed-input contract: a read hook that faer can
+    // consume as a strided `MatRef` must test eligibility and return through
+    // the `*_faer_view_entered` adapter *before* it reaches
+    // `with_materialized_tensor_read`, so an eligible view never pays for a
+    // front-end copy.
+    let source = cpu_backend_source();
+    for (read, view_entry) in [
+        ("svd_read", "svd_faer_view_entered"),
+        ("svd_full_read", "svd_full_faer_view_entered"),
+        ("svd_values_read", "svd_values_faer_view_entered"),
+        ("qr_read", "qr_faer_view_entered"),
+        ("eigh_read", "eigh_faer_view_entered"),
+    ] {
+        let section = rust_function_section(&source, read);
+        let eligibility = section
+            .find("faer_strided_read_ok(&input)")
+            .unwrap_or_else(|| panic!("{read} must consult faer_strided_read_ok"));
+        let view_return = section
+            .find(view_entry)
+            .unwrap_or_else(|| panic!("{read} must return through {view_entry}"));
+        let materialization = section
+            .find("context.with_materialized_tensor_read(")
+            .unwrap_or_else(|| panic!("{read} must keep a materializing fallback"));
+        assert!(
+            eligibility < view_return && view_return < materialization,
+            "{read} must take the faer view path before materializing"
+        );
+    }
+}
+
+#[test]
 fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
     let source = cpu_backend_source();
     let methods = [
         ("triangular_solve_read", "triangular_solve_entered"),
         ("solve_read", "solve_entered"),
         ("svd_read", "svd_entered"),
+        ("svd_full_read", "svd_full_entered"),
         ("qr_read", "qr_entered"),
         ("eigh_read", "eigh_entered"),
         ("cholesky_read", "cholesky_entered"),

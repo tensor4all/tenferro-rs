@@ -422,6 +422,42 @@ fn faer_full_svd_enters_once() {
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 }
 
+#[cfg(all(feature = "cpu-faer", not(feature = "cpu-blas")))]
+#[test]
+fn faer_full_svd_read_enters_once_on_both_view_paths() {
+    let (mut backend, installs, submits) = external_no_inner_backend();
+    let input =
+        TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 5.0, 8.0, 13.0])
+            .unwrap();
+
+    // Faer-eligible strided view: consumed as a `MatRef` without packing.
+    let transposed = input.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = with_cpu_linalg(&mut backend, |backend| {
+        backend.svd_full_read(TensorRead::from_view(TensorView::F64(transposed)))
+    })
+    .unwrap();
+    assert_eq!(outputs[0].shape(), &[3, 3]);
+    assert_eq!(outputs[1].shape(), &[2]);
+    assert_eq!(outputs[2].shape(), &[2, 2]);
+    assert_eq!(installs.load(Ordering::Relaxed), 1);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+
+    // Negative strides are ineligible, so the packing fallback runs; it must
+    // still stay inside the same single operation entry.
+    let reversed = input
+        .as_view()
+        .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+        .unwrap();
+    let outputs = assert_one_install(&installs, &submits, || {
+        with_cpu_linalg(&mut backend, |backend| {
+            backend.svd_full_read(TensorRead::from_view(TensorView::F64(reversed)))
+        })
+    });
+    assert_eq!(outputs[0].shape(), &[2, 2]);
+    assert_eq!(outputs[1].shape(), &[2]);
+    assert_eq!(outputs[2].shape(), &[3, 3]);
+}
+
 fn assert_one_install<R>(
     installs: &AtomicUsize,
     submits: &AtomicUsize,

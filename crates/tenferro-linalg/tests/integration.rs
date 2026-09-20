@@ -19,6 +19,8 @@ mod eager_tensor;
 mod full_piv_lu;
 #[path = "integration/full_svd_lstsq.rs"]
 mod full_svd_lstsq;
+#[path = "integration/full_svd_read.rs"]
+mod full_svd_read;
 #[path = "integration/gpu_linalg.rs"]
 mod gpu_linalg;
 #[path = "integration/gpu_linalg_source_contract.rs"]

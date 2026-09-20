@@ -403,65 +403,25 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("svd_full", input)?;
-        match linalg_provider_kind(self.kind(), "svd_full")? {
-            CpuLinalgProvider::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    self.with_linalg_pool_fresh(|context, buffers| match input.dtype() {
-                        DType::F32 => linalg::faer::svd_full(
-                            context,
-                            buffers,
-                            input
-                                .as_typed::<f32>()
-                                .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
-                        )
-                        .map(|outputs| {
-                            outputs.into_iter().map(Tensor::from_typed::<f32>).collect()
-                        }),
-                        DType::F64 => linalg::faer::svd_full(
-                            context,
-                            buffers,
-                            input
-                                .as_typed::<f64>()
-                                .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
-                        )
-                        .map(|outputs| {
-                            outputs.into_iter().map(Tensor::from_typed::<f64>).collect()
-                        }),
-                        DType::C32 => linalg::faer::svd_full(
-                            context,
-                            buffers,
-                            input
-                                .as_typed::<Complex32>()
-                                .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
-                        )
-                        .and_then(svd_c32_outputs_to_public_tensors),
-                        DType::C64 => linalg::faer::svd_full(
-                            context,
-                            buffers,
-                            input
-                                .as_typed::<Complex64>()
-                                .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
-                        )
-                        .and_then(svd_c64_outputs_to_public_tensors),
-                        _ => Err(unsupported_dtype("svd_full", input.dtype())),
-                    })
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(unsupported_provider("svd_full", self.kind()))
-                }
+        let provider = linalg_provider_kind(self.kind(), "svd_full")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            svd_full_entered(provider, context, buffers, input)
+        })
+    }
+
+    fn svd_full_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor_read("svd_full", &input)?;
+        ensure_supported_linalg_dtype("svd_full", input.dtype())?;
+        let provider = linalg_provider_kind(self.kind(), "svd_full")?;
+        self.with_linalg_pool_fresh(move |context, buffers| {
+            #[cfg(feature = "cpu-faer")]
+            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+                return svd_full_faer_view_entered(context, buffers, input.tensor_view());
             }
-            // The LAPACK provider is intentionally not wired for full-matrices
-            // SVD in this slice; it returns a typed error instead of silently
-            // computing a thin decomposition. Full-SVD callers select the faer
-            // provider (the default) or download to host and use it explicitly.
-            CpuLinalgProvider::Blas => Err(tenferro_tensor::Error::unsupported(
-                "svd_full",
-                "CPU LAPACK provider does not implement full-matrices SVD; \
-                 use the faer provider for full SVD",
-            )),
-        }
+            context.with_materialized_tensor_read(buffers, "svd_full", input, |input, buffers| {
+                svd_full_entered(provider, context, buffers, input)
+            })
+        })
     }
 
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
@@ -2037,6 +1997,73 @@ fn svd_entered(
     }
 }
 
+fn svd_full_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                match input.dtype() {
+                    DType::F32 => linalg::faer::svd_full(
+                        context,
+                        buffers,
+                        input
+                            .as_typed::<f32>()
+                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
+                    )
+                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    DType::F64 => linalg::faer::svd_full(
+                        context,
+                        buffers,
+                        input
+                            .as_typed::<f64>()
+                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
+                    )
+                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    DType::C32 => linalg::faer::svd_full(
+                        context,
+                        buffers,
+                        input
+                            .as_typed::<Complex32>()
+                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
+                    )
+                    .and_then(svd_c32_outputs_to_public_tensors),
+                    DType::C64 => linalg::faer::svd_full(
+                        context,
+                        buffers,
+                        input
+                            .as_typed::<Complex64>()
+                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
+                    )
+                    .and_then(svd_c64_outputs_to_public_tensors),
+                    _ => Err(unsupported_dtype("svd_full", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("svd_full", CpuBackendKind::Faer))
+            }
+        }
+        // The LAPACK provider is intentionally not wired for full-matrices SVD
+        // yet; it returns a typed error instead of silently computing a thin
+        // decomposition or switching to faer. Full-SVD callers select the faer
+        // provider (the default) or download to host and use it explicitly.
+        CpuLinalgProvider::Blas => {
+            let _ = (context, buffers, input);
+            Err(tenferro_tensor::Error::unsupported(
+                "svd_full",
+                "CPU LAPACK provider does not implement full-matrices SVD; \
+                 use the faer provider for full SVD",
+            ))
+        }
+    }
+}
+
 fn svd_values_entered(
     provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
@@ -3120,6 +3147,25 @@ fn svd_faer_view_entered(
         TensorView::C64(view) => linalg::faer::svd_view(context, buffers, view)
             .and_then(svd_c64_outputs_to_public_tensors),
         unsupported => Err(unsupported_dtype("svd", unsupported.dtype())),
+    }
+}
+
+#[cfg(feature = "cpu-faer")]
+fn svd_full_faer_view_entered(
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: TensorView<'_>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    match input {
+        TensorView::F32(view) => linalg::faer::svd_full_view(context, buffers, view)
+            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+        TensorView::F64(view) => linalg::faer::svd_full_view(context, buffers, view)
+            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+        TensorView::C32(view) => linalg::faer::svd_full_view(context, buffers, view)
+            .and_then(svd_c32_outputs_to_public_tensors),
+        TensorView::C64(view) => linalg::faer::svd_full_view(context, buffers, view)
+            .and_then(svd_c64_outputs_to_public_tensors),
+        unsupported => Err(unsupported_dtype("svd_full", unsupported.dtype())),
     }
 }
 

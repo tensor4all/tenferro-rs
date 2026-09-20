@@ -202,6 +202,38 @@ pub trait TensorLinalgExt {
         options: SvdOptions,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+    /// Compute the full-matrices SVD `(U, S, Vt)` with `U` shaped `m x m` and
+    /// `Vt` shaped `n x n`, so the trailing `Vt` rows span the input's right
+    /// nullspace and the trailing `U` columns span its left nullspace.
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
+    /// backend or CPU provider has no full-matrices kernel; the thin
+    /// decomposition is never substituted for it. Returns validation errors for
+    /// an unsupported rank or dtype, plus backend, numerical, or
+    /// output-contract errors.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "cpu-faer")]
+    /// # {
+    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+    /// # let mut host = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
+    /// #     .expect("faer CPU backend");
+    /// let (u, s, vt) = host.with_backend_session(|session| a.svd_full(session))?;
+    /// assert_eq!(u.shape(), &[1, 1]);
+    /// assert_eq!(s.shape(), &[1]);
+    /// assert_eq!(vt.shape(), &[2, 2]);
+    /// # }
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn svd_full(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, unsupported-backend, numerical, or output-contract errors.
@@ -699,6 +731,45 @@ pub trait TensorReadLinalgExt {
     fn svd_with_options_read(
         self,
         options: SvdOptions,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+    /// Compute the full-matrices SVD `(U, S, Vt)` from a borrowed tensor read
+    /// target, with `U` shaped `m x m` and `Vt` shaped `n x n`.
+    ///
+    /// Eligible faer host views (rank 2, host placement, non-negative strides)
+    /// are consumed without an input copy. A provider that requires owned
+    /// compact storage materializes explicitly inside the provider boundary;
+    /// unsupported providers return a typed error instead of a thin result. The
+    /// borrowed source is never modified.
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
+    /// backend or CPU provider has no borrowed full-matrices capability.
+    /// Returns validation errors for an unsupported rank, dtype, or placement,
+    /// plus same-placement materialization, backend, numerical, or
+    /// output-contract errors.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "cpu-faer")]
+    /// # {
+    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_linalg::TensorReadLinalgExt;
+    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+    /// # let mut host = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
+    /// #     .expect("faer CPU backend");
+    /// let (u, s, vt) = host.with_backend_session(|session| {
+    ///     TensorRead::from_tensor(&a).svd_full_read(session)
+    /// })?;
+    /// assert_eq!(u.shape(), &[1, 1]);
+    /// assert_eq!(s.shape(), &[1]);
+    /// assert_eq!(vt.shape(), &[2, 2]);
+    /// # }
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn svd_full_read(
+        self,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
     /// # Errors
@@ -1238,6 +1309,34 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
         options: SvdOptions,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedSvd<T>>;
+    /// Compute the full-matrices SVD `(U, S, Vt)` with `U` shaped `m x m` and
+    /// `Vt` shaped `n x n`. The singular values keep the real counterpart dtype
+    /// of `T`, exactly as [`TypedTensorLinalgExt::svd`] does.
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
+    /// backend or CPU provider has no full-matrices kernel. Returns validation
+    /// errors for an unsupported rank or dtype, plus backend, numerical,
+    /// output-contract, or typed-downcast errors.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "cpu-faer")]
+    /// # {
+    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_linalg::TypedTensorLinalgExt;
+    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![1, 2], vec![1.0, 1.0])?;
+    /// # let mut host = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
+    /// #     .expect("faer CPU backend");
+    /// let (u, s, vt) = host.with_backend_session(|session| a.svd_full(session))?;
+    /// assert_eq!(u.shape(), &[1, 1]);
+    /// assert_eq!(vt.shape(), &[2, 2]);
+    /// assert!((s.as_slice()?[0] - 2.0_f64.sqrt()).abs() < 1e-12);
+    /// # }
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn svd_full(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedSvd<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
@@ -1654,6 +1753,14 @@ impl TensorLinalgExt for Tensor {
             three(backend.svd_with_options(self, options)?, "svd_with_options")
         })
     }
+    fn svd_full(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+        with_linalg_backend(session, "svd_full", |backend| {
+            three(backend.svd_full(self)?, "svd_full")
+        })
+    }
     fn qr(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)> {
         with_linalg_backend(session, "qr", |backend| two(backend.qr(self)?, "qr"))
     }
@@ -1821,6 +1928,14 @@ impl TensorReadLinalgExt for TensorRead<'_> {
             let mut out = backend.svd_read(self)?;
             apply_svd_gauge(options.gauge, &mut out)?;
             three(out, "svd_with_options_read")
+        })
+    }
+    fn svd_full_read(
+        self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+        with_linalg_backend(session, "svd_full_read", |backend| {
+            three(backend.svd_full_read(self)?, "svd_full_read")
         })
     }
     fn qr_read(
@@ -2053,6 +2168,12 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
     ) -> tenferro_tensor::Result<TypedSvd<T>> {
         with_linalg_backend(session, "svd_with_options", |backend| {
             typed_svd(T::tensor_read(self).svd_with_options_read(options, backend)?)
+        })
+    }
+
+    fn svd_full(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedSvd<T>> {
+        with_linalg_backend(session, "svd_full", |backend| {
+            typed_svd(T::tensor_read(self).svd_full_read(backend)?)
         })
     }
 

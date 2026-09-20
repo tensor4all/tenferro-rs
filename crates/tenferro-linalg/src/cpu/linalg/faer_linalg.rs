@@ -4037,28 +4037,62 @@ pub(crate) fn svd_full<T: FaerLinalg>(
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch(input, "svd_full")?;
-        let k = m.min(n);
-        return Ok(vec![
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, m, batch_shape),
-                Vec::new(),
-                input.placement(),
-            )?,
-            tensor_from_vec_with_template(
-                vector_with_batch_shape(k, batch_shape),
-                Vec::new(),
-                input.placement(),
-            )?,
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(n, n, batch_shape),
-                Vec::new(),
-                input.placement(),
-            )?,
-        ]);
+        return empty_svd_full_outputs("svd_full", m, n, batch_shape, input.placement());
     }
     batched_multi_result("svd_full", buffers, input, 2, |buffers, batch| {
         T::svd_2d(ctx, buffers, batch, true)
     })
+}
+
+/// Full-SVD factors for an input with an empty dimension.
+///
+/// The full variant keeps its `m x m` and `n x n` output shapes even when the
+/// other core dimension is zero, so a degenerate factor is not empty: the
+/// canonical choice is the identity, which preserves `U Uᴴ = I` and `Vᴴ V = I`
+/// and reconstructs the (empty) input exactly.
+fn empty_svd_full_outputs<T: FaerLinalg>(
+    op: &'static str,
+    m: usize,
+    n: usize,
+    batch_shape: &[usize],
+    placement: &tenferro_tensor::Placement,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let blocks = checked_product(op, "batch shape", batch_shape)?;
+    Ok(vec![
+        tensor_from_vec_with_template(
+            matrix_with_batch_shape(m, m, batch_shape),
+            identity_blocks(op, m, blocks)?,
+            placement,
+        )?,
+        tensor_from_vec_with_template(
+            vector_with_batch_shape(m.min(n), batch_shape),
+            Vec::new(),
+            placement,
+        )?,
+        tensor_from_vec_with_template(
+            matrix_with_batch_shape(n, n, batch_shape),
+            identity_blocks(op, n, blocks)?,
+            placement,
+        )?,
+    ])
+}
+
+/// `blocks` column-major `dim x dim` identity matrices laid out back to back.
+fn identity_blocks<T: FaerLinalg>(
+    op: &'static str,
+    dim: usize,
+    blocks: usize,
+) -> tenferro_tensor::Result<Vec<T>> {
+    let per_block = checked_product(op, "identity block", &[dim, dim])?;
+    let len = checked_product(op, "identity stack", &[per_block, blocks])?;
+    let mut data = vec![T::default(); len];
+    for block in 0..blocks {
+        let base = block * per_block;
+        for index in 0..dim {
+            data[base + index + index * dim] = T::parity_one();
+        }
+    }
+    Ok(data)
 }
 
 pub(crate) fn svd_values<T: FaerLinalg>(
@@ -4328,6 +4362,25 @@ pub(crate) fn svd_view<T: FaerLinalg + 'static>(
     let base = host_base_ptr(&view)?;
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
     T::svd_core(ctx, buffers, mat, m, n, false, &placement)
+}
+
+pub(crate) fn svd_full_view<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (m, n) = matrix_dims_view(&view, "svd_full")?;
+    let placement = view.placement().clone();
+    if m == 0 || n == 0 {
+        return empty_svd_full_outputs("svd_full", m, n, &[], &placement);
+    }
+    let base = host_base_ptr(&view)?;
+    // SAFETY: `TypedTensorView` construction validates the shape/stride span and
+    // offset against its host allocation; `faer_strided_ok` additionally proves
+    // host placement, rank 2, and non-negative strides. `host_base_ptr` returns
+    // the aligned non-null element pointer at that validated offset.
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::svd_core(ctx, buffers, mat, m, n, true, &placement)
 }
 
 pub(crate) fn svd_values_view<T: FaerLinalg + 'static>(

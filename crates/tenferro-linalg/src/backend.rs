@@ -258,6 +258,53 @@ pub trait LinalgBackend: BackendSession {
         ))
     }
 
+    /// Compute full-matrices SVD outputs `(U, S, Vt)` from a tensor read target.
+    ///
+    /// This is the borrowed-input counterpart of [`LinalgBackend::svd_full`] and
+    /// keeps the same output contract: `U` is `m x m`, `S` has `min(m, n)`
+    /// entries, and `Vt` is `n x n`. Backends may canonicalize the input inside
+    /// the same placement family, but must not silently transfer between CPU
+    /// and GPU memory, and must not substitute the thin decomposition.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "cpu-faer")]
+    /// # {
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBackendKind};
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView, TypedTensor};
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![1, 2], vec![1.0, 1.0])?;
+    /// let mut host = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
+    ///     .expect("faer CPU backend");
+    /// let outputs = host.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |backend| {
+    ///         backend.svd_full_read(TensorRead::from_view(TensorView::F64(input.as_view())))
+    ///     })
+    ///     .expect("CpuBackend must expose a CpuExecSession")
+    /// })?;
+    /// assert_eq!(outputs[0].shape(), &[1, 1]);
+    /// assert_eq!(outputs[1].shape(), &[1]);
+    /// assert_eq!(outputs[2].shape(), &[2, 2]);
+    /// # }
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept tensor read targets for the full variant; an
+    /// implementation may instead return `Error::Validation` for an unsupported
+    /// rank or dtype, `Error::Unsupported` when the selected provider has no
+    /// full-matrices kernel, and a typed backend source when the solver fails.
+    fn svd_full_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::unsupported(
+            "svd_full",
+            "backend does not accept tensor reads for full-matrices SVD at this execution boundary",
+        ))
+    }
+
     #[doc(hidden)]
     fn svd_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         Err(tenferro_tensor::Error::unsupported(

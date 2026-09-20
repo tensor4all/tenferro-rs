@@ -774,6 +774,7 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
             apply_svd_gauge(gauge, &mut outputs)?;
             return Ok(outputs);
         }
+        LinalgOp::SvdFull => return session.svd_full_read(inputs[0].clone()),
         LinalgOp::SvdVals { .. } => return Ok(vec![session.svd_values_read(inputs[0].clone())?]),
         LinalgOp::Qr { gauge } => {
             return session.qr_with_options_read(inputs[0].clone(), QrOptions { gauge });
