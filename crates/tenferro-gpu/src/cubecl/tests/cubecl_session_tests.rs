@@ -77,6 +77,64 @@ fn cubecl_session_allocates_zero_filled_output() {
 
 #[test]
 #[ignore = "requires CUDA"]
+fn cubecl_session_fills_an_existing_output_with_zero() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    with_cuda_exec(&mut backend, |session| {
+        // Seed a destination the session owns with a value that `0 * y` would
+        // preserve, then reset it through the public session entry.
+        let output = session
+            .with_raw("test.cubecl_fill_zero_raw", |raw| {
+                let mut output = raw.alloc_output::<f32>(&[4])?;
+                let seed = [f32::NAN, -0.0, f32::INFINITY, 2.5];
+                let seed_bytes = unsafe {
+                    std::slice::from_raw_parts(seed.as_ptr().cast::<u8>(), seed.len() * 4)
+                };
+                let uploaded = raw.upload_bytes(seed_bytes, "test.cubecl_fill_zero_seed")?;
+                let dst = raw.tensor_mut(&mut output)?;
+                let dst_ptr = unsafe { dst.raw_ptr() };
+                let mut copy_result = Ok(());
+                // SAFETY: `uploaded` is an uploaded workspace of the same byte
+                // size as `dst`, both on this runtime's stream; `dst` uniquely
+                // owns the destination span.
+                unsafe {
+                    uploaded.with_ptr(|src_ptr| {
+                        copy_result = raw.copy_bytes(
+                            dst_ptr,
+                            src_ptr,
+                            seed_bytes.len(),
+                            "test.cubecl_fill_zero_copy",
+                        );
+                    });
+                }
+                copy_result?;
+                Ok(output)
+            })
+            .unwrap();
+        let mut output_enum = tenferro_tensor::Tensor::from_typed::<f32>(output);
+        session
+            .with_cubecl("test.cubecl_fill_zero", |cubecl| {
+                cubecl.fill_zero_write(tenferro_tensor::TensorWrite::from_tensor(&mut output_enum))
+            })
+            .unwrap();
+        let typed = output_enum
+            .into_typed::<f32>()
+            .expect("the fill keeps the destination dtype");
+        let result = session
+            .with_raw("test.cubecl_fill_zero_raw2", |raw| {
+                raw.download_tensor::<f32>(&typed, "test.cubecl_fill_zero_raw2")
+            })
+            .unwrap();
+        let values = result.host_data().unwrap();
+        assert_eq!(values.len(), 4);
+        for value in values {
+            assert_eq!(value.to_bits(), 0.0_f32.to_bits(), "expected +0.0 bits");
+        }
+    });
+}
+
+#[test]
+#[ignore = "requires CUDA"]
 fn cubecl_session_scales_output_in_place() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");

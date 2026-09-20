@@ -511,6 +511,7 @@ host	tenferro-gpu	cubecl::tests::capability_tests::cuda_unsupported_entries_have
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_allocates_and_binds_output
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_allocates_zero_filled_output
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_exposes_client_and_launch_helpers
+gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_fills_an_existing_output_with_zero
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_flushes_after_error_callback
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_flushes_on_exit_so_raw_sees_work
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_scales_output_in_place
