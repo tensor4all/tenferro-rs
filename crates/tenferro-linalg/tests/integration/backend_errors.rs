@@ -394,6 +394,57 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
+    // Full-matrices SVD is refused explicitly on both the owned and the
+    // borrowed boundary rather than silently falling back to the thin variant.
+    let full_input = Tensor::from_typed::<f64>(input.duplicate().unwrap());
+    for error in [
+        backend.svd_full(&full_input).unwrap_err(),
+        backend
+            .svd_full_read(TensorRead::from_tensor(&full_input))
+            .unwrap_err(),
+    ] {
+        assert!(matches!(
+            error,
+            Error::Unsupported {
+                op: "svd_full",
+                ref message,
+            } if message.contains("full-matrices SVD")
+        ));
+    }
+
+    // The hidden borrowed values-only hooks report the read boundary rather
+    // than the owned one, so a backend that implements neither is told which
+    // capability it is missing.
+    let borrowed_input = Tensor::from_typed::<f64>(input.duplicate().unwrap());
+    for (error, expected_op) in [
+        (
+            backend
+                .eig_values_read(TensorRead::from_tensor(&borrowed_input))
+                .unwrap_err(),
+            "eig_values",
+        ),
+        (
+            backend
+                .eigh_values_read(TensorRead::from_tensor(&borrowed_input))
+                .unwrap_err(),
+            "eigh_values",
+        ),
+        (
+            backend
+                .svd_values_read(TensorRead::from_tensor(&borrowed_input))
+                .unwrap_err(),
+            "svd_values",
+        ),
+    ] {
+        assert!(matches!(
+            error,
+            Error::Unsupported {
+                op,
+                ref message,
+            } if op == expected_op && message.contains("borrowed")
+        ));
+    }
+
     let owned_input = Tensor::from_typed::<f64>(input.duplicate().unwrap());
 
     let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![7.0_f64, 11.0]).unwrap();
