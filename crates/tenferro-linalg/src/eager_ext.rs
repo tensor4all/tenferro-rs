@@ -1,3 +1,6 @@
+// Solve residual policy reference: PyTorch 8dd3b763, derivatives.yaml's
+// _linalg_solve_ex and FunctionsManual.cpp::linalg_solve_backward. The tracked
+// implementation composes tenferro's existing LuFactor/LuSolvePrepared ops.
 use std::sync::Arc;
 
 use tenferro_ad::error::{Error, Result};
@@ -1230,7 +1233,43 @@ pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor
 /// metadata, `Error::Extension` for an unsupported dtype or singular system,
 /// and `Error::RuntimeState` when the backend is unavailable.
 pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
-    one_output(apply_linalg_eager(LinalgOp::Solve, &[a, b])?, "solve")
+    if !a.tracks_grad() && !b.tracks_grad() {
+        return one_output(apply_linalg_eager(LinalgOp::Solve, &[a, b])?, "solve");
+    }
+    if !a.same_context(b) {
+        return Err(Error::ContextMismatch {
+            lhs: a.ctx_id(),
+            rhs: b.ctx_id(),
+        });
+    }
+    crate::validation::validate_solve_inputs(a.dtype(), a.shape(), b.dtype(), b.shape())?;
+    // Follow the existing traced composite. Like PyTorch's _linalg_solve_ex /
+    // FunctionsManual.cpp::linalg_solve_backward, retain LU/pivots and X for
+    // backward, while the explicit A operand preserves higher-order semantics.
+    let mut factors = apply_linalg_eager(LinalgOp::LuFactor, &[a])?.into_iter();
+    let (packed_lu, pivots) = match (
+        factors.next(),
+        factors.next(),
+        factors.next(),
+        factors.next(),
+    ) {
+        (Some(lu), Some(pivots), Some(_parity), None) => (lu, pivots),
+        _ => {
+            return Err(Error::Internal(
+                "lu_factor eager op returned an unexpected number of outputs".into(),
+            ))
+        }
+    };
+    one_output(
+        apply_linalg_eager(
+            LinalgOp::LuSolvePrepared {
+                transpose_a: false,
+                conjugate_a: false,
+            },
+            &[a, &packed_lu, &pivots, b],
+        )?,
+        "solve",
+    )
 }
 
 /// Cholesky factorization for eager tensors.
