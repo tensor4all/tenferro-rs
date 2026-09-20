@@ -13,11 +13,9 @@ use tenferro_tensor::{
 use super::super::CudaBackend;
 use super::{
     assert_cuda_unsupported_dtype, assert_error_parity, assert_runtime_state,
-    assert_shape_mismatch, assert_tensor_close, assert_validation_kind, cpu_backend, download,
-    gpu_backend, tensor_bool, tensor_c32, tensor_c64, tensor_f32, tensor_f64, tensor_i32,
-    tensor_i64, upload,
+    assert_shape_mismatch, assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool,
+    tensor_c32, tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
-use tenferro_tensor::{ValidationError, ValidationKind};
 
 fn with_cuda_ordinal<T>(mut tensor: TypedTensor<T>, ordinal: usize) -> TypedTensor<T> {
     tensor.set_placement(Placement {
@@ -924,9 +922,11 @@ fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
     println!("#1522 A100 3D sorted samples (ms): {samples_3d:?}");
 }
 
+/// Issue #1832: the erased read-into entry must consume an arbitrary-stride
+/// source view directly instead of rejecting it.
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
-fn cuda_runtime_copy_rejects_noncompact_source_with_erased_operation_name() {
+fn cuda_runtime_copy_read_into_consumes_transposed_source() {
     let mut gpu = gpu_backend();
     let gpu_src = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
     let mut gpu_dst = upload(&gpu, &tensor_i32(vec![2, 2], vec![0, 0, 0, 0]));
@@ -935,25 +935,14 @@ fn cuda_runtime_copy_rejects_noncompact_source_with_erased_operation_name() {
     };
     let src_view = src.as_view().transpose_view([1, 0]).unwrap();
 
-    let err = gpu
-        .copy_read_into(
-            TensorRead::from_view(TensorView::I32(src_view)),
-            TensorWrite::from_tensor(&mut gpu_dst),
-        )
-        .unwrap_err();
+    gpu.copy_read_into(
+        TensorRead::from_view(TensorView::I32(src_view)),
+        TensorWrite::from_tensor(&mut gpu_dst),
+    )
+    .unwrap();
 
-    assert_validation_kind(
-        &err,
-        "CudaBackend::copy_read_into",
-        ValidationKind::InvalidArgument,
-    );
-    assert!(matches!(
-        err,
-        Error::Validation {
-            source: ValidationError::InvalidArgument { argument: "source", message },
-            ..
-        } if message.contains("compact source view")
-    ));
+    let actual = download(&gpu, &gpu_dst);
+    assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
 }
 
 #[test]
@@ -1137,9 +1126,11 @@ fn cuda_copy_into_updates_strided_view_on_cuda() {
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
 }
 
+/// Issue #1832: an arbitrary-stride source view copies in place, without the
+/// caller canonicalizing it first.
 #[test]
 #[ignore]
-fn cuda_copy_into_rejects_arbitrary_stride_source_without_materializing() {
+fn cuda_copy_into_consumes_arbitrary_stride_source() {
     let mut gpu = gpu_backend();
     let src_host = tensor_i32(vec![2, 2], vec![1, 2, 3, 4]);
     let dst_host = tensor_i32(vec![2, 2], vec![0, 0, 0, 0]);
@@ -1150,22 +1141,127 @@ fn cuda_copy_into_rejects_arbitrary_stride_source_without_materializing() {
     };
     let src_view = src.as_view().transpose_view([1, 0]).unwrap();
 
-    let err = gpu
-        .copy_into(&src_view, &mut dst.as_view_mut())
-        .unwrap_err();
+    gpu.copy_into(&src_view, &mut dst.as_view_mut()).unwrap();
 
-    assert_validation_kind(
-        &err,
-        "CudaBackend::copy_into",
-        ValidationKind::InvalidArgument,
-    );
-    assert!(matches!(
-        err,
-        Error::Validation {
-            source: ValidationError::InvalidArgument { argument: "source", message },
-            ..
-        } if message.contains("compact source view")
-    ));
+    let actual = download(&gpu, &gpu_dst);
+    assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
+}
+
+/// Issue #1832: a strided region at a nonzero offset inside a larger device
+/// buffer copies into a strided region of another buffer in one pass, and the
+/// destination elements outside the region stay untouched.
+///
+/// The source region is `dst[1 + 3i + j] = src[2 + i + 4j]` over a 2x3 block,
+/// which exercises an offset strided read and an offset non-compact write on
+/// the same launch.
+macro_rules! region_copy_case {
+    ($name:ident, $ty:ty, $tensor:ident, $value:expr) => {
+        #[test]
+        #[ignore = "requires CUDA 12.8+ GPU"]
+        fn $name() {
+            let mut gpu = gpu_backend();
+            let source_values: Vec<$ty> = (0..16).map($value).collect();
+            let gpu_src = upload(&gpu, &$tensor(vec![16], source_values.clone()));
+            let mut gpu_dst = upload(&gpu, &$tensor(vec![20], vec![$value(99); 20]));
+            let (Some(src), Some(dst)) = (gpu_src.as_typed::<$ty>(), gpu_dst.as_typed_mut::<$ty>())
+            else {
+                panic!("expected typed tensors");
+            };
+
+            let src_view = src.backend_region_view(vec![2, 3], vec![1, 4], 2).unwrap();
+            let mut dst_view = dst
+                .backend_region_view_mut(vec![2, 3], vec![3, 1], 1)
+                .unwrap();
+            gpu.copy_into(&src_view, &mut dst_view).unwrap();
+
+            let mut expected = vec![$value(99); 20];
+            for row in 0..2usize {
+                for column in 0..3usize {
+                    expected[1 + 3 * row + column] = source_values[2 + row + 4 * column];
+                }
+            }
+            let actual = download(&gpu, &gpu_dst);
+            assert_eq!(actual.as_slice::<$ty>().unwrap(), expected.as_slice());
+        }
+    };
+}
+
+region_copy_case!(
+    cuda_copy_into_moves_offset_strided_region_f32,
+    f32,
+    tensor_f32,
+    |value| value as f32
+);
+region_copy_case!(
+    cuda_copy_into_moves_offset_strided_region_f64,
+    f64,
+    tensor_f64,
+    f64::from
+);
+region_copy_case!(
+    cuda_copy_into_moves_offset_strided_region_i32,
+    i32,
+    tensor_i32,
+    |value| value
+);
+region_copy_case!(
+    cuda_copy_into_moves_offset_strided_region_i64,
+    i64,
+    tensor_i64,
+    i64::from
+);
+region_copy_case!(
+    cuda_copy_into_moves_offset_strided_region_c32,
+    Complex32,
+    tensor_c32,
+    |value| Complex32::new(value as f32, -(value as f32))
+);
+region_copy_case!(
+    cuda_copy_into_moves_offset_strided_region_c64,
+    Complex64,
+    tensor_c64,
+    |value| Complex64::new(f64::from(value), -f64::from(value))
+);
+
+/// Issue #1832: the erased read-into entry routes F32/F64/C32/C64 through
+/// cuTENSOR, so cover an offset strided source there as well, with a rank-3
+/// permuted destination.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_read_into_moves_offset_strided_region_through_cutensor() {
+    let mut gpu = gpu_backend();
+    let source_values: Vec<f64> = (0..48).map(f64::from).collect();
+    let gpu_src = upload(&gpu, &tensor_f64(vec![48], source_values.clone()));
+    let mut gpu_dst = upload(&gpu, &tensor_f64(vec![64], vec![-1.0; 64]));
+    let (Some(src), Some(dst)) = (gpu_src.as_typed::<f64>(), gpu_dst.as_typed_mut::<f64>()) else {
+        panic!("expected f64 tensors");
+    };
+
+    // 2x3x2 source block with axis strides (1, 4, 16) starting at offset 3.
+    let src_view = src
+        .backend_region_view(vec![2, 3, 2], vec![1, 4, 16], 3)
+        .unwrap();
+    // Destination with the two leading axes swapped in memory, at offset 5.
+    let dst_view = dst
+        .backend_region_view_mut(vec![2, 3, 2], vec![3, 1, 6], 5)
+        .unwrap();
+
+    gpu.copy_read_into(
+        TensorRead::from_view(TensorView::F64(src_view)),
+        TensorWrite::from_view(TensorViewMut::F64(dst_view)),
+    )
+    .unwrap();
+
+    let mut expected = vec![-1.0f64; 64];
+    for i in 0..2usize {
+        for j in 0..3usize {
+            for k in 0..2usize {
+                expected[5 + 3 * i + j + 6 * k] = source_values[3 + i + 4 * j + 16 * k];
+            }
+        }
+    }
+    let actual = download(&gpu, &gpu_dst);
+    assert_eq!(actual.as_slice::<f64>().unwrap(), expected.as_slice());
 }
 
 #[test]
@@ -1235,4 +1331,34 @@ fn cuda_copy_into_reports_typed_shape_mismatch() {
         .unwrap_err();
 
     assert_shape_mismatch(&err, "CudaBackend::copy_into", &[2], &[3]);
+}
+
+/// Issue #1832: materializing an offset strided device region reads the region
+/// in place. The vendor path declares the element-size alignment here, so this
+/// covers the offset descriptor rather than the alignment regression that
+/// `cuda_copy_read_into_moves_offset_strided_region_through_cutensor` pins.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_to_contiguous_read_materializes_offset_strided_region() {
+    let mut gpu = gpu_backend();
+    let source_values: Vec<f64> = (0..48).map(f64::from).collect();
+    let gpu_src = upload(&gpu, &tensor_f64(vec![48], source_values.clone()));
+    let Some(src) = gpu_src.as_typed::<f64>() else {
+        panic!("expected f64 source");
+    };
+    let src_view = src.backend_region_view(vec![2, 3], vec![1, 4], 3).unwrap();
+
+    let materialized = gpu
+        .to_contiguous_read(TensorRead::from_view(TensorView::F64(src_view)))
+        .unwrap();
+
+    let mut expected = Vec::with_capacity(6);
+    for column in 0..3usize {
+        for row in 0..2usize {
+            expected.push(source_values[3 + row + 4 * column]);
+        }
+    }
+    let actual = download(&gpu, &materialized);
+    assert_eq!(actual.shape(), &[2, 3]);
+    assert_eq!(actual.as_slice::<f64>().unwrap(), expected.as_slice());
 }

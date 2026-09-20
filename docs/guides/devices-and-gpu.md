@@ -138,10 +138,27 @@ For downstream PTX, CUBIN, NVRTC, or device-library kernels, see
 
 `TensorStructural::copy_read_into` can reuse an already allocated CUDA
 destination; for supported floating and complex permutation layouts it uses
-the backend-owned cuTENSOR permutation plan cache. The source and destination
-must be distinct allocations. CUDA does not silently fall back when the
-required NVIDIA library stack is unavailable; the operation returns a typed
-library/provider error instead.
+the backend-owned cuTENSOR permutation plan cache. Both operands may be
+arbitrary-stride region views at a nonzero offset inside a larger allocation:
+each side is described by its own extents, strides, and offset, so a block
+region is read and written in place instead of being canonicalized into
+scratch first. Reversed (negative-stride) and broadcast source layouts, which
+cuTENSOR descriptors cannot represent, run the native strided kernel instead.
+The source and destination must be distinct allocations. CUDA does not
+silently fall back when the required NVIDIA library stack is unavailable; the
+operation returns a typed library/provider error instead.
+
+`BackendSession::axpby_read_into_accum` keeps the documented compact
+destination contract, and consumes an arbitrary-stride or offset `x` through
+one native strided-source pass rather than canonicalizing it; a compact `x`
+still runs the single cuBLAS `geam` call.
+
+The CUDA extension session exposes `Session::fill_zero_write`, the `beta = 0`
+reset for storage the caller owns. It never reads the previous contents, so a
+stale `NaN`/`Inf` cannot survive and `-0.0` is normalized to `+0.0`, which
+`0 * y` cannot promise. A compact destination (including an offset region
+view) is filled by one stream-ordered memset; a strided region view runs one
+native fill kernel and leaves every element outside the region untouched.
 
 ## CUDA and NVIDIA library compatibility
 

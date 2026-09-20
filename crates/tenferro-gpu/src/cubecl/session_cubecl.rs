@@ -135,6 +135,43 @@ impl<'s> Session<'s> {
         super::interop::alloc_zero_output(&self.runtime, shape)
     }
 
+    /// Overwrite a caller-owned CUDA destination with an exact `+0.0`.
+    ///
+    /// This is the `beta = 0` reset for re-executing an accumulate-form
+    /// operation into storage the caller keeps: the previous contents are never
+    /// read, so a stale `NaN` or `Inf` cannot survive and `-0.0` is normalized
+    /// to `+0.0`, which `0 * y` cannot promise. A compact destination
+    /// (including a nonzero-offset region view) is filled by one stream-ordered
+    /// memset, so nothing is allocated and no kernel is compiled; a strided
+    /// region view runs one native fill kernel over its own coordinates and
+    /// leaves every element outside the region untouched.
+    ///
+    /// Supports `F32`, `F64`, `I32`, `I64`, `C32`, `C64`, and compact `Bool`
+    /// destinations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the destination is not
+    /// resident on this session's runtime, [`crate::Error::Validation`] when
+    /// the destination layout or its byte span cannot be represented,
+    /// [`crate::Error::Unsupported`] for a strided `Bool` destination, and
+    /// [`crate::Error::BackendSource`] when the fill cannot be enqueued.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::cubecl::Session;
+    /// use tenferro_tensor::TensorWrite;
+    ///
+    /// fn reset(session: &Session<'_>) -> tenferro_tensor::Result<()> {
+    ///     let mut destination = session.alloc_output::<f32>(&[4])?;
+    ///     session.fill_zero_write(TensorWrite::from_tensor(&mut destination))
+    /// }
+    /// ```
+    pub fn fill_zero_write(&self, output: TensorWrite<'_>) -> crate::Result<()> {
+        super::interop::fill_zero_write(&self.runtime, output)
+    }
+
     /// Scale a mutable CUDA tensor in place by a real factor.
     ///
     /// Supports F32, F64, C32, and C64 payloads; the factor is interpreted as

@@ -116,21 +116,18 @@ pub fn alloc_zero_output<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<
 where
     T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
 {
-    let output = alloc_output::<T>(rt, shape)?;
-    dispatch::launch_nullary_into(
-        rt,
-        &output,
-        "alloc_zero_output",
-        dispatch::cube_count_for_len(output.n_elements())?,
-        dispatch::cube_dim_1d(),
-        |client, count, dim, out| unsafe {
-            // SAFETY: `launch_nullary_into` validates output residency and
-            // the launch domain; the fill kernel bounds every write by len.
-            crate::kernels::structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
-                client, count, dim, out,
-            );
-        },
-    )?;
+    let mut output = alloc_output::<T>(rt, shape)?;
+    // One stream-ordered memset over the fresh allocation: dtype-agnostic,
+    // exact `+0.0` bits, and no kernel compilation on the first call for a
+    // dtype. This is the same primitive `fill_zero_write` uses.
+    let len = output.n_elements();
+    if len > 0 {
+        let handle = dispatch::cubecl_buffer(&output, "alloc_zero_output")?
+            .handle()
+            .clone();
+        let prepared = dispatch::prepared_tensor_mut_access(&mut output, "alloc_zero_output")?;
+        fill_zero_span::<T>(rt, prepared, 0, len, handle)?;
+    }
     Ok(output)
 }
 
@@ -680,6 +677,223 @@ fn launch_scale_c64(
             CubeclCudaRuntime,
         >(client, count, dim, output, factor);
     }
+}
+
+const FILL_ZERO_OP: &str = "fill_zero_write";
+
+/// Overwrite every element a destination addresses with an exact `+0.0`.
+///
+/// This is the `beta = 0` reset a consumer needs when it re-executes an
+/// accumulate-form operation into storage it owns: the previous contents are
+/// never read, so a stale `NaN`/`Inf` cannot survive and `-0.0` is normalized,
+/// which `0 * y` cannot promise. Compact spans (including a nonzero offset) are
+/// filled with one stream-ordered `cuMemsetD8Async`, so no kernel is compiled
+/// and no device or host memory is allocated. A strided destination region runs
+/// one native fill kernel over its logical coordinates, leaving every element
+/// outside the region untouched.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeState`] when the destination is not resident
+/// on this runtime, [`crate::Error::Validation`] when the destination layout
+/// or its byte span cannot be represented, and [`crate::Error::BackendSource`]
+/// when the fill cannot be enqueued.
+pub fn fill_zero_write(rt: &CudaRuntime, output: TensorWrite<'_>) -> crate::Result<()> {
+    ensure_tensor_write_resident(rt, &output, FILL_ZERO_OP)?;
+    match output {
+        TensorWrite::Tensor(output) => match output.dtype() {
+            DType::F32 => fill_zero_typed_tensor::<f32>(rt, output),
+            DType::F64 => fill_zero_typed_tensor::<f64>(rt, output),
+            DType::I32 => fill_zero_typed_tensor::<i32>(rt, output),
+            DType::I64 => fill_zero_typed_tensor::<i64>(rt, output),
+            DType::Bool => fill_zero_typed_tensor::<bool>(rt, output),
+            DType::C32 => fill_zero_typed_tensor::<Complex32>(rt, output),
+            DType::C64 => fill_zero_typed_tensor::<Complex64>(rt, output),
+            dtype => Err(unsupported_dtype(FILL_ZERO_OP, dtype)),
+        },
+        TensorWrite::View(mut output) => match &mut output {
+            TensorViewMut::F32(output) => fill_zero_typed_view::<f32>(rt, output),
+            TensorViewMut::F64(output) => fill_zero_typed_view::<f64>(rt, output),
+            TensorViewMut::I32(output) => fill_zero_typed_view::<i32>(rt, output),
+            TensorViewMut::I64(output) => fill_zero_typed_view::<i64>(rt, output),
+            TensorViewMut::Bool(output) => fill_zero_bool_view(rt, output),
+            TensorViewMut::C32(output) => fill_zero_typed_view::<Complex32>(rt, output),
+            TensorViewMut::C64(output) => fill_zero_typed_view::<Complex64>(rt, output),
+        },
+    }
+}
+
+fn fill_zero_typed_tensor<T>(rt: &CudaRuntime, output: &mut crate::Tensor) -> crate::Result<()>
+where
+    T: TensorScalar + Clone + Send + Sync + 'static,
+{
+    let output = output
+        .as_typed_mut::<T>()
+        .ok_or_else(|| unsupported_dtype(FILL_ZERO_OP, T::dtype()))?;
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(());
+    }
+    let handle = dispatch::cubecl_buffer(output, FILL_ZERO_OP)?
+        .handle()
+        .clone();
+    let prepared = dispatch::prepared_tensor_mut_access(output, FILL_ZERO_OP)?;
+    // An owned runtime tensor is a compact span starting at its allocation.
+    fill_zero_span::<T>(rt, prepared, 0, len, handle)
+}
+
+fn fill_zero_typed_view<T>(
+    rt: &CudaRuntime,
+    output: &mut TypedTensorViewMut<'_, T>,
+) -> crate::Result<()>
+where
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+{
+    dispatch::ensure_view_mut_resident_on_runtime(rt, output, FILL_ZERO_OP)?;
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(());
+    }
+    if output.is_col_major_contiguous()? {
+        return fill_zero_view_span::<T>(rt, output, len);
+    }
+    fill_zero_strided_view::<T>(rt, output, len)
+}
+
+/// `Bool` destinations reuse the dtype-agnostic memset for a compact span.
+///
+/// A strided `Bool` region would need a `u8`-bound fill kernel, which is the
+/// same gap the CUDA backend already reports for `Bool` materialization and
+/// `copy_into`, so it stays an explicit typed error rather than a silent
+/// host round trip.
+fn fill_zero_bool_view(
+    rt: &CudaRuntime,
+    output: &mut TypedTensorViewMut<'_, bool>,
+) -> crate::Result<()> {
+    dispatch::ensure_view_mut_resident_on_runtime(rt, output, FILL_ZERO_OP)?;
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(());
+    }
+    if output.is_col_major_contiguous()? {
+        return fill_zero_view_span::<bool>(rt, output, len);
+    }
+    Err(crate::Error::unsupported(
+        FILL_ZERO_OP,
+        "CUDA fill_zero_write does not support a strided Bool destination; \
+         fill a compact Bool destination or download the tensor to host",
+    ))
+}
+
+fn fill_zero_view_span<T>(
+    rt: &CudaRuntime,
+    output: &mut TypedTensorViewMut<'_, T>,
+    len: usize,
+) -> crate::Result<()>
+where
+    T: TensorScalar + Clone + 'static,
+{
+    let handle = dispatch::cubecl_view_mut_buffer(output, FILL_ZERO_OP)?
+        .handle()
+        .clone();
+    let offset = output.offset();
+    let prepared = dispatch::prepared_view_mut_access(output, FILL_ZERO_OP)?;
+    fill_zero_span::<T>(rt, prepared, offset, len, handle)
+}
+
+/// Fill a compact device span of `len` elements with zero bytes.
+///
+/// The memset is enqueued on the runtime's CUDA stream, so it is ordered with
+/// the CubeCL kernels around it. `flush_cubecl` first submits CubeCL's pending
+/// host-side launches, which a raw stream call would otherwise overtake.
+fn fill_zero_span<T: 'static>(
+    rt: &CudaRuntime,
+    prepared: dispatch::CubeclPreparedAccess,
+    offset: isize,
+    len: usize,
+    handle: cubecl_runtime::server::Handle,
+) -> crate::Result<()> {
+    let byte_len = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+        crate::Error::invalid_argument(FILL_ZERO_OP, "shape", "destination byte length overflows")
+    })?;
+    rt.set_current_cuda_context(FILL_ZERO_OP)?;
+    let ptr = dispatch::offset_device_ptr::<T>(rt, prepared, offset, FILL_ZERO_OP)?;
+    rt.flush_cubecl(FILL_ZERO_OP)?;
+    let stream = rt.raw_cuda_stream()?;
+    let cross_stream = if rt.is_current_stream_slot(&handle) {
+        Vec::new()
+    } else {
+        vec![handle]
+    };
+    // SAFETY: `ptr` resolves the destination's prepared device access on this
+    // runtime, `byte_len` is the checked byte product of the validated compact
+    // element span reachable from that pointer, and `stream` is this runtime's
+    // CUDA stream for the current CubeCL stream slot. The memset writes only
+    // that span and reads nothing.
+    let result = unsafe {
+        cudarc::driver::result::memset_d8_async(
+            ptr as u64,
+            0,
+            byte_len,
+            stream as usize as cudarc::driver::sys::CUstream,
+        )
+    }
+    .map_err(|err| crate::Error::backend_source(FILL_ZERO_OP, err));
+    rt.finish_vendor_enqueue(FILL_ZERO_OP, cross_stream, result)
+}
+
+/// Fill the logical coordinates of a strided destination region with zero.
+fn fill_zero_strided_view<T>(
+    rt: &CudaRuntime,
+    output: &mut TypedTensorViewMut<'_, T>,
+    len: usize,
+) -> crate::Result<()>
+where
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+{
+    let dims = output.shape().to_vec();
+    let strides = output
+        .strides()
+        .iter()
+        .map(|&stride| {
+            i64::try_from(stride).map_err(|_| {
+                crate::Error::invalid_argument(
+                    FILL_ZERO_OP,
+                    "layout",
+                    "destination stride exceeds the CubeCL i64 metadata limit",
+                )
+            })
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    let offset = i64::try_from(output.offset()).map_err(|_| {
+        crate::Error::invalid_argument(
+            FILL_ZERO_OP,
+            "layout",
+            "destination offset exceeds the CubeCL i64 metadata limit",
+        )
+    })?;
+    let rank = dims.len();
+    let count = dispatch::cube_count_for_len(len)?;
+    let dim = dispatch::cube_dim_1d();
+    let output_arg = dispatch::typed_view_mut_array_arg(output, FILL_ZERO_OP)?;
+    unsafe {
+        // SAFETY: the array binding covers the destination's whole root
+        // allocation, the view layout was validated as reachable and injective
+        // when the view was created, and the launch domain visits each logical
+        // coordinate of the region exactly once.
+        crate::kernels::structural::fill_zero_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+            rt.client(),
+            count,
+            dim,
+            output_arg,
+            dispatch::comptime_sequence(&dims),
+            dispatch::comptime_sequence(&strides),
+            offset,
+            len,
+            rank,
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

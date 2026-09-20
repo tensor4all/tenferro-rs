@@ -548,11 +548,19 @@ CUDA library calls:
 | Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge for all public tensor dtypes |
 | Elementwise | `F32`/`F64` arithmetic, comparison, selection, clamp, and analytic unary ops; `I32`/`I64` add/sub/mul/div/rem, neg/abs/sign/pow, compare/select, and minimum/maximum; `C32`/`C64` add/mul/div/neg/conj/sign and real-output `abs` |
 | Reductions | sum/prod for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; min/max for `F32`, `F64`, `I32`, and `I64` |
-| Structural | reshape, transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks, slice, and pad support all public tensor dtypes; `F32`/`F64`/`C32`/`C64` transpose and view canonicalization use cuTENSOR permutation on CUDA; integer and Bool data movement use CubeCL kernels because cuTENSOR lacks those permutation compute descriptors |
+| Structural | reshape, transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks, slice, and pad support all public tensor dtypes; `F32`/`F64`/`C32`/`C64` transpose and view canonicalization use cuTENSOR permutation on CUDA; integer and Bool data movement use CubeCL kernels because cuTENSOR lacks those permutation compute descriptors. `copy_read_into`/`copy_into` accept arbitrary-stride and offset region views on both operands; reversed and broadcast sources route to the native strided kernel because cuTENSOR descriptors require positive strides. `Session::fill_zero_write` resets a caller-owned destination to exact `+0.0` with a stream-ordered memset (compact spans, including offset regions) or one native fill kernel (strided regions) |
 | DType conversion | checked `convert` and explicit `cast` cover every CPU-supported pair among the seven public dtypes; explicit real/complex-to-integer validation uses a small device flag and never downloads the input tensor |
 | Indexing | gather and dynamic_slice support `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with CPU-supported `F32`, `F64`, `I32`, or `I64` index tensors; additive scatter remains limited to floating and complex data and explicitly excludes Bool data |
 | Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes |
 | Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, LU solve, and triangular solve for supported real and complex floating dtypes |
+| BLAS-1 | cuBLAS-backed `vdot_read`, `norm_squared_read`, and `axpby_read_into_accum` for `F32`/`F64`/`C32`/`C64`. An arbitrary-stride or offset `x` runs one native strided-source pass, a layout the vendor vector entries cannot address; the destination stays compact per the shared accumulate contract |
+
+A cuTENSOR operand descriptor advertises the alignment its pointer guarantees,
+and cuTENSOR selects vectorized kernels from it. A region view folds its
+element offset into the operand pointer, so the descriptor must report the
+alignment of that shifted address, not the 256-byte allocation alignment;
+claiming more than the pointer can satisfy fails the launch with `misaligned
+address`.
 
 CUDA SVD follows JAX-compatible default driver selection as an internal backend
 policy: use cuSOLVER Jacobi `gesvdj` when both matrix dimensions are at most

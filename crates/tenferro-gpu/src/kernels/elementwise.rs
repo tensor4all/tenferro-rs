@@ -134,6 +134,54 @@ macro_rules! unary_both_kernel {
     };
 }
 
+/// `y[i] <- coefficients[0] * x[strided(i)] + coefficients[1] * y[i]` for a
+/// strided or offset `x`.
+///
+/// The compact `x` layout is served by cuBLAS `geam`; this kernel covers the
+/// arbitrary-stride source layouts no BLAS-1 vendor entry can address, so the
+/// caller never has to canonicalize `x` into scratch first. `y` stays compact
+/// per the shared accumulate contract and is addressed as `y_offset + i`.
+///
+/// INVARIANT: the coefficients arrive as a two-element device array rather than
+/// kernel scalars because the CUDA dialect's kernel-argument type info panics
+/// while sizing a complex scalar parameter; the array form is the same explicit
+/// device-constant boundary the in-place scaling kernels use.
+macro_rules! axpby_strided_source_kernel {
+    ($name:ident, $bound:ident) => {
+        #[cube(launch_unchecked)]
+        pub fn $name<E: $bound>(
+            y: &mut Array<E>,
+            x: &Array<E>,
+            coefficients: &Array<E>,
+            #[comptime] dims: Sequence<usize>,
+            #[comptime] x_strides: Sequence<i64>,
+            x_offset: i64,
+            y_offset: i64,
+            #[comptime] len: usize,
+            #[comptime] rank: usize,
+        ) {
+            if ABSOLUTE_POS < len {
+                let mut flat = ABSOLUTE_POS;
+                let mut x_index = x_offset;
+                #[unroll]
+                for axis in 0..rank {
+                    let dim = comptime! { *dims.index(axis) };
+                    let coordinate = flat % dim;
+                    flat /= dim;
+                    let x_stride = comptime! { *x_strides.index(axis) };
+                    x_index += (coordinate as i64) * x_stride;
+                }
+                let y_index = usize::cast_from(y_offset) + ABSOLUTE_POS;
+                y[y_index] =
+                    coefficients[0] * x[usize::cast_from(x_index)] + coefficients[1] * y[y_index];
+            }
+        }
+    };
+}
+
+axpby_strided_source_kernel!(axpby_strided_source_float, Float);
+axpby_strided_source_kernel!(axpby_strided_source_complex, ComplexCore);
+
 binary_float_complex_kernel!(add_float, add_complex, +);
 binary_float_complex_kernel!(sub_float, sub_complex, -);
 binary_float_complex_kernel!(mul_float, mul_complex, *);

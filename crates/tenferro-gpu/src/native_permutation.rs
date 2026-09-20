@@ -109,6 +109,86 @@ impl NativeTransposeTile {
     }
 }
 
+/// Validated launch metadata for one native strided-to-strided copy.
+///
+/// Both operands carry their own strides and offsets inside their root
+/// allocations, so this plan covers copies between regions of larger buffers
+/// that neither side can express as a compact tensor. Axis fusion is shared
+/// with [`NativePermutationPlan`], which adds the compact-destination
+/// requirement and the kernel classification on top of this plan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NativeStridedCopyPlan {
+    pub(crate) dims: Vec<usize>,
+    pub(crate) src_strides: Vec<isize>,
+    pub(crate) dst_strides: Vec<isize>,
+    pub(crate) src_offset: isize,
+    pub(crate) dst_offset: isize,
+    pub(crate) len: usize,
+}
+
+impl NativeStridedCopyPlan {
+    /// Validate both operand layouts and fuse the affine axes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] when the shape product overflows,
+    /// when either layout reaches outside its allocation, when the destination
+    /// is not injective, or when the two allocations overlap.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        op: &'static str,
+        dims: &[usize],
+        src_strides: &[isize],
+        src_offset: isize,
+        src_allocation_len: usize,
+        dst_strides: &[isize],
+        dst_offset: isize,
+        dst_allocation_len: usize,
+        allocations_overlap: bool,
+    ) -> crate::Result<Self> {
+        let len = checked_shape_product(op, "shape", dims)?;
+        if allocations_overlap && len != 0 {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "allocations",
+                "source and destination allocations overlap",
+            ));
+        }
+
+        let source = TensorLayout::<DynRank>::from_parts(
+            dims.to_vec().into(),
+            src_strides.to_vec().into(),
+            src_offset,
+            src_allocation_len,
+        )
+        .map_err(|source| crate::Error::validation(op, source))?;
+        let destination = TensorLayout::<DynRank>::from_parts(
+            dims.to_vec().into(),
+            dst_strides.to_vec().into(),
+            dst_offset,
+            dst_allocation_len,
+        )
+        .map_err(|source| crate::Error::validation(op, source))?;
+        destination
+            .validate_mutable_no_overlap()
+            .map_err(|source| crate::Error::validation(op, source))?;
+
+        let fusion = plan_bilateral_fusion(source.shape(), source.strides(), destination.strides())
+            .map_err(|source| {
+                crate::Error::invalid_argument(op, "fusion metadata", source.to_string())
+            })?;
+
+        Ok(Self {
+            dims: fusion.dims,
+            src_strides: fusion.src_strides,
+            dst_strides: fusion.dst_strides,
+            src_offset,
+            dst_offset,
+            len,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NativePermutationPlan {
     pub(crate) kind: NativePermutationKind,
@@ -131,7 +211,6 @@ impl NativePermutationPlan {
         dst_allocation_len: usize,
         allocations_overlap: bool,
     ) -> crate::Result<Self> {
-        let len = checked_shape_product(op, "shape", dims)?;
         let expected_dst_strides = compact_col_major_strides(op, dims)?;
         if dst_strides != expected_dst_strides {
             return Err(crate::Error::invalid_argument(
@@ -143,45 +222,26 @@ impl NativePermutationPlan {
                 ),
             ));
         }
-        if allocations_overlap && len != 0 {
-            return Err(crate::Error::invalid_argument(
-                op,
-                "allocations",
-                "source and destination allocations overlap",
-            ));
-        }
-
-        let source = TensorLayout::<DynRank>::from_parts(
-            dims.to_vec().into(),
-            src_strides.to_vec().into(),
+        let plan = NativeStridedCopyPlan::new(
+            op,
+            dims,
+            src_strides,
             src_offset,
             src_allocation_len,
-        )
-        .map_err(|source| crate::Error::validation(op, source))?;
-        let destination = TensorLayout::<DynRank>::from_parts(
-            dims.to_vec().into(),
-            dst_strides.to_vec().into(),
+            dst_strides,
             0,
             dst_allocation_len,
-        )
-        .map_err(|source| crate::Error::validation(op, source))?;
-        destination
-            .validate_mutable_no_overlap()
-            .map_err(|source| crate::Error::validation(op, source))?;
-
-        let fusion = plan_bilateral_fusion(source.shape(), source.strides(), destination.strides())
-            .map_err(|source| {
-                crate::Error::invalid_argument(op, "fusion metadata", source.to_string())
-            })?;
-        let kind = classify(&fusion.dims, &fusion.src_strides, &fusion.dst_strides, len);
+            allocations_overlap,
+        )?;
+        let kind = classify(&plan.dims, &plan.src_strides, &plan.dst_strides, plan.len);
 
         Ok(Self {
             kind,
-            dims: fusion.dims,
-            src_strides: fusion.src_strides,
-            dst_strides: fusion.dst_strides,
-            src_offset,
-            len,
+            dims: plan.dims,
+            src_strides: plan.src_strides,
+            dst_strides: plan.dst_strides,
+            src_offset: plan.src_offset,
+            len: plan.len,
         })
     }
 

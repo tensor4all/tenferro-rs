@@ -32,6 +32,32 @@ pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
     }
 }
 
+/// Write an exact zero to every logical coordinate of a strided destination
+/// region, leaving the elements the region does not address untouched.
+#[cube(launch_unchecked)]
+pub fn fill_zero_view_kernel<E: CubePrimitive>(
+    out: &mut Array<E>,
+    #[comptime] dims: Sequence<usize>,
+    #[comptime] strides: Sequence<i64>,
+    base_offset: i64,
+    #[comptime] len: usize,
+    #[comptime] rank: usize,
+) {
+    if ABSOLUTE_POS < len {
+        let mut flat = ABSOLUTE_POS;
+        let mut index = base_offset;
+        #[unroll]
+        for axis in 0..rank {
+            let dim = comptime! { *dims.index(axis) };
+            let coordinate = flat % dim;
+            flat /= dim;
+            let stride = comptime! { *strides.index(axis) };
+            index += (coordinate as i64) * stride;
+        }
+        out[usize::cast_from(index)] = zero_value::<E>();
+    }
+}
+
 #[cube(launch_unchecked)]
 pub fn copy_bool_kernel(out: &mut Array<u8>, input: &Array<u8>) {
     if ABSOLUTE_POS < out.len() {
@@ -148,6 +174,36 @@ pub fn contiguous_to_view_kernel<E: CubePrimitive>(
         let dst_offset =
             strided_view_offset_from_tensor(ABSOLUTE_POS, src, strides, base_offset, rank);
         dst[dst_offset] = src[ABSOLUTE_POS];
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn strided_to_strided_kernel<E: CubePrimitive>(
+    dst: &mut Array<E>,
+    src: &Array<E>,
+    #[comptime] dims: Sequence<usize>,
+    #[comptime] src_strides: Sequence<i64>,
+    #[comptime] dst_strides: Sequence<i64>,
+    src_offset: i64,
+    dst_offset: i64,
+    #[comptime] len: usize,
+    #[comptime] rank: usize,
+) {
+    if ABSOLUTE_POS < len {
+        let mut flat = ABSOLUTE_POS;
+        let mut src_index = src_offset;
+        let mut dst_index = dst_offset;
+        #[unroll]
+        for axis in 0..rank {
+            let dim = comptime! { *dims.index(axis) };
+            let coordinate = flat % dim;
+            flat /= dim;
+            let src_stride = comptime! { *src_strides.index(axis) };
+            let dst_stride = comptime! { *dst_strides.index(axis) };
+            src_index += (coordinate as i64) * src_stride;
+            dst_index += (coordinate as i64) * dst_stride;
+        }
+        dst[usize::cast_from(dst_index)] = src[usize::cast_from(src_index)];
     }
 }
 

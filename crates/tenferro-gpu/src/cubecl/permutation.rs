@@ -403,13 +403,16 @@ where
     Ok(output)
 }
 
-/// Copy a compact source view into a caller-owned CUDA destination view using
-/// the same cached cuTENSOR permutation plan as allocating materialization.
+/// Copy a source view into a caller-owned CUDA destination view using the same
+/// cached cuTENSOR permutation plan as allocating materialization.
 ///
-/// The caller selects this path only for layouts supported by cuTENSOR. This
-/// function deliberately does not fall back when cuTENSOR loading or plan
-/// creation fails: supported CUDA permutation paths require the NVIDIA
-/// library stack.
+/// Both operands are described by their own extents, strides, and offsets, so
+/// a strided region inside a larger allocation can be read or written directly
+/// without a canonicalizing copy. The caller selects this path only for
+/// layouts supported by cuTENSOR: strides must be positive, which excludes
+/// reversed and broadcast source views. This function deliberately does not
+/// fall back when cuTENSOR loading or plan creation fails: supported CUDA
+/// permutation paths require the NVIDIA library stack.
 pub(super) fn copy_view_into<T, R>(
     backend: &CudaBackend,
     src: &TypedTensorView<'_, T, R>,
@@ -442,20 +445,18 @@ where
             "CUDA copy_into source and destination allocations must not alias",
         ));
     }
-    if !src.is_col_major_contiguous()? || src.offset() != 0 {
-        return Err(crate::Error::invalid_argument(
-            op,
-            "source",
-            "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization",
-        ));
-    }
     if dst.n_elements() == 0 {
         return Ok(());
     }
 
     backend.runtime().set_current_cuda_context(op)?;
     let input_extents = dims_to_i64(op, src.shape())?;
-    let input_strides = compact_strides_i64(op, src.shape())?;
+    // Describe the source with its own strides, exactly like the allocating
+    // materialization path above. cuTENSOR accepts explicit strides on every
+    // operand, and `resolve_prepared_device_region` folds the view offset into
+    // the operand pointer, so a region inside a larger allocation is read in
+    // place instead of being canonicalized into scratch first.
+    let input_strides = view_strides_i64(src.strides(), op)?;
     let modes = identity_modes(op, src.shape().len())?;
     // Describe the destination in physical stride order. This is equivalent
     // to the logical-order view descriptor, but lets cuTENSOR see the same
@@ -687,10 +688,7 @@ where
     R: TensorRank,
 {
     ensure_resident_on_runtime(rt, tensor, op)?;
-    Ok(ResolvedPermutationOperand {
-        ptr: typed_device_ptr(rt, tensor, op)?,
-        alignment: CUDA_ALLOCATION_ALIGNMENT,
-    })
+    Ok(resolved_operand(typed_device_ptr(rt, tensor, op)?))
 }
 
 fn resolve_view_operand<T, R>(
@@ -750,10 +748,34 @@ fn resolve_prepared_device_region<T: TensorScalar + 'static>(
         .ok_or_else(|| {
             Error::invalid_argument(op, "layout", "view device address overflows u64")
         })?;
-    Ok(ResolvedPermutationOperand {
-        ptr: cuda_device_ptr_from_addr(addr, op)?,
-        alignment: CUDA_ALLOCATION_ALIGNMENT,
-    })
+    Ok(resolved_operand(cuda_device_ptr_from_addr(addr, op)?))
+}
+
+/// Pair a resolved operand pointer with the alignment it actually guarantees.
+///
+/// cuTENSOR selects vectorized kernels from the alignment a descriptor
+/// advertises, so a region view that folds its element offset into the pointer
+/// must report the alignment of that shifted address. Reporting the
+/// allocation's 256-byte alignment for an operand that starts mid-allocation
+/// makes cuTENSOR issue a vectorized kernel against a pointer that cannot
+/// satisfy it, which fails the launch with `misaligned address`.
+fn resolved_operand(ptr: *mut c_void) -> ResolvedPermutationOperand {
+    ResolvedPermutationOperand {
+        alignment: device_address_alignment(ptr as u64),
+        ptr,
+    }
+}
+
+/// Largest power-of-two byte alignment of `address`, capped at the CUDA
+/// allocation alignment.
+fn device_address_alignment(address: u64) -> u32 {
+    if address == 0 {
+        return CUDA_ALLOCATION_ALIGNMENT;
+    }
+    let capped_bits = address
+        .trailing_zeros()
+        .min(CUDA_ALLOCATION_ALIGNMENT.trailing_zeros());
+    1u32 << capped_bits
 }
 
 fn view_descriptor_alignment_requirement<T>() -> u32 {

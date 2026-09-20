@@ -16,20 +16,27 @@
 //! - `axpby_read_into_accum` enqueues one in-place vector
 //!   `cublas{S,D,C,Z}geam` (`y <- alpha * x + beta * y`); the exact-dtype
 //!   coefficients are read from host memory at enqueue time (host pointer
-//!   mode), which does not block.
+//!   mode), which does not block. An arbitrary-stride `x` is a layout no
+//!   BLAS-1 vendor entry can address, so it runs one native strided-source
+//!   kernel instead, reading `x` in place rather than canonicalizing it.
 //!
-//! Non-contiguous inputs are canonicalized on the device through the backend's
-//! existing `to_contiguous_read` path before the cuBLAS call; tensors never
-//! move between host and device here. Compact views with a nonzero offset are
-//! consumed in place via pointer arithmetic. The per-(device, stream) cuBLAS
-//! handle cache lives on [`CudaRuntime`].
+//! `vdot_read` and `norm_squared_read` still canonicalize a non-contiguous
+//! input on the device through the backend's existing `to_contiguous_read`
+//! path before the cuBLAS call; tensors never move between host and device
+//! here. Compact views with a nonzero offset are consumed in place via pointer
+//! arithmetic. The per-(device, stream) cuBLAS handle cache lives on
+//! [`CudaRuntime`].
 //!
 //! When the cuBLAS shared library cannot be loaded, these operations fail with
 //! a typed load error; they do not fall back to native CubeCL kernels.
 
 use std::ffi::c_void;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use cubecl::prelude::{CubeElement, CubePrimitive};
+use cubecl::client::ComputeClient;
+use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use cudarc::cublas::sys as cublas;
 use num_complex::{Complex32, Complex64};
 
@@ -39,13 +46,15 @@ use tenferro_tensor::backend::{
 use tenferro_tensor::{ContractionScalar, DType, TensorRead, TensorWrite};
 
 use super::dispatch::{
-    alloc_output, cubecl_buffer, cubecl_view_buffer, cubecl_view_mut_buffer,
-    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
-    ensure_view_resident_on_runtime, prepared_view_access, prepared_view_mut_access,
+    alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, cubecl_buffer,
+    cubecl_view_buffer, cubecl_view_mut_buffer, ensure_resident_on_runtime,
+    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, offset_device_ptr,
+    prepared_view_access, prepared_view_mut_access, typed_tensor_array_arg,
+    typed_tensor_mut_array_arg, typed_view_array_arg, typed_view_mut_array_arg,
 };
 use super::error::unsupported_dtype;
 use super::gemm::typed_device_ptr;
-use super::interop::{alloc_zero_output, cuda_device_ptr_from_addr};
+use super::interop::{alloc_zero_output, upload_typed_tensor};
 use super::runtime::check_cublas;
 use super::{CudaBackend, CudaRuntime};
 use crate::backend::TensorStructural;
@@ -78,6 +87,22 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
+/// Counts native strided-source AXPBY passes so a regression that reintroduces
+/// a hidden `x` canonicalization (which would route back through cuBLAS) fails
+/// the data-movement assertion instead of only the numerics.
+#[cfg(test)]
+static STRIDED_SOURCE_PASSES: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_strided_source_passes_for_test() {
+    STRIDED_SOURCE_PASSES.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn strided_source_passes_for_test() -> usize {
+    STRIDED_SOURCE_PASSES.load(Ordering::SeqCst)
+}
+
 const VDOT_OP: &str = "BackendSession::vdot_read";
 const NORM_OP: &str = "BackendSession::norm_squared_read";
 const AXPBY_OP: &str = "BackendSession::axpby_read_into_accum";
@@ -171,15 +196,6 @@ pub(super) fn axpby_read_into_accum(
     mut y: TensorWrite<'_>,
 ) -> crate::Result<()> {
     validate_axpby_read_into_accum(alpha, &x, beta, &y)?;
-    let materialized = if x.is_col_major_contiguous()? {
-        None
-    } else {
-        Some(Box::new(backend.to_contiguous_read(x.clone())?))
-    };
-    let x = materialized
-        .as_deref()
-        .map(TensorRead::from_tensor)
-        .unwrap_or(x);
     match x.dtype() {
         DType::F32 => axpby_typed::<f32>(backend, alpha, &x, beta, &mut y),
         DType::F64 => axpby_typed::<f64>(backend, alpha, &x, beta, &mut y),
@@ -190,7 +206,7 @@ pub(super) fn axpby_read_into_accum(
     }
 }
 
-/// Read-slot operand: an owned compact tensor or a compact contiguous view.
+/// Read-slot operand: an owned compact tensor or a borrowed view.
 enum ReadRef<'a, 'b, T> {
     Owned(&'a TypedTensor<T>),
     View(&'a TypedTensorView<'b, T>),
@@ -227,6 +243,15 @@ impl<T: TensorScalar + 'static> ReadRef<'_, '_, T> {
             Self::View(view) => Ok(cubecl_view_buffer(view, op)?.handle()),
         }
     }
+
+    /// Whether this operand is a compact column-major span, which is the
+    /// layout the cuBLAS vector entries can address directly.
+    fn is_compact(&self) -> crate::Result<bool> {
+        match self {
+            Self::Owned(_) => Ok(true),
+            Self::View(view) => view.is_col_major_contiguous(),
+        }
+    }
 }
 
 /// Write-slot operand: an owned compact tensor or a compact contiguous view.
@@ -260,6 +285,23 @@ impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
             Self::View(view) => Ok(cubecl_view_mut_buffer(view, op)?.handle()),
         }
     }
+
+    fn offset(&self) -> isize {
+        match self {
+            Self::Owned(_) => 0,
+            Self::View(view) => view.offset(),
+        }
+    }
+}
+
+impl<T: CubeElement + TensorScalar + Clone + 'static> WriteRef<'_, '_, T> {
+    /// Bind the destination's whole root allocation for a native kernel launch.
+    fn array_arg(&mut self, op: &'static str) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+        match self {
+            Self::Owned(tensor) => typed_tensor_mut_array_arg(tensor, op),
+            Self::View(view) => typed_view_mut_array_arg(view, op),
+        }
+    }
 }
 
 fn cross_stream_handles<'a>(
@@ -271,30 +313,6 @@ fn cross_stream_handles<'a>(
         .filter(|handle| !rt.is_current_stream_slot(handle))
         .cloned()
         .collect()
-}
-
-/// Resolve a compact view region to `base + offset * size_of::<T>()`.
-fn offset_device_ptr<T: 'static>(
-    rt: &CudaRuntime,
-    prepared: super::dispatch::CubeclPreparedAccess,
-    offset: isize,
-    op: &'static str,
-) -> crate::Result<*mut c_void> {
-    let offset = usize::try_from(offset)
-        .map_err(|_| Error::invalid_argument(op, "layout", "view offset must be nonnegative"))?;
-    let resource = rt
-        .client()
-        .get_resource(prepared.into_handle())
-        .map_err(|err| Error::backend_source(op, err))?;
-    let offset_bytes = offset
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or_else(|| Error::invalid_argument(op, "layout", "view byte offset overflows"))?;
-    let addr = resource
-        .resource()
-        .ptr
-        .checked_add(offset_bytes as u64)
-        .ok_or_else(|| Error::invalid_argument(op, "layout", "view device address overflows"))?;
-    cuda_device_ptr_from_addr(addr, op)
 }
 
 fn read_ref<'a, 'b, T: CublasScalar>(read: &'a TensorRead<'b>) -> Option<ReadRef<'a, 'b, T>> {
@@ -442,6 +460,16 @@ fn axpby_typed<T: CublasScalar>(
     if len == 0 {
         return Ok(());
     }
+    if !x.is_compact()? {
+        let ReadRef::View(x_view) = x else {
+            // INVARIANT: an owned runtime tensor is always compact
+            // column-major, so only a view can report a strided layout.
+            return Err(Error::Internal(
+                "compact owned AXPBY operand reported a strided layout".into(),
+            ));
+        };
+        return axpby_strided_source_typed::<T>(rt, alpha, x_view, beta, &mut y);
+    }
     let x_ptr = x.device_ptr(rt, AXPBY_OP)?;
     let y_ptr = y.device_ptr(rt, AXPBY_OP)?;
     let n = blas1_len(len, AXPBY_OP)?;
@@ -461,6 +489,92 @@ fn axpby_typed<T: CublasScalar>(
         },
     )?;
     Ok(())
+}
+
+/// Apply `y <- alpha * x + beta * y` for an arbitrary-stride or offset `x`.
+///
+/// cuBLAS vector entries can only address a compact span, and the shared
+/// contract keeps `y` compact, so this is the layout the vendor path does not
+/// cover. One native kernel reads `x` through its own strides and offset, which
+/// keeps the operation a single pass with no intermediate allocation, instead
+/// of canonicalizing `x` into scratch first.
+fn axpby_strided_source_typed<T: CublasScalar>(
+    rt: &CudaRuntime,
+    alpha: T,
+    x: &TypedTensorView<'_, T>,
+    beta: T,
+    y: &mut WriteRef<'_, '_, T>,
+) -> crate::Result<()> {
+    #[cfg(test)]
+    STRIDED_SOURCE_PASSES.fetch_add(1, Ordering::SeqCst);
+    let plan = NativeStridedSourcePlan::new(AXPBY_OP, x.shape(), x.strides(), x.offset())?;
+    let y_offset = i64::try_from(y.offset()).map_err(|_| {
+        Error::invalid_argument(AXPBY_OP, "layout", "destination offset overflows i64")
+    })?;
+    // The coefficients become an explicit two-element device constant, the same
+    // boundary the in-place scaling kernels use. Operand tensors never move
+    // between host and device here.
+    let coefficients = upload_typed_tensor(rt, vec![2], vec![alpha, beta])?;
+    let coefficients_arg = typed_tensor_array_arg(&coefficients, AXPBY_OP)?;
+    let x_arg = typed_view_array_arg(x, AXPBY_OP)?;
+    let y_arg = y.array_arg(AXPBY_OP)?;
+    unsafe {
+        // SAFETY: Both operand bindings cover their whole root allocation. The
+        // plan proved every logical coordinate of `x` stays inside its
+        // allocation span, shared validation proved `y` is a compact injective
+        // span of the same shape that does not overlap `x`, the coefficient
+        // array holds exactly the two elements the kernel reads, and the launch
+        // domain visits each logical coordinate exactly once.
+        T::launch_axpby_strided_source(
+            rt.client(),
+            cube_count_for_len(plan.len)?,
+            cube_dim_1d(),
+            y_arg,
+            x_arg,
+            coefficients_arg,
+            &plan.dims,
+            &plan.strides,
+            plan.offset,
+            y_offset,
+            plan.len,
+        );
+    }
+    Ok(())
+}
+
+/// Validated launch metadata for a strided-source BLAS-1 pass.
+struct NativeStridedSourcePlan {
+    dims: Vec<usize>,
+    strides: Vec<i64>,
+    offset: i64,
+    len: usize,
+}
+
+impl NativeStridedSourcePlan {
+    fn new(
+        op: &'static str,
+        shape: &[usize],
+        strides: &[isize],
+        offset: isize,
+    ) -> crate::Result<Self> {
+        let len = tenferro_tensor::validate::checked_shape_product(op, "shape", shape)?;
+        let offset = i64::try_from(offset)
+            .map_err(|_| Error::invalid_argument(op, "layout", "source offset overflows i64"))?;
+        let strides = strides
+            .iter()
+            .map(|&stride| {
+                i64::try_from(stride).map_err(|_| {
+                    Error::invalid_argument(op, "layout", "source stride overflows i64")
+                })
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        Ok(Self {
+            dims: shape.to_vec(),
+            strides,
+            offset,
+            len,
+        })
+    }
 }
 
 /// Scalar-family dispatch for the cuBLAS BLAS1 bindings.
@@ -501,6 +615,34 @@ pub(super) trait CublasScalar:
         result: *mut c_void,
     ) -> cublas::cublasStatus_t;
 
+    /// Launch the native strided-source `y <- alpha * x + beta * y` kernel.
+    ///
+    /// `dims`, `x_strides`, and `x_offset` describe the source region inside
+    /// its allocation; `y_offset` is the destination's compact start, and
+    /// `coefficients` is a two-element device array holding `[alpha, beta]`.
+    ///
+    /// # Safety
+    ///
+    /// Both array arguments must bind the whole root allocation of a live
+    /// operand on this client's device, the source region and the destination
+    /// span must stay inside their allocations, the destination span must be
+    /// injective and disjoint from the source, and `count`/`dim` must cover
+    /// exactly `len` logical elements.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn launch_axpby_strided_source(
+        client: &ComputeClient<CubeclCudaRuntime>,
+        count: CubeCount,
+        dim: CubeDim,
+        y: ArrayArg<CubeclCudaRuntime>,
+        x: ArrayArg<CubeclCudaRuntime>,
+        coefficients: ArrayArg<CubeclCudaRuntime>,
+        dims: &[usize],
+        x_strides: &[i64],
+        x_offset: i64,
+        y_offset: i64,
+        len: usize,
+    );
+
     /// Enqueue the in-place vector update `y <- alpha * x + beta * y`.
     ///
     /// # Safety
@@ -540,7 +682,7 @@ pub(super) trait CublasRealScalar: CublasScalar {
 macro_rules! impl_cublas_scalar {
     (
         $ty:ty, $variant:ident, $real:ty, $components:expr, $ffi:ty,
-        $dotc:ident, $geam:ident
+        $dotc:ident, $geam:ident, $axpby_kernel:path
     ) => {
         impl CublasScalar for $ty {
             type Real = $real;
@@ -583,6 +725,36 @@ macro_rules! impl_cublas_scalar {
                     ContractionScalar::$variant(value) => Some(value),
                     _ => None,
                 }
+            }
+
+            unsafe fn launch_axpby_strided_source(
+                client: &ComputeClient<CubeclCudaRuntime>,
+                count: CubeCount,
+                dim: CubeDim,
+                y: ArrayArg<CubeclCudaRuntime>,
+                x: ArrayArg<CubeclCudaRuntime>,
+                coefficients: ArrayArg<CubeclCudaRuntime>,
+                dims: &[usize],
+                x_strides: &[i64],
+                x_offset: i64,
+                y_offset: i64,
+                len: usize,
+            ) {
+                let rank = dims.len();
+                $axpby_kernel(
+                    client,
+                    count,
+                    dim,
+                    y,
+                    x,
+                    coefficients,
+                    comptime_sequence(dims),
+                    comptime_sequence(x_strides),
+                    x_offset,
+                    y_offset,
+                    len,
+                    rank,
+                );
             }
 
             unsafe fn dotc(
@@ -637,8 +809,32 @@ macro_rules! impl_cublas_scalar {
     };
 }
 
-impl_cublas_scalar!(f32, F32, f32, 1, f32, cublasSdot_v2, cublasSgeam);
-impl_cublas_scalar!(f64, F64, f64, 1, f64, cublasDdot_v2, cublasDgeam);
+impl_cublas_scalar!(
+    f32,
+    F32,
+    f32,
+    1,
+    f32,
+    cublasSdot_v2,
+    cublasSgeam,
+    crate::kernels::elementwise::axpby_strided_source_float::launch_unchecked::<
+        f32,
+        CubeclCudaRuntime,
+    >
+);
+impl_cublas_scalar!(
+    f64,
+    F64,
+    f64,
+    1,
+    f64,
+    cublasDdot_v2,
+    cublasDgeam,
+    crate::kernels::elementwise::axpby_strided_source_float::launch_unchecked::<
+        f64,
+        CubeclCudaRuntime,
+    >
+);
 impl_cublas_scalar!(
     Complex32,
     C32,
@@ -646,7 +842,11 @@ impl_cublas_scalar!(
     2,
     cublas::cuComplex,
     cublasCdotc_v2,
-    cublasCgeam
+    cublasCgeam,
+    crate::kernels::elementwise::axpby_strided_source_complex::launch_unchecked::<
+        Complex32,
+        CubeclCudaRuntime,
+    >
 );
 impl_cublas_scalar!(
     Complex64,
@@ -655,7 +855,11 @@ impl_cublas_scalar!(
     2,
     cublas::cuDoubleComplex,
     cublasZdotc_v2,
-    cublasZgeam
+    cublasZgeam,
+    crate::kernels::elementwise::axpby_strided_source_complex::launch_unchecked::<
+        Complex64,
+        CubeclCudaRuntime,
+    >
 );
 
 impl CublasRealScalar for f32 {

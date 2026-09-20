@@ -95,7 +95,7 @@ use crate::config::{
 use crate::kernels::reduce::{self as cubecl_reduce, ReduceStrategy};
 use crate::kernels::{diagonal, elementwise, indexing, structural};
 use crate::native_permutation::{
-    NativePermutationKind, NativePermutationPlan, NativeTransposeTile,
+    NativePermutationKind, NativePermutationPlan, NativeStridedCopyPlan, NativeTransposeTile,
 };
 use crate::{
     DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer, Tensor, TensorRank,
@@ -1276,13 +1276,6 @@ impl CudaBackend {
                 dst.shape().to_vec(),
             ));
         }
-        if src.offset() != 0 || !src.is_col_major_contiguous()? {
-            return Err(crate::Error::invalid_argument(
-                op,
-                "source",
-                "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization",
-            ));
-        }
         let source_buffer = src.backend_buffer().ok_or_else(|| {
             crate::Error::runtime_state(
                 op,
@@ -1306,26 +1299,75 @@ impl CudaBackend {
         if len == 0 {
             return Ok(());
         }
-        let strides = view_strides_i64(dst.strides(), op)?;
-        let base_offset = view_offset_i64(dst.offset(), op)?;
-        let src_arg = typed_view_binding(src, op)?;
+        let source_allocation_len = source_buffer.len();
+        let destination_allocation_len = destination_buffer.len();
+        if src.offset() == 0 && src.is_col_major_contiguous()? {
+            let strides = view_strides_i64(dst.strides(), op)?;
+            let base_offset = view_offset_i64(dst.offset(), op)?;
+            let src_arg = typed_view_binding(src, op)?;
+            let dst_arg = typed_view_mut_array_arg(dst, op)?;
+            let rank = dst.shape().len();
+            unsafe {
+                // SAFETY: The source is a compact zero-offset CubeCL view on
+                // this runtime. Allocation identity validation above proves
+                // source and destination do not alias. The destination view
+                // has validated reachable offsets and no internal overlap, and
+                // the launch domain covers each source element and destination
+                // logical coordinate exactly once.
+                structural::contiguous_to_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    self.runtime().client(),
+                    cube_count_for_len(len)?,
+                    cube_dim_1d(),
+                    dst_arg,
+                    src_arg.into_tensor_arg(),
+                    comptime_sequence(&strides),
+                    base_offset,
+                    rank,
+                );
+            }
+            return Ok(());
+        }
+        // Both operands keep their own strides and offsets: a region inside a
+        // larger allocation is read and written in place instead of being
+        // canonicalized into scratch first. Axis fusion collapses the affine
+        // runs, so a compact sub-block still costs one flat pass.
+        let plan = NativeStridedCopyPlan::new(
+            op,
+            src.shape(),
+            src.strides(),
+            src.offset(),
+            source_allocation_len,
+            dst.strides(),
+            dst.offset(),
+            destination_allocation_len,
+            false,
+        )?;
+        let src_strides = view_strides_i64(&plan.src_strides, op)?;
+        let dst_strides = view_strides_i64(&plan.dst_strides, op)?;
+        let src_offset = view_offset_i64(plan.src_offset, op)?;
+        let dst_offset = view_offset_i64(plan.dst_offset, op)?;
+        let rank = plan.dims.len();
+        let src_arg = typed_view_array_arg(src, op)?;
         let dst_arg = typed_view_mut_array_arg(dst, op)?;
-        let rank = dst.shape().len();
         unsafe {
-            // SAFETY: The source is an owned compact CubeCL tensor on this
-            // runtime. Allocation identity validation above proves source and
-            // destination do not alias. The destination view has validated
-            // reachable offsets and no internal overlap, and the launch domain
-            // covers each source element and destination logical coordinate
-            // exactly once.
-            structural::contiguous_to_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+            // SAFETY: Both array bindings cover their whole root allocation,
+            // and `NativeStridedCopyPlan` proved every logical coordinate maps
+            // inside the source and destination allocation spans, that the
+            // destination is injective, and (with the allocation identity
+            // check above) that the two allocations are distinct. The launch
+            // domain visits each logical coordinate exactly once.
+            structural::strided_to_strided_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
                 self.runtime().client(),
-                cube_count_for_len(len)?,
+                cube_count_for_len(plan.len)?,
                 cube_dim_1d(),
                 dst_arg,
-                src_arg.into_tensor_arg(),
-                comptime_sequence(&strides),
-                base_offset,
+                src_arg,
+                comptime_sequence(&plan.dims),
+                comptime_sequence(&src_strides),
+                comptime_sequence(&dst_strides),
+                src_offset,
+                dst_offset,
+                plan.len,
                 rank,
             );
         }
@@ -1342,7 +1384,13 @@ impl CudaBackend {
         T: permutation::CutensorPermutationScalar,
         R: TensorRank,
     {
-        if dst.strides().iter().any(|&stride| stride < 0) {
+        // cuTENSOR 2.x descriptors require positive strides on every operand,
+        // so reversed and broadcast views stay on the native kernel. This is a
+        // layout the vendor permutation path cannot represent, not a
+        // missing-library fallback.
+        if dst.strides().iter().any(|&stride| stride < 0)
+            || src.strides().iter().any(|&stride| stride < 1)
+        {
             return self.copy_view_to_view_typed(src, dst, op);
         }
         permutation::copy_view_into(self, src, dst, op)
