@@ -161,10 +161,11 @@ impl<'s> Session<'s> {
     ///
     /// ```
     /// use tenferro_gpu::cuda::cubecl::Session;
-    /// use tenferro_tensor::TensorWrite;
+    /// use tenferro_tensor::{Tensor, TensorWrite};
     ///
     /// fn reset(session: &Session<'_>) -> tenferro_tensor::Result<()> {
-    ///     let mut destination = session.alloc_output::<f32>(&[4])?;
+    ///     let destination = session.alloc_output::<f32>(&[4])?;
+    ///     let mut destination = Tensor::from_typed::<f32>(destination);
     ///     session.fill_zero_write(TensorWrite::from_tensor(&mut destination))
     /// }
     /// ```
