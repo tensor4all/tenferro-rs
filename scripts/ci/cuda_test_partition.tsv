@@ -904,6 +904,7 @@ host	tenferro-linalg	cpu::tests::single_entry::every_one_input_read_fallback_ent
 host	tenferro-linalg	cpu::tests::single_entry::executor_rejection_preserves_input_and_pool_then_recovers
 host	tenferro-linalg	cpu::tests::single_entry::faer_full_svd_covers_the_float_and_complex_tags
 host	tenferro-linalg	cpu::tests::single_entry::faer_full_svd_enters_once
+host	tenferro-linalg	cpu::tests::single_entry::faer_full_svd_read_enters_once_on_both_view_paths
 host	tenferro-linalg	cpu::tests::single_entry::faer_strided_read_fast_path_enters_once
 host	tenferro-linalg	cpu::tests::single_entry::linalg_provider_panic_allows_next_operation_without_clearing_stats_poison
 host	tenferro-linalg	cpu::tests::single_entry::managed_backend_handles_noncompact_two_input_reads
@@ -961,6 +962,7 @@ host	tenferro-linalg::integration	cpu_linalg_source_contract::cpu_eigh_complex_o
 host	tenferro-linalg::integration	cpu_linalg_source_contract::cpu_linalg_allocation_helpers_remain_fallible_and_checked
 host	tenferro-linalg::integration	cpu_linalg_source_contract::cpu_linalg_materialization_requires_an_entered_context_token
 host	tenferro-linalg::integration	cpu_linalg_source_contract::faer_complex_slice_casts_assert_field_offsets
+host	tenferro-linalg::integration	cpu_linalg_source_contract::faer_eligible_reads_reach_the_view_path_before_any_materialization
 host	tenferro-linalg::integration	cpu_linalg_source_contract::lapack_batched_helpers_reuse_input_scratch_instead_of_copying_per_batch
 host	tenferro-linalg::integration	cpu_linalg_source_contract::lapack_ffi_unsafe_blocks_document_safety_invariants
 host	tenferro-linalg::integration	cpu_linalg_source_contract::lapack_full_piv_lu_rejects_positive_getc2_info
@@ -993,6 +995,14 @@ host	tenferro-linalg::integration	full_svd_lstsq::svd_full_complex_tall_reconstr
 host	tenferro-linalg::integration	full_svd_lstsq::svd_full_random_wide_recovers_nullspace_dimension
 host	tenferro-linalg::integration	full_svd_lstsq::svd_full_tall_real_returns_square_factors_and_reconstructs
 host	tenferro-linalg::integration	full_svd_lstsq::svd_full_wide_real_reconstructs_and_recovers_nullspace
+host	tenferro-linalg::integration	full_svd_read::faer_view_path_does_not_pool_an_input_copy
+host	tenferro-linalg::integration	full_svd_read::full_svd_handles_batched_inputs_per_matrix
+host	tenferro-linalg::integration	full_svd_read::full_svd_keeps_square_factors_when_a_core_dimension_is_empty
+host	tenferro-linalg::integration	full_svd_read::full_svd_read_consumes_strided_offset_and_reversed_views_unchanged
+host	tenferro-linalg::integration	full_svd_read::full_svd_read_rejects_unsupported_dtypes_before_provider_entry
+host	tenferro-linalg::integration	full_svd_read::owned_and_borrowed_full_svd_agree_for_every_dtype_and_shape
+host	tenferro-linalg::integration	full_svd_read::owned_full_svd_reports_unsupported_dtypes_from_the_provider_boundary
+host	tenferro-linalg::integration	full_svd_read::typed_full_svd_returns_real_singular_values
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_cholesky_batched_f64_matches_cpu
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_c32_returns_unsupported_error
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_f32_returns_unsupported_error
