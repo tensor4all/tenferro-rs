@@ -122,8 +122,10 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     "ci-config": (
         "python3 scripts/test-release-publish.py",
         "python3 scripts/test-check-publish-layout.py",
+        "python3 scripts/test-check-git-pin-content.py",
         "python3 scripts/test-release-validation-policy.py",
         "python3 scripts/check-publish-layout.py",
+        "python3 scripts/check-git-pin-content.py",
         "python3 scripts/test-storage-ownership-contracts-v2.py",
         _STORAGE_OWNERSHIP_CHECKER,
         "python3 scripts/test-public-boundary-inventory.py",

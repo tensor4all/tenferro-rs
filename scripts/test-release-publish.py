@@ -44,7 +44,8 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
             "independently versioned",
             "stop for explicit confirmation and a reason",
             "unimplemented accepted issues do not affect",
-            "Agents must stop after validation and must never execute a publication.",
+            "Publication is executed by the agent under step-by-step maintainer "
+            "approval:",
         ):
             self.assertIn(phrase, normalized)
         self.assertIn(
@@ -58,7 +59,7 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
             normalized.index("provenance tag"), normalized.index("one proposed")
         )
 
-    def test_release_adapters_reference_the_proposal_gate_and_human_boundary(self) -> None:
+    def test_release_adapters_reference_the_proposal_gate_and_execution_boundary(self) -> None:
         paths = (*self.SKILL_PATHS, ".opencode/commands/tenferro-release-publish.md")
         for relative in paths:
             text = (self.ROOT / relative).read_text()
@@ -66,11 +67,11 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
             self.assertIn("ai/contribution-workflows/release-publish.md", text)
             self.assertIn("before editing", text)
             self.assertIn("SemVer proposal", text)
-            self.assertIn(
-                "stop after validation; a human maintainer runs Phase 3 publication from the tag.",
-                normalized,
-            )
+            self.assertIn("execute publication yourself", normalized)
+            self.assertIn("one irreversible step at a time", normalized)
             for contradictory in (
+                "stop after validation; a human maintainer runs Phase 3 publication from the tag.",
+                "agents never run publication",
                 "Phase 3: publish crates in dependency order from a worktree of the tag",
                 "Proceed phase by phase — version-bump PR, tag, dependency-order publish from a worktree of the tag",
                 "confirm with the user immediately before the first `cargo publish`",
@@ -99,11 +100,7 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
             self.assertIn("generate-script", adapter)
             self.assertIn("X.Y.Z --generate-script", normalized_adapter)
             self.assertIn("one exact lowercase `y` at a TTY", normalized_adapter)
-            self.assertIn(
-                "stop after validation; a human maintainer runs Phase 3 publication "
-                "from the tag.",
-                normalized_adapter,
-            )
+            self.assertIn("execute publication yourself", normalized_adapter)
 
 
     def test_change_aware_validation_and_exact_sha_are_documented(self) -> None:

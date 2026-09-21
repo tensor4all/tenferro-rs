@@ -233,7 +233,9 @@ class RunProfileTests(unittest.TestCase):
         for command in (
             "python3 scripts/test-release-publish.py",
             "python3 scripts/test-check-publish-layout.py",
+            "python3 scripts/test-check-git-pin-content.py",
             "python3 scripts/check-publish-layout.py",
+            "python3 scripts/check-git-pin-content.py",
         ):
             self.assertIn(command, commands)
 

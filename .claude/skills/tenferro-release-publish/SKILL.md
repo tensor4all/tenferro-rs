@@ -13,8 +13,12 @@ Hard invariants (abort the release if any would be violated):
 1. Publish only from a pushed, tagged, main-lineage commit.
 2. The version bump merges to `main` before anything is published.
 3. No manifest edits at publish time; fix on `main` and re-tag instead.
-4. Git-pinned workspace dependencies must pin revs whose declared versions
-   exist on crates.io.
+4. Git-pinned workspace dependencies must resolve, at publish time, to a
+   crates.io release whose contents match the pinned revision. Version
+   existence alone is not enough: `scripts/check-git-pin-content.py` compares
+   the pinned tree and dependency wiring against the crate archive Cargo would
+   resolve, and only reviewed entries in
+   `scripts/git-pin-content-exceptions.toml` may deviate.
 
 Keep the interaction incremental:
 
@@ -26,17 +30,22 @@ Keep the interaction incremental:
    shipped outcomes, never experiments or implementation history.
 3. Phase 2: tag the merged commit, push the tag, and create the GitHub release
    from the reviewed notes file.
-4. At Phase 3, stop after validation; a human maintainer runs Phase 3
-   publication from the tag. The maintainer can generate a guarded handoff
-   script with
+4. At Phase 3, execute publication yourself, one irreversible step at a time,
+   after the maintainer approves that step in the conversation; they never
+   copy commands. Run the preflight without `--execute` first, present
+   exactly what it will publish (including per-package new-package approval),
+   and only then run
+   `python3 scripts/release-publish.py X.Y.Z --execute` with exactly those
+   approvals. Stop and report when any invariant fails and never work around a
+   failed check. A maintainer who prefers to run it personally can generate the
+   guarded handoff script with
    `python3 scripts/release-publish.py X.Y.Z --generate-script PATH`
    that re-runs the fail-closed preflight and requires one exact lowercase
-   `y` at a TTY before invoking the helper with `--execute`; agents never run
-   publication and never type that confirmation. Phase 3 validation is
-   change-aware (`scripts/release-validation-policy.py`): helper-only or
+   `y` at a TTY before invoking the helper with `--execute`. Phase 3 validation
+   is change-aware (`scripts/release-validation-policy.py`): helper-only or
    publication-metadata-only diffs run focused lanes, and a rerun is skipped
    only when the exact-SHA CI check passes
    (`verify_release_ci` in `scripts/release-publish.py`); Rust source or
    ambiguous diffs run the full validation.
-5. After human publication, Phase 4 verifies crates.io versions and
+5. After publication, Phase 4 verifies crates.io versions and
    `.cargo_vcs_info.json` provenance, then cleans up.

@@ -22,9 +22,18 @@ Violating any of these aborts the release.
 3. No manifest edits at publish time. The tagged tree must be publishable
    as-is; if a crate needs an edit to publish, abort, fix on `main`, and
    re-tag as a new patch version.
-4. Every git-pinned dependency in `[workspace.dependencies]` must pin a rev
-   whose declared `version` exists on crates.io, because `cargo publish`
-   strips the `git` source and keeps only `version`.
+4. Every git-pinned dependency in `[workspace.dependencies]` must resolve, at
+   publish time, to a crates.io package whose contents match the pinned
+   revision. `cargo publish` strips the `git` source and keeps only `version`,
+   so a registry package can exist at the required version while holding
+   different source or different dependency wiring (`strided-kernel 0.4.0` was
+   the pre-refactor crate while the pin had the post-refactor facade).
+   `scripts/check-git-pin-content.py` enforces this in the preflight and in the
+   `ci-config` CI lane. A mismatch aborts the release unless it is listed, with
+   an issue and a concrete reason, in
+   `scripts/git-pin-content-exceptions.toml`. Pin an exact `= X.Y.Z`
+   requirement when the registry can hold newer compatible versions: a caret
+   range resolves content the pinned revision never contained.
 
 ## Phase 0 — SemVer Proposal And Preconditions
 
@@ -122,8 +131,14 @@ Complete this phase before changing manifests or making any other release edit.
 
 ## Phase 3 — Publish From The Tag
 
-Only a human maintainer with crates.io ownership runs the publication helper.
-Agents must stop after validation and must never execute a publication.
+Publication is executed by the agent under step-by-step maintainer approval:
+the maintainer approves each irreversible step in the conversation instead of
+copying commands, and the agent stops and reports whenever an invariant fails.
+The maintainer remains the crates.io owner whose configured token performs the
+uploads, and every fail-closed check below — preflight, dependency order,
+provenance, content verification, and new-package approval — is unchanged. The
+guarded handoff script in step 3 stays available for a maintainer who prefers
+to run publication personally; agents never bypass a failed check with it.
 
 1. Fetch the remote state and create a detached worktree at the pushed tag:
 
@@ -168,8 +183,11 @@ Agents must stop after validation and must never execute a publication.
 3. Run the fail-closed preflight without `--execute` first. It structurally
    parses every git dependency in `[workspace.dependencies]`, checks its exact
    registry package/version and pinned-revision manifest, queries crates.io,
-   validates the remote tag/clean checkout invariants, and verifies provenance
-   for any target versions already present on crates.io:
+   compares the pinned revision against the crate archive of the version Cargo
+   resolves (`src` tree and dependency wiring, via
+   `scripts/check-git-pin-content.py`), validates the remote tag/clean checkout
+   invariants, and verifies provenance for any target versions already present
+   on crates.io:
 
    ```bash
    python3 scripts/release-publish.py X.Y.Z

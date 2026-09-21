@@ -41,6 +41,8 @@ class LaneClassificationTests(unittest.TestCase):
         cases = (
             "scripts/release-publish.py",
             "scripts/check-publish-layout.py",
+            "scripts/check-git-pin-content.py",
+            "scripts/git-pin-content-exceptions.toml",
             "scripts/release-validation-policy.py",
             "scripts/test-release-publish.py",
             "scripts/ci/run_profile.py",

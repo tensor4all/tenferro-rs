@@ -281,6 +281,32 @@ class CratesIoClient:
     def version_exists(self, package: str, version: str) -> bool:
         return self._exists(self._url(package, version))
 
+    def versions(self, package: str) -> tuple[str, ...]:
+        """Return the non-yanked published versions of a package."""
+
+        url = self._url(package)
+        status, body = self._request(url)
+        if status != 200:
+            raise ReleaseError(f"crates.io query returned HTTP {status}: {url}")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ReleaseError(
+                f"crates.io returned invalid JSON for {package}: {error}"
+            ) from error
+        versions = payload.get("versions") if isinstance(payload, dict) else None
+        if not isinstance(versions, list):
+            raise ReleaseError(f"crates.io response for {package} has no version list")
+        published: list[str] = []
+        for entry in versions:
+            if not isinstance(entry, dict):
+                raise ReleaseError(
+                    f"crates.io response for {package} has an invalid version entry"
+                )
+            if entry.get("yanked") is False and isinstance(entry.get("num"), str):
+                published.append(entry["num"])
+        return tuple(published)
+
     def download(self, package: str, version: str) -> bytes:
         url = self._url(package, version, "download")
         status, body = self._request(url)
@@ -977,6 +1003,14 @@ def publish_release(
     commit = checkout_verifier(version, runner=runner, root=root)
     runner(
         [sys.executable, "scripts/check-publish-layout.py"],
+        cwd=root,
+        capture=False,
+    )
+    # `cargo publish` resolves the registry package, not the pinned revision, so
+    # a version-existence check is not sufficient: content and dependency wiring
+    # of the pinned revision must match the published archive.
+    runner(
+        [sys.executable, "scripts/check-git-pin-content.py"],
         cwd=root,
         capture=False,
     )

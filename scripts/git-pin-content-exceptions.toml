@@ -1,0 +1,21 @@
+# Reviewed exceptions for scripts/check-git-pin-content.py.
+#
+# The checker fails closed when a git-pinned dependency's pinned revision does
+# not match the crates.io release that `cargo publish` would resolve. An entry
+# here does not silence that finding: the checker still prints it as a warning
+# on every run, and warns again when an entry becomes stale and should be
+# removed. Each entry therefore needs a tracked issue and a concrete reason so
+# that review sees why the deviation is accepted.
+
+[[exception]]
+package = "cubek-fft"
+issue = "https://github.com/tensor4all/tenferro-rs/issues/1855"
+reason = """
+The crates.io name `cubek-fft` belongs to upstream (Tracel AI) and the
+tensor4all fork builds its crate with `publish = false`, so the registry
+package can never match the pinned revision. `cubek-fft` is an optional
+dependency of `tenferro-gpu` enabled only by the `webgpu` feature, so it is not
+part of the default-feature verify build that `cargo publish` runs; the fork
+copy is what CI compiles today. Resolving this requires a manifest change in
+tenferro-gpu, tracked in #1855.
+"""

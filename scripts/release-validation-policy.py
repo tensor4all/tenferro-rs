@@ -57,10 +57,13 @@ RELEASE_HELPER_PATHS = frozenset(
     {
         "scripts/release-publish.py",
         "scripts/check-publish-layout.py",
+        "scripts/check-git-pin-content.py",
+        "scripts/git-pin-content-exceptions.toml",
         "scripts/release-validation-policy.py",
         "scripts/ci/run_profile.py",
         "scripts/test-release-publish.py",
         "scripts/test-check-publish-layout.py",
+        "scripts/test-check-git-pin-content.py",
         "scripts/test-release-validation-policy.py",
         "ai/contribution-workflows/release-publish.md",
         ".agents/skills/tenferro-release-publish/SKILL.md",
