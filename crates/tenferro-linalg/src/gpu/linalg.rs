@@ -3130,8 +3130,11 @@ where
         // it is used immediately to bind the cuSOLVER handle and not retained.
         let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
-        // The Jacobi routine needs a parameter object; it is queried for the
-        // workspace size and reused by every batch call below.
+        // The Jacobi routine needs a parameter object: it is queried for the
+        // workspace size and reused by every call below. It outlives the
+        // launches because the solver-status download later in this scope is
+        // a host barrier, so the device work has retired before the object
+        // drops at the end of the closure. This matches the `gesvdj` path.
         let syevj_params = match routine {
             CusolverEighRoutine::Syevd => None,
             CusolverEighRoutine::Syevj | CusolverEighRoutine::SyevjBatched => {
@@ -3365,8 +3368,11 @@ where
         // it is used immediately to bind the cuSOLVER handle and not retained.
         let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
-        // The Jacobi routine needs a parameter object; it is queried for the
-        // workspace size and reused by every batch call below.
+        // The Jacobi routine needs a parameter object: it is queried for the
+        // workspace size and reused by every call below. It outlives the
+        // launches because the solver-status download later in this scope is
+        // a host barrier, so the device work has retired before the object
+        // drops at the end of the closure. This matches the `gesvdj` path.
         let syevj_params = match routine {
             CusolverEighRoutine::Syevd => None,
             CusolverEighRoutine::Syevj | CusolverEighRoutine::SyevjBatched => {
