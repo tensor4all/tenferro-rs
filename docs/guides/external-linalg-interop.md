@@ -427,7 +427,10 @@ fn lapack_potrf_on_host_storage() -> tenferro_tensor::Result<()> {
   (`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`, and
   often `OMP_NUM_THREADS`). These are read at process start; set them before
   launching your application. Direct calls do not join tenferro's CPU execution
-  domain, and tenferro cannot verify or enforce provider worker affinity.
+  domain. Their threads inherit the calling thread's CPU mask, so a call made
+  from a tenferro worker starts inside that domain's CPU set, but tenferro
+  cannot control the provider's fan-out or an affinity policy the provider
+  installs itself.
 
 ## Threading and resource domains
 
@@ -438,8 +441,8 @@ parallelism. Direct external calls deliberately sit outside that context:
 - A direct faer call with `Par::Seq` runs inline on the calling thread.
 - A direct faer call with `Par::Rayon(n)` uses rayon's **global** thread pool.
   That is not the pool tenferro's faer-backed kernels use: `CpuContext`
-  constructs its own Rayon pools scoped to the requested thread count and CPU
-  affinity. A direct call therefore does not participate in tenferro's CPU
+  constructs its own Rayon pools scoped to the requested thread count and the
+  domain CPU set. A direct call therefore does not participate in tenferro's CPU
   resource domain at all — not its pool, not its budget, not its affinity.
 - A direct BLAS/LAPACK call runs on the provider's own threads as described
   above.

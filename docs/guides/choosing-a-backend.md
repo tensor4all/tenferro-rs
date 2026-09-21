@@ -46,17 +46,19 @@ tenferro can inject `Par::Seq` or `Par::rayon(n)` from the selected backend
 context, and a managed CPU domain can own the corresponding Rayon executor and
 affinity contract.
 
-External BLAS providers own their worker pools. Their environment variables
-are generally process-wide, so a provider call can oversubscribe an outer
-tenferro fan-out unless its provider thread count is reduced, often to one.
-Choose an external provider when its peak dense-kernel performance is worth
-giving up tenferro's strict worker-placement and per-operation control.
+External BLAS providers own their worker pools. Provider workers inherit the
+calling thread's mask — the domain CPU set for a managed domain — but tenferro
+cannot bound the provider's fan-out, and their environment variables are
+generally process-wide, so a provider call can oversubscribe an outer tenferro
+fan-out unless its provider thread count is reduced, often to one. Choose an
+external provider when its peak dense-kernel performance is worth giving up
+tenferro's per-operation thread-count control.
 
 | Provider family | Required library | Cargo feature | Thread ownership and scope | Guidance |
 | --- | --- | --- | --- | --- |
 | faer | None beyond the Rust dependencies | `cpu-faer` | tenferro-managed `CpuDomainExecutor` and Rayon pool; budget is per selected CPU domain | Default choice when placement, reproducibility, and predictable nesting matter |
 | OpenBLAS | OpenBLAS and its CBLAS/LAPACK entry points | `cpu-blas`, `blas-openblas` | OpenBLAS-owned pool; settings such as `OPENBLAS_NUM_THREADS` are provider/process-wide | Use for peak BLAS/LAPACK throughput; use `CpuPlacement::Auto` and avoid outer oversubscription |
-| Intel MKL | MKL and its BLAS/LAPACK entry points | `cpu-blas`, `blas-mkl` | MKL-owned pool; `MKL_NUM_THREADS` and related OpenMP settings are provider/process-wide | Use when the deployment already standardizes on MKL; tenferro cannot verify worker affinity |
+| Intel MKL | MKL and its BLAS/LAPACK entry points | `cpu-blas`, `blas-mkl` | MKL-owned pool; `MKL_NUM_THREADS` and related OpenMP settings are provider/process-wide | Use when the deployment already standardizes on MKL; tenferro confines its own workers to the domain CPU set but cannot bound the provider's fan-out |
 | Apple Accelerate | Apple Accelerate BLAS/LAPACK | `cpu-blas`, `blas-accelerate` | Accelerate-owned pool; `VECLIB_MAXIMUM_THREADS` is provider/process-wide | Use for Apple-native deployments; explicit NUMA placement is not a tenferro guarantee |
 | BLIS | BLIS | Planned in [#1334](https://github.com/tensor4all/tenferro-rs/issues/1334) | Provider-owned; the final scope and controls are not part of the current API | Do not rely on a BLIS feature until the planned provider contract lands |
 | TBLIS external provider | TBLIS source or a separately supplied library | External example in [#1493](https://github.com/tensor4all/tenferro-rs/issues/1493) | The provider bundle owns the TBLIS call policy; the example clamps its call to one thread and restores the setting | A `dot_general` provider example, not a complete dense backend; other operations delegate to the default provider |

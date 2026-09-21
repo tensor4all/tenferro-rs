@@ -53,9 +53,14 @@ still returns an error instead of silently weakening the request.
 
 `CpuPlacement::NumaNode` and `CpuPlacement::AllAllowed` are supported by
 `CpuBackendKind::Faer`. tenferro creates a fixed Rayon engine for the resolved
-CPU set and pins every worker when the engine is constructed. `CpuBackend`
-clones are cheap handles: they share topology, engines, arbitration, and
-engine-owned caches.
+CPU set and confines **every worker to that whole set** when the engine is
+constructed; workers share the domain mask instead of owning one CPU each. The
+verified workers report `CpuExecutorAffinity::TenferroDomainVerified`. They
+share the set because a thread created by a provider (BLAS/LAPACK, or your own
+library call) inherits the creating thread's mask: a one-CPU worker mask would
+confine the provider's entire thread team to one CPU. `CpuBackend` clones are
+cheap handles: they share topology, engines, arbitration, and engine-owned
+caches.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#cpu_execution_29 -->
 ```rust
@@ -137,10 +142,12 @@ to workers created internally by OpenBLAS, MKL, Accelerate, or OpenMP.
 ## External BLAS Providers
 
 OpenBLAS, Intel MKL, Apple Accelerate, and OpenMP-backed BLAS implementations
-own their worker creation and affinity. Their thread-count settings do not prove
-that workers stay inside a requested tenferro CPU set. Consequently external
-BLAS backends accept only `CpuPlacement::Auto`; explicit `NumaNode` and
-`AllAllowed` requests return `CpuPlacementError`.
+own their worker creation. Provider workers inherit the calling worker's mask,
+which for a managed domain is the domain CPU set, but tenferro cannot bound the
+provider's fan-out and a provider that installs its own affinity policy (for
+example `KMP_AFFINITY` with an explicit list) overrides the inherited mask.
+Consequently external BLAS backends accept only `CpuPlacement::Auto`; explicit
+`NumaNode` and `AllAllowed` requests return `CpuPlacementError`.
 
 `Auto` for `CpuBackendKind::Blas` uses provider-default execution under a
 process-wide exclusive permit. This prevents tenferro-managed CPU work from
@@ -155,13 +162,15 @@ application/provider responsibility outside the tenferro placement guarantee.
 
 ### Intel OpenMP worker affinity on Linux
 
-When MKL first creates its workers from a pinned tenferro worker, the new
-threads can inherit that worker's **single-CPU** affinity mask. A reported
-`MKL_Get_Max_Threads() == 4` therefore does not establish four-core execution;
-this can make a 4-thread GEMM slower than a 1-thread GEMM.
+When MKL first creates its workers from a tenferro worker, the new threads
+inherit that worker's mask — the whole domain CPU set — so a 4-thread MKL
+operation starts with the intended CPUs available. A reported
+`MKL_Get_Max_Threads() == 4` still does not by itself prove where the provider
+placed its workers, and the provider's own settings decide how many run.
 
-For an application that has selected allowed CPUs 1–4, configure Intel OpenMP
-before process startup as well as binding the process:
+Providers that install their own affinity policy override the inherited mask.
+If your deployment sets one, keep it inside the CPUs the process may use and
+check `/proc/<pid>/task/<tid>/status` (`Cpus_allowed_list`) during execution:
 
 ```sh
 taskset -c 1-4 env RAYON_NUM_THREADS=4 MKL_NUM_THREADS=4 OMP_NUM_THREADS=4 \
@@ -170,12 +179,12 @@ taskset -c 1-4 env RAYON_NUM_THREADS=4 MKL_NUM_THREADS=4 OMP_NUM_THREADS=4 \
   ./your-program
 ```
 
-Replace both CPU lists with CPUs available to your application. `norespect`
-lets Intel OpenMP use the explicit list rather than the initializing worker's
-inherited one-CPU mask; **never list CPUs outside the application's intended
-allocation**. Check `/proc/<pid>/task/<tid>/status` (`Cpus_allowed_list`) during
-execution, not just the requested thread count. This is an Intel OpenMP setting,
-not a portable OpenBLAS/Accelerate prescription or a new tenferro guarantee.
+Replace both CPU lists with CPUs available to your application, and **never list
+CPUs outside the application's intended allocation**. This is an Intel OpenMP
+setting, not a portable OpenBLAS/Accelerate prescription or a new tenferro
+guarantee. The `norespect` form was originally a workaround for an inherited
+one-CPU worker mask; managed domains no longer produce that mask, so it is only
+needed when you deliberately pin OpenMP yourself.
 
 Fallible backend constructors return `CpuBackendError`. Configuration failures
 appear as `CpuBackendError::Tensor`, while topology discovery and engine
@@ -198,9 +207,10 @@ or resident there, or that an allocation-domain owner changed. Metadata-only
 views and reshapes retain their storage metadata, while caller-owned `_into`
 destinations are never retagged.
 
-The reduced worker budget is spread deterministically over the logical CPU IDs
-in a domain. This is not a promise to prefer physical cores over SMT siblings;
-tenferro does not currently infer core/sibling topology for that selection.
+The worker budget is not mapped onto individual CPUs: every worker is confined
+to the same domain CPU set and the operating system schedules the pool inside
+it. That is not a promise to prefer physical cores over SMT siblings; tenferro
+does not infer core/sibling topology for a domain.
 
 ## Where Elementwise Rayon Runs
 

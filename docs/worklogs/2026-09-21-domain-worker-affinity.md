@@ -19,6 +19,13 @@
   per-worker CCX CPU subsets. The first two add restore/error paths and change
   where a session executes; the third was measured to protect nothing (see
   below) and was dropped as unnecessary complexity.
+- User-facing guides are part of the change: `docs/guides/cpu-execution.md`
+  documented the one-CPU worker pinning and carried a `KMP_AFFINITY=...,norespect`
+  workaround for the inherited one-CPU mask it produced. The guide now describes
+  domain confinement, and `docs/guides/choosing-a-backend.md` /
+  `docs/guides/external-linalg-interop.md` no longer claim that tenferro cannot
+  place provider workers at all — the precise remaining limits are the provider's
+  fan-out and any affinity policy the provider installs itself.
 - Rejected: keeping per-worker single-CPU affinity for "performance-critical"
   native regions. Pinning only those regions would restore the syscall/pool
   machinery while the measurements show no native locality benefit.
