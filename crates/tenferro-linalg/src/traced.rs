@@ -859,6 +859,7 @@ pub fn eigh_with_options(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
                 derivative_eps: options.derivative_eps,
                 gauge: options.gauge,
+                driver: options.driver,
             })),
             &[a],
         )?,
@@ -1970,6 +1971,7 @@ fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
                 derivative_eps: EighOptions::default().derivative_eps,
                 gauge: EighOptions::default().gauge,
+                driver: EighOptions::default().driver,
             })),
             &[a],
         )?,

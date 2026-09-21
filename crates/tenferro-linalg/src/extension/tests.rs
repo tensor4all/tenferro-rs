@@ -8,7 +8,7 @@ use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 
 use super::{
     apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, canonical_svd_gauge_layout, promote_dtypes,
-    EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdDriver, SvdGauge,
+    EighDriver, EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdDriver, SvdGauge,
     LINALG_EXTENSION_FAMILY_ID,
 };
 
@@ -61,9 +61,11 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
         LinalgOp::Eigh {
             derivative_eps: 0.0,
             gauge: EighGauge::Raw,
+            driver: EighDriver::Auto,
         },
         LinalgOp::EighVals {
             derivative_eps: 0.0,
+            driver: EighDriver::Auto,
         },
         LinalgOp::Eig {
             input_dtype: DType::F64,
@@ -364,6 +366,7 @@ fn decomposition_value_outputs_prune_to_values_only_ops() {
     let eigh = LinalgExtensionOp::new(LinalgOp::Eigh {
         derivative_eps: 1.0e-12,
         gauge: EighGauge::Raw,
+        driver: EighDriver::Syevj,
     });
     let pruned_eigh = eigh
         .prune_outputs(&[true, false])
@@ -375,7 +378,8 @@ fn decomposition_value_outputs_prune_to_values_only_ops() {
     assert_eq!(
         pruned_eigh.op(),
         LinalgOp::EighVals {
-            derivative_eps: 1.0e-12
+            derivative_eps: 1.0e-12,
+            driver: EighDriver::Syevj,
         }
     );
 

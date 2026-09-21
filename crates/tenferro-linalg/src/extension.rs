@@ -207,15 +207,50 @@ impl SvdOptions {
     }
 }
 
+/// cuSOLVER Hermitian eigensolver selection used by [`EighOptions`] on the
+/// CUDA backend.
+///
+/// The driver changes speed and rounding, not the decomposition contract, so
+/// gauges and AD rules are unaffected. CPU providers have a single eigh kernel
+/// and ignore it. Analogous to [`SvdDriver`] and to
+/// `scipy.linalg.eigh(..., driver=...)`.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{EighDriver, EighOptions};
+///
+/// let options = EighOptions::default().driver(EighDriver::Syevj);
+/// assert_eq!(options.driver, EighDriver::Syevj);
+/// assert_eq!(EighOptions::default().driver, EighDriver::Auto);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EighDriver {
+    /// The backend's default policy. On CUDA this is `syevd`/`heevd` at every
+    /// size, which is what the backend did before the driver existed. The
+    /// policy may gain a size rule later; measurements decide, not this enum.
+    #[default]
+    Auto,
+    /// cuSOLVER's divide-and-conquer driver (`cusolverDn<t>syevd`, `heevd` for
+    /// complex input) regardless of size.
+    Syevd,
+    /// cuSOLVER's Jacobi driver (`cusolverDn<t>syevj`, `heevj` for complex
+    /// input) regardless of size.
+    Syevj,
+}
+
 /// Options for Hermitian eigenvalue decomposition.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_linalg::EighOptions;
+/// use tenferro_linalg::{EighDriver, EighOptions};
 ///
-/// let options = EighOptions::default().derivative_eps(1.0e-10);
+/// let options = EighOptions::default()
+///     .derivative_eps(1.0e-10)
+///     .driver(EighDriver::Syevj);
 /// assert_eq!(options.derivative_eps, 1.0e-10);
+/// assert_eq!(options.driver, EighDriver::Syevj);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EighOptions {
@@ -223,6 +258,8 @@ pub struct EighOptions {
     pub gauge: EighGauge,
     /// AD derivative regularization for repeated or nearly repeated eigenvalues.
     pub derivative_eps: f64,
+    /// CUDA eigensolver driver; ignored by CPU providers.
+    pub driver: EighDriver,
 }
 
 impl Default for EighOptions {
@@ -230,6 +267,7 @@ impl Default for EighOptions {
         Self {
             gauge: EighGauge::Raw,
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+            driver: EighDriver::Auto,
         }
     }
 }
@@ -262,6 +300,21 @@ impl EighOptions {
     /// ```
     pub fn derivative_eps(mut self, derivative_eps: f64) -> Self {
         self.derivative_eps = derivative_eps;
+        self
+    }
+
+    /// Return options with an explicit CUDA eigensolver driver.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::{EighDriver, EighOptions};
+    ///
+    /// let options = EighOptions::default().driver(EighDriver::Syevd);
+    /// assert_eq!(options.driver, EighDriver::Syevd);
+    /// ```
+    pub fn driver(mut self, driver: EighDriver) -> Self {
+        self.driver = driver;
         self
     }
 }
@@ -391,9 +444,12 @@ pub(crate) enum LinalgOp {
     Eigh {
         derivative_eps: f64,
         gauge: EighGauge,
+        driver: EighDriver,
     },
+    /// Eigenvalues only.
     EighVals {
         derivative_eps: f64,
+        driver: EighDriver,
     },
     Eig {
         input_dtype: DType,
@@ -531,8 +587,12 @@ impl ExtensionOp for LinalgExtensionOp {
                 hasher.write_u64(derivative_eps.to_bits());
                 hash_svd_driver(hasher, driver);
             }
-            LinalgOp::EighVals { derivative_eps } => {
+            LinalgOp::EighVals {
+                derivative_eps,
+                driver,
+            } => {
                 hasher.write_u64(derivative_eps.to_bits());
+                hash_eigh_driver(hasher, driver);
             }
             LinalgOp::Qr { gauge }
             | LinalgOp::HouseholderQrR { gauge }
@@ -552,9 +612,11 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::Eigh {
                 derivative_eps,
                 gauge,
+                driver,
             } => {
                 hasher.write_u64(derivative_eps.to_bits());
                 hash_eigh_gauge(hasher, gauge);
+                hash_eigh_driver(hasher, driver);
             }
             LinalgOp::Eig { input_dtype } | LinalgOp::EigVals { input_dtype } => {
                 hash_dtype(hasher, input_dtype);
@@ -639,9 +701,14 @@ impl ExtensionOp for LinalgExtensionOp {
                     driver,
                 })))
             }
-            LinalgOp::Eigh { derivative_eps, .. } if live_outputs == [true, false] => {
-                Some(Arc::new(Self::new(LinalgOp::EighVals { derivative_eps })))
-            }
+            LinalgOp::Eigh {
+                derivative_eps,
+                driver,
+                ..
+            } if live_outputs == [true, false] => Some(Arc::new(Self::new(LinalgOp::EighVals {
+                derivative_eps,
+                driver,
+            }))),
             LinalgOp::Eig { input_dtype } if live_outputs == [true, false] => {
                 Some(Arc::new(Self::new(LinalgOp::EigVals { input_dtype })))
             }
@@ -868,13 +935,22 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
         LinalgOp::Eigh {
             derivative_eps,
             gauge,
+            driver,
         } => {
-            validate_derivative_eps("eigh_with_options", derivative_eps)?;
-            let mut outputs = session.eigh_read(inputs[0].clone())?;
-            apply_eigh_gauge(gauge, &mut outputs)?;
-            return Ok(outputs);
+            return session.eigh_with_options_read(
+                inputs[0].clone(),
+                EighOptions {
+                    derivative_eps,
+                    gauge,
+                    driver,
+                },
+            );
         }
-        LinalgOp::EighVals { .. } => return Ok(vec![session.eigh_values_read(inputs[0].clone())?]),
+        LinalgOp::EighVals { driver, .. } => {
+            return Ok(vec![
+                session.eigh_values_with_driver_read(inputs[0].clone(), driver)?
+            ]);
+        }
         LinalgOp::Eig { .. } => return session.eig_read(inputs[0].clone()),
         LinalgOp::EigVals { .. } => return Ok(vec![session.eig_values_read(inputs[0].clone())?]),
         LinalgOp::Solve => {
@@ -1081,14 +1157,18 @@ fn execute_linalg<B: LinalgBackend>(
         LinalgOp::Eigh {
             derivative_eps,
             gauge,
+            driver,
         } => backend.eigh_with_options(
             inputs[0],
             EighOptions {
                 derivative_eps,
                 gauge,
+                driver,
             },
         ),
-        LinalgOp::EighVals { .. } => Ok(vec![backend.eigh_values(inputs[0])?]),
+        LinalgOp::EighVals { driver, .. } => {
+            Ok(vec![backend.eigh_values_with_driver(inputs[0], driver)?])
+        }
         LinalgOp::Eig { .. } => backend.eig(inputs[0]),
         LinalgOp::EigVals { .. } => Ok(vec![backend.eig_values(inputs[0])?]),
         LinalgOp::TriangularSolve {
@@ -1988,6 +2068,15 @@ fn hash_svd_driver(hasher: &mut dyn Hasher, driver: SvdDriver) {
         SvdDriver::Auto => 0,
         SvdDriver::Gesvdj => 1,
         SvdDriver::Gesvd => 2,
+    };
+    hasher.write_u8(tag);
+}
+
+fn hash_eigh_driver(hasher: &mut dyn Hasher, driver: EighDriver) {
+    let tag = match driver {
+        EighDriver::Auto => 0,
+        EighDriver::Syevd => 1,
+        EighDriver::Syevj => 2,
     };
     hasher.write_u8(tag);
 }

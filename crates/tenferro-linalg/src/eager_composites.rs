@@ -3,7 +3,7 @@ use tenferro_ad::{CompareDir, DType, DotGeneralConfig, EagerTensor, Error, Resul
 use tenferro_runtime::ErrorPhase;
 
 use crate::eager_ext::{apply_linalg_eager, lu, one_output, qr, solve, svd, triangular_solve};
-use crate::extension::{LinalgOp, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
+use crate::extension::{EighOptions, LinalgOp, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
 use crate::validation::{ensure_float_or_complex, validate_lstsq};
 
 pub(crate) fn slogdet(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
@@ -50,6 +50,7 @@ pub(crate) fn eigvalsh(a: &EagerTensor) -> Result<EagerTensor> {
         apply_linalg_eager(
             LinalgOp::EighVals {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                driver: EighOptions::default().driver,
             },
             &[a],
         )?,

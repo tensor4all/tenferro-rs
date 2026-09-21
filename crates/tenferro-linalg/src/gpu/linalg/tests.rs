@@ -1,5 +1,8 @@
-use super::{select_svd_driver, CusolverSvdRoutine, JAX_COMPATIBLE_GESVDJ_MAX_DIM};
-use crate::extension::SvdDriver;
+use super::{
+    select_eigh_driver, select_svd_driver, CusolverEighRoutine, CusolverSvdRoutine,
+    CUSOLVER_SYEVJ_BATCHED_MAX_DIM, JAX_COMPATIBLE_GESVDJ_MAX_DIM,
+};
+use crate::extension::{EighDriver, SvdDriver};
 
 #[test]
 fn auto_driver_keeps_jax_compatible_threshold() {
@@ -36,5 +39,48 @@ fn explicit_driver_overrides_dimension_policy() {
     assert_eq!(
         select_svd_driver(SvdDriver::Gesvdj, 4, max + 1),
         CusolverSvdRoutine::Gesvdj
+    );
+}
+
+#[test]
+fn eigh_auto_driver_keeps_the_pre_driver_routine() {
+    // `Auto` must reproduce the behavior that existed before the driver: the
+    // divide-and-conquer routine at every size and batch count.
+    for (n, batch) in [(1, 1), (8, 1), (8, 1024), (4096, 1), (4096, 8)] {
+        assert_eq!(
+            select_eigh_driver(EighDriver::Auto, n, batch),
+            CusolverEighRoutine::Syevd,
+            "Auto policy for n={n} batch={batch}"
+        );
+        assert_eq!(
+            select_eigh_driver(EighDriver::Syevd, n, batch),
+            CusolverEighRoutine::Syevd,
+            "forced Syevd for n={n} batch={batch}"
+        );
+    }
+}
+
+#[test]
+fn eigh_jacobi_driver_takes_the_batched_entry_point_only_where_cusolver_allows_it() {
+    let max = CUSOLVER_SYEVJ_BATCHED_MAX_DIM;
+    assert_eq!(max, 32);
+    // A real batch within the size limit is the only case with a batched
+    // cuSOLVER entry point to reach.
+    for n in [1, 8, max] {
+        assert_eq!(
+            select_eigh_driver(EighDriver::Syevj, n, 2),
+            CusolverEighRoutine::SyevjBatched,
+            "batched Jacobi for n={n}"
+        );
+    }
+    // Single matrices have no batch to amortize, and cuSOLVER rejects the
+    // batched entry point above the limit.
+    assert_eq!(
+        select_eigh_driver(EighDriver::Syevj, 8, 1),
+        CusolverEighRoutine::Syevj
+    );
+    assert_eq!(
+        select_eigh_driver(EighDriver::Syevj, max + 1, 256),
+        CusolverEighRoutine::Syevj
     );
 }

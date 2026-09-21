@@ -1370,6 +1370,7 @@ pub fn eigh_with_options(
             LinalgOp::Eigh {
                 derivative_eps: options.derivative_eps,
                 gauge: options.gauge,
+                driver: options.driver,
             },
             &[a],
         )?,

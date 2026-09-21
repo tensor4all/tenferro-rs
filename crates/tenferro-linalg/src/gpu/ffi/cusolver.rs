@@ -46,6 +46,7 @@ pub type CusolverDnHandleRaw = *mut c_void;
 pub type CublasHandleRaw = *mut c_void;
 pub type CudaStream = *mut c_void;
 type GesvdjInfoRaw = *mut c_void;
+type SyevjInfoRaw = *mut c_void;
 type CusolverDnParamsRaw = *mut c_void;
 
 type CusolverStatus = i32;
@@ -753,6 +754,211 @@ type SyevdC64Fn = unsafe extern "C" fn(
     *mut i32,
 ) -> CusolverStatus;
 
+type CreateSyevjInfoFn = unsafe extern "C" fn(*mut SyevjInfoRaw) -> CusolverStatus;
+type DestroySyevjInfoFn = unsafe extern "C" fn(SyevjInfoRaw) -> CusolverStatus;
+
+type SyevjBufferSizeF32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *const f32,
+    i32,
+    *const f32,
+    *mut i32,
+    SyevjInfoRaw,
+) -> CusolverStatus;
+type SyevjBufferSizeF64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *const f64,
+    i32,
+    *const f64,
+    *mut i32,
+    SyevjInfoRaw,
+) -> CusolverStatus;
+type SyevjBufferSizeC32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *const Complex32,
+    i32,
+    *const f32,
+    *mut i32,
+    SyevjInfoRaw,
+) -> CusolverStatus;
+type SyevjBufferSizeC64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *const Complex64,
+    i32,
+    *const f64,
+    *mut i32,
+    SyevjInfoRaw,
+) -> CusolverStatus;
+type SyevjF32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    *mut f32,
+    i32,
+    *mut i32,
+    SyevjInfoRaw,
+) -> CusolverStatus;
+type SyevjF64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    *mut f64,
+    i32,
+    *mut i32,
+    SyevjInfoRaw,
+) -> CusolverStatus;
+type SyevjC32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut f32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+    SyevjInfoRaw,
+) -> CusolverStatus;
+type SyevjC64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut f64,
+    *mut Complex64,
+    i32,
+    *mut i32,
+    SyevjInfoRaw,
+) -> CusolverStatus;
+
+type SyevjBatchedBufferSizeF32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *const f32,
+    i32,
+    *const f32,
+    *mut i32,
+    SyevjInfoRaw,
+    i32,
+) -> CusolverStatus;
+type SyevjBatchedBufferSizeF64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *const f64,
+    i32,
+    *const f64,
+    *mut i32,
+    SyevjInfoRaw,
+    i32,
+) -> CusolverStatus;
+type SyevjBatchedBufferSizeC32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *const Complex32,
+    i32,
+    *const f32,
+    *mut i32,
+    SyevjInfoRaw,
+    i32,
+) -> CusolverStatus;
+type SyevjBatchedBufferSizeC64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *const Complex64,
+    i32,
+    *const f64,
+    *mut i32,
+    SyevjInfoRaw,
+    i32,
+) -> CusolverStatus;
+type SyevjBatchedF32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    *mut f32,
+    i32,
+    *mut i32,
+    SyevjInfoRaw,
+    i32,
+) -> CusolverStatus;
+type SyevjBatchedF64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    *mut f64,
+    i32,
+    *mut i32,
+    SyevjInfoRaw,
+    i32,
+) -> CusolverStatus;
+type SyevjBatchedC32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut f32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+    SyevjInfoRaw,
+    i32,
+) -> CusolverStatus;
+type SyevjBatchedC64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    CublasFillMode,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut f64,
+    *mut Complex64,
+    i32,
+    *mut i32,
+    SyevjInfoRaw,
+    i32,
+) -> CusolverStatus;
+
 type CublasCreateFn = unsafe extern "C" fn(*mut CublasHandleRaw) -> CublasStatus;
 type CublasDestroyFn = unsafe extern "C" fn(CublasHandleRaw) -> CublasStatus;
 type CublasSetStreamFn = unsafe extern "C" fn(CublasHandleRaw, CudaStream) -> CublasStatus;
@@ -941,6 +1147,24 @@ struct CusolverVtable {
     dsyevd: SyevdF64Fn,
     cheevd: SyevdC32Fn,
     zheevd: SyevdC64Fn,
+    create_syevj_info: CreateSyevjInfoFn,
+    destroy_syevj_info: DestroySyevjInfoFn,
+    ssyevj_buffer_size: SyevjBufferSizeF32Fn,
+    dsyevj_buffer_size: SyevjBufferSizeF64Fn,
+    cheevj_buffer_size: SyevjBufferSizeC32Fn,
+    zheevj_buffer_size: SyevjBufferSizeC64Fn,
+    ssyevj: SyevjF32Fn,
+    dsyevj: SyevjF64Fn,
+    cheevj: SyevjC32Fn,
+    zheevj: SyevjC64Fn,
+    ssyevj_batched_buffer_size: SyevjBatchedBufferSizeF32Fn,
+    dsyevj_batched_buffer_size: SyevjBatchedBufferSizeF64Fn,
+    cheevj_batched_buffer_size: SyevjBatchedBufferSizeC32Fn,
+    zheevj_batched_buffer_size: SyevjBatchedBufferSizeC64Fn,
+    ssyevj_batched: SyevjBatchedF32Fn,
+    dsyevj_batched: SyevjBatchedF64Fn,
+    cheevj_batched: SyevjBatchedC32Fn,
+    zheevj_batched: SyevjBatchedC64Fn,
 }
 
 impl CusolverVtable {
@@ -1011,6 +1235,40 @@ impl CusolverVtable {
             dsyevd: load_symbol(lib, b"cusolverDnDsyevd\0", "cuSOLVER")?,
             cheevd: load_symbol(lib, b"cusolverDnCheevd\0", "cuSOLVER")?,
             zheevd: load_symbol(lib, b"cusolverDnZheevd\0", "cuSOLVER")?,
+            create_syevj_info: load_symbol(lib, b"cusolverDnCreateSyevjInfo\0", "cuSOLVER")?,
+            destroy_syevj_info: load_symbol(lib, b"cusolverDnDestroySyevjInfo\0", "cuSOLVER")?,
+            ssyevj_buffer_size: load_symbol(lib, b"cusolverDnSsyevj_bufferSize\0", "cuSOLVER")?,
+            dsyevj_buffer_size: load_symbol(lib, b"cusolverDnDsyevj_bufferSize\0", "cuSOLVER")?,
+            cheevj_buffer_size: load_symbol(lib, b"cusolverDnCheevj_bufferSize\0", "cuSOLVER")?,
+            zheevj_buffer_size: load_symbol(lib, b"cusolverDnZheevj_bufferSize\0", "cuSOLVER")?,
+            ssyevj: load_symbol(lib, b"cusolverDnSsyevj\0", "cuSOLVER")?,
+            dsyevj: load_symbol(lib, b"cusolverDnDsyevj\0", "cuSOLVER")?,
+            cheevj: load_symbol(lib, b"cusolverDnCheevj\0", "cuSOLVER")?,
+            zheevj: load_symbol(lib, b"cusolverDnZheevj\0", "cuSOLVER")?,
+            ssyevj_batched_buffer_size: load_symbol(
+                lib,
+                b"cusolverDnSsyevjBatched_bufferSize\0",
+                "cuSOLVER",
+            )?,
+            dsyevj_batched_buffer_size: load_symbol(
+                lib,
+                b"cusolverDnDsyevjBatched_bufferSize\0",
+                "cuSOLVER",
+            )?,
+            cheevj_batched_buffer_size: load_symbol(
+                lib,
+                b"cusolverDnCheevjBatched_bufferSize\0",
+                "cuSOLVER",
+            )?,
+            zheevj_batched_buffer_size: load_symbol(
+                lib,
+                b"cusolverDnZheevjBatched_bufferSize\0",
+                "cuSOLVER",
+            )?,
+            ssyevj_batched: load_symbol(lib, b"cusolverDnSsyevjBatched\0", "cuSOLVER")?,
+            dsyevj_batched: load_symbol(lib, b"cusolverDnDsyevjBatched\0", "cuSOLVER")?,
+            cheevj_batched: load_symbol(lib, b"cusolverDnCheevjBatched\0", "cuSOLVER")?,
+            zheevj_batched: load_symbol(lib, b"cusolverDnZheevjBatched\0", "cuSOLVER")?,
         })
     }
 }
@@ -1347,6 +1605,33 @@ impl Drop for GesvdjInfo<'_> {
     }
 }
 
+pub struct SyevjInfo<'a> {
+    handle: &'a CusolverDnHandle,
+    raw: SyevjInfoRaw,
+}
+
+impl fmt::Debug for SyevjInfo<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SyevjInfo")
+            .field("handle", &self.handle)
+            .field("initialized", &true)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SyevjInfo<'_> {
+    fn raw(&self) -> SyevjInfoRaw {
+        self.raw
+    }
+}
+
+impl Drop for SyevjInfo<'_> {
+    fn drop(&mut self) {
+        let status = unsafe { (self.handle.lib.vtable.destroy_syevj_info)(self.raw) };
+        report_cusolver_destroy_status(status, "cusolverDnDestroySyevjInfo");
+    }
+}
+
 impl CusolverDnHandle {
     /// Load cuSOLVER and create a native handle.
     ///
@@ -1393,6 +1678,23 @@ impl CusolverDnHandle {
         self.lib
             .check_status(status, op, "cusolverDnCreateGesvdjInfo")?;
         Ok(GesvdjInfo { handle: self, raw })
+    }
+
+    /// Create the cuSOLVER parameters used by the Jacobi eigensolver.
+    ///
+    /// The defaults cuSOLVER installs (tolerance and sweep limit) are kept:
+    /// the driver selects a routine, it does not retune convergence.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER cannot allocate the
+    /// parameter object or reports another non-success status.
+    pub fn create_syevj_info(&self, op: &'static str) -> Result<SyevjInfo<'_>> {
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe { (self.lib.vtable.create_syevj_info)(&mut raw) };
+        self.lib
+            .check_status(status, op, "cusolverDnCreateSyevjInfo")?;
+        Ok(SyevjInfo { handle: self, raw })
     }
 
     /// Query the workspace required by Cholesky factorization.
@@ -2488,6 +2790,346 @@ impl CusolverDnHandle {
             ),
         };
         self.lib.check_status(status, op, "cusolverDn*syevd")
+    }
+
+    /// Query the workspace required by the Jacobi symmetric/Hermitian
+    /// eigensolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success status.
+    #[allow(clippy::too_many_arguments)]
+    pub fn syevj_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        jobz: CusolverEigMode,
+        uplo: CublasFillMode,
+        n: i32,
+        a: *const c_void,
+        lda: i32,
+        w: *const c_void,
+        params: &SyevjInfo<'_>,
+        op: &'static str,
+    ) -> Result<i32> {
+        let mut lwork = 0;
+        let params = params.raw();
+        let status = unsafe {
+            match dtype {
+                CudaDataType::F32 => (self.lib.vtable.ssyevj_buffer_size)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    &mut lwork,
+                    params,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dsyevj_buffer_size)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    &mut lwork,
+                    params,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cheevj_buffer_size)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    &mut lwork,
+                    params,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zheevj_buffer_size)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    &mut lwork,
+                    params,
+                ),
+            }
+        };
+        self.lib
+            .check_status(status, op, "cusolverDn*syevj_bufferSize")?;
+        Ok(lwork)
+    }
+
+    /// Execute a Jacobi symmetric/Hermitian eigendecomposition through
+    /// cuSOLVER.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for the input matrix,
+    /// eigenvalues, workspace, and `info`, with dimensions and workspace size
+    /// accepted by cuSOLVER, and `params` must be the object the workspace
+    /// size was queried with.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success eigensolver status, including non-convergence.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn syevj(
+        &self,
+        dtype: CudaDataType,
+        jobz: CusolverEigMode,
+        uplo: CublasFillMode,
+        n: i32,
+        a: *mut c_void,
+        lda: i32,
+        w: *mut c_void,
+        workspace: *mut c_void,
+        lwork: i32,
+        info: *mut i32,
+        params: &SyevjInfo<'_>,
+        op: &'static str,
+    ) -> Result<()> {
+        let params = params.raw();
+        let status = match dtype {
+            CudaDataType::F32 => (self.lib.vtable.ssyevj)(
+                self.raw,
+                jobz,
+                uplo,
+                n,
+                a.cast(),
+                lda,
+                w.cast(),
+                workspace.cast(),
+                lwork,
+                info,
+                params,
+            ),
+            CudaDataType::F64 => (self.lib.vtable.dsyevj)(
+                self.raw,
+                jobz,
+                uplo,
+                n,
+                a.cast(),
+                lda,
+                w.cast(),
+                workspace.cast(),
+                lwork,
+                info,
+                params,
+            ),
+            CudaDataType::Complex32 => (self.lib.vtable.cheevj)(
+                self.raw,
+                jobz,
+                uplo,
+                n,
+                a.cast(),
+                lda,
+                w.cast(),
+                workspace.cast(),
+                lwork,
+                info,
+                params,
+            ),
+            CudaDataType::Complex64 => (self.lib.vtable.zheevj)(
+                self.raw,
+                jobz,
+                uplo,
+                n,
+                a.cast(),
+                lda,
+                w.cast(),
+                workspace.cast(),
+                lwork,
+                info,
+                params,
+            ),
+        };
+        self.lib.check_status(status, op, "cusolverDn*syevj")
+    }
+
+    /// Query the workspace required by the batched Jacobi eigensolver.
+    ///
+    /// cuSOLVER restricts the batched Jacobi entry point to `n <= 32`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success status.
+    #[allow(clippy::too_many_arguments)]
+    pub fn syevj_batched_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        jobz: CusolverEigMode,
+        uplo: CublasFillMode,
+        n: i32,
+        a: *const c_void,
+        lda: i32,
+        w: *const c_void,
+        params: &SyevjInfo<'_>,
+        batch_size: i32,
+        op: &'static str,
+    ) -> Result<i32> {
+        let mut lwork = 0;
+        let params = params.raw();
+        let status = unsafe {
+            match dtype {
+                CudaDataType::F32 => (self.lib.vtable.ssyevj_batched_buffer_size)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    &mut lwork,
+                    params,
+                    batch_size,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dsyevj_batched_buffer_size)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    &mut lwork,
+                    params,
+                    batch_size,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cheevj_batched_buffer_size)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    &mut lwork,
+                    params,
+                    batch_size,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zheevj_batched_buffer_size)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    &mut lwork,
+                    params,
+                    batch_size,
+                ),
+            }
+        };
+        self.lib
+            .check_status(status, op, "cusolverDn*syevjBatched_bufferSize")?;
+        Ok(lwork)
+    }
+
+    /// Execute a batched Jacobi symmetric/Hermitian eigendecomposition.
+    ///
+    /// One launch covers `batch_size` matrices stored back to back with
+    /// stride `n * lda`; `w` holds `batch_size` spectra of length `n` and
+    /// `info` one status per matrix. cuSOLVER has no divide-and-conquer
+    /// counterpart, so this entry point exists only for the Jacobi driver.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers sized for the whole
+    /// batch, a workspace of the queried length, and `params` must be the
+    /// object the workspace size was queried with.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success eigensolver status, including non-convergence.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn syevj_batched(
+        &self,
+        dtype: CudaDataType,
+        jobz: CusolverEigMode,
+        uplo: CublasFillMode,
+        n: i32,
+        a: *mut c_void,
+        lda: i32,
+        w: *mut c_void,
+        workspace: *mut c_void,
+        lwork: i32,
+        info: *mut i32,
+        params: &SyevjInfo<'_>,
+        batch_size: i32,
+        op: &'static str,
+    ) -> Result<()> {
+        let params = params.raw();
+        let status = match dtype {
+            CudaDataType::F32 => (self.lib.vtable.ssyevj_batched)(
+                self.raw,
+                jobz,
+                uplo,
+                n,
+                a.cast(),
+                lda,
+                w.cast(),
+                workspace.cast(),
+                lwork,
+                info,
+                params,
+                batch_size,
+            ),
+            CudaDataType::F64 => (self.lib.vtable.dsyevj_batched)(
+                self.raw,
+                jobz,
+                uplo,
+                n,
+                a.cast(),
+                lda,
+                w.cast(),
+                workspace.cast(),
+                lwork,
+                info,
+                params,
+                batch_size,
+            ),
+            CudaDataType::Complex32 => (self.lib.vtable.cheevj_batched)(
+                self.raw,
+                jobz,
+                uplo,
+                n,
+                a.cast(),
+                lda,
+                w.cast(),
+                workspace.cast(),
+                lwork,
+                info,
+                params,
+                batch_size,
+            ),
+            CudaDataType::Complex64 => (self.lib.vtable.zheevj_batched)(
+                self.raw,
+                jobz,
+                uplo,
+                n,
+                a.cast(),
+                lda,
+                w.cast(),
+                workspace.cast(),
+                lwork,
+                info,
+                params,
+                batch_size,
+            ),
+        };
+        self.lib.check_status(status, op, "cusolverDn*syevjBatched")
     }
 }
 

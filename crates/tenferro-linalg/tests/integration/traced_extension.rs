@@ -1,8 +1,8 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{
-    EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions, SvdDriver,
-    SvdGauge, SvdOptions, TracedTensorLinalgExt,
+    EighDriver, EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions,
+    SvdDriver, SvdGauge, SvdOptions, TracedTensorLinalgExt,
 };
 use tenferro_runtime::{DType, Error, GraphCompiler, Runtime, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::Error as TensorError;
@@ -209,7 +209,7 @@ fn cpu_ignores_explicit_svd_driver_on_concrete_and_traced_paths() {
         forced_values.as_slice::<f64>().unwrap(),
         default_values.as_slice::<f64>().unwrap()
     );
-    assert_singular_values_close(
+    assert_spectra_close(
         forced_values.as_slice::<f64>().unwrap(),
         default_outputs[1].as_slice::<f64>().unwrap(),
     );
@@ -243,17 +243,94 @@ fn cpu_ignores_explicit_svd_driver_on_concrete_and_traced_paths() {
         outputs[3].as_slice::<f64>().unwrap(),
         default_values.as_slice::<f64>().unwrap()
     );
-    assert_singular_values_close(
+    assert_spectra_close(
         outputs[3].as_slice::<f64>().unwrap(),
         default_outputs[1].as_slice::<f64>().unwrap(),
     );
 }
 
-/// Assert two singular-value spectra agree to rounding.
+#[test]
+fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
+    // `EighDriver` selects a cuSOLVER routine; CPU providers have one eigh
+    // kernel, so a forced driver must execute and match the default policy on
+    // the same host. As with `SvdDriver`, that is a per-entry-point property:
+    // the LAPACK provider reaches the vectors and values-only routines
+    // through different jobz modes, which differ in the last ULPs.
+    let data = vec![2.0_f64, 0.5, -0.25, 0.5, 3.0, 0.75, -0.25, 0.75, 4.0];
+    let a = Tensor::from_vec_col_major(vec![3, 3], data.clone()).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let (default_outputs, forced_outputs, default_values, forced_values) =
+        support::with_cpu_linalg(&mut backend, |backend| {
+            let default_outputs = backend
+                .eigh_with_options(&a, EighOptions::default())
+                .unwrap();
+            let forced_outputs = backend
+                .eigh_with_options(&a, EighOptions::default().driver(EighDriver::Syevj))
+                .unwrap();
+            let default_values = backend.eigh_values(&a).unwrap();
+            let forced_values = backend
+                .eigh_values_with_driver(&a, EighDriver::Syevd)
+                .unwrap();
+            (
+                default_outputs,
+                forced_outputs,
+                default_values,
+                forced_values,
+            )
+        });
+    for (default, forced) in default_outputs.iter().zip(&forced_outputs) {
+        assert_eq!(
+            default.as_slice::<f64>().unwrap(),
+            forced.as_slice::<f64>().unwrap()
+        );
+    }
+    assert_eq!(
+        forced_values.as_slice::<f64>().unwrap(),
+        default_values.as_slice::<f64>().unwrap()
+    );
+    assert_spectra_close(
+        forced_values.as_slice::<f64>().unwrap(),
+        default_outputs[0].as_slice::<f64>().unwrap(),
+    );
+
+    let traced = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![3, 3], data).unwrap(),
+    )
+    .unwrap();
+    let (w, v) = traced
+        .eigh_with_options(EighOptions::default().driver(EighDriver::Syevj))
+        .unwrap();
+    // Only the eigenvalues are live here, so the op prunes to a values-only
+    // op that keeps the forced driver; the CPU runtime must still execute it.
+    let (w_only, _) = traced
+        .eigh_with_options(EighOptions::default().driver(EighDriver::Syevd))
+        .unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_many(&[&w, &v, &w_only]).unwrap();
+    let outputs = support::run_all(&program, &[]).unwrap();
+    for (traced, default) in outputs[..2].iter().zip(&default_outputs) {
+        assert_eq!(
+            traced.as_slice::<f64>().unwrap(),
+            default.as_slice::<f64>().unwrap()
+        );
+    }
+    assert_eq!(
+        outputs[2].as_slice::<f64>().unwrap(),
+        default_values.as_slice::<f64>().unwrap()
+    );
+    assert_spectra_close(
+        outputs[2].as_slice::<f64>().unwrap(),
+        default_outputs[0].as_slice::<f64>().unwrap(),
+    );
+}
+
+/// Assert two spectra (singular values or eigenvalues) agree to rounding.
 ///
 /// Values-only and vectors LAPACK drivers are distinct routines, so their
 /// results are equal only up to the last ULPs.
-fn assert_singular_values_close(left: &[f64], right: &[f64]) {
+fn assert_spectra_close(left: &[f64], right: &[f64]) {
     assert_eq!(left.len(), right.len());
     let scale = right
         .iter()
@@ -263,7 +340,7 @@ fn assert_singular_values_close(left: &[f64], right: &[f64]) {
     for (left, right) in left.iter().zip(right) {
         assert!(
             (left - right).abs() <= tolerance,
-            "singular values differ beyond rounding: {left} vs {right} (tolerance {tolerance})"
+            "spectra differ beyond rounding: {left} vs {right} (tolerance {tolerance})"
         );
     }
 }

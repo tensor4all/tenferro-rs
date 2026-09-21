@@ -12,8 +12,8 @@ pub struct CompactQrResult {
 
 pub(crate) use crate::error::unsupported_dtype;
 use crate::extension::{
-    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions,
-    QrOptions, SvdDriver, SvdOptions,
+    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighDriver,
+    EighOptions, QrOptions, SvdDriver, SvdOptions,
 };
 use crate::RankRevealingQrOptions;
 
@@ -738,6 +738,59 @@ pub trait LinalgBackend: BackendSession {
         Ok(outputs)
     }
 
+    /// Compute public eigh outputs `(values, vectors)` from a tensor read
+    /// target with explicit options.
+    ///
+    /// This is the borrowed-input counterpart of
+    /// [`LinalgBackend::eigh_with_options`]. The default implementation runs
+    /// [`LinalgBackend::eigh_read`] and applies the gauge on the host; it
+    /// ignores `driver` because CPU providers have a single eigh kernel. The
+    /// CUDA backend overrides it so the driver reaches cuSOLVER.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_linalg::{EighDriver, EighOptions, LinalgBackend};
+    /// use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView, TypedTensor};
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(
+    ///     vec![2, 2],
+    ///     vec![2.0, 0.0, 0.0, 3.0],
+    /// )?;
+    /// let mut host = CpuBackend::new();
+    /// let outputs = host.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |backend| {
+    ///         backend.eigh_with_options_read(
+    ///             TensorRead::from_view(TensorView::F64(input.as_view())),
+    ///             EighOptions::default().driver(EighDriver::Syevj),
+    ///         )
+    ///     })
+    ///     .expect("CpuBackend must expose a CpuExecSession")
+    /// })?;
+    /// assert_eq!(outputs[0].shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] containing
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when
+    /// `derivative_eps` is non-finite or non-positive, plus the validation,
+    /// unsupported-dtype, numerical, placement, or typed backend/provider
+    /// errors from [`LinalgBackend::eigh_read`] and the gauge metadata and
+    /// host-access errors from the default host gauge path.
+    fn eigh_with_options_read(
+        &mut self,
+        input: TensorRead<'_>,
+        options: EighOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_derivative_eps("eigh_with_options_read", options.derivative_eps)?;
+        let mut outputs = self.eigh_read(input)?;
+        apply_eigh_gauge(options.gauge, &mut outputs)?;
+        Ok(outputs)
+    }
+
     /// Compute public Hermitian eigendecomposition outputs from a tensor read target.
     ///
     /// Backends may canonicalize the input inside the same placement family, but
@@ -945,12 +998,35 @@ pub trait LinalgBackend: BackendSession {
         ))
     }
 
+    /// Eigenvalues only with an explicit CUDA driver. The default
+    /// implementation ignores the driver, matching
+    /// [`LinalgBackend::eigh_with_options`].
+    #[doc(hidden)]
+    fn eigh_values_with_driver(
+        &mut self,
+        input: &Tensor,
+        _driver: EighDriver,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.eigh_values(input)
+    }
+
     #[doc(hidden)]
     fn eigh_values_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         Err(tenferro_tensor::Error::unsupported(
             "eigh_values",
             "backend does not implement borrowed Hermitian eigenvalues-only decomposition",
         ))
+    }
+
+    /// Borrowed-input counterpart of
+    /// [`LinalgBackend::eigh_values_with_driver`].
+    #[doc(hidden)]
+    fn eigh_values_with_driver_read(
+        &mut self,
+        input: TensorRead<'_>,
+        _driver: EighDriver,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.eigh_values_read(input)
     }
 
     /// Compute public general eigendecomposition outputs `(values, vectors)`.

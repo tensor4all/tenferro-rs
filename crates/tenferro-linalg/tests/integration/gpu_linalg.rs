@@ -8,8 +8,8 @@ use tenferro_gpu::{
     cuda::CudaBackend, cuda::CudaDeviceId, cuda::CudaExecSession,
 };
 use tenferro_linalg::{
-    HouseholderQr, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions, SvdDriver,
-    SvdOptions, TensorLinalgExt,
+    EighDriver, EighOptions, HouseholderQr, LinalgBackend, QrGauge, QrOptions,
+    RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt,
 };
 use tenferro_tensor::{BackendSessionHost, DType, Error, Tensor, TensorRead, TypedTensor};
 
@@ -1289,6 +1289,135 @@ fn test_cubecl_qr_f32_reconstructs_input() {
         2,
     );
     assert_slice_close_f32(&recon, input.as_slice::<f32>().unwrap(), 1e-3);
+}
+
+/// Symmetric `n x n` block with a well-separated spectrum, repeated over
+/// `batch` matrices so the batched loop is exercised too.
+fn patterned_symmetric_f64(n: usize, batch: usize) -> Tensor {
+    let mut data = Vec::with_capacity(n * n * batch.max(1));
+    for b in 0..batch.max(1) {
+        for col in 0..n {
+            for row in 0..n {
+                let (lo, hi) = if row <= col { (row, col) } else { (col, row) };
+                let patterned = ((lo * 13 + hi * 17 + 3) % 31) as f64 / 31.0 - 0.5;
+                let diagonal = if row == col {
+                    2.0 * (row + 1) as f64 + b as f64
+                } else {
+                    0.0
+                };
+                data.push(patterned + diagonal);
+            }
+        }
+    }
+    let shape = if batch > 1 {
+        vec![n, n, batch]
+    } else {
+        vec![n, n]
+    };
+    tensor_f64(shape, data)
+}
+
+/// Forced-driver eigh through the owned, borrowed, and values-only entry
+/// points: `V diag(w) V^T` reconstructs the input and the eigenvalues match
+/// the CPU provider.
+fn check_forced_eigh_driver(n: usize, batch: usize, driver: EighDriver) {
+    let input = patterned_symmetric_f64(n, batch);
+    let options = EighOptions::default().driver(driver);
+    let batch_total = batch.max(1);
+
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.eigh_with_options(&gpu_input, options)
+    })
+    .unwrap();
+    let values = download(&gpu, &outputs[0]);
+    let vectors = download(&gpu, &outputs[1]);
+    let expected_values_shape: Vec<usize> = if batch > 1 { vec![n, batch] } else { vec![n] };
+    assert_eq!(values.shape(), expected_values_shape.as_slice());
+    assert_eq!(vectors.shape(), input.shape());
+
+    let values_data = values.as_slice::<f64>().unwrap();
+    let vectors_data = vectors.as_slice::<f64>().unwrap();
+    let input_data = input.as_slice::<f64>().unwrap();
+    for b in 0..batch_total {
+        let v = &vectors_data[b * n * n..(b + 1) * n * n];
+        let w = &values_data[b * n..(b + 1) * n];
+        // cuSOLVER returns eigenvalues in ascending order for both routines.
+        for pair in w.windows(2) {
+            assert!(
+                pair[0] <= pair[1] + 1e-12,
+                "eigenvalues must be ascending, got {pair:?}"
+            );
+        }
+        let mut scaled = v.to_vec();
+        for col in 0..n {
+            for row in 0..n {
+                scaled[col_major_index(n, row, col)] *= w[col];
+            }
+        }
+        let reconstruction = matmul_f64(&scaled, &transpose_f64(v, n, n), n, n, n);
+        assert_relative_error_f64(
+            &reconstruction,
+            &input_data[b * n * n..(b + 1) * n * n],
+            1e-9,
+        );
+    }
+
+    let read_outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.eigh_with_options_read(TensorRead::from_tensor(&gpu_input), options)
+    })
+    .unwrap();
+    assert_tensor_close(&download(&gpu, &read_outputs[0]), &values, 1e-10);
+
+    let gpu_values = with_cuda_linalg_session(&mut gpu, |session| {
+        session.eigh_values_with_driver(&gpu_input, driver)
+    })
+    .unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_values), &values, 1e-10);
+
+    let gpu_read_values = with_cuda_linalg_session(&mut gpu, |session| {
+        session.eigh_values_with_driver_read(TensorRead::from_tensor(&gpu_input), driver)
+    })
+    .unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_read_values), &values, 1e-10);
+
+    let mut cpu = cpu_backend();
+    let expected_values =
+        with_cpu_linalg_session(&mut cpu, |session| session.eigh_values(&input)).unwrap();
+    assert_tensor_close(&values, &expected_values, 1e-8);
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU and forces the Jacobi eigensolver that Auto never picks"]
+fn test_cubecl_eigh_forced_syevj_matches_reference() {
+    check_forced_eigh_driver(8, 1, EighDriver::Syevj);
+    check_forced_eigh_driver(64, 1, EighDriver::Syevj);
+    check_forced_eigh_driver(6, 4, EighDriver::Syevj);
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn test_cubecl_eigh_forced_syevd_matches_reference() {
+    check_forced_eigh_driver(8, 1, EighDriver::Syevd);
+    check_forced_eigh_driver(6, 4, EighDriver::Syevd);
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn test_cubecl_eigh_auto_driver_matches_default_eigh() {
+    let input = patterned_symmetric_f64(32, 1);
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let default_outputs =
+        with_cuda_linalg_session(&mut gpu, |session| session.eigh(&gpu_input)).unwrap();
+    let auto_outputs = with_cuda_linalg_session(&mut gpu, |session| {
+        session.eigh_with_options(&gpu_input, EighOptions::default().driver(EighDriver::Auto))
+    })
+    .unwrap();
+    for (default, auto) in default_outputs.iter().zip(&auto_outputs) {
+        assert_tensor_close(&download(&gpu, auto), &download(&gpu, default), 0.0);
+    }
 }
 
 #[test]

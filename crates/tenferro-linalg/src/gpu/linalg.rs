@@ -13,7 +13,7 @@ use super::ffi::cusolver::{
 };
 use super::kernels as cubecl_linalg;
 use crate::backend::CompactQrResult;
-use crate::extension::{QrGauge, QrOptions, SvdDriver};
+use crate::extension::{EighDriver, QrGauge, QrOptions, SvdDriver};
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, magnitude,
 // reduce_min/reduce_max) then downloads scalar summaries — no bulk host
 // roundtrip.
@@ -190,6 +190,36 @@ fn typed_host<'a, T: TensorScalar>(
     input
         .as_typed::<T>()
         .ok_or_else(|| unsupported_linalg_dtype(op, input))
+}
+
+/// cuSOLVER accepts the batched Jacobi entry point only up to this dimension.
+const CUSOLVER_SYEVJ_BATCHED_MAX_DIM: usize = 32;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CusolverEighRoutine {
+    Syevd,
+    Syevj,
+    SyevjBatched,
+}
+
+/// `Auto` keeps the pre-driver behavior: `syevd`/`heevd` at every size, so the
+/// default is unchanged. An explicit driver wins.
+///
+/// Within the Jacobi driver the batched entry point is chosen whenever
+/// cuSOLVER accepts it, because it replaces one launch per matrix with a
+/// single launch; cuSOLVER has no divide-and-conquer counterpart, so this is
+/// the only routine a caller cannot otherwise reach.
+fn select_eigh_driver(driver: EighDriver, n: usize, batch_total: usize) -> CusolverEighRoutine {
+    match driver {
+        EighDriver::Auto | EighDriver::Syevd => CusolverEighRoutine::Syevd,
+        EighDriver::Syevj => {
+            if batch_total > 1 && n <= CUSOLVER_SYEVJ_BATCHED_MAX_DIM {
+                CusolverEighRoutine::SyevjBatched
+            } else {
+                CusolverEighRoutine::Syevj
+            }
+        }
+    }
 }
 
 fn unsupported_linalg_dtype(op: &'static str, input: &Tensor) -> Error {
@@ -1004,39 +1034,59 @@ fn gauge_pair_mut<'a, T: TensorScalar>(
     Ok((q_t, r_t))
 }
 
-pub(super) fn eigh(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn eigh(
+    backend: &mut CudaExecSession<'_>,
+    input: &Tensor,
+    driver: EighDriver,
+) -> Result<Vec<Tensor>> {
     match input.dtype() {
-        DType::F32 => eigh_typed(backend, typed_host::<f32>("eigh", input)?)
+        DType::F32 => eigh_typed(backend, typed_host::<f32>("eigh", input)?, driver)
             .map(|(w, v)| vec![Tensor::from_typed::<f32>(w), Tensor::from_typed::<f32>(v)]),
-        DType::F64 => eigh_typed(backend, typed_host::<f64>("eigh", input)?)
+        DType::F64 => eigh_typed(backend, typed_host::<f64>("eigh", input)?, driver)
             .map(|(w, v)| vec![Tensor::from_typed::<f64>(w), Tensor::from_typed::<f64>(v)]),
-        DType::C32 => eigh_typed(backend, typed_host::<Complex32>("eigh", input)?).map(|(w, v)| {
-            vec![
-                Tensor::from_typed::<f32>(w),
-                Tensor::from_typed::<Complex32>(v),
-            ]
-        }),
-        DType::C64 => eigh_typed(backend, typed_host::<Complex64>("eigh", input)?).map(|(w, v)| {
-            vec![
-                Tensor::from_typed::<f64>(w),
-                Tensor::from_typed::<Complex64>(v),
-            ]
-        }),
+        DType::C32 => {
+            eigh_typed(backend, typed_host::<Complex32>("eigh", input)?, driver).map(|(w, v)| {
+                vec![
+                    Tensor::from_typed::<f32>(w),
+                    Tensor::from_typed::<Complex32>(v),
+                ]
+            })
+        }
+        DType::C64 => {
+            eigh_typed(backend, typed_host::<Complex64>("eigh", input)?, driver).map(|(w, v)| {
+                vec![
+                    Tensor::from_typed::<f64>(w),
+                    Tensor::from_typed::<Complex64>(v),
+                ]
+            })
+        }
         DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype("eigh", input)),
         DType::External(_) => Err(unsupported_linalg_dtype("eigh", input)),
     }
 }
 
-pub(super) fn eigh_values(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Tensor> {
+pub(super) fn eigh_values(
+    backend: &mut CudaExecSession<'_>,
+    input: &Tensor,
+    driver: EighDriver,
+) -> Result<Tensor> {
     match input.dtype() {
-        DType::F32 => eigh_values_typed(backend, typed_host::<f32>("eigh_values", input)?)
+        DType::F32 => eigh_values_typed(backend, typed_host::<f32>("eigh_values", input)?, driver)
             .map(Tensor::from_typed::<f32>),
-        DType::F64 => eigh_values_typed(backend, typed_host::<f64>("eigh_values", input)?)
+        DType::F64 => eigh_values_typed(backend, typed_host::<f64>("eigh_values", input)?, driver)
             .map(Tensor::from_typed::<f64>),
-        DType::C32 => eigh_values_typed(backend, typed_host::<Complex32>("eigh_values", input)?)
-            .map(Tensor::from_typed::<f32>),
-        DType::C64 => eigh_values_typed(backend, typed_host::<Complex64>("eigh_values", input)?)
-            .map(Tensor::from_typed::<f64>),
+        DType::C32 => eigh_values_typed(
+            backend,
+            typed_host::<Complex32>("eigh_values", input)?,
+            driver,
+        )
+        .map(Tensor::from_typed::<f32>),
+        DType::C64 => eigh_values_typed(
+            backend,
+            typed_host::<Complex64>("eigh_values", input)?,
+            driver,
+        )
+        .map(Tensor::from_typed::<f64>),
         DType::I32 | DType::I64 | DType::Bool => {
             Err(unsupported_linalg_dtype("eigh_values", input))
         }
@@ -3043,6 +3093,7 @@ where
 fn eigh_typed<T>(
     backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
+    driver: EighDriver,
 ) -> Result<(TypedTensor<<T as LinalgScalar>::Real>, TypedTensor<T>)>
 where
     T: LinalgScalar + TensorScalar,
@@ -3059,6 +3110,8 @@ where
     let batch_total = batch_count(OP, batch_shape)?;
     let matrix_stride = checked_mul_usize(OP, "eigh matrix stride", n, n)?;
     let values_stride = n;
+    let routine = select_eigh_driver(driver, n, batch_total);
+    let batch_total_i32 = as_i32(batch_total, OP, "batch_total")?;
     if has_zero_dim(input.shape()) {
         return Ok(backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
@@ -3077,6 +3130,14 @@ where
         // it is used immediately to bind the cuSOLVER handle and not retained.
         let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
+        // The Jacobi routine needs a parameter object; it is queried for the
+        // workspace size and reused by every batch call below.
+        let syevj_params = match routine {
+            CusolverEighRoutine::Syevd => None,
+            CusolverEighRoutine::Syevj | CusolverEighRoutine::SyevjBatched => {
+                Some(handles.cusolver().create_syevj_info(OP)?)
+            }
+        };
 
         // Clone `input` into a fresh work matrix on the session stream.
         let mut work = raw.alloc_output::<T>(input.shape())?;
@@ -3094,19 +3155,48 @@ where
         let lwork = {
             let a_ref = raw.tensor(&work)?;
             let values_ref = raw.tensor(&values)?;
-            handles.cusolver().syevd_buffer_size(
-                T::DATA_TYPE,
-                CusolverEigMode::Vector,
-                CublasFillMode::Lower,
-                n_i32,
-                // SAFETY: both spans are validated device allocations on this
-                // runtime; only the leading dimensions are queried here.
-                unsafe { a_ref.raw_ptr().cast_const() },
-                lda,
-                // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                unsafe { values_ref.raw_ptr().cast_const() },
-                OP,
-            )?
+            // SAFETY: both spans are validated device allocations on this
+            // runtime; only the leading dimensions are queried here.
+            let a_ptr = unsafe { a_ref.raw_ptr().cast_const() };
+            // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+            let values_ptr = unsafe { values_ref.raw_ptr().cast_const() };
+            match &syevj_params {
+                None => handles.cusolver().syevd_buffer_size(
+                    T::DATA_TYPE,
+                    CusolverEigMode::Vector,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    a_ptr,
+                    lda,
+                    values_ptr,
+                    OP,
+                )?,
+                Some(params) if routine == CusolverEighRoutine::SyevjBatched => {
+                    handles.cusolver().syevj_batched_buffer_size(
+                        T::DATA_TYPE,
+                        CusolverEigMode::Vector,
+                        CublasFillMode::Lower,
+                        n_i32,
+                        a_ptr,
+                        lda,
+                        values_ptr,
+                        params,
+                        batch_total_i32,
+                        OP,
+                    )?
+                }
+                Some(params) => handles.cusolver().syevj_buffer_size(
+                    T::DATA_TYPE,
+                    CusolverEigMode::Vector,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    a_ptr,
+                    lda,
+                    values_ptr,
+                    params,
+                    OP,
+                )?,
+            }
         };
         let workspace_nbytes = {
             let lwork = usize::try_from(lwork).map_err(|_| {
@@ -3135,7 +3225,40 @@ where
         // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
         let info_ptr = unsafe { info_ref.raw_ptr() };
 
-        for batch in 0..batch_total {
+        if routine == CusolverEighRoutine::SyevjBatched {
+            let params = syevj_params.as_ref().ok_or_else(|| {
+                Error::runtime_state(
+                    OP,
+                    "batched Jacobi eigensolver selected without its cuSOLVER parameters",
+                )
+            })?;
+            // SAFETY: the batch-wide matrix, eigenvalue, info, and workspace
+            // allocations match the strides and lengths cuSOLVER queried, and
+            // `params` is the object that query used.
+            unsafe {
+                handles.cusolver().syevj_batched(
+                    T::DATA_TYPE,
+                    CusolverEigMode::Vector,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    a_ptr,
+                    lda,
+                    values_ptr,
+                    workspace_ptr,
+                    lwork,
+                    info_ptr.cast::<i32>(),
+                    params,
+                    batch_total_i32,
+                    OP,
+                )?;
+            }
+        }
+        // The batched launch above already covered every matrix.
+        let per_matrix_batches = match routine {
+            CusolverEighRoutine::SyevjBatched => 0,
+            CusolverEighRoutine::Syevd | CusolverEighRoutine::Syevj => batch_total,
+        };
+        for batch in 0..per_matrix_batches {
             let a_offset =
                 checked_batch_offset(OP, "eigh matrix batch offset", batch, matrix_stride)?;
             let values_offset =
@@ -3149,29 +3272,55 @@ where
                     batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
                 )
             };
-            // SAFETY: batch pointers, workspace, dimensions, and stream-bound
-            // handle satisfy cuSOLVER syevd's vector eigensolver contract.
-            unsafe {
-                handles.cusolver().syevd(
-                    T::DATA_TYPE,
-                    CusolverEigMode::Vector,
-                    CublasFillMode::Lower,
-                    n_i32,
-                    batch_a,
-                    lda,
-                    batch_w,
-                    workspace_ptr,
-                    lwork,
-                    batch_info,
-                    OP,
-                )?;
+            match &syevj_params {
+                // SAFETY: batch pointers, workspace, dimensions, and
+                // stream-bound handle satisfy cuSOLVER syevd's vector
+                // eigensolver contract.
+                None => unsafe {
+                    handles.cusolver().syevd(
+                        T::DATA_TYPE,
+                        CusolverEigMode::Vector,
+                        CublasFillMode::Lower,
+                        n_i32,
+                        batch_a,
+                        lda,
+                        batch_w,
+                        workspace_ptr,
+                        lwork,
+                        batch_info,
+                        OP,
+                    )?;
+                },
+                // SAFETY: as above, plus `params` is the same object the
+                // workspace size was queried with.
+                Some(params) => unsafe {
+                    handles.cusolver().syevj(
+                        T::DATA_TYPE,
+                        CusolverEigMode::Vector,
+                        CublasFillMode::Lower,
+                        n_i32,
+                        batch_a,
+                        lda,
+                        batch_w,
+                        workspace_ptr,
+                        lwork,
+                        batch_info,
+                        params,
+                        OP,
+                    )?;
+                },
             }
         }
 
         // Host barrier (only for reading the solver diagnostics).
+        let call = match routine {
+            CusolverEighRoutine::Syevd => "cusolverDn*syevd",
+            CusolverEighRoutine::Syevj => "cusolverDn*syevj",
+            CusolverEighRoutine::SyevjBatched => "cusolverDn*syevjBatched",
+        };
         let host_info = raw.download_tensor::<i32>(&info, OP)?;
         for &value in host_info.host_data()? {
-            check_solver_info(OP, "cusolverDn*syevd", value)?;
+            check_solver_info(OP, call, value)?;
         }
         Ok((values, work))
     })?;
@@ -3182,6 +3331,7 @@ where
 fn eigh_values_typed<T>(
     backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
+    driver: EighDriver,
 ) -> Result<TypedTensor<<T as LinalgScalar>::Real>>
 where
     T: LinalgScalar + TensorScalar,
@@ -3198,6 +3348,8 @@ where
     let batch_total = batch_count(OP, batch_shape)?;
     let matrix_stride = checked_mul_usize(OP, "eigh_values matrix stride", n, n)?;
     let values_stride = n;
+    let routine = select_eigh_driver(driver, n, batch_total);
+    let batch_total_i32 = as_i32(batch_total, OP, "batch_total")?;
     if has_zero_dim(input.shape()) {
         return Ok(backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
@@ -3213,6 +3365,14 @@ where
         // it is used immediately to bind the cuSOLVER handle and not retained.
         let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
+        // The Jacobi routine needs a parameter object; it is queried for the
+        // workspace size and reused by every batch call below.
+        let syevj_params = match routine {
+            CusolverEighRoutine::Syevd => None,
+            CusolverEighRoutine::Syevj | CusolverEighRoutine::SyevjBatched => {
+                Some(handles.cusolver().create_syevj_info(OP)?)
+            }
+        };
 
         // Clone `input` into a fresh work matrix on the session stream.
         let mut work = raw.alloc_output::<T>(input.shape())?;
@@ -3230,19 +3390,48 @@ where
         let lwork = {
             let a_ref = raw.tensor(&work)?;
             let values_ref = raw.tensor(&values)?;
-            handles.cusolver().syevd_buffer_size(
-                T::DATA_TYPE,
-                CusolverEigMode::NoVector,
-                CublasFillMode::Lower,
-                n_i32,
-                // SAFETY: both spans are validated device allocations on this
-                // runtime; only the leading dimensions are queried here.
-                unsafe { a_ref.raw_ptr().cast_const() },
-                lda,
-                // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                unsafe { values_ref.raw_ptr().cast_const() },
-                OP,
-            )?
+            // SAFETY: both spans are validated device allocations on this
+            // runtime; only the leading dimensions are queried here.
+            let a_ptr = unsafe { a_ref.raw_ptr().cast_const() };
+            // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+            let values_ptr = unsafe { values_ref.raw_ptr().cast_const() };
+            match &syevj_params {
+                None => handles.cusolver().syevd_buffer_size(
+                    T::DATA_TYPE,
+                    CusolverEigMode::NoVector,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    a_ptr,
+                    lda,
+                    values_ptr,
+                    OP,
+                )?,
+                Some(params) if routine == CusolverEighRoutine::SyevjBatched => {
+                    handles.cusolver().syevj_batched_buffer_size(
+                        T::DATA_TYPE,
+                        CusolverEigMode::NoVector,
+                        CublasFillMode::Lower,
+                        n_i32,
+                        a_ptr,
+                        lda,
+                        values_ptr,
+                        params,
+                        batch_total_i32,
+                        OP,
+                    )?
+                }
+                Some(params) => handles.cusolver().syevj_buffer_size(
+                    T::DATA_TYPE,
+                    CusolverEigMode::NoVector,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    a_ptr,
+                    lda,
+                    values_ptr,
+                    params,
+                    OP,
+                )?,
+            }
         };
         let workspace_nbytes = {
             let lwork = usize::try_from(lwork).map_err(|_| {
@@ -3271,7 +3460,40 @@ where
         // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
         let info_ptr = unsafe { info_ref.raw_ptr() };
 
-        for batch in 0..batch_total {
+        if routine == CusolverEighRoutine::SyevjBatched {
+            let params = syevj_params.as_ref().ok_or_else(|| {
+                Error::runtime_state(
+                    OP,
+                    "batched Jacobi eigensolver selected without its cuSOLVER parameters",
+                )
+            })?;
+            // SAFETY: the batch-wide matrix, eigenvalue, info, and workspace
+            // allocations match the strides and lengths cuSOLVER queried, and
+            // `params` is the object that query used.
+            unsafe {
+                handles.cusolver().syevj_batched(
+                    T::DATA_TYPE,
+                    CusolverEigMode::NoVector,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    a_ptr,
+                    lda,
+                    values_ptr,
+                    workspace_ptr,
+                    lwork,
+                    info_ptr.cast::<i32>(),
+                    params,
+                    batch_total_i32,
+                    OP,
+                )?;
+            }
+        }
+        // The batched launch above already covered every matrix.
+        let per_matrix_batches = match routine {
+            CusolverEighRoutine::SyevjBatched => 0,
+            CusolverEighRoutine::Syevd | CusolverEighRoutine::Syevj => batch_total,
+        };
+        for batch in 0..per_matrix_batches {
             let a_offset =
                 checked_batch_offset(OP, "eigh_values matrix batch offset", batch, matrix_stride)?;
             let values_offset =
@@ -3285,29 +3507,55 @@ where
                     batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
                 )
             };
-            // SAFETY: batch pointers, workspace, dimensions, and stream-bound
-            // handle satisfy cuSOLVER syevd's no-vector eigensolver contract.
-            unsafe {
-                handles.cusolver().syevd(
-                    T::DATA_TYPE,
-                    CusolverEigMode::NoVector,
-                    CublasFillMode::Lower,
-                    n_i32,
-                    batch_a,
-                    lda,
-                    batch_w,
-                    workspace_ptr,
-                    lwork,
-                    batch_info,
-                    OP,
-                )?;
+            match &syevj_params {
+                // SAFETY: batch pointers, workspace, dimensions, and
+                // stream-bound handle satisfy cuSOLVER syevd's no-vector
+                // eigensolver contract.
+                None => unsafe {
+                    handles.cusolver().syevd(
+                        T::DATA_TYPE,
+                        CusolverEigMode::NoVector,
+                        CublasFillMode::Lower,
+                        n_i32,
+                        batch_a,
+                        lda,
+                        batch_w,
+                        workspace_ptr,
+                        lwork,
+                        batch_info,
+                        OP,
+                    )?;
+                },
+                // SAFETY: as above, plus `params` is the same object the
+                // workspace size was queried with.
+                Some(params) => unsafe {
+                    handles.cusolver().syevj(
+                        T::DATA_TYPE,
+                        CusolverEigMode::NoVector,
+                        CublasFillMode::Lower,
+                        n_i32,
+                        batch_a,
+                        lda,
+                        batch_w,
+                        workspace_ptr,
+                        lwork,
+                        batch_info,
+                        params,
+                        OP,
+                    )?;
+                },
             }
         }
 
         // Host barrier (only for reading the solver diagnostics).
+        let call = match routine {
+            CusolverEighRoutine::Syevd => "cusolverDn*syevd",
+            CusolverEighRoutine::Syevj => "cusolverDn*syevj",
+            CusolverEighRoutine::SyevjBatched => "cusolverDn*syevjBatched",
+        };
         let host_info = raw.download_tensor::<i32>(&info, OP)?;
         for &value in host_info.host_data()? {
-            check_solver_info(OP, "cusolverDn*syevd", value)?;
+            check_solver_info(OP, call, value)?;
         }
         Ok(values)
     })?;

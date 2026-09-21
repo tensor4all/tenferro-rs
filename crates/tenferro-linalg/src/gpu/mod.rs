@@ -6,7 +6,10 @@ use tenferro_gpu::cuda::CudaExecSession;
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
-use crate::extension::{apply_svd_gauge, validate_derivative_eps, SvdDriver, SvdOptions};
+use crate::extension::{
+    apply_eigh_gauge, apply_svd_gauge, validate_derivative_eps, EighDriver, EighOptions, SvdDriver,
+    SvdOptions,
+};
 use crate::{QrOptions, RankRevealingQrOptions};
 
 /// cuSOLVER needs compact column-major device storage, so a borrowed view is
@@ -73,6 +76,74 @@ fn svd_values_read_with_driver(
         }),
         TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
             Err(unsupported_dtype("svd_values", input.dtype()))
+        }
+    }
+}
+
+/// cuSOLVER needs compact column-major device storage, so a borrowed view is
+/// made contiguous on the device and never crosses the host boundary.
+fn eigh_read_with_driver(
+    session: &mut CudaExecSession<'_>,
+    input: TensorRead<'_>,
+    driver: EighDriver,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let input = input.tensor_view();
+    match input {
+        TensorView::F32(view) => {
+            let compact = session.to_contiguous(&view)?;
+            let input = Tensor::from_typed::<f32>(compact);
+            linalg::eigh(session, &input, driver)
+        }
+        TensorView::F64(view) => {
+            let compact = session.to_contiguous(&view)?;
+            let input = Tensor::from_typed::<f64>(compact);
+            linalg::eigh(session, &input, driver)
+        }
+        TensorView::C32(view) => {
+            let compact = session.to_contiguous(&view)?;
+            let input = Tensor::from_typed::<num_complex::Complex32>(compact);
+            linalg::eigh(session, &input, driver)
+        }
+        TensorView::C64(view) => {
+            let compact = session.to_contiguous(&view)?;
+            let input = Tensor::from_typed::<num_complex::Complex64>(compact);
+            linalg::eigh(session, &input, driver)
+        }
+        TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+            Err(unsupported_dtype("eigh", input.dtype()))
+        }
+    }
+}
+
+fn eigh_values_read_with_driver(
+    session: &mut CudaExecSession<'_>,
+    input: TensorRead<'_>,
+    driver: EighDriver,
+) -> tenferro_tensor::Result<Tensor> {
+    let input = input.tensor_view();
+    match input {
+        TensorView::F32(view) => session.to_contiguous(&view).and_then(|input| {
+            linalg::eigh_values(session, &Tensor::from_typed::<f32>(input), driver)
+        }),
+        TensorView::F64(view) => session.to_contiguous(&view).and_then(|input| {
+            linalg::eigh_values(session, &Tensor::from_typed::<f64>(input), driver)
+        }),
+        TensorView::C32(view) => session.to_contiguous(&view).and_then(|input| {
+            linalg::eigh_values(
+                session,
+                &Tensor::from_typed::<num_complex::Complex32>(input),
+                driver,
+            )
+        }),
+        TensorView::C64(view) => session.to_contiguous(&view).and_then(|input| {
+            linalg::eigh_values(
+                session,
+                &Tensor::from_typed::<num_complex::Complex64>(input),
+                driver,
+            )
+        }),
+        TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+            Err(unsupported_dtype("eigh_values", input.dtype()))
         }
     }
 }
@@ -366,36 +437,33 @@ impl LinalgBackend for CudaExecSession<'_> {
     }
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        linalg::eigh(self, input)
+        linalg::eigh(self, input, EighDriver::Auto)
+    }
+
+    fn eigh_with_options(
+        &mut self,
+        input: &Tensor,
+        options: EighOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
+        let mut outputs = linalg::eigh(self, input, options.driver)?;
+        apply_eigh_gauge(options.gauge, &mut outputs)?;
+        Ok(outputs)
+    }
+
+    fn eigh_with_options_read(
+        &mut self,
+        input: TensorRead<'_>,
+        options: EighOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_derivative_eps("eigh_with_options_read", options.derivative_eps)?;
+        let mut outputs = eigh_read_with_driver(self, input, options.driver)?;
+        apply_eigh_gauge(options.gauge, &mut outputs)?;
+        Ok(outputs)
     }
 
     fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let input = input.tensor_view();
-        match input {
-            TensorView::F32(view) => {
-                let compact = self.to_contiguous(&view)?;
-                let input = Tensor::from_typed::<f32>(compact);
-                self.eigh(&input)
-            }
-            TensorView::F64(view) => {
-                let compact = self.to_contiguous(&view)?;
-                let input = Tensor::from_typed::<f64>(compact);
-                self.eigh(&input)
-            }
-            TensorView::C32(view) => {
-                let compact = self.to_contiguous(&view)?;
-                let input = Tensor::from_typed::<num_complex::Complex32>(compact);
-                self.eigh(&input)
-            }
-            TensorView::C64(view) => {
-                let compact = self.to_contiguous(&view)?;
-                let input = Tensor::from_typed::<num_complex::Complex64>(compact);
-                self.eigh(&input)
-            }
-            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
-                Err(unsupported_dtype("eigh", input.dtype()))
-            }
-        }
+        eigh_read_with_driver(self, input, EighDriver::Auto)
     }
 
     fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
@@ -515,28 +583,27 @@ impl LinalgBackend for CudaExecSession<'_> {
     }
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        linalg::eigh_values(self, input)
+        linalg::eigh_values(self, input, EighDriver::Auto)
+    }
+
+    fn eigh_values_with_driver(
+        &mut self,
+        input: &Tensor,
+        driver: EighDriver,
+    ) -> tenferro_tensor::Result<Tensor> {
+        linalg::eigh_values(self, input, driver)
     }
 
     fn eigh_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-        let input = input.tensor_view();
-        match input {
-            TensorView::F32(view) => self
-                .to_contiguous(&view)
-                .and_then(|input| self.eigh_values(&Tensor::from_typed::<f32>(input))),
-            TensorView::F64(view) => self
-                .to_contiguous(&view)
-                .and_then(|input| self.eigh_values(&Tensor::from_typed::<f64>(input))),
-            TensorView::C32(view) => self.to_contiguous(&view).and_then(|input| {
-                self.eigh_values(&Tensor::from_typed::<num_complex::Complex32>(input))
-            }),
-            TensorView::C64(view) => self.to_contiguous(&view).and_then(|input| {
-                self.eigh_values(&Tensor::from_typed::<num_complex::Complex64>(input))
-            }),
-            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
-                Err(unsupported_dtype("eigh_values", input.dtype()))
-            }
-        }
+        eigh_values_read_with_driver(self, input, EighDriver::Auto)
+    }
+
+    fn eigh_values_with_driver_read(
+        &mut self,
+        input: TensorRead<'_>,
+        driver: EighDriver,
+    ) -> tenferro_tensor::Result<Tensor> {
+        eigh_values_read_with_driver(self, input, driver)
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {

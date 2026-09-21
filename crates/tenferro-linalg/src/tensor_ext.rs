@@ -17,9 +17,7 @@ use tenferro_tensor::{
     TensorWrite, TypedTensor,
 };
 
-use crate::extension::{
-    apply_eigh_gauge, validate_derivative_eps, EighOptions, QrOptions, SvdOptions,
-};
+use crate::extension::{EighOptions, QrOptions, SvdOptions};
 use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
 
 /// Scalar types supported by statically typed linear algebra methods.
@@ -2052,10 +2050,10 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
         with_linalg_backend(session, "eigh_with_options_read", |backend| {
-            validate_derivative_eps("eigh_with_options_read", options.derivative_eps)?;
-            let mut out = backend.eigh_read(self)?;
-            apply_eigh_gauge(options.gauge, &mut out)?;
-            two(out, "eigh_with_options_read")
+            two(
+                backend.eigh_with_options_read(self, options)?,
+                "eigh_with_options_read",
+            )
         })
     }
     fn eig_read(

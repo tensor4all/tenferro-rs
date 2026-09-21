@@ -468,17 +468,93 @@ fn cubecl_linalg_overrides_qr_read_with_backend_canonicalization() {
 #[test]
 fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
-    let eigh_read_source = source_section(&source, "fn eigh_read", "fn eigh_values");
-
+    let helper_source = source_section(
+        &source,
+        "fn eigh_read_with_driver",
+        "fn eigh_values_read_with_driver",
+    );
     for needle in [
-        "self.to_contiguous(&view)?",
+        "session.to_contiguous(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
-        "self.eigh(&input)",
+        "linalg::eigh(session, &input, driver)",
     ] {
         assert!(
-            eigh_read_source.contains(needle),
+            helper_source.contains(needle),
             "CubeCL eigh_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
+    }
+
+    let eigh_read_source = source_section(&source, "fn eigh_read(", "fn eig_read");
+    assert!(
+        eigh_read_source.contains("eigh_read_with_driver(self, input, EighDriver::Auto)"),
+        "CubeCL eigh_read should keep the default driver policy"
+    );
+    let with_options_source = source_section(&source, "fn eigh_with_options_read", "fn eigh_read(");
+    for needle in [
+        "eigh_read_with_driver(self, input, options.driver)",
+        "apply_eigh_gauge(options.gauge, &mut outputs)?",
+    ] {
+        assert!(
+            with_options_source.contains(needle),
+            "CubeCL eigh_with_options_read should forward the driver and apply the gauge: missing {needle}"
+        );
+    }
+
+    let values_read_source = source_section(&source, "fn eigh_values_read(", "fn eig(");
+    for needle in [
+        "eigh_values_read_with_driver(self, input, EighDriver::Auto)",
+        "eigh_values_read_with_driver(self, input, driver)",
+    ] {
+        assert!(
+            values_read_source.contains(needle),
+            "CubeCL values-only eigh read hooks should share the driver-carrying helper: missing {needle}"
+        );
+    }
+}
+
+#[test]
+fn gpu_eigh_keeps_the_pre_driver_routine_as_the_auto_policy() {
+    let source = linalg_source();
+    let eigh = source_section(&source, "fn eigh_typed", "fn eigh_values_typed");
+    let eigh_values = source_section(
+        &source,
+        "fn eigh_values_typed",
+        "fn build_lu_outputs_device",
+    );
+
+    for needle in [
+        "enum CusolverEighRoutine",
+        "const CUSOLVER_SYEVJ_BATCHED_MAX_DIM: usize = 32",
+        "fn select_eigh_driver(driver: EighDriver, n: usize, batch_total: usize) -> CusolverEighRoutine",
+        "EighDriver::Auto | EighDriver::Syevd => CusolverEighRoutine::Syevd",
+        "batch_total > 1 && n <= CUSOLVER_SYEVJ_BATCHED_MAX_DIM",
+    ] {
+        assert!(
+            source.contains(needle),
+            "GPU eigh should encode the driver policy: missing {needle}"
+        );
+    }
+
+    for section in [eigh, eigh_values] {
+        for needle in [
+            "let routine = select_eigh_driver(driver, n, batch_total);",
+            "handles.cusolver().syevd_buffer_size(",
+            "handles.cusolver().syevj_buffer_size(",
+            "handles.cusolver().syevj_batched_buffer_size(",
+            "handles.cusolver().syevd(",
+            "handles.cusolver().syevj(",
+            "handles.cusolver().syevj_batched(",
+            // The batched launch replaces the per-matrix loop entirely.
+            "CusolverEighRoutine::SyevjBatched => 0,",
+            "CusolverEighRoutine::Syevd => \"cusolverDn*syevd\"",
+            "CusolverEighRoutine::Syevj => \"cusolverDn*syevj\"",
+            "CusolverEighRoutine::SyevjBatched => \"cusolverDn*syevjBatched\"",
+        ] {
+            assert!(
+                section.contains(needle),
+                "GPU eigh driver path should contain {needle}"
+            );
+        }
     }
 }
 

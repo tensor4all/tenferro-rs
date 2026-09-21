@@ -146,9 +146,17 @@ impl LinalgAdRule {
                 derivative_eps,
                 ctx,
             ),
-            LinalgOp::EighVals { derivative_eps } => {
-                rules::linearize_eigh_values(builder, primal_in, tangent_in, derivative_eps, ctx)
-            }
+            LinalgOp::EighVals {
+                derivative_eps,
+                driver,
+            } => rules::linearize_eigh_values(
+                builder,
+                primal_in,
+                tangent_in,
+                derivative_eps,
+                driver,
+                ctx,
+            ),
             LinalgOp::Eig { input_dtype } => {
                 rules::linearize_eig(builder, primal_in, primal_out, tangent_in, input_dtype, ctx)
             }
@@ -396,7 +404,7 @@ fn fixed_transpose_value(
 mod tests {
     use super::*;
     use crate::extension::{
-        EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+        EighDriver, EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
     };
     use computegraph::graph::GraphBuilder;
     use std::collections::HashSet;
@@ -664,6 +672,7 @@ mod tests {
                 LinalgOp::Eigh {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                     gauge: EighGauge::Raw,
+                    driver: EighDriver::Auto,
                 },
                 eigh_context(),
                 vec![None, None],
@@ -751,6 +760,7 @@ mod tests {
         let op = LinalgExtensionOp::new(LinalgOp::Eigh {
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             gauge: EighGauge::Raw,
+            driver: EighDriver::Auto,
         });
 
         let result = LinalgAdRule
@@ -1009,6 +1019,7 @@ mod tests {
         let cotangent = builder.add_input(TensorInputKey::User { id: 85 });
         let op = LinalgExtensionOp::new(LinalgOp::EighVals {
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+            driver: EighDriver::Auto,
         });
 
         let result = LinalgAdRule
@@ -1038,6 +1049,7 @@ mod tests {
         let op = LinalgExtensionOp::new(LinalgOp::Eigh {
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             gauge: EighGauge::Raw,
+            driver: EighDriver::Auto,
         });
 
         let result = LinalgAdRule
@@ -1164,9 +1176,11 @@ mod tests {
             LinalgOp::Eigh {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                 gauge: EighGauge::Raw,
+                driver: EighDriver::Auto,
             },
             LinalgOp::EighVals {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                driver: EighDriver::Auto,
             },
             LinalgOp::Eig {
                 input_dtype: DType::F64,
@@ -1344,6 +1358,7 @@ mod tests {
             .add_extension(
                 Arc::new(LinalgExtensionOp::new(LinalgOp::EighVals {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                    driver: EighDriver::Auto,
                 })),
                 &[matrix],
             )
@@ -1480,6 +1495,7 @@ mod tests {
                 op: LinalgOp::Eigh {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                     gauge: EighGauge::Raw,
+                    driver: EighDriver::Auto,
                 },
                 active_outputs: &[0, 1],
                 matrix: symmetric,
@@ -1489,6 +1505,7 @@ mod tests {
                 name: "eigh_values",
                 op: LinalgOp::EighVals {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                    driver: EighDriver::Auto,
                 },
                 active_outputs: &[0],
                 matrix: symmetric,
@@ -2265,6 +2282,7 @@ mod tests {
                 LinalgOp::Eigh {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                     gauge: EighGauge::Raw,
+                    driver: EighDriver::Auto,
                 },
                 vec![true, true],
                 true,
@@ -2273,6 +2291,7 @@ mod tests {
                 LinalgAdOpKind::EighVals,
                 LinalgOp::EighVals {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                    driver: EighDriver::Auto,
                 },
                 vec![true],
                 true,
@@ -2473,12 +2492,14 @@ mod tests {
                 LinalgOp::Eigh {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                     gauge: EighGauge::Raw,
+                    driver: EighDriver::Auto,
                 },
                 vec![true, true],
             ),
             (
                 LinalgOp::EighVals {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                    driver: EighDriver::Auto,
                 },
                 vec![true],
             ),

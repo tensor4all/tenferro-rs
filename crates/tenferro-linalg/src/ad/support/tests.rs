@@ -1,7 +1,7 @@
 use tenferro_tensor::DType;
 
 use crate::extension::{
-    EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+    EighDriver, EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
 };
 
 use super::*;
@@ -78,12 +78,14 @@ fn manifest_internal_mapping_covers_linalg_op_variants() {
             LinalgOp::Eigh {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                 gauge: EighGauge::Raw,
+                driver: EighDriver::Auto,
             },
             LinalgAdOpKind::Eigh,
         ),
         (
             LinalgOp::EighVals {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                driver: EighDriver::Auto,
             },
             LinalgAdOpKind::EighVals,
         ),
