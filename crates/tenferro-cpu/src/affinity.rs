@@ -62,15 +62,16 @@ pub enum CpuAffinityError {
 }
 
 pub(crate) trait ThreadAffinity: Clone + Send + Sync + 'static {
-    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, CpuAffinityError>;
+    /// Confine the calling thread to `cpus` and report the resulting mask.
+    fn confine_current(&self, cpus: &CpuSet) -> Result<CpuSet, CpuAffinityError>;
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SystemThreadAffinity;
 
 impl ThreadAffinity for SystemThreadAffinity {
-    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, CpuAffinityError> {
-        set_current_thread_affinity(&CpuSet::new([cpu])?)?;
+    fn confine_current(&self, cpus: &CpuSet) -> Result<CpuSet, CpuAffinityError> {
+        set_current_thread_affinity(cpus)?;
         process_cpu_affinity().ok_or(CpuAffinityError::VerificationUnavailable)
     }
 }

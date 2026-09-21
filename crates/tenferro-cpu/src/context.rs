@@ -14,7 +14,7 @@ use crate::domain_executor::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
     CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, ScopedCpuJob, ScopedCpuJobs,
 };
-use crate::{CpuId, CpuSet, Error, ErrorKind, Result, ValidationKind};
+use crate::{CpuSet, Error, ErrorKind, Result, ValidationKind};
 
 /// Stack size reserved for every Tenferro CPU worker thread.
 ///
@@ -100,13 +100,11 @@ pub enum CpuContextError {
         #[source]
         source: rayon::ThreadPoolBuildError,
     },
-    /// A worker could not set or verify its assigned CPU affinity.
-    #[error("failed to pin worker {worker} to CPU {cpu}: {source}")]
-    WorkerPinning {
+    /// A worker could not be confined to the domain CPU set.
+    #[error("failed to confine worker {worker} to the domain CPU set: {source}")]
+    WorkerAffinity {
         /// Stable Rayon worker index.
         worker: usize,
-        /// Assigned operating-system logical CPU.
-        cpu: CpuId,
         /// OS or verification failure.
         #[source]
         source: CpuAffinityError,
@@ -313,7 +311,11 @@ impl CpuContext {
         })
     }
 
-    /// Create a Rayon context whose workers are pinned to assigned logical CPUs.
+    /// Create a Rayon context whose workers are confined to an assigned CPU set.
+    ///
+    /// Every worker receives the whole `cpus` mask rather than one CPU, so threads
+    /// created by a provider inherit the full domain and keep their own
+    /// parallelism. The requested worker count cannot exceed the assigned CPU count.
     ///
     /// A real Rayon pool is constructed even when `num_threads` is one. The
     /// worker count cannot exceed the assigned CPU count.
@@ -335,7 +337,7 @@ impl CpuContext {
     ///
     /// Returns [`CpuContextError::InvalidThreadCount`] for zero workers,
     /// [`CpuContextError::TooManyWorkers`] when the request exceeds the CPU
-    /// set, or an affinity error when workers cannot be pinned.
+    /// set, or an affinity error when workers cannot be confined.
     pub fn with_pinned_cpus(
         cpus: CpuSet,
         num_threads: usize,
@@ -387,20 +389,25 @@ impl CpuContext {
         }
 
         let execution_scope = Arc::new(ExecutionScopeState::default());
-        let assigned_cpus = Arc::new(select_worker_cpus(&cpus, num_threads));
+        // Every worker is confined to the whole domain CPU set rather than to one
+        // CPU: threads created by a provider (BLAS/LAPACK) inherit the creating
+        // worker's mask, so a single-CPU mask would confine the provider's own
+        // thread team to one CPU and destroy its parallelism.
+        let domain_cpus = Arc::new(cpus.clone());
         let (startup_tx, startup_rx) = std::sync::mpsc::channel();
-        let pool_assigned_cpus = Arc::clone(&assigned_cpus);
+        let pool_domain_cpus = Arc::clone(&domain_cpus);
         let worker_scope = Arc::clone(&execution_scope);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .stack_size(worker_stack_bytes)
             .spawn_handler(move |thread| {
                 let worker = thread.index();
-                let cpu = pool_assigned_cpus[worker];
+                let worker_cpus = Arc::clone(&pool_domain_cpus);
                 let startup_tx = startup_tx.clone();
                 let affinity = affinity.clone();
                 let worker_scope = Arc::clone(&worker_scope);
-                let mut builder = std::thread::Builder::new().name(format!("tenferro-cpu-{cpu}"));
+                let mut builder =
+                    std::thread::Builder::new().name(format!("tenferro-cpu-{worker}"));
                 // Rayon applies its configured stack size only in its own spawn
                 // path, so a custom handler has to carry it to the OS thread.
                 if let Some(size) = thread.stack_size() {
@@ -409,14 +416,14 @@ impl CpuContext {
                 builder
                     .spawn(move || {
                         register_worker_execution_scope(Arc::clone(&worker_scope));
-                        let result = affinity.pin_current(cpu).and_then(|observed| {
-                            (observed.len() == 1 && observed.contains(cpu))
+                        let result = affinity.confine_current(&worker_cpus).and_then(|observed| {
+                            (observed.as_slice() == worker_cpus.as_slice())
                                 .then_some(())
                                 .ok_or_else(|| CpuAffinityError::Verification {
                                     observed: observed.as_slice().to_vec(),
                                 })
                         });
-                        let _ = startup_tx.send((worker, cpu, result));
+                        let _ = startup_tx.send((worker, result));
                         thread.run();
                     })
                     .map(|_| ())
@@ -425,15 +432,11 @@ impl CpuContext {
             .map_err(|source| CpuContextError::PoolBuild { source })?;
         let pool = Arc::new(pool);
         for _ in 0..num_threads {
-            let (worker, cpu, result) = startup_rx
+            let (worker, result) = startup_rx
                 .recv()
                 .map_err(|source| CpuContextError::WorkerStartupClosed { source })?;
             if let Err(source) = result {
-                return Err(CpuContextError::WorkerPinning {
-                    worker,
-                    cpu,
-                    source,
-                });
+                return Err(CpuContextError::WorkerAffinity { worker, source });
             }
         }
         Ok(Self {
@@ -565,7 +568,7 @@ impl CpuDomainExecutor for CpuContext {
             // CpuBackend re-entry remains guarded by BACKEND_REENTRY_PANIC.
             reentrancy: CpuExecutorReentrancy::SameExecutor,
             affinity: if self.pinned_cpus.is_some() {
-                CpuExecutorAffinity::TenferroPinnedVerified
+                CpuExecutorAffinity::TenferroDomainVerified
             } else {
                 CpuExecutorAffinity::None
             },
@@ -595,19 +598,6 @@ impl CpuDomainExecutor for CpuContext {
         let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
         self.install_if_needed(|| job.run())
     }
-}
-
-fn select_worker_cpus(cpus: &CpuSet, num_threads: usize) -> Vec<CpuId> {
-    if num_threads == 1 {
-        return vec![cpus.as_slice()[cpus.len() / 2]];
-    }
-    (0..num_threads)
-        .map(|worker| {
-            let index = ((worker as u128) * ((cpus.len() - 1) as u128)
-                / ((num_threads - 1) as u128)) as usize;
-            cpus.as_slice()[index]
-        })
-        .collect()
 }
 
 #[cfg(test)]

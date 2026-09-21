@@ -52,12 +52,16 @@ pub enum CpuExecutorReentrancy {
 /// use tenferro_cpu::CpuExecutorAffinity;
 ///
 /// let affinity = CpuExecutorAffinity::CallerDeclaredUnverified;
-/// assert_ne!(affinity, CpuExecutorAffinity::TenferroPinnedVerified);
+/// assert_ne!(affinity, CpuExecutorAffinity::TenferroDomainVerified);
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CpuExecutorAffinity {
-    /// Tenferro pinned the workers and verified their placement.
-    TenferroPinnedVerified,
+    /// Tenferro confined every worker to the declared domain CPU set and verified
+    /// the resulting mask.
+    ///
+    /// The claim covers the domain's CPU set, not a distinct CPU per worker. A
+    /// provider that creates its own threads therefore inherits the whole set.
+    TenferroDomainVerified,
     /// The caller declared worker placement, but tenferro did not verify it.
     CallerDeclaredUnverified,
     /// The executor makes no worker-placement claim.
@@ -100,7 +104,7 @@ pub enum CpuExecutorShutdown {
 ///     outer_parallelism: true,
 ///     inner_parallelism: CpuInnerParallelism::Rayon,
 ///     reentrancy: CpuExecutorReentrancy::Rejected,
-///     affinity: CpuExecutorAffinity::TenferroPinnedVerified,
+///     affinity: CpuExecutorAffinity::TenferroDomainVerified,
 ///     shutdown: CpuExecutorShutdown::TenferroOwned,
 /// };
 /// assert_eq!(capabilities.worker_count.get(), 4);

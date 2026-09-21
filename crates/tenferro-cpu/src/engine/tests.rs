@@ -65,7 +65,7 @@ fn engine_new_reports_unsupported_worker_affinity() {
 
     let error = CpuEngine::new_managed(CpuDomainId::new(0), placement, 1, 0).unwrap_err();
 
-    assert!(matches!(error, CpuContextError::WorkerPinning { .. }));
+    assert!(matches!(error, CpuContextError::WorkerAffinity { .. }));
     assert!(error.to_string().contains("unsupported on this platform"));
 }
 

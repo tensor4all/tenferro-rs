@@ -1,4 +1,4 @@
-use super::{select_worker_cpus, CpuContext, CpuContextError, DEFAULT_WORKER_STACK_BYTES};
+use super::{CpuContext, CpuContextError, DEFAULT_WORKER_STACK_BYTES};
 #[cfg(target_os = "linux")]
 use crate::affinity::current_cpu;
 use crate::affinity::{CpuAffinityError, ThreadAffinity};
@@ -67,7 +67,7 @@ fn pinned_context_reports_verified_affinity_with_test_setter() {
     assert_eq!(caps.worker_count.get(), 1);
     assert!(!caps.outer_parallelism);
     assert_eq!(caps.inner_parallelism, CpuInnerParallelism::Rayon);
-    assert_eq!(caps.affinity, CpuExecutorAffinity::TenferroPinnedVerified);
+    assert_eq!(caps.affinity, CpuExecutorAffinity::TenferroDomainVerified);
 }
 
 #[test]
@@ -196,6 +196,44 @@ fn pinned_context_reports_only_assigned_cpus() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn pinned_workers_are_confined_to_the_whole_domain_cpu_set() {
+    let allowed = process_cpu_affinity().unwrap();
+    let selected = CpuSet::new(allowed.as_slice().iter().take(2).copied()).unwrap();
+    let workers = selected.len();
+    let ctx = CpuContext::with_pinned_cpus(selected.clone(), workers).unwrap();
+
+    let observed = ctx
+        .pool
+        .as_ref()
+        .unwrap()
+        .broadcast(|_| process_cpu_affinity());
+
+    assert_eq!(observed.len(), workers);
+    assert!(observed.iter().all(|mask| mask.as_ref() == Some(&selected)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn provider_style_thread_from_a_worker_inherits_the_domain_cpu_set() {
+    // A BLAS/LAPACK provider creates its own thread team, and those threads
+    // inherit the creating thread's mask. Confining a worker to one CPU would
+    // therefore confine the provider's whole team, so each worker must carry the
+    // complete domain set.
+    let allowed = process_cpu_affinity().unwrap();
+    let selected = CpuSet::new(allowed.as_slice().iter().take(2).copied()).unwrap();
+    let ctx = CpuContext::with_pinned_cpus(selected.clone(), selected.len()).unwrap();
+
+    let inherited = ctx.pool.as_ref().unwrap().broadcast(|_| {
+        std::thread::spawn(|| process_cpu_affinity().unwrap())
+            .join()
+            .unwrap()
+    });
+
+    assert!(inherited.iter().all(|mask| mask == &selected));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn pinned_single_worker_context_still_enters_a_real_rayon_pool() {
     let allowed = process_cpu_affinity().unwrap();
     let selected = CpuSet::new(allowed.as_slice().iter().take(1).copied()).unwrap();
@@ -214,7 +252,7 @@ fn pin_failure_aborts_context_construction() {
 
     assert!(matches!(
         result,
-        Err(CpuContextError::WorkerPinning { worker: 0, .. })
+        Err(CpuContextError::WorkerAffinity { worker: 0, .. })
     ));
 }
 
@@ -232,17 +270,6 @@ fn pinned_context_rejects_invalid_worker_counts() {
             cpus: 1
         })
     ));
-}
-
-#[test]
-fn worker_assignment_spreads_a_reduced_budget_across_the_domain() {
-    let cpus = CpuSet::new((0..8).map(CpuId::new)).unwrap();
-
-    assert_eq!(
-        select_worker_cpus(&cpus, 4),
-        vec![CpuId::new(0), CpuId::new(2), CpuId::new(4), CpuId::new(7)]
-    );
-    assert_eq!(select_worker_cpus(&cpus, 1), vec![CpuId::new(4)]);
 }
 
 /// Recursion that keeps about one MiB of its own frame per level.
@@ -311,7 +338,7 @@ fn pinned_worker_pool_runs_recursion_beyond_the_std_default_stack() {
 struct FailingAffinitySetter;
 
 impl ThreadAffinity for FailingAffinitySetter {
-    fn pin_current(&self, _cpu: CpuId) -> Result<CpuSet, CpuAffinityError> {
+    fn confine_current(&self, _cpus: &CpuSet) -> Result<CpuSet, CpuAffinityError> {
         Err(CpuAffinityError::UnsupportedPlatform)
     }
 }
@@ -320,8 +347,8 @@ impl ThreadAffinity for FailingAffinitySetter {
 struct ExactAffinitySetter;
 
 impl ThreadAffinity for ExactAffinitySetter {
-    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, CpuAffinityError> {
-        Ok(CpuSet::new([cpu]).unwrap())
+    fn confine_current(&self, cpus: &CpuSet) -> Result<CpuSet, CpuAffinityError> {
+        Ok(cpus.clone())
     }
 }
 

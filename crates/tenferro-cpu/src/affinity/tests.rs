@@ -42,7 +42,9 @@ fn affinity_mask_builds_sparse_logical_cpu_ids() {
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 #[test]
 fn system_thread_affinity_reports_unsupported_platform() {
-    let error = SystemThreadAffinity.pin_current(CpuId::new(0)).unwrap_err();
+    let error = SystemThreadAffinity
+        .confine_current(&CpuSet::new([CpuId::new(0)]).unwrap())
+        .unwrap_err();
 
     assert!(matches!(error, CpuAffinityError::UnsupportedPlatform));
 }

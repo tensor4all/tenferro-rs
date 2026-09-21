@@ -169,12 +169,12 @@ fn executor_capabilities_preserve_each_declared_axis() {
         outer_parallelism: true,
         inner_parallelism: CpuInnerParallelism::Rayon,
         reentrancy: CpuExecutorReentrancy::SameExecutor,
-        affinity: CpuExecutorAffinity::TenferroPinnedVerified,
+        affinity: CpuExecutorAffinity::TenferroDomainVerified,
         shutdown: CpuExecutorShutdown::TenferroOwned,
     };
     assert_eq!(
         supported.affinity,
-        CpuExecutorAffinity::TenferroPinnedVerified
+        CpuExecutorAffinity::TenferroDomainVerified
     );
     assert_ne!(
         supported.affinity,

@@ -377,6 +377,15 @@ Audit hints:
 - For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.
 - Do not derive faer parallelism independently inside individual ops or helpers.
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
+- A pinned managed domain confines every worker to the whole declared CPU set
+  rather than assigning one CPU per worker. BLAS/LAPACK providers create their
+  own thread team, and those threads inherit the creating worker's mask, so a
+  one-CPU worker mask silently confines the provider's entire team to one CPU
+  (measured: 3-20x slower dgemm/LU paths at four threads). Keep the domain's CPU
+  set authoritative: `CpuExecutorAffinity::TenferroDomainVerified` asserts the
+  verified domain set, and narrowing a single worker's mask back to one CPU is
+  not an approved placement policy. Provider thread counts remain controlled by
+  the provider variables named below, not by worker affinity.
 - Entered worker pools reserve `DEFAULT_WORKER_STACK_BYTES` (16 MiB) per worker
   rather than the `std::thread` default of 2 MiB, because provider kernels recurse
   with large private frames: a `NUM_THREADS=64` OpenBLAS build keeps about 541 KiB
@@ -402,7 +411,8 @@ Audit hints:
   BLAS-specific exclusions from entered-context reuse; faer or `strided-kernel`
   work outside `ctx.install(...)`;
   `rayon::current_num_threads`, `ThreadPoolBuilder`, or `Par::rayon(0)` used
-  to derive policy; thread counts chosen inside op helpers.
+  to derive policy; thread counts chosen inside op helpers; per-worker
+  single-CPU affinity that provider-created threads would inherit.
 - Fix: enter once at the managed session boundary and reuse its context and
   permit; take the degree from `CpuContext` and run inside its installed pool;
   leave provider-owned threading to the provider variables.

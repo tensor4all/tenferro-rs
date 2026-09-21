@@ -62,7 +62,7 @@ impl CpuEngine {
     ) -> Self {
         let capabilities = context.capabilities();
         let placement_guarantee =
-            if capabilities.affinity == CpuExecutorAffinity::TenferroPinnedVerified {
+            if capabilities.affinity == CpuExecutorAffinity::TenferroDomainVerified {
                 CpuPlacementGuarantee::ExactDeclared
             } else {
                 CpuPlacementGuarantee::AdvisoryDeclared

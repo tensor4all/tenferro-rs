@@ -10,8 +10,13 @@ No code may reinterpret node IDs as dense indexes or widen process affinity.
 
 For `CpuBackendKind::Faer`, `Auto` resolves to managed `AllAllowed`, and
 explicit node/all-allowed placement is supported. Each managed engine has a
-fixed Rayon pool whose workers are pinned and verified at construction.
-Overlapping CPU sets cannot hold permits concurrently; disjoint sets can.
+fixed Rayon pool whose workers are confined to the declared CPU set and
+verified at construction. Workers share the domain set instead of owning one CPU
+each, because provider-created threads inherit the creating worker's mask and a
+one-CPU mask would confine a provider's whole thread team. Provider parallelism
+is therefore bounded by the provider's own thread settings, not by worker
+affinity. Overlapping CPU sets cannot hold permits concurrently; disjoint sets
+can.
 
 For `CpuBackendKind::Blas`, only `Auto` is valid. It resolves to a
 provider-default exclusive permit because tenferro cannot establish the CPU
