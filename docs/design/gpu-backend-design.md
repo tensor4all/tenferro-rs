@@ -573,6 +573,23 @@ materializes the public `vt` output by copying V to V^H on the device. The
 singular-values-only path still passes scratch U/V buffers to `gesvdj` because
 cuSOLVER rejects null U/V pointers on that path.
 
+CUDA eigh takes the same driver shape, with a different default rule.
+`EighOptions::driver` at `EighDriver::Auto` uses cuSOLVER divide-and-conquer
+`syevd`/`heevd` at every size and batch count, which is the behavior that
+existed before the driver, so the default is unchanged. `EighDriver::Syevd`
+forces that routine explicitly and `EighDriver::Syevj` forces Jacobi. Inside
+the Jacobi driver the backend takes `syevjBatched` whenever cuSOLVER accepts it
+(`batch_total > 1` and `n <= CUSOLVER_SYEVJ_BATCHED_MAX_DIM`, which is 32),
+because that replaces one launch per matrix with a single launch for the whole
+batch. That entry point is the reason the knob exists: cuSOLVER has no
+divide-and-conquer batched counterpart, so no default policy can reach it. On
+an A100, 1024 batched 8x8 `f64` matrices cost 105 ms under `syevd` and 0.29 ms
+under `syevjBatched`, agreeing to 3.4e-15 relative to the largest eigenvalue;
+Jacobi loses by 1.6x to 21x on single dense matrices and on ten-decade complex
+spectra, which is why `Auto` stays divide-and-conquer rather than adding a size
+rule. As with the SVD driver, the eigh driver is part of the traced op identity
+and survives pruning to the values-only op, and CPU providers ignore it.
+
 The published [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains
 the current CUDA operation and dtype matrix. Keep that matrix synchronized with
 the `CudaBackend` `TensorBackend` implementation when adding or removing CUDA

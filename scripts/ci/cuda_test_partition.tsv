@@ -945,6 +945,8 @@ host	tenferro-linalg	error::tests::provider_status_keeps_typed_backend_source
 host	tenferro-linalg	extension::cuda_tests::session_support_admits_cuda_full_svd_and_still_rejects_the_missing_kernels
 host	tenferro-linalg	gpu::ffi::tests::cusolver_cuda_data_type_has_c_abi_integer_layout
 host	tenferro-linalg	gpu::linalg::tests::auto_driver_keeps_jax_compatible_threshold
+host	tenferro-linalg	gpu::linalg::tests::eigh_auto_driver_keeps_the_pre_driver_routine
+host	tenferro-linalg	gpu::linalg::tests::eigh_jacobi_driver_takes_the_batched_entry_point_only_where_cusolver_allows_it
 host	tenferro-linalg	gpu::linalg::tests::explicit_driver_overrides_dimension_policy
 host	tenferro-linalg	traced::tests::p_norm_rejects_zero_and_non_finite_orders
 host	tenferro-linalg::integration	backend_errors::cholesky_rejects_rank_less_than_two_even_when_zero_dim
@@ -1054,7 +1056,10 @@ gpu	tenferro-linalg::integration	gpu_linalg::cuda_q_column_ranges_past_the_full_
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_cholesky_batched_f64_matches_cpu
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_c32_returns_unsupported_error
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_f32_returns_unsupported_error
+gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_auto_driver_matches_default_eigh
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_c64_reconstructs_input
+gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_forced_syevd_matches_reference
+gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_forced_syevj_matches_reference
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_values_c64_matches_cpu
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_lu_f32_handles_batched_pivots
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_lu_f32_handles_rectangular_pivots
@@ -1092,6 +1097,7 @@ host	tenferro-linalg::integration	gpu_linalg_source_contract::cubecl_linalg_over
 host	tenferro-linalg::integration	gpu_linalg_source_contract::cubecl_linalg_overrides_svd_read_with_backend_canonicalization
 host	tenferro-linalg::integration	gpu_linalg_source_contract::cuda_linalg_drop_paths_report_destroy_status
 host	tenferro-linalg::integration	gpu_linalg_source_contract::cuda_rrqr_has_no_payload_download_or_cpu_fallback
+host	tenferro-linalg::integration	gpu_linalg_source_contract::gpu_eigh_keeps_the_pre_driver_routine_as_the_auto_policy
 host	tenferro-linalg::integration	gpu_linalg_source_contract::gpu_eigh_values_uses_cusolver_no_vector_mode
 host	tenferro-linalg::integration	gpu_linalg_source_contract::gpu_linalg_batched_pointer_offsets_use_checked_arithmetic_contract
 host	tenferro-linalg::integration	gpu_linalg_source_contract::gpu_linalg_unsafe_blocks_document_safety_invariants
@@ -1160,6 +1166,7 @@ host	tenferro-linalg::integration	traced_correctness::traced_spectral_norm_prese
 host	tenferro-linalg::integration	traced_correctness::traced_tensor_linalg_ext_exposes_svd
 host	tenferro-linalg::integration	traced_extension::complex_svd_runtime_singular_values_match_traced_real_dtype
 host	tenferro-linalg::integration	traced_extension::concrete_decomposition_options_execute_through_backend_defaults
+host	tenferro-linalg::integration	traced_extension::cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths
 host	tenferro-linalg::integration	traced_extension::cpu_ignores_explicit_svd_driver_on_concrete_and_traced_paths
 host	tenferro-linalg::integration	traced_extension::full_piv_lu_multi_output_slots_are_preserved
 host	tenferro-linalg::integration	traced_extension::missing_runtime_reports_linalg_family

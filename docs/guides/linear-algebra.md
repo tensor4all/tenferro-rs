@@ -292,6 +292,41 @@ assert_eq!(vt.concrete_shape()?, vec![2, 2]);
 ```
 <!-- end-snippet-source -->
 
+`EighOptions::driver` is the same knob for the Hermitian eigensolver.
+`EighDriver::Auto` (the default) uses cuSOLVER's divide-and-conquer
+`syevd`/`heevd` at every size, which is what the backend did before the driver
+existed. `EighDriver::Syevj` selects the Jacobi eigensolver, and for a batch of
+matrices with `n <= 32` it reaches `syevjBatched`, which solves the whole batch
+in one launch. cuSOLVER has no divide-and-conquer batched counterpart, so that
+entry point is unreachable without the driver: on an A100, 1024 batched 8x8
+`f64` matrices take 105 ms under `Auto` and 0.29 ms under `Syevj`, agreeing to
+3.4e-15 relative to the largest eigenvalue. Jacobi loses on single dense
+matrices and on wide spectra, so `Auto` stays divide-and-conquer; measure your
+own shapes. CPU providers ignore the driver.
+
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_eigh_driver -->
+```rust
+use tenferro_linalg::{EighDriver, EighOptions, TracedTensorLinalgExt};
+use tenferro_runtime::TracedTensor;
+
+// A batch of two 2x2 symmetric matrices, batch on the trailing axis.
+let a = TracedTensor::from_vec_col_major(
+    vec![2, 2, 2],
+    vec![
+        2.0_f64, 0.5, 0.5, 3.0,
+        4.0, -0.25, -0.25, 1.0,
+    ],
+)?;
+// On CUDA this reaches `syevjBatched`: one launch for the whole batch.
+// CPU providers ignore the driver.
+let (values, vectors) =
+    a.eigh_with_options(EighOptions::default().driver(EighDriver::Syevj))?;
+
+assert_eq!(values.concrete_shape()?, vec![2, 2]);
+assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);
+```
+<!-- end-snippet-source -->
+
 Use `slice_axis` for rank-preserving contiguous ranges and `take_axis` when the
 selected axis needs repeated or reordered indices:
 

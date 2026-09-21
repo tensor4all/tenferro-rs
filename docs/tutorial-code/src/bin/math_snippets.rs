@@ -185,6 +185,33 @@ assert_eq!(vt.concrete_shape()?, vec![2, 2]);
         Ok(())
     }
 
+    snippet_linear_algebra_eigh_driver()?;
+
+    // snippet source: docs/guides/linear-algebra.md
+    fn snippet_linear_algebra_eigh_driver() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:linear_algebra_eigh_driver
+use tenferro_linalg::{EighDriver, EighOptions, TracedTensorLinalgExt};
+use tenferro_runtime::TracedTensor;
+
+// A batch of two 2x2 symmetric matrices, batch on the trailing axis.
+let a = TracedTensor::from_vec_col_major(
+    vec![2, 2, 2],
+    vec![
+        2.0_f64, 0.5, 0.5, 3.0,
+        4.0, -0.25, -0.25, 1.0,
+    ],
+)?;
+// On CUDA this reaches `syevjBatched`: one launch for the whole batch.
+// CPU providers ignore the driver.
+let (values, vectors) =
+    a.eigh_with_options(EighOptions::default().driver(EighDriver::Syevj))?;
+
+assert_eq!(values.concrete_shape()?, vec![2, 2]);
+assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);
+        // snippet-end:linear_algebra_eigh_driver
+        Ok(())
+    }
+
     snippet_linear_algebra_6()?;
 
     // snippet source: docs/guides/linear-algebra.md:244
