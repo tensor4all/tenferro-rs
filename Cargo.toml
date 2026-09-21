@@ -86,9 +86,9 @@ cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4al
 cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885", version = "=0.10.1" }
 cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885", version = "=0.10.1" }
 cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl.git", rev = "6709076b7a9072ac4f409e345a2c22380a84a885", version = "=0.10.1" }
-cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "db5df6752c2728e307a518599eaf536d1c2e3516", version = "=0.2.1", default-features = false }
-cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "db5df6752c2728e307a518599eaf536d1c2e3516", version = "=0.2.1", default-features = false }
-cubek-fft = { package = "cubek-fft", git = "https://github.com/tensor4all/cubek.git", rev = "db5df6752c2728e307a518599eaf536d1c2e3516", version = "=0.2.0", default-features = false }
+cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "de1fd63f5aeac5a1a79d2c139b98f66cc2002a33", version = "=0.2.1", default-features = false }
+cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "de1fd63f5aeac5a1a79d2c139b98f66cc2002a33", version = "=0.2.1", default-features = false }
+cubek-fft = { package = "t4a-cubek-fft", git = "https://github.com/tensor4all/cubek.git", rev = "de1fd63f5aeac5a1a79d2c139b98f66cc2002a33", version = "=0.2.1", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }
