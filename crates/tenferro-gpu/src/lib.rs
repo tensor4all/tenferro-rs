@@ -112,6 +112,7 @@ pub(crate) struct CubeclBuffer {
     allocation_domain: AllocationDomainId,
     allocation_id: AllocationId,
     // Memoized device address resolved by the first raw-FFI access.
+    // Zero means "not memoized": no CUDA allocation lives at the null address.
     //
     // INVARIANT: in pinned CubeCL rev a2adda17, a retained handle's memory
     // slice keeps its storage offset (pool coalescing merges only free
@@ -119,7 +120,16 @@ pub(crate) struct CubeclBuffer {
     // slices is live, so the resolved address is stable for this buffer's
     // lifetime. Raw-FFI callers must still route cross-stream accesses
     // through `get_resource` for CubeCL's stream alignment.
-    device_addr: std::sync::OnceLock<u64>,
+    //
+    // INVARIANT (issue #1868): the memoized address is cleared whenever a
+    // CubeCL kernel is queued to write this buffer. Resolving the address
+    // through `get_resource` is a blocking server round trip, which is also
+    // what pushes queued kernels onto the CUstream; a raw vendor call reached
+    // through a memoized address skips that round trip and could otherwise be
+    // issued ahead of a kernel that precedes it in program order. Clearing on
+    // write keeps the fast path for read-only reuse and forces exactly one
+    // round trip after each write.
+    device_addr: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(feature = "cuda")]
@@ -153,7 +163,7 @@ impl CubeclBuffer {
             allocation_id: AllocationId::from_backend_id(
                 NEXT_CUDA_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ),
-            device_addr: std::sync::OnceLock::new(),
+            device_addr: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -161,15 +171,31 @@ impl CubeclBuffer {
         &self.handle
     }
 
-    /// Return the memoized device address, if one was resolved.
+    /// Return the memoized device address, if one is currently valid.
     pub(crate) fn cached_device_addr(&self) -> Option<u64> {
-        self.device_addr.get().copied()
+        match self.device_addr.load(std::sync::atomic::Ordering::Acquire) {
+            0 => None,
+            addr => Some(addr),
+        }
     }
 
     /// Memoize the device address resolved through `get_resource` for this
-    /// buffer's handle; later calls keep the first stored value.
+    /// buffer's handle.
     pub(crate) fn memoize_device_addr(&self, addr: u64) {
-        let _ = self.device_addr.set(addr);
+        self.device_addr
+            .store(addr, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Drop the memoized address because a CubeCL kernel was queued to write
+    /// this buffer.
+    ///
+    /// The next raw-FFI access then resolves through `get_resource`, whose
+    /// blocking server round trip also pushes the queued kernel onto the
+    /// CUstream, so the vendor call cannot overtake it. See the
+    /// `device_addr` invariant and issue #1868.
+    pub(crate) fn invalidate_device_addr(&self) {
+        self.device_addr
+            .store(0, std::sync::atomic::Ordering::Release);
     }
 
     pub(crate) fn element_len<T: 'static>(&self) -> usize {

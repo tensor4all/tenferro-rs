@@ -20,6 +20,7 @@ mod fusion_tests;
 mod gemm_accum_tests;
 mod gemm_tests;
 mod indexing_tests;
+mod memoized_addr_tests;
 mod metadata_tests;
 mod plan_cache_tests;
 mod raw_launch_tests;

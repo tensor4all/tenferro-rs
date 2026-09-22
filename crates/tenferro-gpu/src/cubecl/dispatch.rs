@@ -437,6 +437,11 @@ pub(crate) fn launch_bool_tensor_into(
 ) -> crate::Result<()> {
     ensure_resident_on_runtime(rt, output, op)?;
     ensure_resident_on_runtime(rt, input, op)?;
+    // A queued kernel is about to write this buffer, so any memoized device
+    // address must go: the next raw-FFI access has to resolve through
+    // `get_resource`, whose blocking server round trip also pushes this
+    // kernel onto the CUstream. See issue #1868.
+    cubecl_buffer(output, op)?.invalidate_device_addr();
     let output_arg = typed_tensor_binding(output, op)?;
     let input_arg = typed_tensor_binding(input, op)?;
     if output.n_elements() != 0 {
@@ -459,6 +464,11 @@ pub(crate) fn launch_nullary_bool_into(
     ),
 ) -> crate::Result<()> {
     ensure_resident_on_runtime(rt, output, op)?;
+    // A queued kernel is about to write this buffer, so any memoized device
+    // address must go: the next raw-FFI access has to resolve through
+    // `get_resource`, whose blocking server round trip also pushes this
+    // kernel onto the CUstream. See issue #1868.
+    cubecl_buffer(output, op)?.invalidate_device_addr();
     let output_arg = bool_tensor_array_arg(output, op)?;
     if output.n_elements() != 0 {
         launch(rt.client(), count, dim, output_arg);
@@ -776,6 +786,11 @@ where
     TOut: CubeElement + TensorScalar + Clone,
 {
     ensure_resident_on_runtime(rt, output, op)?;
+    // A queued kernel is about to write this buffer, so any memoized device
+    // address must go: the next raw-FFI access has to resolve through
+    // `get_resource`, whose blocking server round trip also pushes this
+    // kernel onto the CUstream. See issue #1868.
+    cubecl_buffer(output, op)?.invalidate_device_addr();
     let output_arg = typed_tensor_array_arg(output, op)?;
     if output.n_elements() == 0 {
         return Ok(());
@@ -808,6 +823,11 @@ where
 {
     ensure_resident_on_runtime(rt, output, op)?;
     ensure_resident_on_runtime(rt, input, op)?;
+    // A queued kernel is about to write this buffer, so any memoized device
+    // address must go: the next raw-FFI access has to resolve through
+    // `get_resource`, whose blocking server round trip also pushes this
+    // kernel onto the CUstream. See issue #1868.
+    cubecl_buffer(output, op)?.invalidate_device_addr();
     let output_arg = typed_tensor_binding(output, op)?;
     let input_arg = typed_tensor_binding(input, op)?;
     if output.n_elements() == 0 {
