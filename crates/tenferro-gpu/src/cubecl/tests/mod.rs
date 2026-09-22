@@ -27,6 +27,7 @@ mod raw_launch_tests;
 mod raw_session_tests;
 mod reduction_tests;
 mod runtime_tests;
+mod shared_workspace_tests;
 mod structural_tests;
 
 /// Enter a CUDA execution session through the erased backend-session surface.

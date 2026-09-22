@@ -1621,7 +1621,7 @@ fn cutensor_contractions_use_structural_plan_cache_without_pointer_alignment_key
     );
     assert!(
         source.contains("update_retained_bytes::<"),
-        "cached cuTENSOR workspace bytes should be reported through the runtime-owned cache"
+        "cuTENSOR plan metadata bytes should be reported through the runtime-owned cache"
     );
     assert!(
         source.contains("pub(super) fn cutensor_plan_cache_stats")
@@ -1629,8 +1629,29 @@ fn cutensor_contractions_use_structural_plan_cache_without_pointer_alignment_key
         "cuTENSOR plan cache should expose owner-routed stats and bound configuration"
     );
     assert!(
-        source.contains("workspace.size"),
-        "cuTENSOR retained-byte accounting should include cached device workspace bytes"
+        source.contains("struct CutensorContractionCacheState")
+            && source.contains("workspaces: Box<[Option<Workspace>]>")
+            && source.contains("state.workspaces[slot]")
+            && !source.contains("cached.workspaces"),
+        "cuTENSOR scratch should be shared per physical stream slot, not owned by each plan"
+    );
+    assert!(
+        source.contains("pub(super) fn plan_workspace")
+            && source.contains("pub(super) fn cutensor_workspace_stats")
+            && source.contains("fn release_workspaces"),
+        "shared cuTENSOR scratch should expose its retention decision, stats, and release path"
+    );
+    // The replacement buffer is allocated before the retained one is replaced,
+    // so a failed allocation cannot cost a slot its usable scratch.
+    assert_ordered_needles(
+        "gemm.rs cached_cutensor_contraction",
+        source_tail(&source, "fn cached_cutensor_contraction"),
+        &[
+            "let decision = plan_workspace(",
+            "let replacement = alloc_workspace(",
+            "state.workspaces[slot] = Some(replacement);",
+            "WorkspacePlan::Temporary(capacity) => {",
+        ],
     );
 }
 

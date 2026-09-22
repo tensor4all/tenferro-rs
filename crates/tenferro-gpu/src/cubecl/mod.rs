@@ -66,6 +66,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use cubecl::client::ComputeClient;
@@ -150,6 +151,8 @@ pub(crate) mod session_cubecl;
 mod workspace_retirement;
 
 pub use workspace_retirement::WorkspaceRetirementStats;
+
+pub use gemm::CutensorWorkspaceStats;
 
 use dispatch::{
     alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
@@ -352,6 +355,9 @@ struct CudaBackendState {
     // context is still retained by `CudaRuntime`.
     cutensor: OnceLock<ffi::cutensor::CutensorHandle>,
     extension_cache: CudaExtensionCache,
+    // Backend-level so the configured cap survives clearing or evicting the
+    // extension-cache entry that owns the shared scratch pool itself.
+    cutensor_workspace_max_retained_bytes: AtomicU64,
     rt: CudaRuntime,
 }
 
@@ -382,6 +388,13 @@ impl fmt::Debug for CudaExtensionCache {
 
 const DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES: usize = 16;
 const DEFAULT_CUDA_EXTENSION_CACHE_RETAINED_BYTES: usize = 64 * 1024 * 1024;
+
+/// Default cap on retained shared cuTENSOR contraction scratch, in bytes.
+///
+/// This bounds only the scratch the backend keeps for reuse, not total device
+/// memory: a contraction whose requirement exceeds the remaining cap still runs
+/// in a temporary workspace. See `CudaBackend::cutensor_workspace_stats`.
+const DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES: u64 = 1 << 30;
 
 struct CudaExtensionCacheEntry {
     value: Box<dyn Any + Send>,
@@ -783,6 +796,9 @@ impl CudaBackend {
             inner: Arc::new(CudaBackendState {
                 cutensor: OnceLock::new(),
                 extension_cache: CudaExtensionCache::new(),
+                cutensor_workspace_max_retained_bytes: AtomicU64::new(
+                    DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES,
+                ),
                 rt: CudaRuntime::new(device_id)?,
             }),
         })
@@ -923,12 +939,99 @@ impl CudaBackend {
     ///
     /// The returned entry count is the number of retained cuTENSOR contraction
     /// plans inside the CUDA backend's extension cache entry. Logical retained
-    /// bytes include cached cuTENSOR device workspace estimates.
+    /// bytes cover plan metadata, not the shared per-stream device scratch;
+    /// [`CudaBackend::cutensor_workspace_stats`] reports that separately. The
+    /// cache byte limit is therefore not a total device-memory limit.
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
     pub fn cutensor_plan_cache_stats(&self) -> crate::Result<CacheStats> {
         gemm::cutensor_plan_cache_stats(self)
+    }
+
+    /// Return the retained shared cuTENSOR contraction scratch, in bytes.
+    ///
+    /// All cached cuTENSOR contraction plans share one lazily grown workspace
+    /// per physical stream slot, so this is the sum over slots of the capacity
+    /// each slot currently holds. It is bounded by
+    /// [`CudaBackend::set_cutensor_workspace_max_retained_bytes`], reported
+    /// separately from the extension-cache byte statistics, and released by
+    /// clearing the extension cache or dropping the backend. This is retained
+    /// scratch, not total device memory: a workspace in use by a queued
+    /// contraction, a retiring allocation, and vendor-internal memory are all
+    /// excluded.
+    ///
+    /// Read this to size a retention cap: it is the high-water demand of the
+    /// workload shapes that have run so far.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn cutensor_workspace_stats(&self) -> crate::Result<CutensorWorkspaceStats> {
+        gemm::cutensor_workspace_stats(self)
+    }
+
+    /// Return the device bytes retained by the shared cuTENSOR contraction
+    /// scratch. Equal to
+    /// [`CudaBackend::cutensor_workspace_stats`]`().retained_bytes`.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn cutensor_workspace_bytes(&self) -> crate::Result<u64> {
+        Ok(self.cutensor_workspace_stats()?.retained_bytes)
+    }
+
+    /// Return the configured retention cap for shared cuTENSOR contraction
+    /// scratch, in bytes.
+    ///
+    /// The default is 1 GiB. See
+    /// [`CudaBackend::set_cutensor_workspace_max_retained_bytes`] for the
+    /// contract; this value is not a device-memory reservation. The cap is
+    /// plain backend state, so reading it cannot fail and never creates cache
+    /// state.
+    pub fn cutensor_workspace_max_retained_bytes(&self) -> u64 {
+        self.cutensor_workspace_limit()
+    }
+
+    /// Configure the retention cap for shared cuTENSOR contraction scratch.
+    ///
+    /// The cap bounds how much scratch the backend keeps for reuse, summed over
+    /// physical stream slots. It never refuses a contraction: a requirement that
+    /// does not fit the remaining cap runs in a temporary workspace that is
+    /// released afterwards, and shrinking the cap drops retained buffers
+    /// without evicting any cached plan. Other slots are never evicted to make
+    /// room.
+    ///
+    /// `0` disables retention entirely; it is not "unlimited". The default
+    /// (1 GiB) is finite but is not a practical memory protection, and neither
+    /// the cap nor the reported statistics bound total device memory.
+    ///
+    /// Setting a cap below the steady-state working set makes matching
+    /// contractions allocate and retire their scratch on every call, which can
+    /// increase workspace-retirement stream barrier fallbacks. To choose a
+    /// value, run the workload and read the
+    /// [`CudaBackend::cutensor_workspace_bytes`] high-water: retaining every
+    /// slot's rounded high-water needs a cap of at least the sum of
+    /// `next_power_of_two(max(request, 1 MiB))` over the stream slots.
+    ///
+    /// The setting is stored on the backend, so it survives
+    /// `CudaBackend::clear_cuda_extension_cache` and extension-cache eviction,
+    /// and is shared by clones of this backend.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the plan-cache mutex is
+    /// poisoned while releasing retained buffers.
+    pub fn set_cutensor_workspace_max_retained_bytes(&self, bytes: u64) -> crate::Result<()> {
+        self.inner
+            .cutensor_workspace_max_retained_bytes
+            .store(bytes, Ordering::Relaxed);
+        gemm::set_cutensor_workspace_max_retained_bytes(self, bytes)
+    }
+
+    /// Current retention cap for shared cuTENSOR contraction scratch.
+    fn cutensor_workspace_limit(&self) -> u64 {
+        self.inner
+            .cutensor_workspace_max_retained_bytes
+            .load(Ordering::Relaxed)
     }
 
     /// Return deferred cuTENSOR workspace retirement counters.

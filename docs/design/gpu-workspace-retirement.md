@@ -3,6 +3,13 @@
 Status: implemented on `perf/cutensor-workspace-retirement`
 (`WorkspaceRetirementQueue` in `crates/tenferro-gpu/src/cubecl/workspace_retirement.rs`).
 
+Plan eviction keeps the shared scratch allocation alive. Scratch growth, a
+lowered retention cap, whole-cache eviction, clear, and teardown retire the
+allocation through this mechanism. The historical measurements below
+describe the pre-sharing design; shared scratch is excluded from cache byte
+accounting and bounded by its own retention cap, see
+[current ownership and tradeoffs](gpu-backend-design.md).
+
 ## Problem
 
 `gpu/tensornetwork` trace-mode execution spends 54% of each call with the
@@ -109,9 +116,11 @@ Decisions taken for this change:
   `test_workspace_retirement_defers_eviction_barrier_f64` (plan cache bound 1,
   two contractions, counters asserted, then an explicit barrier releases the
   queue).
-- Accounting: keep `cuda_extension_cache_stats` retained-byte estimates correct
-  while workspaces are in flight. Deferred workspaces stay counted in the plan
-  cache retained-byte estimate until their handle is released.
+- Accounting: `cuda_extension_cache_stats` retained-byte estimates cover
+  cache-owned payloads only. Shared cuTENSOR scratch is outside them and is
+  reported by `CudaBackend::cutensor_workspace_stats`; a workspace that is
+  retiring or in flight is counted by neither, so neither statistic is a
+  device-memory total.
 - Performance: at least three repetitions per configuration (single-run variance
   is about 5%), reporting the median plus nsys kernel-busy/span and the
   inter-kernel gap distribution, for `gpu/tensornetwork` trace and eager.

@@ -5,7 +5,7 @@ use std::panic;
 use crate::cubecl::dispatch::{
     cubecl_shape_and_strides, typed_tensor_array_arg, typed_tensor_binding,
 };
-use crate::cubecl::{CudaBackend, CudaExtensionCache};
+use crate::cubecl::{CudaBackend, CudaExtensionCache, CutensorWorkspaceStats};
 use crate::{
     CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
     TypedTensor,
@@ -241,6 +241,14 @@ fn cuda_backend_exposes_extension_cache_retained_byte_controls() {
         CudaBackend::set_cuda_extension_cache_max_retained_bytes;
     let _cutensor_stats: fn(&CudaBackend) -> crate::Result<CacheStats> =
         CudaBackend::cutensor_plan_cache_stats;
+    let _cutensor_workspace_bytes: fn(&CudaBackend) -> crate::Result<u64> =
+        CudaBackend::cutensor_workspace_bytes;
+    let _cutensor_workspace_stats: fn(&CudaBackend) -> crate::Result<CutensorWorkspaceStats> =
+        CudaBackend::cutensor_workspace_stats;
+    let _cutensor_workspace_cap_getter: fn(&CudaBackend) -> u64 =
+        CudaBackend::cutensor_workspace_max_retained_bytes;
+    let _cutensor_workspace_cap_setter: fn(&CudaBackend, u64) -> crate::Result<()> =
+        CudaBackend::set_cutensor_workspace_max_retained_bytes;
     let _cutensor_getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
         CudaBackend::cutensor_plan_cache_max_entries;
     let _cutensor_setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =

@@ -278,18 +278,55 @@ allocator arena usage.
 
 CUDA `dot_general` stores cuTENSOR contraction descriptors, plans, and lazy
 per-physical-stream device workspaces inside this backend-owned extension
-cache. A workspace is locked through enqueue, and eviction retires its owning
-stream before releasing the workspace, plan, or descriptors. The cuTENSOR plan key is
+cache. All contraction plans share one workspace per physical stream slot.
+The cache mutex serializes host enqueues; stream ordering prevents overlapping
+use of a slot's scratch allocation. Plan eviction retains shared scratch;
+growth and cache teardown use event-based workspace retirement from
+[the retirement design](gpu-workspace-retirement.md). The cuTENSOR plan key is
 structural: dtype, extents, strides, modes, conjugation flags, descriptor
 alignment requirements, and workspace preference. It must not include
 allocation addresses or actual pointer-specific alignment. Whole-allocation
 operands keep the CUDA allocation alignment requirement; borrowed views use a
 conservative dtype-size descriptor alignment requirement so the cached plan
 remains valid across different view offsets without using pointer-specific
-alignment. Lazily allocated device workspace bytes are included in the logical
-retained-byte estimate and are released by normal extension-cache eviction or
-`CudaBackend::clear_cuda_extension_cache`. The overall extension cache stats
-report the retained typed cache entry. Use
+alignment. Shared scratch is excluded from the plan and extension-cache byte
+budgets: with one scratch allocation per plan, a single shape that needs more
+scratch than the remaining budget evicted the whole plan-cache entry. The cache
+byte limit therefore does not bound total device memory. Instead the backend
+keeps a separate retention cap:
+`CudaBackend::cutensor_workspace_max_retained_bytes` (default 1 GiB, `0`
+disables retention) configured with
+`CudaBackend::set_cutensor_workspace_max_retained_bytes`. The cap bounds the
+scratch the backend keeps for reuse, not what a contraction may use: a request
+that does not fit the remaining cap runs in a temporary workspace that is
+retired afterwards, and lowering the cap releases retained buffers without
+evicting any plan. Other slots are never evicted to make room. `0` is not
+"unlimited", and the 1 GiB default is a finite policy value, not a practical
+memory protection or reservation. Nonzero requests round up to a power of two
+with a 1 MiB floor; a zero request allocates nothing. Each slot keeps its
+high-water capacity until it is replaced, the cap is lowered,
+`CudaBackend::clear_cuda_extension_cache`, or backend teardown.
+`CudaBackend::cutensor_workspace_stats` reports the retained slot count and
+retained bytes, and `CudaBackend::cutensor_workspace_bytes` reports the byte
+high-water.
+
+Sizing the cap: with `H_s` the largest workspace requirement seen on slot `s`
+and `Q(w) = next_power_of_two(max(w, 1 MiB))` for `w > 0` (with `Q(0) = 0`),
+retaining every slot's rounded high-water fits the cap iff
+`L >= sum_s Q(H_s)`. That is a sufficient condition for avoiding cap-driven
+temporary workspaces, not a necessary one, because a request whose rounded
+capacity does not fit is retained at its exact size instead. The conservative
+single-value form is `L >= S * Q(W_max)` for `S` stream slots. The cap cannot
+be derived from the plan set or the plan entry bound. Setting it below the
+steady-state working set makes matching contractions allocate and retire
+scratch on every call, which increases retirement churn and can increase the
+retirement queue's stream barrier fallbacks; the reported statistics show the
+retained amount, not the suppressed demand. Read
+`CudaBackend::cutensor_workspace_bytes` after a representative run to choose a
+value. Device residency is not bounded by the cap: a temporary workspace, a
+retiring allocation, the allocator arena, and vendor-internal memory are all
+outside it, so residency can exceed the cap while an older buffer retires.
+The overall extension cache stats report the retained typed cache entry. Use
 `CudaBackend::cutensor_plan_cache_stats`,
 `CudaBackend::cutensor_plan_cache_max_entries`, and
 `CudaBackend::set_cutensor_plan_cache_max_entries` for cuTENSOR plan-entry

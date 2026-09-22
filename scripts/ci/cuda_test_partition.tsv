@@ -465,6 +465,9 @@ host	tenferro-gpu	cubecl::error::tests::unsupported_dtype_preserves_classificati
 host	tenferro-gpu	cubecl::error::tests::workspace_overflow_preserves_classification_and_source
 host	tenferro-gpu	cubecl::ffi::cutensor::tests::cutensor_loader_missing_library_is_typed_io_error
 host	tenferro-gpu	cubecl::ffi::cutensor::tests::cutensor_sm70_guard_uses_reproduced_version_boundary
+host	tenferro-gpu	cubecl::tests::shared_workspace_tests::default_retention_cap_is_one_gib
+host	tenferro-gpu	cubecl::tests::shared_workspace_tests::plan_workspace_reuses_retains_exact_and_falls_back_to_temporary
+host	tenferro-gpu	cubecl::tests::shared_workspace_tests::shared_workspace_capacity_rounds_to_power_of_two_with_a_floor
 gpu	tenferro-gpu	cubecl::interop::tests::fill_zero::fill_zero_clears_a_compact_region_at_a_nonzero_offset
 gpu	tenferro-gpu	cubecl::interop::tests::fill_zero::fill_zero_covers_integer_and_bool_destinations
 gpu	tenferro-gpu	cubecl::interop::tests::fill_zero::fill_zero_does_not_allocate
@@ -581,6 +584,11 @@ gpu	tenferro-gpu	cubecl::tests::gemm_accum_tests::test_accum_zero_contraction_vi
 gpu	tenferro-gpu	cubecl::tests::gemm_accum_tests::test_read_view_operands_allocating_f64
 gpu	tenferro-gpu	cubecl::tests::gemm_accum_tests::test_workspace_retirement_defers_eviction_barrier_f64
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_default_retention_cap_survives_cache_clear
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_shared_workspace_does_not_evict_plan_cache_by_bytes
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_shrinking_retention_cap_releases_scratch_and_keeps_plans
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_small_retention_cap_is_respected_and_keeps_plans
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_zero_retention_cap_runs_without_retaining_scratch
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::test_dot_general_batched_matmul_f32
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::test_dot_general_complex_matmul_c32
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::test_dot_general_complex_matmul_c64
@@ -620,7 +628,6 @@ host	tenferro-gpu	cubecl::tests::plan_cache_tests::plan_cache_build_error_leaves
 host	tenferro-gpu	cubecl::tests::plan_cache_tests::plan_cache_evicts_least_recently_used_entry
 host	tenferro-gpu	cubecl::tests::plan_cache_tests::plan_cache_hash_collision_replaces_entry
 host	tenferro-gpu	cubecl::tests::plan_cache_tests::plan_cache_hits_and_misses_are_counted
-host	tenferro-gpu	cubecl::tests::plan_cache_tests::plan_cache_retained_bytes_include_lazy_value_allocations
 host	tenferro-gpu	cubecl::tests::plan_cache_tests::plan_cache_retained_bytes_track_insert_and_evict
 host	tenferro-gpu	cubecl::tests::plan_cache_tests::plan_cache_shrinking_max_entries_evicts_and_reaccounts
 host	tenferro-gpu	cubecl::tests::plan_cache_tests::plan_cache_values_iterates_retained_entries
