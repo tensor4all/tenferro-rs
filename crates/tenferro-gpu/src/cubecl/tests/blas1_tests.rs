@@ -1,4 +1,6 @@
 use super::super::blas1::blas1_len;
+use cudarc::cublas::sys as cublas;
+use num_complex::{Complex32, Complex64};
 
 #[test]
 fn blas1_length_stays_within_the_portable_cublas_interface() {
@@ -122,4 +124,34 @@ fn cuda_axpby_keeps_compact_operands_on_cublas() {
     .unwrap();
 
     assert_eq!(strided_source_passes_for_test(), 0);
+}
+
+/// The reason `geam_accum` takes its coefficients by value (issue #1870).
+///
+/// cuBLAS reads a host-mode coefficient as its FFI type, and CUDA declares
+/// `cuDoubleComplex` as `__align__(16)` `double2`. `num_complex` is only
+/// 8-aligned, so a `&Complex64 -> *const cuDoubleComplex` cast is a
+/// misaligned pointer whenever the stack places the value at 8 mod 16.
+/// cuBLAS 12.9 faults on it; 12.1 and 12.6 happen to tolerate it. If this
+/// assertion ever fails because the bindings changed, the copy in
+/// `geam_accum` became unnecessary -- that is a decision to record, not a
+/// line to delete silently.
+#[test]
+fn cublas_complex_scalars_are_more_strictly_aligned_than_num_complex() {
+    assert!(
+        align_of::<cublas::cuDoubleComplex>() > align_of::<Complex64>(),
+        "cuDoubleComplex {} vs Complex64 {}",
+        align_of::<cublas::cuDoubleComplex>(),
+        align_of::<Complex64>()
+    );
+    assert!(
+        align_of::<cublas::cuComplex>() > align_of::<Complex32>(),
+        "cuComplex {} vs Complex32 {}",
+        align_of::<cublas::cuComplex>(),
+        align_of::<Complex32>()
+    );
+    // The copy is only sound because the sizes match; `geam_accum` also
+    // asserts this at compile time for each instantiated pair.
+    assert_eq!(size_of::<cublas::cuDoubleComplex>(), size_of::<Complex64>());
+    assert_eq!(size_of::<cublas::cuComplex>(), size_of::<Complex32>());
 }

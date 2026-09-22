@@ -484,7 +484,7 @@ fn axpby_typed<T: CublasScalar>(
             // spans matching in-place geam (`C == B`, `ldb == ldc`). Host-mode
             // coefficients are consumed synchronously during enqueue.
             check_cublas(AXPBY_OP, T::GEAM_NAME, unsafe {
-                T::geam_accum(handle, n, &alpha, x_ptr, &beta, y_ptr)
+                T::geam_accum(handle, n, alpha, x_ptr, beta, y_ptr)
             })
         },
     )?;
@@ -645,17 +645,22 @@ pub(super) trait CublasScalar:
 
     /// Enqueue the in-place vector update `y <- alpha * x + beta * y`.
     ///
+    /// The coefficients are taken by value: the implementation copies them
+    /// into locals of the cuBLAS FFI scalar type before passing host pointers
+    /// (host pointer mode), because `cuDoubleComplex` is 16-byte aligned while
+    /// `Complex64` is only 8-byte aligned, so a `*const Self` cast is not a
+    /// valid `cuDoubleComplex` pointer.
+    ///
     /// # Safety
     ///
     /// `x` and `y` must be live non-overlapping device pointers to at least
-    /// `n` compact elements of `Self` on the handle's device; `alpha` and
-    /// `beta` must be live host pointers (host pointer mode).
+    /// `n` compact elements of `Self` on the handle's device.
     unsafe fn geam_accum(
         handle: cublas::cublasHandle_t,
         n: i32,
-        alpha: *const Self,
+        alpha: Self,
         x: *const c_void,
-        beta: *const Self,
+        beta: Self,
         y: *mut c_void,
     ) -> cublas::cublasStatus_t;
 }
@@ -780,12 +785,22 @@ macro_rules! impl_cublas_scalar {
             unsafe fn geam_accum(
                 handle: cublas::cublasHandle_t,
                 n: i32,
-                alpha: *const Self,
+                alpha: Self,
                 x: *const c_void,
-                beta: *const Self,
+                beta: Self,
                 y: *mut c_void,
             ) -> cublas::cublasStatus_t {
                 let ld = n.max(1);
+                // Host-mode coefficients must satisfy the FFI scalar's
+                // alignment (`cuDoubleComplex` is 16-byte aligned, `Complex64`
+                // only 8). Copy each value into a local of the FFI type so the
+                // pointer handed to cuBLAS is aligned; `transmute_copy` reads
+                // the source unaligned when the destination is stricter.
+                // INVARIANT: `Self` and `$ffi` have identical size and layout
+                // (re/im pairs for complex, the same primitive for real).
+                const _: () = assert!(core::mem::size_of::<$ty>() == core::mem::size_of::<$ffi>());
+                let alpha: $ffi = core::mem::transmute_copy(&alpha);
+                let beta: $ffi = core::mem::transmute_copy(&beta);
                 // In-place `geam` form 2: `C = alpha * op(A) + beta * C` with
                 // `B == C`, `ldb == ldc`, and `transb == N`, treating the
                 // vectors as `n x 1` column-major matrices.
@@ -795,10 +810,10 @@ macro_rules! impl_cublas_scalar {
                     cublas::cublasOperation_t::CUBLAS_OP_N,
                     n,
                     1,
-                    alpha.cast::<$ffi>(),
+                    &alpha,
                     x.cast::<$ffi>(),
                     ld,
-                    beta.cast::<$ffi>(),
+                    &beta,
                     y.cast::<$ffi>().cast_const(),
                     ld,
                     y.cast::<$ffi>(),
