@@ -600,6 +600,8 @@ gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_scatter_accumulates_
 gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_scatter_skips_invalid_windows_like_cpu
 gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_signed_pad_cropping_matches_cpu_values
 gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_slice_dynamic_slice_and_pad_match_cpu
+host	tenferro-gpu	cubecl::tests::memoized_addr_tests::every_in_place_launch_helper_invalidates_the_memoized_address
+gpu	tenferro-gpu	cubecl::tests::memoized_addr_tests::queued_cubecl_write_drops_the_memoized_device_address
 host	tenferro-gpu	cubecl::tests::metadata_tests::cubecl_buffers_keep_domain_and_distinguish_allocations
 host	tenferro-gpu	cubecl::tests::metadata_tests::cubecl_metadata_uses_dense_column_major_strides
 host	tenferro-gpu	cubecl::tests::metadata_tests::cuda_backend_exposes_extension_cache_retained_byte_controls
