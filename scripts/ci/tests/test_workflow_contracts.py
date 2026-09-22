@@ -567,7 +567,7 @@ class WorkflowContractTests(unittest.TestCase):
             int(minimum_runtime.group(1)),
             int(minimum_runtime.group(2)),
         )
-        self.assertEqual(minimum, (12, 4))
+        self.assertEqual(minimum, (12, 6))
         allowed_versions = [
             tuple(int(part) for part in version.split("."))
             for version in runpod_config["allowed_cuda_versions"]
@@ -709,7 +709,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         for env_line in (
             '  CUDARC_CUDA_VERSION: "12080"',
-            '  CUDA_MIN_RUNTIME_VERSION: "12.4"',
+            '  CUDA_MIN_RUNTIME_VERSION: "12.6"',
             '  CUDA_RUNTIME_VERSION: "12.8"',
             '  CUTENSOR_VERSION: "2.6.0.4"',
             "  TENFERRO_CI_CACHE_ROOT: /opt/tenferro-ci",

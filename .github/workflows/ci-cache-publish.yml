@@ -221,7 +221,7 @@ jobs:
       fail-fast: false
       matrix:
         # Both runtime tiers the RunPod driver selection can choose.
-        cuda: ["12.4", "12.8"]
+        cuda: ["12.6", "12.8"]
 
     steps:
       - name: Checkout tenferro-rs

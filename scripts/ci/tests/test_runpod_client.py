@@ -223,7 +223,7 @@ class RunPodClientTests(unittest.TestCase):
         self.assertIs(payload["interruptible"], False)
         self.assertEqual(
             payload["allowedCudaVersions"],
-            ["13.0", "12.9", "12.8", "12.4"],
+            ["13.0", "12.9", "12.8", "12.7", "12.6"],
         )
         self.assertEqual(payload["gpuTypeIds"], gpu_type_ids)
         self.assertEqual(payload["env"]["RUNNER_JIT_CONFIG"], "jit")

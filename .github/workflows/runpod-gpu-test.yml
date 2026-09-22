@@ -100,7 +100,7 @@ env:
   CUDA_TUTORIAL_ARCHIVE: cuda-tutorial.tar.zst
   # Keep 12.8 bindings so newer runtimes retain every CubeCL CUDA feature.
   CUDARC_CUDA_VERSION: "12080"
-  # RunPod may select the 12.4 baseline; 12.8 enables the full CubeCL feature set.
+  # RunPod may select the 12.6 baseline; 12.8 enables the full CubeCL feature set.
   CUDA_MIN_RUNTIME_VERSION: "12.6"
   CUDA_RUNTIME_VERSION: "12.8"
   ARCHIVE_WORKSPACE_ROOT: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}

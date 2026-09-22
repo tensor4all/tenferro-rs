@@ -351,7 +351,7 @@ def run_smoke(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--min-runtime-version", default="12.4")
+    parser.add_argument("--min-runtime-version", default="12.6")
     parser.add_argument("--full-runtime-version", default="12.8")
     parser.add_argument("--min-vram-gb", type=float, default=0.0)
     parser.add_argument(
