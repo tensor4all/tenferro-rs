@@ -503,6 +503,7 @@ two-gpu	tenferro-gpu	cubecl::runtime_adapter::tests::cuda_registration_preserves
 host	tenferro-gpu	cubecl::runtime_adapter::tests::sum_squares_routes_through_runtime_reduction_preparation
 host	tenferro-gpu	cubecl::runtime_adapter::tests::unavailable_selection_preserves_requested_id_and_discovered_records
 host	tenferro-gpu	cubecl::tests::blas1_tests::blas1_length_stays_within_the_portable_cublas_interface
+host	tenferro-gpu	cubecl::tests::blas1_tests::cublas_complex_scalars_are_more_strictly_aligned_than_num_complex
 gpu	tenferro-gpu	cubecl::tests::blas1_tests::cuda_axpby_keeps_compact_operands_on_cublas
 gpu	tenferro-gpu	cubecl::tests::blas1_tests::cuda_axpby_reads_an_offset_strided_source_in_place
 host	tenferro-gpu	cubecl::tests::capability_tests::cuda_capability_entries_match_core_catalog_dtype_policy
