@@ -294,21 +294,26 @@ budgets: with one scratch allocation per plan, a single shape that needs more
 scratch than the remaining budget evicted the whole plan-cache entry. The cache
 byte limit therefore does not bound total device memory. Instead the backend
 keeps a separate retention cap:
-`CudaBackend::cutensor_workspace_max_retained_bytes` (default 1 GiB, `0`
+`CudaBackend::cutensor_workspace_max_retained_bytes` (default 10 GiB, `0`
 disables retention) configured with
 `CudaBackend::set_cutensor_workspace_max_retained_bytes`. The cap bounds the
 scratch the backend keeps for reuse, not what a contraction may use: a request
 that does not fit the remaining cap runs in a temporary workspace that is
 retired afterwards, and lowering the cap releases retained buffers without
 evicting any plan. Other slots are never evicted to make room. `0` is not
-"unlimited", and the 1 GiB default is a finite policy value, not a practical
+"unlimited", and the 10 GiB default is a finite policy value, not a practical
 memory protection or reservation. Nonzero requests round up to a power of two
 with a 1 MiB floor; a zero request allocates nothing. Each slot keeps its
 high-water capacity until it is replaced, the cap is lowered,
 `CudaBackend::clear_cuda_extension_cache`, or backend teardown.
 `CudaBackend::cutensor_workspace_stats` reports the retained slot count and
 retained bytes, and `CudaBackend::cutensor_workspace_bytes` reports the byte
-high-water.
+high-water. `CudaBackend::cutensor_workspace_temporary_uses` counts the
+contractions that ran in a temporary workspace because their requirement did
+not fit the cap: a nonzero, increasing value is the direct signal that the cap
+is below the workload's real requirement and that the retained high-water
+under-reports it. That counter is cumulative for the backend and survives
+`CudaBackend::clear_cuda_extension_cache`.
 
 Sizing the cap: with `H_s` the largest workspace requirement seen on slot `s`
 and `Q(w) = next_power_of_two(max(w, 1 MiB))` for `w > 0` (with `Q(0) = 0`),
@@ -321,9 +326,11 @@ be derived from the plan set or the plan entry bound. Setting it below the
 steady-state working set makes matching contractions allocate and retire
 scratch on every call, which increases retirement churn and can increase the
 retirement queue's stream barrier fallbacks; the reported statistics show the
-retained amount, not the suppressed demand. Read
+retained amount. Read
 `CudaBackend::cutensor_workspace_bytes` after a representative run to choose a
-value. Device residency is not bounded by the cap: a temporary workspace, a
+value, and confirm with
+`CudaBackend::cutensor_workspace_temporary_uses` that the chosen cap is not
+binding. Device residency is not bounded by the cap: a temporary workspace, a
 retiring allocation, the allocator arena, and vendor-internal memory are all
 outside it, so residency can exceed the cap while an older buffer retires.
 The overall extension cache stats report the retained typed cache entry. Use

@@ -74,6 +74,6 @@ fn plan_workspace_reuses_retains_exact_and_falls_back_to_temporary() {
 }
 
 #[test]
-fn default_retention_cap_is_one_gib() {
-    assert_eq!(DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES, GIB);
+fn default_retention_cap_is_ten_gib() {
+    assert_eq!(DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES, 10 * GIB);
 }
