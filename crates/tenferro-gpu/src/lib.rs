@@ -52,8 +52,8 @@ pub mod cuda {
         cuda_runtime_hardware_class, download_tensor, gpu_available, upload_tensor,
         with_cuda_exec_session, CudaBackend, CudaComputeCapability, CudaDeviceError, CudaDeviceId,
         CudaDeviceInfo, CudaDeviceUuid, CudaExecSession, CudaExtensionCache,
-        CudaExtensionCacheGuard, CudaRuntime, CudaRuntimeIdentity, GpuExtensionCapability,
-        WorkspaceRetirementStats,
+        CudaExtensionCacheGuard, CudaRuntime, CudaRuntimeIdentity, CutensorWorkspaceStats,
+        GpuExtensionCapability, WorkspaceRetirementStats,
     };
 
     /// Public tenferro-wide CubeCL session (issue #1597).

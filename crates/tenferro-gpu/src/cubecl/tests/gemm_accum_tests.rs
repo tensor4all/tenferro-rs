@@ -597,9 +597,8 @@ fn test_accum_zero_contraction_view_output_beta_error() {
 #[test]
 #[ignore]
 fn test_workspace_retirement_defers_eviction_barrier_f64() {
-    // Evicting a cached cuTENSOR contraction retires its workspace. The handle
-    // must only return to the CubeCL pool once the stream reaches the event
-    // recorded at retirement, so eviction must not drain the stream itself.
+    // Plan eviction keeps the shared scratch allocation alive. Clearing the
+    // owning cache still retires it using the event-based path from #1809.
     use std::num::NonZeroUsize;
 
     let mut gpu = gpu_backend();
@@ -621,12 +620,13 @@ fn test_workspace_retirement_defers_eviction_barrier_f64() {
         results.push((actual, reference));
     }
 
-    // Downloading a large tensor synchronizes the runtime and drains deferred
-    // retirements, so verify the queue before reading the results back.
+    assert_eq!(gpu.cutensor_plan_cache_stats().unwrap().evictions, 1);
+    gpu.clear_cuda_extension_cache().unwrap();
+    // Cache clear retires the shared workspace. Inspect before downloading.
     let stats = gpu.cutensor_workspace_retirement_stats().unwrap();
     assert!(
         stats.deferred >= 1,
-        "eviction should defer at least one workspace retirement, got {stats:?}"
+        "cache clear should defer shared workspace retirement, got {stats:?}"
     );
     assert!(
         stats.barrier_fallbacks == 0,
