@@ -323,12 +323,13 @@ python3 scripts/check-coverage.py coverage.json
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
 
-# GPU (CUDA/CubeCL) tests: requires NVIDIA GPU + CUDA 12.4+ (12.8+ enables the full CubeCL feature set).
+# GPU (CUDA/CubeCL) tests: requires NVIDIA GPU + CUDA 12.6.2+ (12.8+ enables the full CubeCL feature set).
+# The floor is cuSOLVER >= 11.7.1, which ships `cusolverDnXsyevBatched` (issue #1852).
 # GPU tests are #[ignore]; --ignored runs them. CUBECL_DEBUG_LOG=0 suppresses JIT logs.
 # Find the installed CUDA root with `ls -d /usr/local/cuda*`.
 CUBECL_DEBUG_LOG=0 \
-CUDA_PATH=/usr/local/cuda-12.4 \
-LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
+CUDA_PATH=/usr/local/cuda-12.6 \
+LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
   cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 
@@ -337,7 +338,7 @@ LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:/usr/lib/x86_64-linux-gnu/libcutensor
 | Variable | Value | Purpose |
 |----------|-------|---------|
 | `CUBECL_DEBUG_LOG` | `0` | Suppress JIT compilation log output (default is verbose) |
-| `CUDA_PATH` | `/usr/local/cuda-12.4` or newer | CUDA toolkit root for NVRTC header resolution |
+| `CUDA_PATH` | `/usr/local/cuda-12.6` or newer | CUDA toolkit root for NVRTC header resolution |
 | `LD_LIBRARY_PATH` | Include CUDA + cuTENSOR lib dirs | Runtime library loading |
 
 Set these in CI and local dev shells. Without `CUBECL_DEBUG_LOG=0`, cubecl emits

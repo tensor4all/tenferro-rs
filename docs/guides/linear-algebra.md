@@ -295,17 +295,20 @@ assert_eq!(vt.concrete_shape()?, vec![2, 2]);
 ```
 <!-- end-snippet-source -->
 
-`EighOptions::driver` is the same knob for the Hermitian eigensolver.
-`EighDriver::Auto` (the default) uses cuSOLVER's divide-and-conquer
-`syevd`/`heevd` at every size, which is what the backend did before the driver
-existed. `EighDriver::Syevj` selects the Jacobi eigensolver, and for a batch of
-matrices with `n <= 32` it reaches `syevjBatched`, which solves the whole batch
-in one launch. cuSOLVER has no divide-and-conquer batched counterpart, so that
-entry point is unreachable without the driver: on an A100, 1024 batched 8x8
-`f64` matrices take 105 ms under `Auto` and 0.29 ms under `Syevj`, agreeing to
-3.4e-15 relative to the largest eigenvalue. Jacobi loses on single dense
-matrices and on wide spectra, so `Auto` stays divide-and-conquer; measure your
-own shapes. CPU providers ignore the driver.
+`EighOptions::driver` is the same knob for the Hermitian eigensolver, but you
+will rarely need it. `EighDriver::Auto` (the default) picks the fastest
+divide-and-conquer routine available: a single matrix goes to `syevd`/`heevd`,
+and a batch goes to `cusolverDnXsyevBatched`, which diagonalises the whole
+batch in one launch at the same accuracy. On an A100 that is 1024 batched 8x8
+`f64` matrices in 0.37 ms against 105 ms for the per-matrix loop this default
+used before, and 0.69 ms against 70 ms for 256 batched 32x32.
+
+`EighDriver::Syevj` selects the Jacobi eigensolver instead, batched the same
+way. It is worth asking for only on batches of small matrices: on that A100 it
+is slightly ahead at order 8 and 32 (0.27 ms and 0.38 ms) and behind from
+there, by about 4x at order 128, and much further on wide spectra where it is
+also the less accurate of the two. Measure your own shapes. CPU providers
+ignore the driver.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_eigh_driver -->
 ```rust

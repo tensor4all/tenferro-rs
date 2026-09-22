@@ -41,7 +41,7 @@ env:
   CUDA_TUTORIAL_ARCHIVE: cuda-tutorial.tar.zst
   # Keep these in sync with runpod-gpu-test.yml (contract-tested).
   CUDARC_CUDA_VERSION: "12080"
-  CUDA_MIN_RUNTIME_VERSION: "12.4"
+  CUDA_MIN_RUNTIME_VERSION: "12.6"
   CUDA_RUNTIME_VERSION: "12.8"
   TENFERRO_CI_CACHE_ROOT: /opt/tenferro-ci
   CUTENSOR_VERSION: "2.6.0.4"

@@ -324,6 +324,44 @@ type GeqrfC64Fn = unsafe extern "C" fn(
 
 type CreateParamsFn = unsafe extern "C" fn(*mut CusolverDnParamsRaw) -> CusolverStatus;
 type DestroyParamsFn = unsafe extern "C" fn(CusolverDnParamsRaw) -> CusolverStatus;
+// Xsyev batched bindings transcribed from the cuSOLVER API reference and the
+// CUDA 12.6 `cusolverDn.h` declarations. cuSOLVER >= 11.7.1 exports these.
+type XsyevBatchedBufferSizeFn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverDnParamsRaw,
+    i32,
+    i32,
+    i64,
+    i32,
+    *const c_void,
+    i64,
+    i32,
+    *const c_void,
+    i32,
+    *mut usize,
+    *mut usize,
+    i64,
+) -> CusolverStatus;
+type XsyevBatchedFn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverDnParamsRaw,
+    i32,
+    i32,
+    i64,
+    i32,
+    *mut c_void,
+    i64,
+    i32,
+    *mut c_void,
+    i32,
+    *mut c_void,
+    usize,
+    *mut c_void,
+    usize,
+    *mut i32,
+    i64,
+) -> CusolverStatus;
+
 type XgesvdpBufferSizeFn = unsafe extern "C" fn(
     CusolverDnHandleRaw,
     CusolverDnParamsRaw,
@@ -1166,6 +1204,8 @@ struct CusolverVtable {
     xlarft: XlarftFn,
     xgesvdp_buffer_size: XgesvdpBufferSizeFn,
     xgesvdp: XgesvdpFn,
+    xsyev_batched_buffer_size: XsyevBatchedBufferSizeFn,
+    xsyev_batched: XsyevBatchedFn,
     sorgqr_buffer_size: OrgqrBufferSizeF32Fn,
     dorgqr_buffer_size: OrgqrBufferSizeF64Fn,
     cungqr_buffer_size: OrgqrBufferSizeC32Fn,
@@ -1260,6 +1300,12 @@ impl CusolverVtable {
             },
             // SAFETY: signature matches the documented cuSOLVER 64-bit API.
             xgesvdp: unsafe { load_symbol(lib, b"cusolverDnXgesvdp\0", "cuSOLVER")? },
+            // SAFETY: signatures match the documented cuSOLVER 64-bit API.
+            xsyev_batched_buffer_size: unsafe {
+                load_symbol(lib, b"cusolverDnXsyevBatched_bufferSize\0", "cuSOLVER")?
+            },
+            // SAFETY: signature matches the documented cuSOLVER 64-bit API.
+            xsyev_batched: unsafe { load_symbol(lib, b"cusolverDnXsyevBatched\0", "cuSOLVER")? },
             sorgqr_buffer_size: load_symbol(lib, b"cusolverDnSorgqr_bufferSize\0", "cuSOLVER")?,
             dorgqr_buffer_size: load_symbol(lib, b"cusolverDnDorgqr_bufferSize\0", "cuSOLVER")?,
             cungqr_buffer_size: load_symbol(lib, b"cusolverDnCungqr_bufferSize\0", "cuSOLVER")?,
@@ -2155,6 +2201,118 @@ impl CusolverDnHandle {
         self.lib
             .check_status(status, op, "cusolverDnXgesvdp_bufferSize")?;
         Ok((device_bytes, host_bytes))
+    }
+
+    /// Query the batched divide-and-conquer eigensolver workspace, in bytes.
+    ///
+    /// # Errors
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments.
+    // INVARIANT: the arguments mirror the vendor ABI at this private FFI boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::gpu) fn xsyev_batched_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        jobz: CusolverEigMode,
+        uplo: CublasFillMode,
+        n: i64,
+        a: *const c_void,
+        lda: i64,
+        w: *const c_void,
+        batch_size: i64,
+        op: &'static str,
+    ) -> Result<(usize, usize)> {
+        let real = match dtype {
+            CudaDataType::F32 | CudaDataType::Complex32 => CudaDataType::F32,
+            CudaDataType::F64 | CudaDataType::Complex64 => CudaDataType::F64,
+        };
+        let compute = cuda_data_type_abi(real);
+        let real = cuda_data_type_abi(real);
+        let dtype = cuda_data_type_abi(dtype);
+        let mut device_bytes = 0;
+        let mut host_bytes = 0;
+        // SAFETY: bufferSize only queries sizes; no device data is accessed.
+        let status = unsafe {
+            (self.lib.vtable.xsyev_batched_buffer_size)(
+                self.raw,
+                self.params,
+                jobz as i32,
+                uplo as i32,
+                n,
+                dtype,
+                a,
+                lda,
+                real,
+                w,
+                compute,
+                &mut device_bytes,
+                &mut host_bytes,
+                batch_size,
+            )
+        };
+        self.lib
+            .check_status(status, op, "cusolverDnXsyevBatched_bufferSize")?;
+        Ok((device_bytes, host_bytes))
+    }
+
+    /// Diagonalise a whole batch of Hermitian matrices in one launch.
+    ///
+    /// cuSOLVER writes one `info` entry per matrix. `A` is overwritten with
+    /// the eigenvectors when `jobz` asks for them.
+    ///
+    /// # Safety
+    /// Device pointers must cover `batch_size` matrices of order `n` and the
+    /// matching real spectra. Both workspaces must remain live until the work
+    /// completes and must match the preceding `xsyev_batched_buffer_size`
+    /// query.
+    ///
+    /// # Errors
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments.
+    // INVARIANT: the arguments mirror the vendor ABI at this private FFI boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::gpu) unsafe fn xsyev_batched(
+        &self,
+        dtype: CudaDataType,
+        jobz: CusolverEigMode,
+        uplo: CublasFillMode,
+        n: i64,
+        a: *mut c_void,
+        lda: i64,
+        w: *mut c_void,
+        device_workspace: *mut c_void,
+        device_bytes: usize,
+        host_workspace: *mut c_void,
+        host_bytes: usize,
+        info: *mut i32,
+        batch_size: i64,
+        op: &'static str,
+    ) -> Result<()> {
+        let real = match dtype {
+            CudaDataType::F32 | CudaDataType::Complex32 => CudaDataType::F32,
+            CudaDataType::F64 | CudaDataType::Complex64 => CudaDataType::F64,
+        };
+        let compute = cuda_data_type_abi(real);
+        let real = cuda_data_type_abi(real);
+        let dtype = cuda_data_type_abi(dtype);
+        let status = (self.lib.vtable.xsyev_batched)(
+            self.raw,
+            self.params,
+            jobz as i32,
+            uplo as i32,
+            n,
+            dtype,
+            a,
+            lda,
+            real,
+            w,
+            compute,
+            device_workspace,
+            device_bytes,
+            host_workspace,
+            host_bytes,
+            info,
+            batch_size,
+        );
+        self.lib.check_status(status, op, "cusolverDnXsyevBatched")
     }
 
     /// Compute a column-major Xgesvdp SVD, returning V rather than Vᴴ.

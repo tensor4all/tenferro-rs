@@ -194,28 +194,36 @@ fn typed_host<'a, T: TensorScalar>(
         .ok_or_else(|| unsupported_linalg_dtype(op, input))
 }
 
-/// cuSOLVER accepts the batched Jacobi entry point only up to this dimension.
-const CUSOLVER_SYEVJ_BATCHED_MAX_DIM: usize = 32;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CusolverEighRoutine {
     Syevd,
     Syevj,
     SyevjBatched,
+    XsyevBatched,
 }
 
-/// `Auto` keeps the pre-driver behavior: `syevd`/`heevd` at every size, so the
-/// default is unchanged. An explicit driver wins.
+/// A real batch always takes a batched cuSOLVER routine, which replaces one
+/// launch per matrix with a single launch. Which batched routine depends only
+/// on the driver: `Auto`/`Syevd` take divide-and-conquer `Xsyev`, `Syevj`
+/// takes Jacobi. Single matrices have no launch overhead to amortize and keep
+/// the per-matrix entry points.
 ///
-/// Within the Jacobi driver the batched entry point is chosen whenever
-/// cuSOLVER accepts it, because it replaces one launch per matrix with a
-/// single launch; cuSOLVER has no divide-and-conquer counterpart, so this is
-/// the only routine a caller cannot otherwise reach.
-fn select_eigh_driver(driver: EighDriver, n: usize, batch_total: usize) -> CusolverEighRoutine {
+/// There is no size threshold. Measured on an A100 (issue #1852), batched
+/// Jacobi beats a per-matrix Jacobi loop at every order tested from 8 to 512,
+/// and `XsyevBatched` beats a per-matrix `syevd` loop at every one of them, so
+/// no order exists at which falling back to a loop is the faster choice.
+fn select_eigh_driver(driver: EighDriver, batch_total: usize) -> CusolverEighRoutine {
+    let batched = batch_total > 1;
     match driver {
-        EighDriver::Auto | EighDriver::Syevd => CusolverEighRoutine::Syevd,
+        EighDriver::Auto | EighDriver::Syevd => {
+            if batched {
+                CusolverEighRoutine::XsyevBatched
+            } else {
+                CusolverEighRoutine::Syevd
+            }
+        }
         EighDriver::Syevj => {
-            if batch_total > 1 && n <= CUSOLVER_SYEVJ_BATCHED_MAX_DIM {
+            if batched {
                 CusolverEighRoutine::SyevjBatched
             } else {
                 CusolverEighRoutine::Syevj
@@ -3122,8 +3130,12 @@ where
     let batch_total = batch_count(OP, batch_shape)?;
     let matrix_stride = checked_mul_usize(OP, "eigh matrix stride", n, n)?;
     let values_stride = n;
-    let routine = select_eigh_driver(driver, n, batch_total);
+    let routine = select_eigh_driver(driver, batch_total);
     let batch_total_i32 = as_i32(batch_total, OP, "batch_total")?;
+    // The 64-bit batched entry point takes i64 dimensions.
+    let n_i64 = i64::from(n_i32);
+    let lda_i64 = i64::from(lda);
+    let batch_total_i64 = i64::from(batch_total_i32);
     if has_zero_dim(input.shape()) {
         return Ok(backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
@@ -3148,7 +3160,7 @@ where
         // a host barrier, so the device work has retired before the object
         // drops at the end of the closure. This matches the `gesvdj` path.
         let syevj_params = match routine {
-            CusolverEighRoutine::Syevd => None,
+            CusolverEighRoutine::Syevd | CusolverEighRoutine::XsyevBatched => None,
             CusolverEighRoutine::Syevj | CusolverEighRoutine::SyevjBatched => {
                 Some(handles.cusolver().create_syevj_info(OP)?)
             }
@@ -3167,7 +3179,33 @@ where
         }
         let mut values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
 
-        let lwork = {
+        // The batched divide-and-conquer entry point reports byte sizes, so
+        // its query is separate from the element-count query below.
+        let xsyev_bytes = if routine == CusolverEighRoutine::XsyevBatched {
+            let a_ref = raw.tensor(&work)?;
+            let values_ref = raw.tensor(&values)?;
+            // SAFETY: both spans are validated device allocations on this
+            // runtime; only the leading dimensions are queried here.
+            let a_ptr = unsafe { a_ref.raw_ptr().cast_const() };
+            // SAFETY: `values_ref` is a validated device span on this runtime.
+            let values_ptr = unsafe { values_ref.raw_ptr().cast_const() };
+            Some(handles.cusolver().xsyev_batched_buffer_size(
+                T::DATA_TYPE,
+                CusolverEigMode::Vector,
+                CublasFillMode::Lower,
+                n_i64,
+                a_ptr,
+                lda_i64,
+                values_ptr,
+                batch_total_i64,
+                OP,
+            )?)
+        } else {
+            None
+        };
+        let lwork = if routine == CusolverEighRoutine::XsyevBatched {
+            0
+        } else {
             let a_ref = raw.tensor(&work)?;
             let values_ref = raw.tensor(&values)?;
             // SAFETY: both spans are validated device allocations on this
@@ -3213,21 +3251,41 @@ where
                 )?,
             }
         };
-        let workspace_nbytes = {
-            let lwork = usize::try_from(lwork).map_err(|_| {
-                Error::invalid_argument(
-                    OP,
-                    "workspace_length",
-                    format!("must be non-negative, got {lwork}"),
+        // `Xsyev` reports byte sizes for a device and a host workspace; the
+        // legacy entry points report an element count and need device scratch
+        // only. The host buffer stays uninitialized because cuSOLVER owns it
+        // and Rust never reads it, and it outlives the launch because the
+        // solver-status download below is a host barrier.
+        let (workspace_nbytes, host_nbytes) = match xsyev_bytes {
+            Some(bytes) => bytes,
+            None => {
+                let lwork = usize::try_from(lwork).map_err(|_| {
+                    Error::invalid_argument(
+                        OP,
+                        "workspace_length",
+                        format!("must be non-negative, got {lwork}"),
+                    )
+                })?;
+                (
+                    lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                        Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                    })?,
+                    0,
                 )
-            })?;
-            lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
-                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
-            })?
+            }
         };
-        let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+        let workspace = raw.alloc_bytes(workspace_nbytes.max(1), OP)?;
         let mut workspace_ptr = std::ptr::null_mut::<c_void>();
         workspace.with_ptr(|ptr| workspace_ptr = ptr);
+        let mut host_workspace = Vec::<std::mem::MaybeUninit<u8>>::new();
+        host_workspace
+            .try_reserve_exact(host_nbytes)
+            .map_err(|error| Error::backend_source(OP, error))?;
+        let host_ptr = if host_nbytes == 0 {
+            std::ptr::null_mut::<c_void>()
+        } else {
+            host_workspace.as_mut_ptr().cast::<c_void>()
+        };
 
         let mut info = raw.alloc_output::<i32>(&[batch_total])?;
         let a_ref = raw.tensor_mut(&mut work)?;
@@ -3268,9 +3326,32 @@ where
                 )?;
             }
         }
+        if routine == CusolverEighRoutine::XsyevBatched {
+            // SAFETY: the batch-wide matrix, eigenvalue, and info allocations
+            // match the strides cuSOLVER expects, and both workspaces have the
+            // queried sizes and stay live until the barrier below.
+            unsafe {
+                handles.cusolver().xsyev_batched(
+                    T::DATA_TYPE,
+                    CusolverEigMode::Vector,
+                    CublasFillMode::Lower,
+                    n_i64,
+                    a_ptr,
+                    lda_i64,
+                    values_ptr,
+                    workspace_ptr,
+                    workspace_nbytes,
+                    host_ptr,
+                    host_nbytes,
+                    info_ptr.cast::<i32>(),
+                    batch_total_i64,
+                    OP,
+                )?;
+            }
+        }
         // The batched launch above already covered every matrix.
         let per_matrix_batches = match routine {
-            CusolverEighRoutine::SyevjBatched => 0,
+            CusolverEighRoutine::SyevjBatched | CusolverEighRoutine::XsyevBatched => 0,
             CusolverEighRoutine::Syevd | CusolverEighRoutine::Syevj => batch_total,
         };
         for batch in 0..per_matrix_batches {
@@ -3332,6 +3413,7 @@ where
             CusolverEighRoutine::Syevd => "cusolverDn*syevd",
             CusolverEighRoutine::Syevj => "cusolverDn*syevj",
             CusolverEighRoutine::SyevjBatched => "cusolverDn*syevjBatched",
+            CusolverEighRoutine::XsyevBatched => "cusolverDnXsyevBatched",
         };
         let host_info = raw.download_tensor::<i32>(&info, OP)?;
         for &value in host_info.host_data()? {
@@ -3363,8 +3445,12 @@ where
     let batch_total = batch_count(OP, batch_shape)?;
     let matrix_stride = checked_mul_usize(OP, "eigh_values matrix stride", n, n)?;
     let values_stride = n;
-    let routine = select_eigh_driver(driver, n, batch_total);
+    let routine = select_eigh_driver(driver, batch_total);
     let batch_total_i32 = as_i32(batch_total, OP, "batch_total")?;
+    // The 64-bit batched entry point takes i64 dimensions.
+    let n_i64 = i64::from(n_i32);
+    let lda_i64 = i64::from(lda);
+    let batch_total_i64 = i64::from(batch_total_i32);
     if has_zero_dim(input.shape()) {
         return Ok(backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
@@ -3386,7 +3472,7 @@ where
         // a host barrier, so the device work has retired before the object
         // drops at the end of the closure. This matches the `gesvdj` path.
         let syevj_params = match routine {
-            CusolverEighRoutine::Syevd => None,
+            CusolverEighRoutine::Syevd | CusolverEighRoutine::XsyevBatched => None,
             CusolverEighRoutine::Syevj | CusolverEighRoutine::SyevjBatched => {
                 Some(handles.cusolver().create_syevj_info(OP)?)
             }
@@ -3405,7 +3491,33 @@ where
         }
         let mut values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
 
-        let lwork = {
+        // The batched divide-and-conquer entry point reports byte sizes, so
+        // its query is separate from the element-count query below.
+        let xsyev_bytes = if routine == CusolverEighRoutine::XsyevBatched {
+            let a_ref = raw.tensor(&work)?;
+            let values_ref = raw.tensor(&values)?;
+            // SAFETY: both spans are validated device allocations on this
+            // runtime; only the leading dimensions are queried here.
+            let a_ptr = unsafe { a_ref.raw_ptr().cast_const() };
+            // SAFETY: `values_ref` is a validated device span on this runtime.
+            let values_ptr = unsafe { values_ref.raw_ptr().cast_const() };
+            Some(handles.cusolver().xsyev_batched_buffer_size(
+                T::DATA_TYPE,
+                CusolverEigMode::NoVector,
+                CublasFillMode::Lower,
+                n_i64,
+                a_ptr,
+                lda_i64,
+                values_ptr,
+                batch_total_i64,
+                OP,
+            )?)
+        } else {
+            None
+        };
+        let lwork = if routine == CusolverEighRoutine::XsyevBatched {
+            0
+        } else {
             let a_ref = raw.tensor(&work)?;
             let values_ref = raw.tensor(&values)?;
             // SAFETY: both spans are validated device allocations on this
@@ -3451,21 +3563,41 @@ where
                 )?,
             }
         };
-        let workspace_nbytes = {
-            let lwork = usize::try_from(lwork).map_err(|_| {
-                Error::invalid_argument(
-                    OP,
-                    "workspace_length",
-                    format!("must be non-negative, got {lwork}"),
+        // `Xsyev` reports byte sizes for a device and a host workspace; the
+        // legacy entry points report an element count and need device scratch
+        // only. The host buffer stays uninitialized because cuSOLVER owns it
+        // and Rust never reads it, and it outlives the launch because the
+        // solver-status download below is a host barrier.
+        let (workspace_nbytes, host_nbytes) = match xsyev_bytes {
+            Some(bytes) => bytes,
+            None => {
+                let lwork = usize::try_from(lwork).map_err(|_| {
+                    Error::invalid_argument(
+                        OP,
+                        "workspace_length",
+                        format!("must be non-negative, got {lwork}"),
+                    )
+                })?;
+                (
+                    lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                        Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                    })?,
+                    0,
                 )
-            })?;
-            lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
-                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
-            })?
+            }
         };
-        let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+        let workspace = raw.alloc_bytes(workspace_nbytes.max(1), OP)?;
         let mut workspace_ptr = std::ptr::null_mut::<c_void>();
         workspace.with_ptr(|ptr| workspace_ptr = ptr);
+        let mut host_workspace = Vec::<std::mem::MaybeUninit<u8>>::new();
+        host_workspace
+            .try_reserve_exact(host_nbytes)
+            .map_err(|error| Error::backend_source(OP, error))?;
+        let host_ptr = if host_nbytes == 0 {
+            std::ptr::null_mut::<c_void>()
+        } else {
+            host_workspace.as_mut_ptr().cast::<c_void>()
+        };
 
         let mut info = raw.alloc_output::<i32>(&[batch_total])?;
         let a_ref = raw.tensor_mut(&mut work)?;
@@ -3506,9 +3638,32 @@ where
                 )?;
             }
         }
+        if routine == CusolverEighRoutine::XsyevBatched {
+            // SAFETY: the batch-wide matrix, eigenvalue, and info allocations
+            // match the strides cuSOLVER expects, and both workspaces have the
+            // queried sizes and stay live until the barrier below.
+            unsafe {
+                handles.cusolver().xsyev_batched(
+                    T::DATA_TYPE,
+                    CusolverEigMode::NoVector,
+                    CublasFillMode::Lower,
+                    n_i64,
+                    a_ptr,
+                    lda_i64,
+                    values_ptr,
+                    workspace_ptr,
+                    workspace_nbytes,
+                    host_ptr,
+                    host_nbytes,
+                    info_ptr.cast::<i32>(),
+                    batch_total_i64,
+                    OP,
+                )?;
+            }
+        }
         // The batched launch above already covered every matrix.
         let per_matrix_batches = match routine {
-            CusolverEighRoutine::SyevjBatched => 0,
+            CusolverEighRoutine::SyevjBatched | CusolverEighRoutine::XsyevBatched => 0,
             CusolverEighRoutine::Syevd | CusolverEighRoutine::Syevj => batch_total,
         };
         for batch in 0..per_matrix_batches {
@@ -3570,6 +3725,7 @@ where
             CusolverEighRoutine::Syevd => "cusolverDn*syevd",
             CusolverEighRoutine::Syevj => "cusolverDn*syevj",
             CusolverEighRoutine::SyevjBatched => "cusolverDn*syevjBatched",
+            CusolverEighRoutine::XsyevBatched => "cusolverDnXsyevBatched",
         };
         let host_info = raw.download_tensor::<i32>(&info, OP)?;
         for &value in host_info.host_data()? {

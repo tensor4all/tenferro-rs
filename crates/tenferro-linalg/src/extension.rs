@@ -241,16 +241,26 @@ impl SvdOptions {
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EighDriver {
-    /// The backend's default policy. On CUDA this is `syevd`/`heevd` at every
-    /// size, which is what the backend did before the driver existed. The
-    /// policy may gain a size rule later; measurements decide, not this enum.
+    /// The backend's default policy: the fastest divide-and-conquer routine
+    /// available. On CUDA a single matrix uses `syevd`/`heevd` and a batch
+    /// uses `cusolverDnXsyevBatched`, which solves the whole batch in one
+    /// launch at the same accuracy. On an A100 that is about 100x to 280x
+    /// faster than the per-matrix loop this default used before.
+    ///
+    /// The batched routine is a different cuSOLVER entry point, so batched
+    /// results can differ from the per-matrix loop in the last ULPs.
     #[default]
     Auto,
-    /// cuSOLVER's divide-and-conquer driver (`cusolverDn<t>syevd`, `heevd` for
-    /// complex input) regardless of size.
+    /// cuSOLVER's divide-and-conquer driver, which is what [`Self::Auto`]
+    /// already selects. Kept as an explicit spelling of the same choice.
     Syevd,
     /// cuSOLVER's Jacobi driver (`cusolverDn<t>syevj`, `heevj` for complex
-    /// input) regardless of size.
+    /// input, and their batched forms).
+    ///
+    /// Worth asking for only on batches of small matrices: measured on an
+    /// A100 it is slightly ahead of the default up to about order 32 and
+    /// loses from there, by about 4x at order 128 and far more on wide
+    /// spectra, where it is also the less accurate of the two.
     Syevj,
 }
 

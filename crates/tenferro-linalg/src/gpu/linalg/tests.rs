@@ -1,6 +1,6 @@
 use super::{
     select_eigh_driver, select_svd_driver, CusolverEighRoutine, CusolverSvdRoutine,
-    CUSOLVER_SYEVJ_BATCHED_MAX_DIM, JAX_COMPATIBLE_GESVDJ_MAX_DIM,
+    JAX_COMPATIBLE_GESVDJ_MAX_DIM,
 };
 use crate::extension::{EighDriver, SvdDriver};
 
@@ -55,44 +55,47 @@ fn explicit_driver_overrides_dimension_policy() {
 }
 
 #[test]
-fn eigh_auto_driver_keeps_the_pre_driver_routine() {
-    // `Auto` must reproduce the behavior that existed before the driver: the
-    // divide-and-conquer routine at every size and batch count.
-    for (n, batch) in [(1, 1), (8, 1), (8, 1024), (4096, 1), (4096, 8)] {
-        assert_eq!(
-            select_eigh_driver(EighDriver::Auto, n, batch),
-            CusolverEighRoutine::Syevd,
-            "Auto policy for n={n} batch={batch}"
-        );
-        assert_eq!(
-            select_eigh_driver(EighDriver::Syevd, n, batch),
-            CusolverEighRoutine::Syevd,
-            "forced Syevd for n={n} batch={batch}"
-        );
+fn eigh_batches_take_a_batched_routine_at_every_order() {
+    // There is no size threshold: a real batch always takes a batched
+    // cuSOLVER routine, and the driver alone decides which one. #1852
+    // measured both batched routines beating their per-matrix loops at every
+    // order from 8 to 512, so no order falls back.
+    for n in [1, 8, 32, 33, 64, 128, 512, 4096] {
+        let _ = n; // the policy is order-independent; the range documents that.
+        for batch in [2, 1024] {
+            assert_eq!(
+                select_eigh_driver(EighDriver::Auto, batch),
+                CusolverEighRoutine::XsyevBatched,
+                "Auto batch={batch}"
+            );
+            assert_eq!(
+                select_eigh_driver(EighDriver::Syevd, batch),
+                CusolverEighRoutine::XsyevBatched,
+                "Syevd batch={batch}"
+            );
+            assert_eq!(
+                select_eigh_driver(EighDriver::Syevj, batch),
+                CusolverEighRoutine::SyevjBatched,
+                "Syevj batch={batch}"
+            );
+        }
     }
 }
 
 #[test]
-fn eigh_jacobi_driver_takes_the_batched_entry_point_only_where_cusolver_allows_it() {
-    let max = CUSOLVER_SYEVJ_BATCHED_MAX_DIM;
-    assert_eq!(max, 32);
-    // A real batch within the size limit is the only case with a batched
-    // cuSOLVER entry point to reach.
-    for n in [1, 8, max] {
-        assert_eq!(
-            select_eigh_driver(EighDriver::Syevj, n, 2),
-            CusolverEighRoutine::SyevjBatched,
-            "batched Jacobi for n={n}"
-        );
-    }
-    // Single matrices have no batch to amortize, and cuSOLVER rejects the
-    // batched entry point above the limit.
+fn eigh_single_matrices_keep_the_per_matrix_entry_points() {
+    // One matrix has no launch overhead to amortize, so the batched entry
+    // points have nothing to win and the per-matrix routines stay.
     assert_eq!(
-        select_eigh_driver(EighDriver::Syevj, 8, 1),
-        CusolverEighRoutine::Syevj
+        select_eigh_driver(EighDriver::Auto, 1),
+        CusolverEighRoutine::Syevd
     );
     assert_eq!(
-        select_eigh_driver(EighDriver::Syevj, max + 1, 256),
+        select_eigh_driver(EighDriver::Syevd, 1),
+        CusolverEighRoutine::Syevd
+    );
+    assert_eq!(
+        select_eigh_driver(EighDriver::Syevj, 1),
         CusolverEighRoutine::Syevj
     );
 }

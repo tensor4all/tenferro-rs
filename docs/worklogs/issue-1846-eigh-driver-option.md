@@ -61,7 +61,7 @@
   `n = 8` the divide-and-conquer path spends about 102 us per matrix, which is
   launch overhead, not arithmetic.
 - Constraints: `tenferro-linalg` compiles GPU linear algebra only under the
-  `cuda` feature. `syevjBatched` is capped at `n = 32` by cuSOLVER. The Jacobi
+  `cuda` feature. `syevjBatched` was believed to be capped at `n = 32` by cuSOLVER. That was wrong -- see [issue #1846 follow-up](issue-1852-xsyev-batched.md). The Jacobi
   parameter object keeps cuSOLVER's default tolerance and sweep limit; the
   driver selects a routine and does not retune convergence. The measurement
   host had CUDA 12.6, not the 12.8 that enables the full CubeCL feature set.

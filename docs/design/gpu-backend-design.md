@@ -585,22 +585,38 @@ documented on the public variant. The existing `svd_full` API has no driver
 option and continues to use `Auto`; full Xgesvdp factors are covered internally
 without extending that public API.
 
-CUDA eigh takes the same driver shape, with a different default rule.
-`EighOptions::driver` at `EighDriver::Auto` uses cuSOLVER divide-and-conquer
-`syevd`/`heevd` at every size and batch count, which is the behavior that
-existed before the driver, so the default is unchanged. `EighDriver::Syevd`
-forces that routine explicitly and `EighDriver::Syevj` forces Jacobi. Inside
-the Jacobi driver the backend takes `syevjBatched` whenever cuSOLVER accepts it
-(`batch_total > 1` and `n <= CUSOLVER_SYEVJ_BATCHED_MAX_DIM`, which is 32),
-because that replaces one launch per matrix with a single launch for the whole
-batch. That entry point is the reason the knob exists: cuSOLVER has no
-divide-and-conquer batched counterpart, so no default policy can reach it. On
-an A100, 1024 batched 8x8 `f64` matrices cost 105 ms under `syevd` and 0.29 ms
-under `syevjBatched`, agreeing to 3.4e-15 relative to the largest eigenvalue;
-Jacobi loses by 1.6x to 21x on single dense matrices and on ten-decade complex
-spectra, which is why `Auto` stays divide-and-conquer rather than adding a size
-rule. As with the SVD driver, the eigh driver is part of the traced op identity
-and survives pruning to the values-only op, and CPU providers ignore it.
+CUDA eigh routes by batch count, not by order. A real batch
+(`batch_total > 1`) always takes a batched cuSOLVER routine, because that
+replaces one launch per matrix with a single launch; a single matrix keeps the
+per-matrix entry point. Which batched routine depends only on the driver:
+`EighDriver::Auto` and `Syevd` take divide-and-conquer
+`cusolverDnXsyevBatched`, and `Syevj` takes Jacobi `syevjBatched`.
+
+There is deliberately no size threshold. An earlier revision capped batched
+Jacobi at order 32 and described that as a cuSOLVER restriction; issue #1852
+showed the manual documents that limit for `gesvdjBatched`, the SVD routine,
+not for `syevjBatched`, which accepts any order. Measured on an A100, each
+batched routine beats its own per-matrix loop at every order from 8 to 512, so
+no order exists at which falling back is faster.
+
+`Auto` therefore no longer reproduces the pre-driver behaviour bit for bit on
+batched input: it is defined as the fastest divide-and-conquer routine
+available, and the batched entry point is a different cuSOLVER call. It is the
+same algorithm at the same accuracy, and it made the default about 100x to
+280x faster on batches (105 ms to 0.37 ms for 1024 8x8 `f64`; 70 ms to 0.69 ms
+for 256 32x32). `Syevj` retains a narrow advantage only up to about order 32.
+
+`cusolverDnXsyevBatched` requires cuSOLVER 11.7.1 or newer, which is why the
+supported CUDA floor is 12.6.2. That is a library floor: the loader resolves
+cuSOLVER at runtime, and CUDA 12.x supports the same GPU architectures
+throughout, so no hardware or driver requirement changes. Making the symbol
+optional was rejected — the cuSOLVER loader treats every symbol as mandatory,
+so an optional entry point would need a second loading mode, and leaving the
+floor at 12.4 with a mandatory symbol would turn a missing optimisation into a
+total cuSOLVER load failure.
+
+As with the SVD driver, the eigh driver is part of the traced op identity and
+survives pruning to the values-only op, and CPU providers ignore it.
 
 The published [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains
 the current CUDA operation and dtype matrix. Keep that matrix synchronized with

@@ -1397,13 +1397,41 @@ fn test_cubecl_eigh_forced_syevj_matches_reference() {
     check_forced_eigh_driver(8, 1, EighDriver::Syevj);
     check_forced_eigh_driver(64, 1, EighDriver::Syevj);
     check_forced_eigh_driver(6, 4, EighDriver::Syevj);
+    // Above the order that used to gate the batched Jacobi entry point
+    // (#1852): the routine is valid there, so the batch still takes it.
+    check_forced_eigh_driver(33, 4, EighDriver::Syevj);
+    check_forced_eigh_driver(64, 4, EighDriver::Syevj);
 }
 
 #[test]
 #[ignore = "requires a CUDA GPU"]
 fn test_cubecl_eigh_forced_syevd_matches_reference() {
     check_forced_eigh_driver(8, 1, EighDriver::Syevd);
+    // Batched input now reaches `cusolverDnXsyevBatched` (#1852), including
+    // above the order that used to gate any batched routine.
     check_forced_eigh_driver(6, 4, EighDriver::Syevd);
+    check_forced_eigh_driver(33, 4, EighDriver::Syevd);
+    check_forced_eigh_driver(64, 4, EighDriver::Syevd);
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn test_cubecl_eigh_auto_batched_matches_the_per_matrix_spectrum() {
+    // `Auto` batches through `XsyevBatched` while a single matrix keeps the
+    // per-matrix `syevd`. The two must agree: the batched routine is the same
+    // divide-and-conquer algorithm, not a different accuracy class.
+    let mut gpu = gpu_backend();
+    let mut cpu = cpu_backend();
+    for n in [8, 33, 64] {
+        let batched = patterned_symmetric_f64(n, 4);
+        let device = upload(&gpu, &batched);
+        let values = with_cuda_linalg_session(&mut gpu, |session| session.eigh_values(&device))
+            .map(|values| download(&gpu, &values))
+            .unwrap();
+        let expected =
+            with_cpu_linalg_session(&mut cpu, |session| session.eigh_values(&batched)).unwrap();
+        assert_tensor_close(&values, &expected, 1e-9);
+    }
 }
 
 #[test]

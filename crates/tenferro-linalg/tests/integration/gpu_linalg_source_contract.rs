@@ -513,7 +513,7 @@ fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
 }
 
 #[test]
-fn gpu_eigh_keeps_the_pre_driver_routine_as_the_auto_policy() {
+fn gpu_eigh_sends_every_batch_to_a_batched_routine() {
     let source = linalg_source();
     let eigh = source_section(&source, "fn eigh_typed", "fn eigh_values_typed");
     let eigh_values = source_section(
@@ -522,12 +522,17 @@ fn gpu_eigh_keeps_the_pre_driver_routine_as_the_auto_policy() {
         "fn build_lu_outputs_device",
     );
 
+    assert!(
+        !source.contains("CUSOLVER_SYEVJ_BATCHED_MAX_DIM"),
+        "the batched Jacobi order guard was a performance knee, not a cuSOLVER \
+         limit, and #1852 removed it; do not reintroduce it as a validity check"
+    );
     for needle in [
         "enum CusolverEighRoutine",
-        "const CUSOLVER_SYEVJ_BATCHED_MAX_DIM: usize = 32",
-        "fn select_eigh_driver(driver: EighDriver, n: usize, batch_total: usize) -> CusolverEighRoutine",
-        "EighDriver::Auto | EighDriver::Syevd => CusolverEighRoutine::Syevd",
-        "batch_total > 1 && n <= CUSOLVER_SYEVJ_BATCHED_MAX_DIM",
+        "fn select_eigh_driver(driver: EighDriver, batch_total: usize) -> CusolverEighRoutine",
+        "let batched = batch_total > 1;",
+        "CusolverEighRoutine::XsyevBatched",
+        "CusolverEighRoutine::SyevjBatched",
     ] {
         assert!(
             source.contains(needle),
@@ -537,18 +542,21 @@ fn gpu_eigh_keeps_the_pre_driver_routine_as_the_auto_policy() {
 
     for section in [eigh, eigh_values] {
         for needle in [
-            "let routine = select_eigh_driver(driver, n, batch_total);",
+            "let routine = select_eigh_driver(driver, batch_total);",
             "handles.cusolver().syevd_buffer_size(",
             "handles.cusolver().syevj_buffer_size(",
             "handles.cusolver().syevj_batched_buffer_size(",
+            "handles.cusolver().xsyev_batched_buffer_size(",
             "handles.cusolver().syevd(",
             "handles.cusolver().syevj(",
             "handles.cusolver().syevj_batched(",
-            // The batched launch replaces the per-matrix loop entirely.
-            "CusolverEighRoutine::SyevjBatched => 0,",
+            "handles.cusolver().xsyev_batched(",
+            // Either batched launch replaces the per-matrix loop entirely.
+            "CusolverEighRoutine::SyevjBatched | CusolverEighRoutine::XsyevBatched => 0,",
             "CusolverEighRoutine::Syevd => \"cusolverDn*syevd\"",
             "CusolverEighRoutine::Syevj => \"cusolverDn*syevj\"",
             "CusolverEighRoutine::SyevjBatched => \"cusolverDn*syevjBatched\"",
+            "CusolverEighRoutine::XsyevBatched => \"cusolverDnXsyevBatched\"",
         ] {
             assert!(
                 section.contains(needle),
