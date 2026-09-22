@@ -20,6 +20,13 @@
 //! #[cfg(feature = "cuda")]
 //! let _example: fn() -> Result<Option<CudaBackend>, CudaDeviceError> = first_cuda_backend;
 //! ```
+// A misaligned pointer handed to a CUDA library is undefined behaviour and
+// fails only on some library versions: `cuDoubleComplex` is `double2`, which
+// CUDA declares `__align__(16)`, while `num_complex::Complex64` is 8-aligned,
+// so casting `&Complex64` to `*const cuDoubleComplex` produced a pointer
+// cuBLAS >= 12.9 faults on (issue #1870). Deny the whole cast class at this
+// FFI boundary rather than re-auditing it by hand.
+#![deny(clippy::cast_ptr_alignment)]
 
 #[cfg(feature = "cuda")]
 use std::any::Any;
