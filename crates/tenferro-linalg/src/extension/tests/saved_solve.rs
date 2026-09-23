@@ -86,7 +86,9 @@ fn prepared_solve_does_not_copy_owned_factors_or_conjugate_real_lu() {
         .split("fn solve(")
         .next()
         .unwrap();
-    assert!(solve.contains("matches!(packed_lu.dtype(), DType::C32 | DType::C64)"));
-    assert!(solve.contains("conjugated_lu.as_ref().unwrap_or(packed_lu)"));
+    // The batched kernel reads the saved factors in place and folds any
+    // conjugation into the RHS or the `?getrs` trans flag.
+    assert!(solve.contains("packed_lu::lu_solve_prepared_entered("));
+    assert!(!solve.contains("self.conj(packed_lu)"));
     assert!(!solve.contains("packed_lu.duplicate()"));
 }

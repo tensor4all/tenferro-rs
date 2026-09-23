@@ -288,16 +288,6 @@ pub(crate) fn leading_upper_triangle_from_lapack<T: Copy + Default>(
     Ok(out)
 }
 
-pub(crate) fn transpose_col_major_data<T: Copy>(data: &[T], rows: usize, cols: usize) -> Vec<T> {
-    let mut transposed = Vec::with_capacity(data.len());
-    for j in 0..rows {
-        for i in 0..cols {
-            transposed.push(data[j + i * rows]);
-        }
-    }
-    transposed
-}
-
 pub(crate) fn batched_single<T, F>(
     op_name: &'static str,
     buffers: &mut BufferPool,
@@ -572,111 +562,6 @@ where
             tensor_from_vec_with_template(out_shape, out_data, input)
         })
         .collect()
-}
-
-pub(crate) fn batched_binary_result<T, F>(
-    op_name: &'static str,
-    buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
-    op: F,
-) -> tenferro_tensor::Result<TypedTensor<T>>
-where
-    T: PoolScalar,
-    F: Fn(
-        &mut BufferPool,
-        &TypedTensor<T>,
-        &TypedTensor<T>,
-    ) -> tenferro_tensor::Result<TypedTensor<T>>,
-{
-    let (a_core_shape, a_batch_shape) = split_core_and_batch_result(a, 2, op_name)?;
-    let (b_core_shape, b_batch_shape) = split_core_and_batch_result(b, 2, op_name)?;
-    if a_batch_shape != b_batch_shape {
-        return Err(tenferro_tensor::Error::shape_mismatch(
-            op_name,
-            a_batch_shape.to_vec(),
-            b_batch_shape.to_vec(),
-        ));
-    }
-
-    if a_batch_shape.is_empty() {
-        return op(buffers, a, b);
-    }
-
-    let a_slice_size = checked_product(op_name, "lhs core shape", a_core_shape)?;
-    let b_slice_size = checked_product(op_name, "rhs core shape", b_core_shape)?;
-    let batch_count = batch_element_count(op_name, a_batch_shape)?;
-    if batch_count == 0 {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            op_name,
-            "batch",
-            "zero-sized batch dims must be handled by the caller",
-        ));
-    }
-
-    let mut out_core_shape: Option<Vec<usize>> = None;
-    let mut out_data: Option<Vec<T>> = None;
-
-    let a_first_range = checked_slice_range(op_name, 0, a_slice_size)?;
-    let b_first_range = checked_slice_range(op_name, 0, b_slice_size)?;
-    let mut batch_a = tensor_from_pooled_slice_with_template(
-        buffers,
-        a_core_shape.to_vec(),
-        &a.host_data()?[a_first_range],
-        a,
-    )?;
-    let mut batch_b = tensor_from_pooled_slice_with_template(
-        buffers,
-        b_core_shape.to_vec(),
-        &b.host_data()?[b_first_range],
-        b,
-    )?;
-
-    for batch_idx in 0..batch_count {
-        if batch_idx > 0 {
-            let a_range = checked_slice_range(op_name, batch_idx, a_slice_size)?;
-            let b_range = checked_slice_range(op_name, batch_idx, b_slice_size)?;
-            refill_tensor_from_slice(&mut batch_a, &a.host_data()?[a_range])?;
-            refill_tensor_from_slice(&mut batch_b, &b.host_data()?[b_range])?;
-        }
-        let batch_output = op(buffers, &batch_a, &batch_b)?;
-
-        if let Some(expected_shape) = &out_core_shape {
-            if batch_output.shape() != expected_shape.as_slice() {
-                return Err(tenferro_tensor::Error::shape_mismatch(
-                    op_name,
-                    batch_output.shape().to_vec(),
-                    expected_shape.clone(),
-                ));
-            }
-        } else {
-            out_data = Some(Vec::with_capacity(checked_repeated_len(
-                op_name,
-                "output",
-                batch_output.n_elements(),
-                batch_count,
-            )?));
-            out_core_shape = Some(batch_output.shape().to_vec());
-        }
-
-        match &mut out_data {
-            Some(data) => data.extend_from_slice(batch_output.host_data()?),
-            None => {
-                return Err(tenferro_tensor::Error::Internal(format!(
-                    "{op_name}: missing output buffer after first batch"
-                )));
-            }
-        }
-    }
-
-    let mut out_shape = out_core_shape.ok_or_else(|| {
-        tenferro_tensor::Error::Internal(format!("{op_name}: missing output shape"))
-    })?;
-    out_shape.extend_from_slice(a_batch_shape);
-    let out_data = out_data.ok_or_else(|| {
-        tenferro_tensor::Error::Internal(format!("{op_name}: missing output data"))
-    })?;
-    tensor_from_vec_with_template(out_shape, out_data, b)
 }
 
 pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {

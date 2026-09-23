@@ -4,33 +4,153 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batched_multi, batched_multi_convert, check_lapack_info, checked_product, dim_i32,
-    has_zero_dim, matrix_dims, matrix_with_batch_shape, pooled_copy, pooled_zeroed,
-    release_scratch, split_core_and_batch_result, tensor_from_vec_with_template,
-    vector_with_batch_shape, work_len,
+    batch_element_count, check_lapack_info, checked_product, dim_i32, has_zero_dim,
+    matrix_with_batch_shape, pooled_copy, pooled_zeroed, release_scratch,
+    split_core_and_batch_result, tensor_from_vec_with_template, vector_with_batch_shape, work_len,
 };
 
+/// Which singular factors a batched SVD computes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SvdMode {
+    /// Thin factors: `U` is `m x k` and `Vt` is `k x n`.
+    Thin,
+    /// Full factors: `U` is `m x m` and `Vt` is `n x n`, so the trailing
+    /// columns and rows span the left and right nullspaces.
+    Full,
+    /// Singular values only.
+    Values,
+}
+
+impl SvdMode {
+    /// LAPACK job letter shared by `gesdd` (`jobz`) and `gesvd` (`jobu`, `jobvt`).
+    fn job(self) -> u8 {
+        match self {
+            Self::Thin => b'S',
+            Self::Full => b'A',
+            Self::Values => b'N',
+        }
+    }
+
+    /// `(U columns, Vt rows)` of one factor pair; zero in values-only mode.
+    fn factor_dims(self, m: usize, n: usize) -> (usize, usize) {
+        let k = m.min(n);
+        match self {
+            Self::Thin => (k, k),
+            Self::Full => (m, n),
+            Self::Values => (0, 0),
+        }
+    }
+}
+
+/// Per-matrix buffer lengths of one batched SVD call.
+struct SvdLayout {
+    batch: usize,
+    k: usize,
+    a_len: usize,
+    u_len: usize,
+    vt_len: usize,
+    ldu: i32,
+    ldvt: i32,
+}
+
+impl SvdLayout {
+    /// Check that all four buffers describe the same number of nonempty
+    /// `m x n` problems in `mode`.
+    fn new(
+        op: &'static str,
+        mode: SvdMode,
+        m: usize,
+        n: usize,
+        lens: [usize; 4],
+    ) -> tenferro_tensor::Result<Self> {
+        let [a, s, u, vt] = lens;
+        let k = m.min(n);
+        let (u_cols, vt_rows) = mode.factor_dims(m, n);
+        let a_len = checked_product(op, "matrix", &[m, n])?;
+        let u_len = checked_product(op, "left singular vectors", &[m, u_cols])?;
+        let vt_len = checked_product(op, "right singular vectors", &[vt_rows, n])?;
+        let batch = a.checked_div(a_len).unwrap_or(0);
+        let consistent = a_len != 0
+            && a == checked_product(op, "matrix batch", &[a_len, batch])?
+            && s == checked_product(op, "singular value batch", &[k, batch])?
+            && u == checked_product(op, "left factor batch", &[u_len, batch])?
+            && vt == checked_product(op, "right factor batch", &[vt_len, batch])?;
+        if !consistent {
+            return Err(tenferro_tensor::Error::Internal(format!(
+                "{op}: SVD buffers describe different batches"
+            )));
+        }
+        let (ldu, ldvt) = if mode == SvdMode::Values {
+            (1, 1)
+        } else {
+            (dim_i32(m, op)?, dim_i32(vt_rows, op)?)
+        };
+        Ok(Self {
+            batch,
+            k,
+            a_len,
+            u_len,
+            vt_len,
+            ldu,
+            ldvt,
+        })
+    }
+
+    /// Mutable views of matrix `index` in each of the four buffers.
+    fn chunk<'a, T, R>(
+        &self,
+        index: usize,
+        a: &'a mut [T],
+        s: &'a mut [R],
+        u: &'a mut [T],
+        vt: &'a mut [T],
+    ) -> (&'a mut [T], &'a mut [R], &'a mut [T], &'a mut [T]) {
+        (
+            &mut a[index * self.a_len..(index + 1) * self.a_len],
+            &mut s[index * self.k..(index + 1) * self.k],
+            &mut u[index * self.u_len..(index + 1) * self.u_len],
+            &mut vt[index * self.vt_len..(index + 1) * self.vt_len],
+        )
+    }
+}
+
 pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
-    type Real: Clone + Copy + Default + tenferro_tensor::TensorScalar;
+    type Real: Clone + Copy + Default + PoolScalar + tenferro_tensor::TensorScalar;
 
     /// The multiplicative unit, used to build the identity factor a full
     /// decomposition still owes for an empty core dimension.
     fn unit() -> Self;
 
-    fn svd_2d(
+    /// Decompose every compact `m x n` matrix of `a` (destroyed), writing
+    /// `min(m, n)` descending singular values per matrix into `s` and, unless
+    /// `mode` is [`SvdMode::Values`], the factors into `u` and `vt`.
+    ///
+    /// The workspace is queried once and reused across the batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Internal` for inconsistent buffer lengths, an invalid
+    /// workspace error for a bad LAPACK query, and `NonConvergence` or an
+    /// illegal-argument error from the LAPACK driver.
+    #[allow(clippy::too_many_arguments)]
+    fn svd_batched(
         buffers: &mut BufferPool,
-        input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
-    /// Full-matrices variant: `U` is `m x m` and `Vt` is `n x n`, so the
-    /// trailing columns and rows span the left and right nullspaces.
-    fn svd_full_2d(
+        op: &'static str,
+        mode: SvdMode,
+        m: usize,
+        n: usize,
+        a: &mut [Self],
+        s: &mut [<Self as LapackSvd>::Real],
+        u: &mut [Self],
+        vt: &mut [Self],
+    ) -> tenferro_tensor::Result<()>;
+
+    /// Real singular values in this scalar type, reusing the buffer when the
+    /// scalar is real.
+    fn values_as_scalar(
         buffers: &mut BufferPool,
-        input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
-    fn svd_values_2d(
-        buffers: &mut BufferPool,
-        input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>>;
+        values: Vec<<Self as LapackSvd>::Real>,
+    ) -> Vec<Self>;
 }
 
 #[cfg(not(feature = "provider-inject"))]
@@ -79,175 +199,65 @@ macro_rules! impl_real_svd {
                 1.0
             }
 
-            fn svd_2d(
+            #[allow(clippy::too_many_arguments)]
+            fn svd_batched(
                 buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-                let (m, n) = matrix_dims(input, "svd")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd")?;
-                let n_i32 = dim_i32(n, "svd")?;
-                let k_i32 = dim_i32(k, "svd")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$scalar>(buffers, k);
-                let u_len = checked_product("svd", "left singular vectors", &[m, k])?;
-                let mut u = pooled_zeroed::<$scalar>(buffers, u_len);
-                let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
-                let mut vt = pooled_zeroed::<$scalar>(buffers, vt_len);
-                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
+                op: &'static str,
+                mode: SvdMode,
+                m: usize,
+                n: usize,
+                a: &mut [Self],
+                s: &mut [$scalar],
+                u: &mut [Self],
+                vt: &mut [Self],
+            ) -> tenferro_tensor::Result<()> {
+                let layout = SvdLayout::new(op, mode, m, n, [a.len(), s.len(), u.len(), vt.len()])?;
+                if layout.batch == 0 {
+                    return Ok(());
+                }
+                let job = mode.job();
+                let m_i32 = dim_i32(m, op)?;
+                let n_i32 = dim_i32(n, op)?;
+                let (ldu, ldvt) = (layout.ldu, layout.ldvt);
+                let mut query = [<$scalar>::default(); 1];
                 let mut info = 0;
-                // SAFETY: `a`, `s`, `u`, and `vt` match the validated SVD
-                // dimensions, and `lwork = -1` makes `query` the workspace output.
-                unsafe {
-                    $gesvd(
-                        b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        k_i32, &mut query, -1, &mut info,
-                    );
+                {
+                    let (a0, s0, u0, vt0) = layout.chunk(0, a, s, u, vt);
+                    // SAFETY: the first chunk of every buffer matches the
+                    // validated `m x n` problem in `mode` (lengths checked by
+                    // `SvdLayout::new`); `lwork = -1` writes only `query`.
+                    unsafe {
+                        $gesvd(
+                            job, job, m_i32, n_i32, a0, m_i32, s0, u0, ldu, vt0, ldvt, &mut query,
+                            -1, &mut info,
+                        );
+                    }
                 }
-                check_lapack_info("svd", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0] as f64, "svd", $routine)?;
+                check_lapack_info(op, concat!($routine, "(work query)"), info)?;
+                let lwork = work_len(query[0] as f64, op, $routine)?;
                 let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
-                // SAFETY: buffers and leading dimensions match the validated
-                // SVD problem, and `work` uses the queried workspace length.
-                unsafe {
-                    $gesvd(
-                        b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        k_i32, &mut work, lwork, &mut info,
-                    );
+                // INVARIANT: `SvdLayout::new` checked that every buffer holds
+                // `layout.batch` blocks, and the workspace depends only on
+                // `(mode, m, n)`, so it is reused across the batch. The serial
+                // loop is intentional: the LAPACK provider owns threading.
+                for index in 0..layout.batch {
+                    let (a_i, s_i, u_i, vt_i) = layout.chunk(index, a, s, u, vt);
+                    // SAFETY: each chunk matches the validated problem and
+                    // `work` has the queried length.
+                    unsafe {
+                        $gesvd(
+                            job, job, m_i32, n_i32, a_i, m_i32, s_i, u_i, ldu, vt_i, ldvt,
+                            &mut work, lwork, &mut info,
+                        );
+                    }
+                    check_lapack_info(op, $routine, info)?;
                 }
-                check_lapack_info("svd", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
                 release_scratch(buffers, work);
-
-                Ok(vec![
-                    tensor_from_vec_with_template(vec![m, k], u, input)?,
-                    tensor_from_vec_with_template(vec![k], s, input)?,
-                    tensor_from_vec_with_template(vec![k, n], vt, input)?,
-                ])
+                Ok(())
             }
 
-            fn svd_full_2d(
-                buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-                let (m, n) = matrix_dims(input, "svd_full")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd_full")?;
-                let n_i32 = dim_i32(n, "svd_full")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$scalar>(buffers, k);
-                let u_len = checked_product("svd_full", "left singular vectors", &[m, m])?;
-                let mut u = pooled_zeroed::<$scalar>(buffers, u_len);
-                let vt_len = checked_product("svd_full", "right singular vectors", &[n, n])?;
-                let mut vt = pooled_zeroed::<$scalar>(buffers, vt_len);
-                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
-                let mut info = 0;
-                // SAFETY: `a`, `s`, `u`, and `vt` match the validated
-                // full-matrices SVD dimensions (`ldu = m`, `ldvt = n`), and
-                // `lwork = -1` makes `query` the workspace output.
-                unsafe {
-                    $gesvd(
-                        b'A', b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        n_i32, &mut query, -1, &mut info,
-                    );
-                }
-                check_lapack_info("svd_full", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0] as f64, "svd_full", $routine)?;
-                let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
-                // SAFETY: buffers and leading dimensions match the validated
-                // full-matrices SVD problem, and `work` uses the queried length.
-                unsafe {
-                    $gesvd(
-                        b'A', b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        n_i32, &mut work, lwork, &mut info,
-                    );
-                }
-                check_lapack_info("svd_full", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
-                release_scratch(buffers, work);
-
-                Ok(vec![
-                    tensor_from_vec_with_template(vec![m, m], u, input)?,
-                    tensor_from_vec_with_template(vec![k], s, input)?,
-                    tensor_from_vec_with_template(vec![n, n], vt, input)?,
-                ])
-            }
-
-            fn svd_values_2d(
-                buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>> {
-                let (m, n) = matrix_dims(input, "svd_values")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd_values")?;
-                let n_i32 = dim_i32(n, "svd_values")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$scalar>(buffers, k);
-                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
-                let mut info = 0;
-                // SAFETY: `a` and `s` match the validated SVD dimensions;
-                // no-vector mode ignores the dummy U/VT buffers, and `lwork = -1` queries workspace.
-                unsafe {
-                    $gesvd(
-                        b'N',
-                        b'N',
-                        m_i32,
-                        n_i32,
-                        &mut a,
-                        m_i32,
-                        &mut s,
-                        &mut [],
-                        1,
-                        &mut [],
-                        1,
-                        &mut query,
-                        -1,
-                        &mut info,
-                    );
-                }
-                check_lapack_info("svd_values", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0] as f64, "svd_values", $routine)?;
-                let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
-                // SAFETY: `a`, `s`, dummy no-vector buffers, and `work`
-                // satisfy the validated SVD dimensions and queried workspace length.
-                unsafe {
-                    $gesvd(
-                        b'N',
-                        b'N',
-                        m_i32,
-                        n_i32,
-                        &mut a,
-                        m_i32,
-                        &mut s,
-                        &mut [],
-                        1,
-                        &mut [],
-                        1,
-                        &mut work,
-                        lwork,
-                        &mut info,
-                    );
-                }
-                check_lapack_info("svd_values", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
-                release_scratch(buffers, work);
-
-                tensor_from_vec_with_template(vec![k], s, input)
+            fn values_as_scalar(_buffers: &mut BufferPool, values: Vec<Self>) -> Vec<Self> {
+                values
             }
         }
     };
@@ -263,184 +273,67 @@ macro_rules! impl_real_svd {
                 1.0
             }
 
-            fn svd_2d(
+            #[allow(clippy::too_many_arguments)]
+            fn svd_batched(
                 buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-                let (m, n) = matrix_dims(input, "svd")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd")?;
-                let n_i32 = dim_i32(n, "svd")?;
-                let k_i32 = dim_i32(k, "svd")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$scalar>(buffers, k);
-                let u_len = checked_product("svd", "left singular vectors", &[m, k])?;
-                let mut u = pooled_zeroed::<$scalar>(buffers, u_len);
-                let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
-                let mut vt = pooled_zeroed::<$scalar>(buffers, vt_len);
-                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
-                let mut iwork = pooled_zeroed::<i32>(buffers, gesdd_iwork_len(k)?);
+                op: &'static str,
+                mode: SvdMode,
+                m: usize,
+                n: usize,
+                a: &mut [Self],
+                s: &mut [$scalar],
+                u: &mut [Self],
+                vt: &mut [Self],
+            ) -> tenferro_tensor::Result<()> {
+                let layout = SvdLayout::new(op, mode, m, n, [a.len(), s.len(), u.len(), vt.len()])?;
+                if layout.batch == 0 {
+                    return Ok(());
+                }
+                let job = mode.job();
+                let m_i32 = dim_i32(m, op)?;
+                let n_i32 = dim_i32(n, op)?;
+                let (ldu, ldvt) = (layout.ldu, layout.ldvt);
+                let mut iwork = pooled_zeroed::<i32>(buffers, gesdd_iwork_len(layout.k)?);
+                let mut query = [<$scalar>::default(); 1];
                 let mut info = 0;
-                // SAFETY: `a`, `s`, `u`, and `vt` match the validated SVD
-                // dimensions, and `lwork = -1` makes `query` the workspace output.
-                unsafe {
-                    $gesdd(
-                        b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, k_i32,
-                        &mut query, -1, &mut iwork, &mut info,
-                    );
+                {
+                    let (a0, s0, u0, vt0) = layout.chunk(0, a, s, u, vt);
+                    // SAFETY: the first chunk of every buffer matches the
+                    // validated `m x n` problem in `mode` (lengths checked by
+                    // `SvdLayout::new`); `lwork = -1` writes only `query`.
+                    unsafe {
+                        $gesdd(
+                            job, m_i32, n_i32, a0, m_i32, s0, u0, ldu, vt0, ldvt, &mut query, -1,
+                            &mut iwork, &mut info,
+                        );
+                    }
                 }
-                check_lapack_info("svd", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0] as f64, "svd", $routine)?;
+                check_lapack_info(op, concat!($routine, "(work query)"), info)?;
+                let lwork = work_len(query[0] as f64, op, $routine)?;
                 let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
-                // SAFETY: buffers and leading dimensions match the validated
-                // SVD problem, and `work` uses the queried workspace length.
-                unsafe {
-                    $gesdd(
-                        b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, k_i32,
-                        &mut work, lwork, &mut iwork, &mut info,
-                    );
+                // INVARIANT: `SvdLayout::new` checked that every buffer holds
+                // `layout.batch` blocks, and the workspace depends only on
+                // `(mode, m, n)`, so it is reused across the batch. The serial
+                // loop is intentional: the LAPACK provider owns threading.
+                for index in 0..layout.batch {
+                    let (a_i, s_i, u_i, vt_i) = layout.chunk(index, a, s, u, vt);
+                    // SAFETY: each chunk matches the validated problem and
+                    // `work` has the queried length.
+                    unsafe {
+                        $gesdd(
+                            job, m_i32, n_i32, a_i, m_i32, s_i, u_i, ldu, vt_i, ldvt, &mut work,
+                            lwork, &mut iwork, &mut info,
+                        );
+                    }
+                    check_lapack_info(op, $routine, info)?;
                 }
-                check_lapack_info("svd", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
                 release_scratch(buffers, iwork);
-
                 release_scratch(buffers, work);
-
-                Ok(vec![
-                    tensor_from_vec_with_template(vec![m, k], u, input)?,
-                    tensor_from_vec_with_template(vec![k], s, input)?,
-                    tensor_from_vec_with_template(vec![k, n], vt, input)?,
-                ])
+                Ok(())
             }
 
-            fn svd_full_2d(
-                buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-                let (m, n) = matrix_dims(input, "svd_full")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd_full")?;
-                let n_i32 = dim_i32(n, "svd_full")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$scalar>(buffers, k);
-                let u_len = checked_product("svd_full", "left singular vectors", &[m, m])?;
-                let mut u = pooled_zeroed::<$scalar>(buffers, u_len);
-                let vt_len = checked_product("svd_full", "right singular vectors", &[n, n])?;
-                let mut vt = pooled_zeroed::<$scalar>(buffers, vt_len);
-                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
-                let mut iwork = pooled_zeroed::<i32>(buffers, gesdd_iwork_len(k)?);
-                let mut info = 0;
-                // SAFETY: `a`, `s`, `u`, and `vt` match the validated
-                // full-matrices SVD dimensions (`ldu = m`, `ldvt = n`), and
-                // `lwork = -1` makes `query` the workspace output.
-                unsafe {
-                    $gesdd(
-                        b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, n_i32,
-                        &mut query, -1, &mut iwork, &mut info,
-                    );
-                }
-                check_lapack_info("svd_full", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0] as f64, "svd_full", $routine)?;
-                let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
-                // SAFETY: buffers and leading dimensions match the validated
-                // full-matrices SVD problem, and `work` uses the queried length.
-                unsafe {
-                    $gesdd(
-                        b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, n_i32,
-                        &mut work, lwork, &mut iwork, &mut info,
-                    );
-                }
-                check_lapack_info("svd_full", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
-                release_scratch(buffers, iwork);
-
-                release_scratch(buffers, work);
-
-                Ok(vec![
-                    tensor_from_vec_with_template(vec![m, m], u, input)?,
-                    tensor_from_vec_with_template(vec![k], s, input)?,
-                    tensor_from_vec_with_template(vec![n, n], vt, input)?,
-                ])
-            }
-
-            fn svd_values_2d(
-                buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>> {
-                let (m, n) = matrix_dims(input, "svd_values")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd_values")?;
-                let n_i32 = dim_i32(n, "svd_values")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$scalar>(buffers, k);
-                let mut query = pooled_zeroed::<$scalar>(buffers, 1);
-                let mut iwork = pooled_zeroed::<i32>(buffers, gesdd_iwork_len(k)?);
-                let mut info = 0;
-                // SAFETY: `a` and `s` match the validated SVD dimensions;
-                // no-vector mode ignores the dummy U/VT buffers, and `lwork = -1` queries workspace.
-                unsafe {
-                    $gesdd(
-                        b'N',
-                        m_i32,
-                        n_i32,
-                        &mut a,
-                        m_i32,
-                        &mut s,
-                        &mut [],
-                        1,
-                        &mut [],
-                        1,
-                        &mut query,
-                        -1,
-                        &mut iwork,
-                        &mut info,
-                    );
-                }
-                check_lapack_info("svd_values", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0] as f64, "svd_values", $routine)?;
-                let mut work = pooled_zeroed::<$scalar>(buffers, lwork as usize);
-                // SAFETY: `a`, `s`, dummy no-vector buffers, and `work`
-                // satisfy the validated SVD dimensions and queried workspace length.
-                unsafe {
-                    $gesdd(
-                        b'N',
-                        m_i32,
-                        n_i32,
-                        &mut a,
-                        m_i32,
-                        &mut s,
-                        &mut [],
-                        1,
-                        &mut [],
-                        1,
-                        &mut work,
-                        lwork,
-                        &mut iwork,
-                        &mut info,
-                    );
-                }
-                check_lapack_info("svd_values", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
-                release_scratch(buffers, iwork);
-
-                release_scratch(buffers, work);
-
-                tensor_from_vec_with_template(vec![k], s, input)
+            fn values_as_scalar(_buffers: &mut BufferPool, values: Vec<Self>) -> Vec<Self> {
+                values
             }
         }
     };
@@ -456,202 +349,71 @@ macro_rules! impl_complex_svd {
                 <$complex>::new(1.0, 0.0)
             }
 
-            fn svd_2d(
+            #[allow(clippy::too_many_arguments)]
+            fn svd_batched(
                 buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-                let (m, n) = matrix_dims(input, "svd")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd")?;
-                let n_i32 = dim_i32(n, "svd")?;
-                let k_i32 = dim_i32(k, "svd")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$real>(buffers, k);
-                let u_len = checked_product("svd", "left singular vectors", &[m, k])?;
-                let mut u = pooled_zeroed::<$complex>(buffers, u_len);
-                let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
-                let mut vt = pooled_zeroed::<$complex>(buffers, vt_len);
-                let mut query = pooled_zeroed::<$complex>(buffers, 1);
-                let rwork_len = checked_product("svd", "real workspace", &[5, k.max(1)])?;
+                op: &'static str,
+                mode: SvdMode,
+                m: usize,
+                n: usize,
+                a: &mut [Self],
+                s: &mut [$real],
+                u: &mut [Self],
+                vt: &mut [Self],
+            ) -> tenferro_tensor::Result<()> {
+                let layout = SvdLayout::new(op, mode, m, n, [a.len(), s.len(), u.len(), vt.len()])?;
+                if layout.batch == 0 {
+                    return Ok(());
+                }
+                let job = mode.job();
+                let m_i32 = dim_i32(m, op)?;
+                let n_i32 = dim_i32(n, op)?;
+                let (ldu, ldvt) = (layout.ldu, layout.ldvt);
+                let rwork_len = checked_product(op, "real workspace", &[5, layout.k.max(1)])?;
                 let mut rwork = pooled_zeroed::<$real>(buffers, rwork_len);
+                let mut query = [<$complex>::default(); 1];
                 let mut info = 0;
-                // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the
-                // validated complex SVD dimensions; `lwork = -1` queries workspace.
-                unsafe {
-                    $gesvd(
-                        b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        k_i32, &mut query, -1, &mut rwork, &mut info,
-                    );
+                {
+                    let (a0, s0, u0, vt0) = layout.chunk(0, a, s, u, vt);
+                    // SAFETY: the first chunk of every buffer matches the
+                    // validated `m x n` problem in `mode` (lengths checked by
+                    // `SvdLayout::new`); `lwork = -1` writes only `query`.
+                    unsafe {
+                        $gesvd(
+                            job, job, m_i32, n_i32, a0, m_i32, s0, u0, ldu, vt0, ldvt, &mut query,
+                            -1, &mut rwork, &mut info,
+                        );
+                    }
                 }
-                check_lapack_info("svd", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0].re as f64, "svd", $routine)?;
+                check_lapack_info(op, concat!($routine, "(work query)"), info)?;
+                let lwork = work_len(query[0].re as f64, op, $routine)?;
                 let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
-                // SAFETY: buffers, real workspace, and leading dimensions
-                // match the validated complex SVD problem and queried workspace length.
-                unsafe {
-                    $gesvd(
-                        b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        k_i32, &mut work, lwork, &mut rwork, &mut info,
-                    );
+                // INVARIANT: `SvdLayout::new` checked that every buffer holds
+                // `layout.batch` blocks, and the workspace depends only on
+                // `(mode, m, n)`, so it is reused across the batch. The serial
+                // loop is intentional: the LAPACK provider owns threading.
+                for index in 0..layout.batch {
+                    let (a_i, s_i, u_i, vt_i) = layout.chunk(index, a, s, u, vt);
+                    // SAFETY: each chunk matches the validated problem and
+                    // `work` has the queried length.
+                    unsafe {
+                        $gesvd(
+                            job, job, m_i32, n_i32, a_i, m_i32, s_i, u_i, ldu, vt_i, ldvt,
+                            &mut work, lwork, &mut rwork, &mut info,
+                        );
+                    }
+                    check_lapack_info(op, $routine, info)?;
                 }
-                check_lapack_info("svd", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
                 release_scratch(buffers, rwork);
-
                 release_scratch(buffers, work);
-
-                Ok(vec![
-                    tensor_from_vec_with_template(vec![m, k], u, input)?,
-                    tensor_from_vec_with_template(
-                        vec![k],
-                        s.into_iter()
-                            .map(|value| <$complex>::new(value, 0.0))
-                            .collect(),
-                        input,
-                    )?,
-                    tensor_from_vec_with_template(vec![k, n], vt, input)?,
-                ])
+                Ok(())
             }
 
-            fn svd_full_2d(
-                buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-                let (m, n) = matrix_dims(input, "svd_full")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd_full")?;
-                let n_i32 = dim_i32(n, "svd_full")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$real>(buffers, k);
-                let u_len = checked_product("svd_full", "left singular vectors", &[m, m])?;
-                let mut u = pooled_zeroed::<$complex>(buffers, u_len);
-                let vt_len = checked_product("svd_full", "right singular vectors", &[n, n])?;
-                let mut vt = pooled_zeroed::<$complex>(buffers, vt_len);
-                let mut query = pooled_zeroed::<$complex>(buffers, 1);
-                let rwork_len = checked_product("svd_full", "real workspace", &[5, k.max(1)])?;
-                let mut rwork = pooled_zeroed::<$real>(buffers, rwork_len);
-                let mut info = 0;
-                // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the validated
-                // complex full-matrices SVD dimensions (`ldu = m`, `ldvt = n`),
-                // and `lwork = -1` queries workspace.
-                unsafe {
-                    $gesvd(
-                        b'A', b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        n_i32, &mut query, -1, &mut rwork, &mut info,
-                    );
-                }
-                check_lapack_info("svd_full", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0].re as f64, "svd_full", $routine)?;
-                let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
-                // SAFETY: buffers, real workspace, and leading dimensions match
-                // the validated complex full-matrices SVD problem and the
-                // queried workspace length.
-                unsafe {
-                    $gesvd(
-                        b'A', b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        n_i32, &mut work, lwork, &mut rwork, &mut info,
-                    );
-                }
-                check_lapack_info("svd_full", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
-                release_scratch(buffers, rwork);
-
-                release_scratch(buffers, work);
-
-                Ok(vec![
-                    tensor_from_vec_with_template(vec![m, m], u, input)?,
-                    tensor_from_vec_with_template(
-                        vec![k],
-                        s.into_iter()
-                            .map(|value| <$complex>::new(value, 0.0))
-                            .collect(),
-                        input,
-                    )?,
-                    tensor_from_vec_with_template(vec![n, n], vt, input)?,
-                ])
-            }
-
-            fn svd_values_2d(
-                buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>> {
-                let (m, n) = matrix_dims(input, "svd_values")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd_values")?;
-                let n_i32 = dim_i32(n, "svd_values")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$real>(buffers, k);
-                let mut query = pooled_zeroed::<$complex>(buffers, 1);
-                let rwork_len = checked_product("svd", "real workspace", &[5, k.max(1)])?;
-                let mut rwork = pooled_zeroed::<$real>(buffers, rwork_len);
-                let mut info = 0;
-                // SAFETY: `a`, `s`, and `rwork` match the validated complex
-                // SVD dimensions; no-vector mode ignores dummy U/VT buffers, and `lwork = -1` queries workspace.
-                unsafe {
-                    $gesvd(
-                        b'N',
-                        b'N',
-                        m_i32,
-                        n_i32,
-                        &mut a,
-                        m_i32,
-                        &mut s,
-                        &mut [],
-                        1,
-                        &mut [],
-                        1,
-                        &mut query,
-                        -1,
-                        &mut rwork,
-                        &mut info,
-                    );
-                }
-                check_lapack_info("svd_values", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0].re as f64, "svd_values", $routine)?;
-                let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
-                // SAFETY: `a`, `s`, dummy no-vector buffers, `work`, and
-                // `rwork` satisfy the validated complex SVD dimensions and queried workspace length.
-                unsafe {
-                    $gesvd(
-                        b'N',
-                        b'N',
-                        m_i32,
-                        n_i32,
-                        &mut a,
-                        m_i32,
-                        &mut s,
-                        &mut [],
-                        1,
-                        &mut [],
-                        1,
-                        &mut work,
-                        lwork,
-                        &mut rwork,
-                        &mut info,
-                    );
-                }
-                check_lapack_info("svd_values", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
-                release_scratch(buffers, rwork);
-
-                release_scratch(buffers, work);
-
-                tensor_from_vec_with_template(vec![k], s, input)
+            fn values_as_scalar(buffers: &mut BufferPool, values: Vec<$real>) -> Vec<Self> {
+                let mut converted = buffers.acquire_with_capacity::<$complex>(values.len());
+                converted.extend(values.iter().map(|&value| <$complex>::new(value, 0.0)));
+                release_scratch(buffers, values);
+                converted
             }
         }
     };
@@ -667,213 +429,73 @@ macro_rules! impl_complex_svd {
                 <$complex>::new(1.0, 0.0)
             }
 
-            fn svd_2d(
+            #[allow(clippy::too_many_arguments)]
+            fn svd_batched(
                 buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-                let (m, n) = matrix_dims(input, "svd")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd")?;
-                let n_i32 = dim_i32(n, "svd")?;
-                let k_i32 = dim_i32(k, "svd")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$real>(buffers, k);
-                let u_len = checked_product("svd", "left singular vectors", &[m, k])?;
-                let mut u = pooled_zeroed::<$complex>(buffers, u_len);
-                let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
-                let mut vt = pooled_zeroed::<$complex>(buffers, vt_len);
-                let mut query = pooled_zeroed::<$complex>(buffers, 1);
+                op: &'static str,
+                mode: SvdMode,
+                m: usize,
+                n: usize,
+                a: &mut [Self],
+                s: &mut [$real],
+                u: &mut [Self],
+                vt: &mut [Self],
+            ) -> tenferro_tensor::Result<()> {
+                let layout = SvdLayout::new(op, mode, m, n, [a.len(), s.len(), u.len(), vt.len()])?;
+                if layout.batch == 0 {
+                    return Ok(());
+                }
+                let job = mode.job();
+                let m_i32 = dim_i32(m, op)?;
+                let n_i32 = dim_i32(n, op)?;
+                let (ldu, ldvt) = (layout.ldu, layout.ldvt);
                 let mut rwork =
-                    pooled_zeroed::<$real>(buffers, complex_gesdd_rwork_len(b'S', m, n)?);
-                let mut iwork = pooled_zeroed::<i32>(buffers, gesdd_iwork_len(k)?);
+                    pooled_zeroed::<$real>(buffers, complex_gesdd_rwork_len(job, m, n)?);
+                let mut iwork = pooled_zeroed::<i32>(buffers, gesdd_iwork_len(layout.k)?);
+                let mut query = [<$complex>::default(); 1];
                 let mut info = 0;
-                // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the
-                // validated complex SVD dimensions; `lwork = -1` queries workspace.
-                unsafe {
-                    $gesdd(
-                        b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, k_i32,
-                        &mut query, -1, &mut rwork, &mut iwork, &mut info,
-                    );
+                {
+                    let (a0, s0, u0, vt0) = layout.chunk(0, a, s, u, vt);
+                    // SAFETY: the first chunk of every buffer matches the
+                    // validated `m x n` problem in `mode` (lengths checked by
+                    // `SvdLayout::new`); `lwork = -1` writes only `query`.
+                    unsafe {
+                        $gesdd(
+                            job, m_i32, n_i32, a0, m_i32, s0, u0, ldu, vt0, ldvt, &mut query, -1,
+                            &mut rwork, &mut iwork, &mut info,
+                        );
+                    }
                 }
-                check_lapack_info("svd", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0].re as f64, "svd", $routine)?;
+                check_lapack_info(op, concat!($routine, "(work query)"), info)?;
+                let lwork = work_len(query[0].re as f64, op, $routine)?;
                 let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
-                // SAFETY: buffers, real workspace, and leading dimensions
-                // match the validated complex SVD problem and queried workspace length.
-                unsafe {
-                    $gesdd(
-                        b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, k_i32,
-                        &mut work, lwork, &mut rwork, &mut iwork, &mut info,
-                    );
+                // INVARIANT: `SvdLayout::new` checked that every buffer holds
+                // `layout.batch` blocks, and the workspace depends only on
+                // `(mode, m, n)`, so it is reused across the batch. The serial
+                // loop is intentional: the LAPACK provider owns threading.
+                for index in 0..layout.batch {
+                    let (a_i, s_i, u_i, vt_i) = layout.chunk(index, a, s, u, vt);
+                    // SAFETY: each chunk matches the validated problem and
+                    // `work` has the queried length.
+                    unsafe {
+                        $gesdd(
+                            job, m_i32, n_i32, a_i, m_i32, s_i, u_i, ldu, vt_i, ldvt, &mut work,
+                            lwork, &mut rwork, &mut iwork, &mut info,
+                        );
+                    }
+                    check_lapack_info(op, $routine, info)?;
                 }
-                check_lapack_info("svd", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
                 release_scratch(buffers, rwork);
-
                 release_scratch(buffers, iwork);
-
                 release_scratch(buffers, work);
-
-                Ok(vec![
-                    tensor_from_vec_with_template(vec![m, k], u, input)?,
-                    tensor_from_vec_with_template(
-                        vec![k],
-                        s.into_iter()
-                            .map(|value| <$complex>::new(value, 0.0))
-                            .collect(),
-                        input,
-                    )?,
-                    tensor_from_vec_with_template(vec![k, n], vt, input)?,
-                ])
+                Ok(())
             }
 
-            fn svd_full_2d(
-                buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-                let (m, n) = matrix_dims(input, "svd_full")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd_full")?;
-                let n_i32 = dim_i32(n, "svd_full")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$real>(buffers, k);
-                let u_len = checked_product("svd_full", "left singular vectors", &[m, m])?;
-                let mut u = pooled_zeroed::<$complex>(buffers, u_len);
-                let vt_len = checked_product("svd_full", "right singular vectors", &[n, n])?;
-                let mut vt = pooled_zeroed::<$complex>(buffers, vt_len);
-                let mut query = pooled_zeroed::<$complex>(buffers, 1);
-                // LAPACK states one LRWORK bound for JOBZ = 'S' or 'A', so the
-                // vectors branch of the shared helper covers full mode too.
-                let mut rwork =
-                    pooled_zeroed::<$real>(buffers, complex_gesdd_rwork_len(b'A', m, n)?);
-                let mut iwork = pooled_zeroed::<i32>(buffers, gesdd_iwork_len(k)?);
-                let mut info = 0;
-                // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the validated
-                // complex full-matrices SVD dimensions (`ldu = m`, `ldvt = n`),
-                // and `lwork = -1` queries workspace.
-                unsafe {
-                    $gesdd(
-                        b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, n_i32,
-                        &mut query, -1, &mut rwork, &mut iwork, &mut info,
-                    );
-                }
-                check_lapack_info("svd_full", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0].re as f64, "svd_full", $routine)?;
-                let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
-                // SAFETY: buffers, real workspace, and leading dimensions match
-                // the validated complex full-matrices SVD problem and the
-                // queried workspace length.
-                unsafe {
-                    $gesdd(
-                        b'A', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, n_i32,
-                        &mut work, lwork, &mut rwork, &mut iwork, &mut info,
-                    );
-                }
-                check_lapack_info("svd_full", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
-                release_scratch(buffers, rwork);
-
-                release_scratch(buffers, iwork);
-
-                release_scratch(buffers, work);
-
-                Ok(vec![
-                    tensor_from_vec_with_template(vec![m, m], u, input)?,
-                    tensor_from_vec_with_template(
-                        vec![k],
-                        s.into_iter()
-                            .map(|value| <$complex>::new(value, 0.0))
-                            .collect(),
-                        input,
-                    )?,
-                    tensor_from_vec_with_template(vec![n, n], vt, input)?,
-                ])
-            }
-
-            fn svd_values_2d(
-                buffers: &mut BufferPool,
-                input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>> {
-                let (m, n) = matrix_dims(input, "svd_values")?;
-                let k = m.min(n);
-                let m_i32 = dim_i32(m, "svd_values")?;
-                let n_i32 = dim_i32(n, "svd_values")?;
-
-                let mut a = pooled_copy(buffers, input.host_data()?);
-                let mut s = pooled_zeroed::<$real>(buffers, k);
-                let mut query = pooled_zeroed::<$complex>(buffers, 1);
-                let mut rwork =
-                    pooled_zeroed::<$real>(buffers, complex_gesdd_rwork_len(b'N', m, n)?);
-                let mut iwork = pooled_zeroed::<i32>(buffers, gesdd_iwork_len(k)?);
-                let mut info = 0;
-                // SAFETY: `a`, `s`, and `rwork` match the validated complex
-                // SVD dimensions; no-vector mode ignores dummy U/VT buffers, and `lwork = -1` queries workspace.
-                unsafe {
-                    $gesdd(
-                        b'N',
-                        m_i32,
-                        n_i32,
-                        &mut a,
-                        m_i32,
-                        &mut s,
-                        &mut [],
-                        1,
-                        &mut [],
-                        1,
-                        &mut query,
-                        -1,
-                        &mut rwork,
-                        &mut iwork,
-                        &mut info,
-                    );
-                }
-                check_lapack_info("svd_values", concat!($routine, "(work query)"), info)?;
-                let lwork = work_len(query[0].re as f64, "svd_values", $routine)?;
-                let mut work = pooled_zeroed::<$complex>(buffers, lwork as usize);
-                // SAFETY: `a`, `s`, dummy no-vector buffers, `work`, and
-                // `rwork` satisfy the validated complex SVD dimensions and queried workspace length.
-                unsafe {
-                    $gesdd(
-                        b'N',
-                        m_i32,
-                        n_i32,
-                        &mut a,
-                        m_i32,
-                        &mut s,
-                        &mut [],
-                        1,
-                        &mut [],
-                        1,
-                        &mut work,
-                        lwork,
-                        &mut rwork,
-                        &mut iwork,
-                        &mut info,
-                    );
-                }
-                check_lapack_info("svd_values", $routine, info)?;
-
-                release_scratch(buffers, a);
-
-                release_scratch(buffers, query);
-
-                release_scratch(buffers, rwork);
-
-                release_scratch(buffers, iwork);
-
-                release_scratch(buffers, work);
-
-                tensor_from_vec_with_template(vec![k], s, input)
+            fn values_as_scalar(buffers: &mut BufferPool, values: Vec<$real>) -> Vec<Self> {
+                let mut converted = buffers.acquire_with_capacity::<$complex>(values.len());
+                converted.extend(values.iter().map(|&value| <$complex>::new(value, 0.0)));
+                release_scratch(buffers, values);
+                converted
             }
         }
     };
@@ -897,22 +519,39 @@ impl_complex_svd!(Complex32, f32, lapack::cgesvd, "cgesvd");
 #[cfg(feature = "provider-inject")]
 impl_complex_svd!(Complex64, f64, lapack::zgesvd, "zgesvd");
 
-fn svd_2d<T: LapackSvd>(
+/// Pooled factor buffers for a batched SVD in `mode`, returned as
+/// `(a copy, values, U, Vt)`.
+#[allow(clippy::type_complexity)]
+fn svd_buffers<T: LapackSvd>(
     buffers: &mut BufferPool,
+    op: &'static str,
+    mode: SvdMode,
+    m: usize,
+    n: usize,
+    batch_shape: &[usize],
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    T::svd_2d(buffers, input)
+) -> tenferro_tensor::Result<(Vec<T>, Vec<<T as LapackSvd>::Real>, Vec<T>, Vec<T>)> {
+    let batch = batch_element_count(op, batch_shape)?;
+    let (u_cols, vt_rows) = mode.factor_dims(m, n);
+    let s_len = checked_product(op, "singular values", &[m.min(n), batch])?;
+    let u_len = checked_product(op, "left singular vectors", &[m, u_cols, batch])?;
+    let vt_len = checked_product(op, "right singular vectors", &[vt_rows, n, batch])?;
+    let mut a = pooled_copy(buffers, input.host_data()?);
+    let mut s = pooled_zeroed::<<T as LapackSvd>::Real>(buffers, s_len);
+    let mut u = pooled_zeroed::<T>(buffers, u_len);
+    let mut vt = pooled_zeroed::<T>(buffers, vt_len);
+    T::svd_batched(buffers, op, mode, m, n, &mut a, &mut s, &mut u, &mut vt)?;
+    Ok((a, s, u, vt))
 }
 
 pub(crate) fn svd<T: LapackSvd>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd")?;
+    let (m, n) = (matrix_shape[0], matrix_shape[1]);
+    let k = m.min(n);
     if has_zero_dim(input.shape()) {
-        let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd")?;
-        let m = matrix_shape[0];
-        let n = matrix_shape[1];
-        let k = m.min(n);
         return Ok(vec![
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(m, k, batch_shape),
@@ -931,31 +570,33 @@ pub(crate) fn svd<T: LapackSvd>(
             )?,
         ]);
     }
-    batched_multi("svd", buffers, input, svd_2d)
-}
-
-fn svd_full_2d<T: LapackSvd>(
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    T::svd_full_2d(buffers, input)
+    let (a, s, u, vt) = svd_buffers(buffers, "svd", SvdMode::Thin, m, n, batch_shape, input)?;
+    release_scratch(buffers, a);
+    let s = T::values_as_scalar(buffers, s);
+    Ok(vec![
+        tensor_from_vec_with_template(matrix_with_batch_shape(m, k, batch_shape), u, input)?,
+        tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), s, input)?,
+        tensor_from_vec_with_template(matrix_with_batch_shape(k, n, batch_shape), vt, input)?,
+    ])
 }
 
 pub(crate) fn svd_full<T: LapackSvd>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_full")?;
+    let (m, n) = (matrix_shape[0], matrix_shape[1]);
     if has_zero_dim(input.shape()) {
-        let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_full")?;
-        return empty_full_svd_outputs(
-            "svd_full",
-            matrix_shape[0],
-            matrix_shape[1],
-            batch_shape,
-            input,
-        );
+        return empty_full_svd_outputs("svd_full", m, n, batch_shape, input);
     }
-    batched_multi("svd_full", buffers, input, svd_full_2d)
+    let (a, s, u, vt) = svd_buffers(buffers, "svd_full", SvdMode::Full, m, n, batch_shape, input)?;
+    release_scratch(buffers, a);
+    let s = T::values_as_scalar(buffers, s);
+    Ok(vec![
+        tensor_from_vec_with_template(matrix_with_batch_shape(m, m, batch_shape), u, input)?,
+        tensor_from_vec_with_template(vector_with_batch_shape(m.min(n), batch_shape), s, input)?,
+        tensor_from_vec_with_template(matrix_with_batch_shape(n, n, batch_shape), vt, input)?,
+    ])
 }
 
 /// Full-SVD factors for an input with an empty core dimension.
@@ -1009,35 +650,31 @@ fn identity_blocks<T: LapackSvd>(
     Ok(data)
 }
 
-fn svd_values_2d<T: LapackSvd>(
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<<T as LapackSvd>::Real>> {
-    T::svd_values_2d(buffers, input)
-}
-
 pub(crate) fn svd_values<T: LapackSvd>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<<T as LapackSvd>::Real>> {
+    let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_values")?;
+    let (m, n) = (matrix_shape[0], matrix_shape[1]);
+    let k = m.min(n);
     if has_zero_dim(input.shape()) {
-        let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_values")?;
-        let k = matrix_shape[0].min(matrix_shape[1]);
         return tensor_from_vec_with_template(
             vector_with_batch_shape(k, batch_shape),
             Vec::new(),
             input,
         );
     }
-
-    let mut outputs =
-        batched_multi_convert("svd_values", buffers, input, |buffers, batch_input| {
-            Ok(vec![svd_values_2d(buffers, batch_input)?])
-        })?;
-    match outputs.pop() {
-        Some(values) if outputs.is_empty() => Ok(values),
-        _ => Err(tenferro_tensor::Error::Internal(
-            "svd_values: expected exactly one output from batched singular-value helper".into(),
-        )),
-    }
+    let (a, s, u, vt) = svd_buffers(
+        buffers,
+        "svd_values",
+        SvdMode::Values,
+        m,
+        n,
+        batch_shape,
+        input,
+    )?;
+    release_scratch(buffers, a);
+    release_scratch(buffers, u);
+    release_scratch(buffers, vt);
+    tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), s, input)
 }

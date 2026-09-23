@@ -419,10 +419,18 @@ pub(crate) enum LinalgOp {
     },
     /// Solve `a @ x = b` with partial-pivot LU (same kernel as
     /// `LinalgBackend::solve`). Two inputs (matrix, rhs) to one output.
-    /// The untracked eager surface (autodiff feature) constructs this variant;
-    /// tracked eager and traced `solve` use LuFactor + LuSolvePrepared.
-    #[cfg_attr(not(feature = "autodiff"), allow(dead_code))]
+    /// The untracked eager surface constructs this variant.
     Solve,
+    /// Fused partial-pivot solve that also returns its factors: inputs
+    /// `(a, b)`, outputs `(x, packed_lu, pivots)`, with the `LuFactor` packed
+    /// layout and 1-based LAPACK pivots.
+    ///
+    /// Tracked eager and traced `solve` emit this op so one backend call both
+    /// factors and solves while the factors stay available as AD residuals:
+    /// the tangent and the transpose solve reuse them through
+    /// [`LinalgOp::LuSolvePrepared`] instead of refactoring. It is never
+    /// pruned to [`LinalgOp::Solve`]; see `prune_outputs`.
+    LuFactorSolve,
     Svd {
         derivative_eps: f64,
         gauge: SvdGauge,
@@ -503,7 +511,7 @@ impl LinalgOp {
             | Self::Solve
             | Self::SvdVals { .. }
             | Self::TriangularSolve { .. } => 1,
-            Self::Svd { .. } | Self::SvdFull => 3,
+            Self::Svd { .. } | Self::SvdFull | Self::LuFactorSolve => 3,
             Self::RankRevealingQr { .. } | Self::Lu => 4,
             Self::Qr { .. }
             | Self::HouseholderQrFactor
@@ -525,6 +533,7 @@ impl LinalgOp {
         match self {
             Self::FullPivLuSolve { .. }
             | Self::Solve
+            | Self::LuFactorSolve
             | Self::TriangularSolve { .. }
             | Self::HouseholderQrFromFactors
             | Self::HouseholderQrR { .. }
@@ -568,6 +577,7 @@ impl LinalgOp {
             Self::HouseholderQrAppendTangent => 25,
             Self::HouseholderQrSplitTangent { .. } => 26,
             Self::RankRevealingQr { .. } => 27,
+            Self::LuFactorSolve => 28,
         }
     }
 }
@@ -676,6 +686,7 @@ impl ExtensionOp for LinalgExtensionOp {
             | LinalgOp::FullPivLu
             | LinalgOp::SvdFull
             | LinalgOp::Solve
+            | LinalgOp::LuFactorSolve
             | LinalgOp::HouseholderQrFactor
             | LinalgOp::HouseholderQrFromFactors
             | LinalgOp::HouseholderQrAppend
@@ -737,6 +748,13 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::Eig { input_dtype } if live_outputs == [true, false] => {
                 Some(Arc::new(Self::new(LinalgOp::EigVals { input_dtype })))
             }
+            // `LuFactorSolve` is deliberately never pruned to `Solve`. Traced
+            // AD compiles its source program with this pruning before
+            // differentiating, so a prune would drop the saved factors and
+            // force the adjoint solve to refactor `A`. A primal only program
+            // loses nothing by keeping the op: the fused CPU kernel does the
+            // `Solve` kernel's work, and the factor buffer the plain solve
+            // uses as scratch becomes the (pooled) LU output instead.
             _ => None,
         }
     }
@@ -765,6 +783,21 @@ impl ExtensionOp for LinalgExtensionOp {
                 require_matrix_meta("tenferro-linalg.solve", input_shapes[0])?;
                 require_matrix_meta("tenferro-linalg.solve", input_shapes[1])?;
                 vec![(promote_dtypes(&input_dtypes), input_shapes[1].to_vec())]
+            }
+            LinalgOp::LuFactorSolve => {
+                require_matrix_meta("tenferro-linalg.lu_factor_solve", input_shapes[1])?;
+                let mut factors = lu_factor_meta(input_dtypes[0], input_shapes[0])?.into_iter();
+                let (Some(packed_lu), Some(pivots)) = (factors.next(), factors.next()) else {
+                    return Err(Error::Internal(
+                        "lu_factor_solve: lu_factor metadata returned fewer than two outputs"
+                            .into(),
+                    ));
+                };
+                vec![
+                    (promote_dtypes(&input_dtypes), input_shapes[1].to_vec()),
+                    packed_lu,
+                    pivots,
+                ]
             }
             LinalgOp::TriangularSolve { .. } => {
                 require_matrix_meta("tenferro-linalg.triangular_solve", input_shapes[0])?;
@@ -1051,6 +1084,9 @@ fn linalg_session_supported<B: BackendSession + 'static>(
                 // (`gpu/linalg.rs::solve` = lu_factor + lu_solve_prepared, no
                 // Unsupported path for F32/F64/C32/C64), so it is admitted.
                 LinalgOp::Solve => true,
+                // The fused solve runs the trait default on CUDA: getrf then
+                // the plain prepared solve, both admitted above.
+                LinalgOp::LuFactorSolve => true,
                 // Conjugate-only prepared LU solve is unsupported on CUDA.
                 LinalgOp::LuSolvePrepared {
                     transpose_a: false,
@@ -1117,6 +1153,7 @@ fn execute_linalg<B: LinalgBackend>(
             transpose_a,
         )?]),
         LinalgOp::Solve => Ok(vec![backend.solve(inputs[0], inputs[1])?]),
+        LinalgOp::LuFactorSolve => backend.lu_factor_solve(inputs[0], inputs[1]),
         LinalgOp::Svd {
             derivative_eps,
             gauge,

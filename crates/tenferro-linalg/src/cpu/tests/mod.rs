@@ -293,6 +293,8 @@ fn diagonal_scatter_config() -> ScatterConfig {
 }
 
 mod backend;
+#[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
+mod batched;
 mod dtype;
 mod linalg;
 mod managed_cholesky;

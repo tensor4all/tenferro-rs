@@ -460,18 +460,22 @@ fn svd_read_accepts_an_owned_tensor_read() {
 fn lapack_batched_value_factor_paths_reuse_pooled_batch_input() {
     let lu_source = include_str!("../linalg/lapack_linalg/lu.rs");
     let lu_factor = source_from(lu_source, "pub(crate) fn lu_factor");
-    assert!(lu_factor.contains("tensor_from_pooled_slice_with_template("));
-    assert!(lu_factor.contains("refill_tensor_from_slice("));
-    assert!(!lu_factor.contains("input.host_data()?[range].to_vec()"));
+    assert!(lu_factor.contains("pooled_copy(buffers, input.host_data()?)"));
+    assert!(lu_factor.contains("lu_factor_batched_in_place("));
+    assert!(!lu_factor.contains("host_data()?[range].to_vec()"));
 
     let eigh_source = include_str!("../linalg/lapack_linalg/eigh.rs");
     let eigh_values = source_from(eigh_source, "pub(crate) fn eigh_values");
-    assert!(eigh_values.contains("batched_multi_convert(\"eigh_values\""));
+    assert!(eigh_values.contains("pooled_copy(buffers, input.host_data()?)"));
+    assert!(eigh_values.contains("T::eigh_batched("));
     assert!(!eigh_values.contains("input.host_data()?[range].to_vec()"));
 
     let svd_source = include_str!("../linalg/lapack_linalg/svd.rs");
     let svd_values = source_from(svd_source, "pub(crate) fn svd_values");
-    assert!(svd_values.contains("batched_multi_convert(\"svd_values\""));
+    assert!(svd_values.contains("svd_buffers("));
+    let svd_driver = source_from(svd_source, "fn svd_buffers");
+    assert!(svd_driver.contains("pooled_copy(buffers, input.host_data()?)"));
+    assert!(svd_driver.contains("T::svd_batched("));
     assert!(!svd_values.contains("input.host_data()?[range].to_vec()"));
 }
 

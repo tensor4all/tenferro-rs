@@ -46,9 +46,9 @@ pub(crate) use householder_qr::{
     linearize_r as linearize_householder_qr_r,
 };
 pub(crate) use solve::{
-    linearize_full_piv_lu_solve, linearize_lu_solve_prepared, linearize_solve,
-    linearize_triangular_solve, transpose_full_piv_lu_solve, transpose_lu_solve_prepared,
-    transpose_solve, transpose_triangular_solve, TriangularSolveFlags,
+    linearize_full_piv_lu_solve, linearize_lu_factor_solve, linearize_lu_solve_prepared,
+    linearize_solve, linearize_triangular_solve, transpose_full_piv_lu_solve,
+    transpose_lu_solve_prepared, transpose_solve, transpose_triangular_solve, TriangularSolveFlags,
 };
 use support::*;
 

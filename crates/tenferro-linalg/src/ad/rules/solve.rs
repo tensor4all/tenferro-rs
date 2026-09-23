@@ -169,24 +169,94 @@ pub(crate) fn linearize_lu_solve_prepared(
     conjugate_a: bool,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let lhs_ref = ValueRef::External(primal_in[0].clone());
-    let rhs_ref = ValueRef::External(primal_in[3].clone());
+    let tangent = linearize_prepared_solve(
+        builder,
+        PreparedSolvePrimal {
+            op: "lu_solve_prepared",
+            a: &primal_in[0],
+            packed_lu: &primal_in[1],
+            pivots: &primal_in[2],
+            b: &primal_in[3],
+            x: &primal_out[0],
+        },
+        tangent_in[0],
+        tangent_in[3],
+        transpose_a,
+        conjugate_a,
+        ctx,
+    )?;
+    Ok(vec![tangent])
+}
+
+/// Linearize the fused `LuFactorSolve` (inputs `a, b`; outputs `x, lu, pivots`).
+///
+/// The tangent `dx = A^{-1} (db - dA x)` reuses the primal's own factors
+/// through one `LuSolvePrepared`, so the linearized program never refactors
+/// `A`. The factor outputs carry no tangent, matching `LuFactor`.
+pub(crate) fn linearize_lu_factor_solve(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let tangent = linearize_prepared_solve(
+        builder,
+        PreparedSolvePrimal {
+            op: "lu_factor_solve",
+            a: &primal_in[0],
+            packed_lu: &primal_out[1],
+            pivots: &primal_out[2],
+            b: &primal_in[1],
+            x: &primal_out[0],
+        },
+        tangent_in[0],
+        tangent_in[1],
+        false,
+        false,
+        ctx,
+    )?;
+    Ok(vec![tangent, None, None])
+}
+
+/// Primal values of one prepared LU solve `op(A) x = b`.
+struct PreparedSolvePrimal<'a> {
+    op: &'static str,
+    a: &'a ValueKey<StdTensorOp>,
+    packed_lu: &'a ValueKey<StdTensorOp>,
+    pivots: &'a ValueKey<StdTensorOp>,
+    b: &'a ValueKey<StdTensorOp>,
+    x: &'a ValueKey<StdTensorOp>,
+}
+
+/// Emit `dx = op(A)^{-1} (db - op(dA) x)` against the saved factors.
+fn linearize_prepared_solve(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal: PreparedSolvePrimal<'_>,
+    a_tangent: Option<LocalValueId>,
+    b_tangent: Option<LocalValueId>,
+    transpose_a: bool,
+    conjugate_a: bool,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Option<LocalValueId>> {
+    let lhs_ref = ValueRef::External(primal.a.clone());
+    let rhs_ref = ValueRef::External(primal.b.clone());
     let lhs_rank = ctx.rank_of(&lhs_ref)?;
     let rhs_rank = ctx.rank_of(&rhs_ref)?;
-    validate_matrix_operands("lu_solve_prepared", ADRuleKind::Jvp, lhs_rank, rhs_rank)?;
-    validate_square_matrix_input("lu_solve_prepared", ADRuleKind::Jvp, &lhs_ref, ctx)?;
+    validate_matrix_operands(primal.op, ADRuleKind::Jvp, lhs_rank, rhs_rank)?;
+    validate_square_matrix_input(primal.op, ADRuleKind::Jvp, &lhs_ref, ctx)?;
     let rank = lhs_rank;
-    let mut rhs_tangent = tangent_in[3];
+    let mut rhs_tangent = b_tangent;
 
-    if let Some(da) = tangent_in[0] {
-        let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
+    if let Some(da) = a_tangent {
+        let dtype = ctx.dtype_of(&lhs_ref)?;
         let d_op_a = match (transpose_a, conjugate_a) {
             (false, false) => da,
             (true, false) => transpose_matrix_linear(builder, da, rank),
             (true, true) => adjoint_matrix_linear(builder, da, rank, dtype),
             (false, true) => conjugate_linear_if_dtype_complex(builder, da, dtype),
         };
-        let x = ValueRef::External(primal_out[0].clone());
+        let x = ValueRef::External(primal.x.clone());
         let correction =
             matmul_linear(builder, ValueRef::Local(d_op_a), x, vec![true, false], rank);
         let neg_correction = linear_neg(builder, correction);
@@ -197,7 +267,7 @@ pub(crate) fn linearize_lu_solve_prepared(
     }
 
     let Some(rhs_tangent) = rhs_tangent else {
-        return Ok(vec![None]);
+        return Ok(None);
     };
 
     let out = builder.add_operation(
@@ -206,16 +276,16 @@ pub(crate) fn linearize_lu_solve_prepared(
             conjugate_a,
         }),
         vec![
-            ValueRef::External(primal_in[0].clone()),
-            ValueRef::External(primal_in[1].clone()),
-            ValueRef::External(primal_in[2].clone()),
+            lhs_ref,
+            ValueRef::External(primal.packed_lu.clone()),
+            ValueRef::External(primal.pivots.clone()),
             ValueRef::Local(rhs_tangent),
         ],
         OperationRole::Linearized {
             active_mask: vec![false, false, false, true],
         },
     );
-    Ok(vec![Some(out[0])])
+    Ok(Some(out[0]))
 }
 
 pub(crate) fn linearize_full_piv_lu_solve(

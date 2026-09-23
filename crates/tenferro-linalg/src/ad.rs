@@ -91,6 +91,9 @@ impl LinalgAdRule {
             LinalgOp::Solve => {
                 rules::linearize_solve(builder, primal_in, primal_out, tangent_in, false, ctx)
             }
+            LinalgOp::LuFactorSolve => {
+                rules::linearize_lu_factor_solve(builder, primal_in, primal_out, tangent_in, ctx)
+            }
             LinalgOp::TriangularSolve {
                 left_side,
                 lower,
@@ -291,9 +294,12 @@ impl LinalgAdRule {
                 "tenferro-linalg.rank_revealing_qr",
                 ADRuleKind::Transpose,
             )),
+            // The fused solve is not linear in `a`; its linearization emits
+            // `LuSolvePrepared`, whose transpose rule above handles VJP.
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
+            | LinalgOp::LuFactorSolve
             | LinalgOp::SignDetFromLuFactor
             | LinalgOp::LogAbsDetFromLuFactor
             | LinalgOp::FullPivLu

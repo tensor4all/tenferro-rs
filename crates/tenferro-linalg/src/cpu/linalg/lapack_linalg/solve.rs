@@ -14,6 +14,8 @@ mod tests;
 pub(crate) trait LapackSolve: Clone + Copy + PoolScalar {
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32);
     fn getrs(args: GetrsArgs<'_, Self>);
+    /// Conjugate every element in place; a no-op for real scalars.
+    fn conj_in_place(_data: &mut [Self]) {}
 }
 
 pub(crate) struct GetrsArgs<'a, T> {
@@ -87,6 +89,12 @@ impl LapackSolve for f32 {
 }
 
 impl LapackSolve for Complex32 {
+    fn conj_in_place(data: &mut [Self]) {
+        for value in data {
+            *value = value.conj();
+        }
+    }
+
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
         // SAFETY: callers validate dimensions and provide a mutable
         // column-major `lda x n` matrix, pivot storage, and live `info`.
@@ -116,6 +124,12 @@ impl LapackSolve for Complex32 {
 }
 
 impl LapackSolve for Complex64 {
+    fn conj_in_place(data: &mut [Self]) {
+        for value in data {
+            *value = value.conj();
+        }
+    }
+
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
         // SAFETY: callers validate dimensions and provide a mutable
         // column-major `lda x n` matrix, pivot storage, and live `info`.
@@ -225,6 +239,195 @@ pub(crate) fn solve<T: LapackSolve + 'static>(
         check_lapack_info("solve", "getrs", info)?;
     }
     tensor_from_vec_with_template(b.shape().to_vec(), output, b)
+}
+
+/// Reject pivots that would make LAPACK `?getrs` index outside the matrix.
+///
+/// `?getrs` applies `ipiv` through `?laswp` without bounds checks, so every
+/// stored pivot must be a one-based row index in `1..=n` before the call.
+fn validate_lapack_pivots(op: &'static str, n: usize, ipiv: &[i32]) -> tenferro_tensor::Result<()> {
+    for &pivot_one_based in ipiv {
+        let in_range = usize::try_from(pivot_one_based)
+            .map(|pivot| (1..=n).contains(&pivot))
+            .unwrap_or(false);
+        if !in_range {
+            return Err(tenferro_tensor::Error::invalid_argument(
+                op,
+                "pivot",
+                format!("LU pivot index {pivot_one_based} is outside 1..={n}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Solve `op(A) X = B` for every batch from packed `getrf` factors.
+///
+/// `output` enters holding the compact column-major RHS batch and leaves
+/// holding the solution. `op(A)` is `A`, `A^T`, `A^H`, or `conj(A)` from the
+/// `(transpose_a, conjugate_a)` flags; the first three map directly to
+/// `?getrs` with `trans = N/T/C`, and `conj(A)` uses
+/// `conj(A) x = b  <=>  A conj(x) = conj(b)`.
+///
+/// # Errors
+///
+/// Returns `Error::InvalidArgument` for a pivot outside `1..=n`, a dimension
+/// outside the LAPACK `i32` range, inconsistent buffer lengths, or an illegal
+/// LAPACK argument.
+pub(crate) fn lu_solve_prepared_batched_in_place<T: LapackSolve>(
+    op: &'static str,
+    (n, nrhs): (usize, usize),
+    packed_lu: &[T],
+    pivots: &[i32],
+    output: &mut [T],
+    (transpose_a, conjugate_a): (bool, bool),
+) -> tenferro_tensor::Result<()> {
+    let matrix_len = checked_product(op, "matrix", &[n, n])?;
+    let rhs_len = checked_product(op, "rhs", &[n, nrhs])?;
+    if matrix_len == 0 || rhs_len == 0 {
+        return Ok(());
+    }
+    let batch_total = packed_lu.len() / matrix_len;
+    if packed_lu.len() != checked_product(op, "packed LU", &[matrix_len, batch_total])?
+        || pivots.len() != checked_product(op, "pivots", &[n, batch_total])?
+        || output.len() != checked_product(op, "rhs batch", &[rhs_len, batch_total])?
+    {
+        return Err(tenferro_tensor::Error::Internal(format!(
+            "{op}: packed LU, pivot, and rhs buffers describe different batches"
+        )));
+    }
+    validate_lapack_pivots(op, n, pivots)?;
+    let n_i32 = dim_i32(n, op)?;
+    let nrhs_i32 = dim_i32(nrhs, op)?;
+    let (trans, conjugate_rhs) = match (transpose_a, conjugate_a) {
+        (false, false) => (b'N', false),
+        (true, false) => (b'T', false),
+        (true, true) => (b'C', false),
+        (false, true) => (b'N', true),
+    };
+    if conjugate_rhs {
+        T::conj_in_place(output);
+    }
+    // INVARIANT: the buffer lengths were checked above to hold exactly
+    // `batch_total` nonempty matrices, pivot vectors, and RHS blocks, and every
+    // pivot is in `1..=n`, so each `?getrs` call reads only its own factors and
+    // writes only its own RHS block. The serial loop is intentional: the
+    // LAPACK provider owns threading inside `?getrs`.
+    for ((matrix, ipiv), rhs) in packed_lu
+        .chunks_exact(matrix_len)
+        .zip(pivots.chunks_exact(n))
+        .zip(output.chunks_exact_mut(rhs_len))
+    {
+        let mut info = 0;
+        T::getrs(GetrsArgs {
+            trans,
+            n: n_i32,
+            nrhs: nrhs_i32,
+            a: matrix,
+            lda: n_i32,
+            ipiv,
+            b: rhs,
+            ldb: n_i32,
+            info: &mut info,
+        });
+        check_lapack_info(op, "getrs", info)?;
+    }
+    if conjugate_rhs {
+        T::conj_in_place(output);
+    }
+    Ok(())
+}
+
+/// Factor and solve `A X = B` for every batch, keeping the packed factors.
+///
+/// `packed_lu` enters holding the compact column-major `A` batch and leaves
+/// holding the packed `getrf` factors; `pivots` receives the one-based
+/// pivots; `output` enters holding the RHS batch and leaves holding `X`.
+/// This is the fused primal of `lu_factor` followed by `lu_solve_prepared`:
+/// one `?getrf` and one `?getrs` per matrix, with no scratch at all because
+/// the factors are themselves an output.
+///
+/// # Errors
+///
+/// Returns `Error::Extension` with `crate::Error::Singular` when a matrix is
+/// exactly singular and there is a nonempty RHS to solve, and `Error::InvalidArgument` for inconsistent buffer
+/// lengths, out-of-range dimensions, or an illegal LAPACK argument.
+pub(crate) fn lu_factor_solve_batched_in_place<T: LapackSolve>(
+    op: &'static str,
+    n: usize,
+    nrhs: usize,
+    packed_lu: &mut [T],
+    pivots: &mut [i32],
+    output: &mut [T],
+) -> tenferro_tensor::Result<()> {
+    let matrix_len = checked_product(op, "matrix", &[n, n])?;
+    let rhs_len = checked_product(op, "rhs", &[n, nrhs])?;
+    if matrix_len == 0 {
+        return Ok(());
+    }
+    let batch_total = packed_lu.len() / matrix_len;
+    if packed_lu.len() != checked_product(op, "packed LU", &[matrix_len, batch_total])?
+        || pivots.len() != checked_product(op, "pivots", &[n, batch_total])?
+        || output.len() != checked_product(op, "rhs batch", &[rhs_len, batch_total])?
+    {
+        return Err(tenferro_tensor::Error::Internal(format!(
+            "{op}: packed LU, pivot, and rhs buffers describe different batches"
+        )));
+    }
+    let n_i32 = dim_i32(n, op)?;
+    let nrhs_i32 = dim_i32(nrhs, op)?;
+    // INVARIANT: the buffer lengths were checked above to hold exactly
+    // `batch_total` nonempty matrices and pivot vectors plus as many RHS
+    // blocks. A zero-column RHS has `rhs_len == 0`, so it is handled by a
+    // separate factor-only loop instead of `chunks_exact_mut(0)`. The serial
+    // loop is intentional: the LAPACK provider owns threading inside
+    // `?getrf`/`?getrs`.
+    let factor_one = |matrix: &mut [T],
+                      ipiv: &mut [i32],
+                      reject_singular: bool|
+     -> tenferro_tensor::Result<()> {
+        let mut info = 0;
+        T::getrf(n_i32, n_i32, matrix, n_i32, ipiv, &mut info);
+        check_lapack_info(op, "getrf", info.min(0))?;
+        if reject_singular && info > 0 {
+            return Err(crate::error::into_tensor_error(
+                op,
+                crate::Error::Singular { op },
+            ));
+        }
+        Ok(())
+    };
+    if rhs_len == 0 {
+        // Nothing to solve: only factor, matching `lu_factor` on singular input.
+        for (matrix, ipiv) in packed_lu
+            .chunks_exact_mut(matrix_len)
+            .zip(pivots.chunks_exact_mut(n))
+        {
+            factor_one(matrix, ipiv, false)?;
+        }
+        return Ok(());
+    }
+    for ((matrix, ipiv), rhs) in packed_lu
+        .chunks_exact_mut(matrix_len)
+        .zip(pivots.chunks_exact_mut(n))
+        .zip(output.chunks_exact_mut(rhs_len))
+    {
+        factor_one(matrix, ipiv, true)?;
+        let mut info = 0;
+        T::getrs(GetrsArgs {
+            trans: b'N',
+            n: n_i32,
+            nrhs: nrhs_i32,
+            a: matrix,
+            lda: n_i32,
+            ipiv,
+            b: rhs,
+            ldb: n_i32,
+            info: &mut info,
+        });
+        check_lapack_info(op, "getrs", info)?;
+    }
+    Ok(())
 }
 
 /// Solve a single matrix system directly into a positive column-major output

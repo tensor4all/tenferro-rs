@@ -10,8 +10,8 @@ use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::{CpuBackendKind, CpuExecSession, CpuExecutionContext};
 use tenferro_tensor::{
     validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
-    MemoryKind, SharedTensorAllocationDomain, Tensor, TensorElementwise, TensorRead, TensorScalar,
-    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    MemoryKind, SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural,
+    TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -789,41 +789,40 @@ impl LinalgBackend for CpuExecSession<'_> {
             return self.with_linalg_pool_fresh(|_, _| zeros_like_tensor(b));
         }
 
-        let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
-            (
-                self.reshape(b, &matrix_rhs_shape)?,
-                Some(b.shape().to_vec()),
-            )
-        } else {
-            (b.duplicate()?, None)
-        };
-
-        validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), rhs.shape())?;
+        validate_lu_solve_prepared_shapes(
+            packed_lu.shape(),
+            pivots.shape(),
+            &packed_lu::rhs_matrix_shape(a.shape(), b.shape()),
+        )?;
         validate_nonsingular_u(packed_lu)?;
-        // Triangular solves only read LU. Real adjoints need no conjugation,
-        // and ordinary solves can borrow the saved factors without a dense copy.
-        let conjugated_lu = if conjugate_a && matches!(packed_lu.dtype(), DType::C32 | DType::C64) {
-            Some(self.conj(packed_lu)?)
-        } else {
-            None
-        };
-        let lu_op = conjugated_lu.as_ref().unwrap_or(packed_lu);
-        let mut result = if transpose_a {
-            let z = self.triangular_solve(lu_op, &rhs, true, false, true, false)?;
-            let y = self.triangular_solve(lu_op, &z, true, true, true, true)?;
-            apply_lu_pivots_cpu(&y, pivots, true)?
-        } else {
-            let pb = apply_lu_pivots_cpu(&rhs, pivots, false)?;
-            let y = self.triangular_solve(lu_op, &pb, true, true, false, true)?;
-            self.triangular_solve(lu_op, &y, true, false, false, false)?
-        };
-        result.tag_fresh(self.domain_id());
+        let provider = linalg_provider_kind(self.kind(), OP)?;
+        // One pooled RHS copy becomes the output; the provider kernel applies
+        // the stored pivots and both triangular solves per matrix in place.
+        self.with_linalg_pool_fresh(|ctx, buffers| {
+            packed_lu::lu_solve_prepared_entered(
+                provider,
+                ctx,
+                buffers,
+                a,
+                packed_lu,
+                pivots,
+                b,
+                transpose_a,
+                conjugate_a,
+            )
+        })
+    }
 
-        if let Some(shape) = restore_shape {
-            self.reshape(&result, &shape)
-        } else {
-            Ok(result)
-        }
+    fn lu_factor_solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        const OP: &str = "lu_factor_solve";
+
+        ensure_host_tensor(OP, a)?;
+        ensure_host_tensor(OP, b)?;
+        ensure_supported_linalg_pair(OP, a, b)?;
+        let provider = linalg_provider_kind(self.kind(), OP)?;
+        self.with_linalg_pool_fresh(|ctx, buffers| {
+            packed_lu::lu_factor_solve_entered(provider, ctx, buffers, a, b)
+        })
     }
 
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor> {
@@ -3575,36 +3574,26 @@ fn checked_product(
     })
 }
 
-fn batch_count(op: &'static str, batch_shape: &[usize]) -> tenferro_tensor::Result<usize> {
-    Ok(checked_product(op, "batch shape", batch_shape)?.max(1))
-}
-
-fn checked_batch_offset(
-    op: &'static str,
-    role: &'static str,
-    batch: usize,
-    stride: usize,
-) -> tenferro_tensor::Result<usize> {
-    batch
-        .checked_mul(stride)
-        .ok_or_else(|| Error::invalid_argument(op, "shape", format!("{role} overflows usize")))
-}
-
 fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
-    if b.shape().len() == 1 {
-        return Some(vec![b.shape()[0], 1]);
+    batched_vector_rhs_shape_of(a.shape(), b.shape())
+}
+
+/// The matrix RHS shape `[n, 1, batch...]` a vector RHS `b` is solved as.
+fn batched_vector_rhs_shape_of(a_shape: &[usize], b_shape: &[usize]) -> Option<Vec<usize>> {
+    if b_shape.len() == 1 {
+        return Some(vec![b_shape[0], 1]);
     }
 
-    let is_batched_vector_rhs = a.shape().len() == b.shape().len() + 1
-        && !b.shape().is_empty()
-        && b.shape()[0] == a.shape()[0]
-        && b.shape()[1..] == a.shape()[2..];
+    let is_batched_vector_rhs = a_shape.len() == b_shape.len() + 1
+        && !b_shape.is_empty()
+        && b_shape[0] == a_shape[0]
+        && b_shape[1..] == a_shape[2..];
     if !is_batched_vector_rhs {
         return None;
     }
 
-    let mut rhs_shape = vec![b.shape()[0], 1];
-    rhs_shape.extend_from_slice(&b.shape()[1..]);
+    let mut rhs_shape = vec![b_shape[0], 1];
+    rhs_shape.extend_from_slice(&b_shape[1..]);
     Some(rhs_shape)
 }
 
@@ -3789,121 +3778,6 @@ fn eigh_c64_outputs_to_public_tensors(
     }
 }
 
-fn apply_lu_pivots_cpu(
-    input: &Tensor,
-    pivots: &Tensor,
-    inverse: bool,
-) -> tenferro_tensor::Result<Tensor> {
-    let Some(pivots) = pivots.as_typed::<i32>() else {
-        return Err(Error::dtype_mismatch(
-            "lu_solve_prepared",
-            DType::I32,
-            pivots.dtype(),
-        ));
-    };
-    match input.dtype() {
-        DType::F32 => {
-            apply_lu_pivots_typed(typed_host(input, "lu_solve_prepared")?, pivots, inverse)
-                .map(Tensor::from_typed::<f32>)
-        }
-        DType::F64 => {
-            apply_lu_pivots_typed(typed_host(input, "lu_solve_prepared")?, pivots, inverse)
-                .map(Tensor::from_typed::<f64>)
-        }
-        DType::C32 => {
-            apply_lu_pivots_typed(typed_host(input, "lu_solve_prepared")?, pivots, inverse)
-                .map(Tensor::from_typed::<Complex32>)
-        }
-        DType::C64 => {
-            apply_lu_pivots_typed(typed_host(input, "lu_solve_prepared")?, pivots, inverse)
-                .map(Tensor::from_typed::<Complex64>)
-        }
-        DType::I32 | DType::I64 | DType::Bool | DType::External(_) => {
-            Err(unsupported_dtype("lu_solve_prepared", input.dtype()))
-        }
-    }
-}
-
-fn apply_lu_pivots_typed<T: Clone + TensorScalar>(
-    input: &TypedTensor<T>,
-    pivots: &TypedTensor<i32>,
-    inverse: bool,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let shape = input.shape();
-    if shape.len() < 2 {
-        return Err(Error::rank_mismatch("lu_solve_prepared", 2, shape.len()));
-    }
-    let rows = shape[0];
-    let cols = shape[1];
-    let k = pivots.shape()[0];
-    if k > rows || pivots.shape()[1..] != shape[2..] {
-        return Err(Error::shape_mismatch(
-            "lu_solve_prepared",
-            pivots.shape().to_vec(),
-            shape.to_vec(),
-        ));
-    }
-    let batch_total = batch_count("lu_solve_prepared", &shape[2..])?;
-    let matrix_stride = checked_product("lu_solve_prepared", "matrix shape", &[rows, cols])?;
-    let pivot_stride = k;
-    let input_data = input.host_data()?;
-    let pivot_data = pivots.host_data()?;
-    let mut data = Vec::with_capacity(input_data.len());
-
-    for batch in 0..batch_total {
-        let mut perm: Vec<usize> = (0..rows).collect();
-        let pivot_offset = checked_batch_offset(
-            "lu_solve_prepared",
-            "pivot batch offset",
-            batch,
-            pivot_stride,
-        )?;
-        for step in 0..k {
-            let pivot_one_based = pivot_data[pivot_offset + step];
-            if pivot_one_based <= 0 {
-                return Err(Error::invalid_argument(
-                    "lu_solve_prepared",
-                    "pivot",
-                    "LU pivot index must be 1-based and positive",
-                ));
-            }
-            let pivot = usize::try_from(pivot_one_based - 1).map_err(|_| {
-                Error::invalid_argument("lu_solve_prepared", "pivot", "LU pivot index is invalid")
-            })?;
-            if pivot >= rows {
-                return Err(Error::invalid_argument(
-                    "lu_solve_prepared",
-                    "pivot",
-                    "LU pivot index is out of bounds",
-                ));
-            }
-            perm.swap(step, pivot);
-        }
-        let row_map = if inverse {
-            let mut inv = vec![0usize; rows];
-            for (row, &source) in perm.iter().enumerate() {
-                inv[source] = row;
-            }
-            inv
-        } else {
-            perm
-        };
-        let batch_offset = checked_batch_offset(
-            "lu_solve_prepared",
-            "matrix batch offset",
-            batch,
-            matrix_stride,
-        )?;
-        for col in 0..cols {
-            for &source_row in &row_map {
-                data.push(input_data[batch_offset + source_row + col * rows]);
-            }
-        }
-    }
-
-    TypedTensor::from_vec_col_major(shape.to_vec(), data)
-}
-
 fn validate_lu_solve_prepared_shapes(
     lu_shape: &[usize],
     pivots_shape: &[usize],
@@ -3974,6 +3848,8 @@ fn unsupported_pair(
         Err(unsupported_dtype(op, lhs.dtype()))
     }
 }
+
+mod packed_lu;
 
 #[cfg(test)]
 mod tests;

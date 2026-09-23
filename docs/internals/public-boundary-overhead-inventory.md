@@ -3,7 +3,7 @@
 
 - Baseline revision: `0457a2ed0aeea21b14f4297f7f4731e09b3a0507`
 - Generation provenance: `source-derived from the current checkout; overlay/source digest is the freshness key`
-- Overlay/source digest: `b1b7e5989f82168f9b8e241b63862661e023391fbdb1daa97761aa35f4aebee8`
+- Overlay/source digest: `f442355239b7c9dc24ff6e68c74a37676163c4daa0cec796ca66e1ecb53542dd`
 
 | Family | Operation | Category | Surfaces (disposition) | Case contracts |
 |---|---|---|---|---|
@@ -161,6 +161,8 @@
 | linalg | `lu` | extension | concrete: follow-up, typed: follow-up, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | linalg.lu.prepared.traced |
 | linalg | `lu_factor` | extension | concrete: follow-up, typed: follow-up, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | linalg.lu_factor.ordinary.concrete |
 | linalg | `lu_factor` | extension | concrete: follow-up, typed: follow-up, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | linalg.lu_factor.prepared.traced |
+| linalg | `lu_factor_solve` | extension | concrete: follow-up, typed: follow-up, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | linalg.lu_factor_solve.ordinary.concrete |
+| linalg | `lu_factor_solve` | extension | concrete: follow-up, typed: follow-up, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | linalg.lu_factor_solve.prepared.traced |
 | linalg | `lu_solve_prepared` | extension | concrete: follow-up, typed: follow-up, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | linalg.lu_solve_prepared.ordinary.concrete |
 | linalg | `lu_solve_prepared` | extension | concrete: follow-up, typed: follow-up, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | linalg.lu_solve_prepared.prepared.traced |
 | linalg | `qr` | extension | concrete: follow-up, typed: follow-up, borrowed: unsupported, output_reuse: unsupported, eager: follow-up, traced: follow-up | linalg.qr.ordinary.concrete |
