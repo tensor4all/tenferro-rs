@@ -1885,8 +1885,7 @@ session, and the refusal a caller sees today is typed and explicit.
 ## 6. Risks and open questions
 
 - Naming: the open abstraction must not be confused with the existing
-  `strided-traits::ScalarBase`, `PoolScalar`, `OrderedElem`, or
-  `ContractionScalar`. The final names are chosen during implementation.
+  `strided-traits::ScalarBase`, `PoolScalar`, or `ContractionScalar`. The final names are chosen during implementation.
 - Deduplicating the two scalar traits is not a pure re-export. The core trait
   produces the host-only model and the runtime trait produces the erased tensor.
   The target is one preset table and one tag; the erased extension is defined

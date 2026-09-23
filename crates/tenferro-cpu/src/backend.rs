@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
+use strided_kernel::ExecContext;
 use tenferro_tensor::DType;
 
 use crate::arbiter::{with_execution_owner, ResourceArbiter, ResourceOwner, ResourcePermit};
@@ -75,24 +76,29 @@ fn tag_fresh_typed<T: TensorScalar>(output: &mut Tensor, domain: CpuDomainId) {
 
 pub(crate) fn elementwise_read_into_fallback_with_pool(
     buffers: &mut BufferPool,
+    ctx: &ExecContext,
     op: ElementwiseReadOp,
     inputs: &[TensorRead<'_>],
     out: TensorWrite<'_>,
 ) -> crate::Result<()> {
     let result = match op {
         ElementwiseReadOp::Add => {
-            elementwise::add_read_with_pool(buffers, inputs[0].clone(), inputs[1].clone())?
+            elementwise::add_read_with_pool(buffers, ctx, inputs[0].clone(), inputs[1].clone())?
         }
         ElementwiseReadOp::Subtract => {
-            elementwise::sub_read_with_pool(buffers, inputs[0].clone(), inputs[1].clone())?
+            elementwise::sub_read_with_pool(buffers, ctx, inputs[0].clone(), inputs[1].clone())?
         }
         ElementwiseReadOp::Multiply => {
-            elementwise::mul_read_with_pool(buffers, inputs[0].clone(), inputs[1].clone())?
+            elementwise::mul_read_with_pool(buffers, ctx, inputs[0].clone(), inputs[1].clone())?
         }
-        ElementwiseReadOp::Negate => elementwise::neg_read_with_pool(buffers, inputs[0].clone())?,
-        ElementwiseReadOp::Conj => elementwise::conj_read_with_pool(buffers, inputs[0].clone())?,
+        ElementwiseReadOp::Negate => {
+            elementwise::neg_read_with_pool(buffers, ctx, inputs[0].clone())?
+        }
+        ElementwiseReadOp::Conj => {
+            elementwise::conj_read_with_pool(buffers, ctx, inputs[0].clone())?
+        }
         ElementwiseReadOp::Divide => {
-            elementwise::div_read_with_pool(buffers, inputs[0].clone(), inputs[1].clone())?
+            elementwise::div_read_with_pool(buffers, ctx, inputs[0].clone(), inputs[1].clone())?
         }
         _ => {
             return Err(crate::Error::unsupported(
@@ -2681,16 +2687,6 @@ impl CpuBackend {
             .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
     }
 
-    fn try_install_fresh<R: FreshCpuOutput + Send>(
-        &self,
-        op: impl FnOnce() -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let domain = self.engine.domain().id();
-        let mut output = self.try_install(op)?;
-        output.tag_fresh(domain);
-        Ok(output)
-    }
-
     fn try_install_fresh_with_context<R: FreshCpuOutput + Send>(
         &self,
         op: impl FnOnce(&CpuExecutionContext<'_>) -> crate::Result<R> + Send,
@@ -2968,101 +2964,155 @@ impl TensorElementwise for CpuBackend {
                 inputs,
                 out,
                 &exec_context,
-                |inputs, out| elementwise_read_into_fallback_with_pool(buffers, op, inputs, out),
+                |inputs, out| {
+                    elementwise_read_into_fallback_with_pool(
+                        buffers,
+                        &exec_context,
+                        op,
+                        inputs,
+                        out,
+                    )
+                },
             )
         })
     }
 
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::add_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::add_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::add_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::sub_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::sub_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::sub_read_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::sub_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::mul_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::mul_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::mul_read_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::mul_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::neg_with_pool(buffers, input))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::neg_with_pool(buffers, &context.strided_exec_context(), input)
+        })
     }
 
     fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::neg_read_with_pool(buffers, input))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::neg_read_with_pool(buffers, &context.strided_exec_context(), input)
+        })
     }
 
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::conj_with_pool(buffers, input))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::conj_with_pool(buffers, &context.strided_exec_context(), input)
+        })
     }
 
     fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::conj_read_with_pool(buffers, input))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::conj_read_with_pool(buffers, &context.strided_exec_context(), input)
+        })
     }
 
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::div_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::div_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::div_read_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::div_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn rem(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::rem_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::rem_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::rem_read_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::rem_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::abs_with_pool(buffers, input))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::abs_with_pool(buffers, &context.strided_exec_context(), input)
+        })
     }
 
     fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::abs_read_with_pool(buffers, input))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::abs_read_with_pool(buffers, &context.strided_exec_context(), input)
+        })
     }
 
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::sign_with_pool(buffers, input))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::sign_with_pool(buffers, &context.strided_exec_context(), input)
+        })
     }
 
     fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::sign_read_with_pool(buffers, input))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::sign_read_with_pool(buffers, &context.strided_exec_context(), input)
+        })
     }
 
     fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::maximum_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::maximum_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::maximum_read_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::maximum_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::minimum_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::minimum_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::minimum_read_with_pool(buffers, lhs, rhs))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::minimum_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::compare_with_pool(buffers, lhs, rhs, dir))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::compare_with_pool(buffers, &context.strided_exec_context(), lhs, rhs, dir)
+        })
     }
 
     fn compare_read(
@@ -3071,8 +3121,14 @@ impl TensorElementwise for CpuBackend {
         rhs: TensorRead<'_>,
         dir: &CompareDir,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            elementwise::compare_read_with_pool(buffers, lhs, rhs, dir)
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::compare_read_with_pool(
+                buffers,
+                &context.strided_exec_context(),
+                lhs,
+                rhs,
+                dir,
+            )
         })
     }
 
@@ -3082,8 +3138,14 @@ impl TensorElementwise for CpuBackend {
         on_true: &Tensor,
         on_false: &Tensor,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            elementwise::select_with_pool(buffers, pred, on_true, on_false)
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::select_with_pool(
+                buffers,
+                &context.strided_exec_context(),
+                pred,
+                on_true,
+                on_false,
+            )
         })
     }
 
@@ -3093,13 +3155,27 @@ impl TensorElementwise for CpuBackend {
         on_true: TensorRead<'_>,
         on_false: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            elementwise::select_read_with_pool(buffers, pred, on_true, on_false)
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::select_read_with_pool(
+                buffers,
+                &context.strided_exec_context(),
+                pred,
+                on_true,
+                on_false,
+            )
         })
     }
 
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| elementwise::clamp_with_pool(buffers, input, lower, upper))
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::clamp_with_pool(
+                buffers,
+                &context.strided_exec_context(),
+                input,
+                lower,
+                upper,
+            )
+        })
     }
 
     fn clamp_read(
@@ -3108,8 +3184,14 @@ impl TensorElementwise for CpuBackend {
         lower: TensorRead<'_>,
         upper: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            elementwise::clamp_read_with_pool(buffers, input, lower, upper)
+        self.install_with_pool_context(|context, buffers| {
+            elementwise::clamp_read_with_pool(
+                buffers,
+                &context.strided_exec_context(),
+                input,
+                lower,
+                upper,
+            )
         })
     }
 }
@@ -3338,19 +3420,31 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh(|| reduction::reduce_max(input, axes))
+        self.try_install_fresh_with_context(|context| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_max(input, axes, &exec_context)
+        })
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| reduction::reduce_max_read(buffers, input, axes))
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_max_read(buffers, input, axes, &exec_context)
+        })
     }
 
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh(|| reduction::reduce_min(input, axes))
+        self.try_install_fresh_with_context(|context| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_min(input, axes, &exec_context)
+        })
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| reduction::reduce_min_read(buffers, input, axes))
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_min_read(buffers, input, axes, &exec_context)
+        })
     }
 }
 
@@ -3806,9 +3900,16 @@ impl TensorFusion for CpuBackend {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<Tensor>> {
-        self.install_with_pool(|buffers| {
+        self.install_with_pool_context(|context, buffers| {
             elementwise::broadcast_multiply_read_with_pool(
-                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+                buffers,
+                &context.strided_exec_context(),
+                lhs,
+                lhs_shape,
+                lhs_dims,
+                rhs,
+                rhs_shape,
+                rhs_dims,
             )
         })
     }
@@ -3823,9 +3924,10 @@ impl TensorFusion for CpuBackend {
         rhs_dims: &[usize],
     ) -> crate::Result<Option<TensorValue>> {
         let domain = self.engine.domain().id();
-        self.install_with_pool_unmarked(|buffers| {
+        self.install_with_pool_context_unmarked(|context, buffers| {
             elementwise::broadcast_multiply_value_with_pool_and_tag(
                 buffers,
+                &context.strided_exec_context(),
                 lhs,
                 lhs_shape,
                 lhs_dims,

@@ -449,67 +449,45 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
     assert!(!pool.contains("pub enum UninitCheckoutToken"));
     assert!(pool.contains("impl private::Sealed for"));
     let elementwise = include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs");
-    for helper in [
-        "pub fn typed_mul_with_pool",
-        "pub fn typed_mul_view_with_pool",
+    // Dense elementwise outputs are finalized in exactly one helper, which
+    // hands a pooled uninit destination to a validated strided erased entry.
+    let run_into = elementwise
+        .split_once("fn run_into<O>(")
+        .and_then(|(_, suffix)| suffix.split_once("\n}\n"))
+        .map(|(body, _)| body)
+        .expect("run_into must remain the dense output boundary");
+    assert!(run_into.contains("PooledUninitOutput::<O>::new"));
+    assert!(run_into.contains(
+        "// SAFETY: a successful erased strided entry initializes every element of its dense column-major destination"
+    ));
+    assert_eq!(
+        elementwise.matches("assume_init()").count(),
+        2,
+        "only run_into and the lazy outer product may finalize pooled output"
+    );
+    for entry in [
+        "erased_zip_into_uninit(",
+        "erased_map_into_uninit(",
+        "erased_compare_into_uninit(",
+        "erased_select_into_uninit(",
+        "erased_clamp_into_uninit(",
+        "erased_broadcast_mul_into_uninit(",
     ] {
-        let body = elementwise
-            .split_once(helper)
-            .and_then(|(_, suffix)| suffix.split_once("pub fn typed_"))
-            .map(|(body, _)| body)
-            .unwrap_or(elementwise);
         assert!(
-            body.contains("mul_into_uninit"),
-            "{helper} must retain the pinned same-shape kernel"
+            elementwise.contains(entry),
+            "{entry} must remain the strided overwrite kernel"
         );
     }
-
-    assert!(
-        !elementwise.contains(
-            "// SAFETY: the successful zip/map replay writes every logical destination element and retains no destination view.\n        // SAFETY:"
-        ),
-        "generic zip/map overwrite proof must not be duplicated"
-    );
-    assert!(
-        !elementwise.contains(
-            "// SAFETY: the successful scalar map replay writes every logical destination element and retains no destination view.\n        // SAFETY:"
-        ),
-        "generic scalar-map overwrite proof must not be duplicated"
-    );
-
-    let generic_binary = elementwise
-        .split_once("fn typed_binary_view_with_pool")
-        .and_then(|(_, suffix)| suffix.split_once("fn typed_unary_view_with_pool"))
+    let zip = elementwise
+        .split_once("fn zip_with_pool<")
+        .and_then(|(_, suffix)| suffix.split_once("\n}\n"))
         .map(|(body, _)| body)
-        .expect("generic binary helper must remain present");
-    assert!(generic_binary.contains(
-        "// SAFETY: the successful runtime-selected zip/map replay writes every logical destination element and retains no destination view."
-    ));
-    assert!(generic_binary.contains(
-        "// SAFETY: the successful runtime-selected scalar-map replay writes every logical destination element and retains no destination view."
-    ));
-
-    let add = elementwise
-        .split_once("pub fn typed_add_view_with_pool")
-        .and_then(|(_, suffix)| suffix.split_once("pub fn typed_sub_with_pool"))
-        .map(|(body, _)| body)
-        .expect("add view helper must remain present");
-    // Add delegates to the validated generic helper whose overwrite proofs
-    // are checked above; it must not acquire or finalize an output separately.
-    assert!(add.contains("typed_binary_view_with_pool("));
-    assert!(add.contains("Add::add"));
-    assert!(!add.contains("assume_init"));
-    assert!(!add.contains("PooledUninitOutput"));
-
-    let multiplication = elementwise
-        .split_once("pub fn typed_mul_view_with_pool")
-        .and_then(|(_, suffix)| suffix.split_once("fn typed_div_with_pool"))
-        .map(|(body, _)| body)
-        .expect("multiplication helpers must remain present");
-    assert!(
-        multiplication.contains("successful multiplication kernel"),
-        "same-shape multiplication must retain its operation-specific proof"
-    );
+        .expect("zip helper must remain present");
+    // Binary arithmetic delegates to run_into; it must not acquire or
+    // finalize an output separately.
+    assert!(zip.contains("run_into::<"));
+    assert!(!zip.contains("assume_init"));
+    assert!(!zip.contains("PooledUninitOutput"));
 }
 
 #[test]

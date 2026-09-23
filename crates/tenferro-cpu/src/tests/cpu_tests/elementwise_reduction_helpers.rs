@@ -712,18 +712,34 @@ fn reduce_max_and_min_propagate_nan_instead_of_leaking_sentinel() {
         TypedTensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN]).unwrap(),
     );
 
-    assert!(reduce_max(&mixed, &[0]).unwrap().as_slice::<f64>().unwrap()[0].is_nan());
-    assert!(reduce_min(&mixed, &[0]).unwrap().as_slice::<f64>().unwrap()[0].is_nan());
-    assert!(reduce_max(&all_nan, &[0])
-        .unwrap()
-        .as_slice::<f64>()
-        .unwrap()[0]
-        .is_nan());
-    assert!(reduce_min(&all_nan, &[0])
-        .unwrap()
-        .as_slice::<f64>()
-        .unwrap()[0]
-        .is_nan());
+    assert!(
+        reduce_max(&mixed, &[0], &strided_kernel::ExecContext::serial())
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap()[0]
+            .is_nan()
+    );
+    assert!(
+        reduce_min(&mixed, &[0], &strided_kernel::ExecContext::serial())
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap()[0]
+            .is_nan()
+    );
+    assert!(
+        reduce_max(&all_nan, &[0], &strided_kernel::ExecContext::serial())
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap()[0]
+            .is_nan()
+    );
+    assert!(
+        reduce_min(&all_nan, &[0], &strided_kernel::ExecContext::serial())
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap()[0]
+            .is_nan()
+    );
 }
 
 #[test]
@@ -747,14 +763,14 @@ fn reduce_sum_zero_length_axis_is_rejected_like_other_reductions() {
         })
     ));
     assert!(matches!(
-        reduce_max(&empty, &[0]),
+        reduce_max(&empty, &[0], &strided_kernel::ExecContext::serial()),
         Err(crate::Error::Validation {
             op: "reduce_max",
             ..
         })
     ));
     assert!(matches!(
-        reduce_min(&empty, &[0]),
+        reduce_min(&empty, &[0], &strided_kernel::ExecContext::serial()),
         Err(crate::Error::Validation {
             op: "reduce_min",
             ..
@@ -1141,14 +1157,14 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
         })
     ));
     assert!(matches!(
-        reduce_max(&complex, &[0]),
+        reduce_max(&complex, &[0], &strided_kernel::ExecContext::serial()),
         Err(crate::Error::Unsupported {
             op: "reduce_max",
             ..
         })
     ));
     assert!(matches!(
-        reduce_min(&complex, &[0]),
+        reduce_min(&complex, &[0], &strided_kernel::ExecContext::serial()),
         Err(crate::Error::Unsupported {
             op: "reduce_min",
             ..
@@ -1159,14 +1175,14 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
         TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap(),
     );
     assert!(matches!(
-        reduce_max(&real, &[2]),
+        reduce_max(&real, &[2], &strided_kernel::ExecContext::serial()),
         Err(crate::Error::Validation {
             op: "reduce_max",
             source: tenferro_tensor::ValidationError::AxisOutOfBounds { .. },
         })
     ));
     assert!(matches!(
-        reduce_min(&real, &[0, 0]),
+        reduce_min(&real, &[0, 0], &strided_kernel::ExecContext::serial()),
         Err(crate::Error::Validation {
             op: "reduce_min",
             source: tenferro_tensor::ValidationError::DuplicateAxis { .. },

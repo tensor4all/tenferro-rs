@@ -231,7 +231,7 @@ fn cpu_reductions_use_common_empty_axes_validation_helpers() {
         ),
         (
             "fn reduction_read_empty_axes_noop",
-            "fn nan_propagating_max",
+            "fn kernel_dtype",
             "if !axes.is_empty()",
         ),
     ] {
@@ -269,31 +269,31 @@ fn cpu_reductions_use_common_empty_axes_validation_helpers() {
         ),
         (
             "pub(crate) fn reduce_prod_read",
-            "pub fn reduce_max",
+            "pub(crate) fn reduce_max(",
             "reduction_read_empty_axes_noop",
             "reduce_prod",
         ),
         (
-            "pub fn reduce_max",
+            "pub(crate) fn reduce_max(",
             "pub(crate) fn reduce_max_read",
             "reduction_empty_axes_noop",
             "reduce_max",
         ),
         (
             "pub(crate) fn reduce_max_read",
-            "pub fn reduce_min",
+            "pub(crate) fn reduce_min(",
             "reduction_read_empty_axes_noop",
             "reduce_max",
         ),
         (
-            "pub fn reduce_min",
+            "pub(crate) fn reduce_min(",
             "pub(crate) fn reduce_min_read",
             "reduction_empty_axes_noop",
             "reduce_min",
         ),
         (
             "pub(crate) fn reduce_min_read",
-            "fn typed_reduce<",
+            "fn typed_reduce_erased<",
             "reduction_read_empty_axes_noop",
             "reduce_min",
         ),
@@ -323,7 +323,7 @@ fn integer_reductions_record_the_delegated_wrapping_contract() {
         ),
         (
             "fn typed_reduce_prod_wrapping",
-            "pub fn typed_reduce_max",
+            "#[cfg(test)]",
             "wrapping_mul",
         ),
     ] {
