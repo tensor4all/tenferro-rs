@@ -29,49 +29,136 @@ const DEFAULT_CUTENSOR_PERMUTATION_PLAN_CACHE_MAX_ENTRIES: usize = 64;
 
 type CutensorPermutationPlanCacheState = Arc<Mutex<CutensorPermutationPlanCache>>;
 
+/// The real `alpha` operand a cuTENSOR permutation is planned with.
+#[derive(Clone, Copy)]
+pub(super) enum VendorAlpha {
+    F32(f32),
+    F64(f64),
+}
+
 pub(super) trait CutensorPermutationScalar:
     CubeElement + TensorScalar + CubePrimitive + Clone + One + Send + Sync + 'static
 {
+    /// Element type of the cuTENSOR descriptors.
+    ///
+    /// A complex dtype is described through its real view, so this is the
+    /// corresponding real type and [`Self::REAL_VIEW`] is `true`.
     const DATA_TYPE: CudaDataType;
     const DTYPE: DType;
+    /// Describe the buffer as its real view with one extra trailing axis.
+    ///
+    /// A complex scalar is two adjacent real scalars, so the buffer is exactly
+    /// the real tensor of shape `[...shape, 2]` with doubled leading strides
+    /// and a unit-stride trailing axis. Permuting that real tensor with a real
+    /// `alpha = 1` moves the same bytes, but the scaling multiply is exact:
+    /// cuTENSOR's complex multiply computes `re = 1*re - 0*im` and
+    /// `im = 1*im + 0*re`, so `0 * inf = NaN` turns a finite component of
+    /// `(inf, finite)` into `NaN` (issue #1891).
+    const REAL_VIEW: bool;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor;
+
+    /// The exact `alpha = 1` operand for the descriptor element type.
+    fn vendor_alpha() -> VendorAlpha;
 }
 
 impl CutensorPermutationScalar for f32 {
     const DATA_TYPE: CudaDataType = CudaDataType::R32F;
     const DTYPE: DType = DType::F32;
+    const REAL_VIEW: bool = false;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_32f()
+    }
+
+    fn vendor_alpha() -> VendorAlpha {
+        VendorAlpha::F32(1.0)
     }
 }
 
 impl CutensorPermutationScalar for f64 {
     const DATA_TYPE: CudaDataType = CudaDataType::R64F;
     const DTYPE: DType = DType::F64;
+    const REAL_VIEW: bool = false;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_64f()
+    }
+
+    fn vendor_alpha() -> VendorAlpha {
+        VendorAlpha::F64(1.0)
     }
 }
 
 impl CutensorPermutationScalar for Complex32 {
-    const DATA_TYPE: CudaDataType = CudaDataType::C32F;
+    const DATA_TYPE: CudaDataType = CudaDataType::R32F;
     const DTYPE: DType = DType::C32;
+    const REAL_VIEW: bool = true;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_32f()
     }
+
+    fn vendor_alpha() -> VendorAlpha {
+        VendorAlpha::F32(1.0)
+    }
 }
 
 impl CutensorPermutationScalar for Complex64 {
-    const DATA_TYPE: CudaDataType = CudaDataType::C64F;
+    const DATA_TYPE: CudaDataType = CudaDataType::R64F;
     const DTYPE: DType = DType::C64;
+    const REAL_VIEW: bool = true;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_64f()
     }
+
+    fn vendor_alpha() -> VendorAlpha {
+        VendorAlpha::F64(1.0)
+    }
+}
+
+/// Expand one operand descriptor into the real view of a complex buffer.
+///
+/// Returns the descriptor unchanged for a real dtype. See
+/// [`CutensorPermutationScalar::REAL_VIEW`] for why the expansion exists.
+fn real_view_operand<T: CutensorPermutationScalar>(
+    op: &'static str,
+    extents: &[i64],
+    strides: &[i64],
+    modes: &[i32],
+) -> crate::Result<(Vec<i64>, Vec<i64>, Vec<i32>)> {
+    if !T::REAL_VIEW {
+        return Ok((extents.to_vec(), strides.to_vec(), modes.to_vec()));
+    }
+    if extents.len() != strides.len() || extents.len() != modes.len() {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "rank",
+            "real-view descriptor extents, strides, and modes must have equal rank",
+        ));
+    }
+    let real_axis_mode = i32::try_from(extents.len()).map_err(|_| {
+        crate::Error::invalid_argument(op, "rank", "tensor rank exceeds the cuTENSOR mode limit")
+    })?;
+    let mut real_extents = Vec::with_capacity(extents.len() + 1);
+    real_extents.extend_from_slice(extents);
+    real_extents.push(2);
+    let mut real_strides = Vec::with_capacity(strides.len() + 1);
+    for &stride in strides {
+        real_strides.push(stride.checked_mul(2).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                op,
+                "stride",
+                "real-view descriptor stride overflows cuTENSOR i64 strides",
+            )
+        })?);
+    }
+    real_strides.push(1);
+    let mut real_modes = Vec::with_capacity(modes.len() + 1);
+    real_modes.extend_from_slice(modes);
+    real_modes.push(real_axis_mode);
+    Ok((real_extents, real_strides, real_modes))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -333,8 +420,18 @@ where
     let output_strides = compact_strides_i64(OP_TRANSPOSE, output.shape())?;
     let input_modes = identity_modes(OP_TRANSPOSE, input.shape().len())?;
     let output_modes = modes_from_perm(OP_TRANSPOSE, perm)?;
-    let input_extents = dims_to_i64(OP_TRANSPOSE, input.shape())?;
-    let output_extents = dims_to_i64(OP_TRANSPOSE, output.shape())?;
+    let (input_extents, input_strides, input_modes) = real_view_operand::<T>(
+        OP_TRANSPOSE,
+        &dims_to_i64(OP_TRANSPOSE, input.shape())?,
+        &input_strides,
+        &input_modes,
+    )?;
+    let (output_extents, output_strides, output_modes) = real_view_operand::<T>(
+        OP_TRANSPOSE,
+        &dims_to_i64(OP_TRANSPOSE, output.shape())?,
+        &output_strides,
+        &output_modes,
+    )?;
     let input_res = resolve_owned_operand(backend.runtime(), input, OP_TRANSPOSE)?;
     let output_res = resolve_owned_operand(backend.runtime(), &output, OP_TRANSPOSE)?;
     if output.n_elements() == 0 {
@@ -375,8 +472,14 @@ where
     let input_strides = view_strides_i64(view.strides(), op)?;
     let output_strides = compact_strides_i64(op, output.shape())?;
     let modes = identity_modes(op, view.shape().len())?;
-    let input_extents = dims_to_i64(op, view.shape())?;
-    let output_extents = dims_to_i64(op, output.shape())?;
+    let (input_extents, input_strides, modes) =
+        real_view_operand::<T>(op, &dims_to_i64(op, view.shape())?, &input_strides, &modes)?;
+    let (output_extents, output_strides, output_modes) = real_view_operand::<T>(
+        op,
+        &dims_to_i64(op, output.shape())?,
+        &output_strides,
+        &modes,
+    )?;
     let input_res = resolve_view_operand(backend.runtime(), view, op)?;
     let output_res = resolve_owned_operand(backend.runtime(), &output, op)?;
     if output.n_elements() == 0 {
@@ -393,7 +496,7 @@ where
             input_modes: &modes,
             output_extents: &output_extents,
             output_strides: &output_strides,
-            output_modes: &modes,
+            output_modes: &output_modes,
             input_alignment_requirement: view_descriptor_alignment_requirement::<T>(),
             output_alignment_requirement: CUDA_ALLOCATION_ALIGNMENT,
             input_op: CutensorOperator::Identity,
@@ -450,7 +553,6 @@ where
     }
 
     backend.runtime().set_current_cuda_context(op)?;
-    let input_extents = dims_to_i64(op, src.shape())?;
     // Describe the source with its own strides, exactly like the allocating
     // materialization path above. cuTENSOR accepts explicit strides on every
     // operand, and `resolve_prepared_device_region` folds the view offset into
@@ -458,6 +560,8 @@ where
     // place instead of being canonicalized into scratch first.
     let input_strides = view_strides_i64(src.strides(), op)?;
     let modes = identity_modes(op, src.shape().len())?;
+    let (input_extents, input_strides, modes) =
+        real_view_operand::<T>(op, &dims_to_i64(op, src.shape())?, &input_strides, &modes)?;
     // Describe the destination in physical stride order. This is equivalent
     // to the logical-order view descriptor, but lets cuTENSOR see the same
     // permutation layout as the direct destination-reuse control. In
@@ -466,6 +570,8 @@ where
     // with swapped strides that may select a slower plan.
     let (output_extents, output_strides, output_modes) =
         physical_output_descriptor(op, dst.shape(), dst.strides())?;
+    let (output_extents, output_strides, output_modes) =
+        real_view_operand::<T>(op, &output_extents, &output_strides, &output_modes)?;
     let input_res = resolve_prepared_device_region::<T>(
         backend.runtime(),
         prepared_view_access(src, op)?,
@@ -568,12 +674,19 @@ where
         "output",
         op,
     )?;
-    let alpha = T::one();
+    let alpha = T::vendor_alpha();
     let stream = raw_stream(backend.runtime())?;
+    // The descriptor element type decides how cuTENSOR reads `alpha`; a
+    // complex `alpha` would be applied as a complex multiply and would turn a
+    // finite component of `(inf, finite)` into `NaN`.
+    let alpha_ptr = match &alpha {
+        VendorAlpha::F32(value) => value as *const f32 as *const c_void,
+        VendorAlpha::F64(value) => value as *const f64 as *const c_void,
+    };
     cached_cutensor_permutation::<T, _>(backend, &spec, op, |cutensor, plan| unsafe {
         cutensor.permute(
             plan,
-            &alpha as *const T as *const c_void,
+            alpha_ptr,
             input_res.ptr as *const c_void,
             output_res.ptr,
             stream,

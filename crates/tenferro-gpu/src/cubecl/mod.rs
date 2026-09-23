@@ -1526,6 +1526,11 @@ impl CudaBackend {
         }
         let source_allocation_len = source_buffer.len();
         let destination_allocation_len = destination_buffer.len();
+        if let Some(plan) = self.transpose_copy_plan(src, dst, op)? {
+            let dst_arg = typed_view_mut_array_arg(dst, op)?;
+            let src_arg = typed_view_array_arg(src, op)?;
+            return launch_native_materialization::<T>(self, dst_arg, src_arg, &plan, op);
+        }
         if src.offset() == 0 && src.is_col_major_contiguous()? {
             let strides = view_strides_i64(dst.strides(), op)?;
             let base_offset = view_offset_i64(dst.offset(), op)?;
@@ -1599,6 +1604,97 @@ impl CudaBackend {
         Ok(())
     }
 
+    /// Build a tiled-transpose plan for a copy whose destination is a
+    /// row-major-compact view at offset zero.
+    ///
+    /// Copying from a compact column-major source into a row-major compact
+    /// destination of the same logical shape writes exactly the same physical
+    /// bytes as materializing the transposed source into a compact
+    /// column-major destination. Selecting that plan keeps the value-exact
+    /// native path while replacing the uncoalesced access pattern of
+    /// `contiguous_to_view_kernel` with the existing tiled transpose kernel.
+    ///
+    /// Returns `Ok(None)` whenever the layout is outside that narrow shape, so
+    /// every other copy keeps its current kernel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] when the transposed plan is rejected
+    /// by bounds, stride-overflow, or destination-overlap validation; the
+    /// remaining copy kernels would reject the same layouts.
+    fn transpose_copy_plan<T, R>(
+        &self,
+        src: &TypedTensorView<'_, T, R>,
+        dst: &TypedTensorViewMut<'_, T, R>,
+        op: &'static str,
+    ) -> crate::Result<Option<NativePermutationPlan>>
+    where
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+        R: TensorRank,
+    {
+        let shape = dst.shape();
+        if !(2..=3).contains(&shape.len()) || dst.offset() != 0 {
+            return Ok(None);
+        }
+        // The transpose kernel writes a compact column-major region starting at
+        // the bound allocation, so the destination view must be exactly that
+        // address range: row-major compact at offset zero.
+        let mut row_major_compact = vec![1isize; shape.len()];
+        for axis in (0..shape.len() - 1).rev() {
+            let extent = isize::try_from(shape[axis + 1]).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "shape",
+                    "row-major stride extent exceeds the isize metadata limit",
+                )
+            })?;
+            row_major_compact[axis] =
+                row_major_compact[axis + 1]
+                    .checked_mul(extent)
+                    .ok_or_else(|| {
+                        crate::Error::invalid_argument(
+                            op,
+                            "shape",
+                            "row-major stride product overflow in the copy destination",
+                        )
+                    })?;
+        }
+        if dst.strides() != row_major_compact {
+            return Ok(None);
+        }
+        let source_allocation_len = src
+            .backend_buffer()
+            .map(|buffer| buffer.len())
+            .ok_or_else(|| crate::Error::runtime_state(op, "expected a CUDA source view"))?;
+        let destination_allocation_len = dst
+            .backend_buffer()
+            .map(|buffer| buffer.len())
+            .ok_or_else(|| crate::Error::runtime_state(op, "expected a CUDA destination view"))?;
+        let permutation: Vec<usize> = (0..shape.len()).rev().collect();
+        let plan = NativePermutationPlan::for_transpose(
+            op,
+            src.shape(),
+            src.strides(),
+            &permutation,
+            src.offset(),
+            source_allocation_len,
+            destination_allocation_len,
+            false,
+        )?;
+        if plan.kind != NativePermutationKind::TiledTranspose {
+            return Ok(None);
+        }
+        Ok(Some(plan))
+    }
+
+    /// Copy through the cuTENSOR permutation executor when the layout supports
+    /// it, otherwise through the exact native copy.
+    ///
+    /// Only real dtypes use this: for `F32`/`F64` the vendor `alpha = 1`
+    /// multiply is exact, and cuTENSOR is markedly faster than the native
+    /// kernel for a multi-axis permutation destination. Complex dtypes are
+    /// routed to the native copy instead, because for them the same multiply
+    /// turns a finite component into `NaN` (issue #1891).
     fn copy_view_to_view_cutensor_or_cubecl<T, R>(
         &self,
         src: &TypedTensorView<'_, T, R>,
@@ -5760,6 +5856,11 @@ impl TensorStructural for CudaBackend {
                 }
             }};
         }
+        // Every numeric dtype uses the cuTENSOR permutation path, which is the
+        // bandwidth-bound optimum for a multi-axis permutation destination.
+        // Complex dtypes are planned through their real view with a real
+        // `alpha = 1`, so the scaling multiply is exact and cannot turn
+        // `(inf, finite)` into `(inf, NaN)` (issue #1891).
         macro_rules! copy_source_cutensor {
             ($variant:ident, $src:expr) => {{
                 let src = $src;

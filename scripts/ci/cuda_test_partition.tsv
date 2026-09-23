@@ -695,10 +695,11 @@ gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_cutensor_permutation_tran
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_bool_copy_reports_intentional_erased_limitation
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_bool_materialization_reports_intentional_erased_limitation
 benchmark	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark
-gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_into_cutensor_matches_complex_destination_reuse
+gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_into_matches_complex_destination_reuse
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_into_cutensor_matches_destination_reuse_and_survives_source_mutation
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_is_object_safe_and_updates_strided_destination
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_read_into_consumes_transposed_source
+gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_read_into_preserves_non_finite_complex_components
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_materialization_is_object_safe_and_stays_on_device
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_to_contiguous_bool_view_returns_unsupported_dtype
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_to_contiguous_empty_view_stays_on_cuda
