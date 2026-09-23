@@ -64,8 +64,8 @@ both the FFT extension and its provider:
 
 ```toml
 [dependencies]
-tenferro-fft = { version = "0.6", features = ["cuda"] }
-tenferro-gpu = { version = "0.6", default-features = false, features = ["cuda"] }
+tenferro-fft = { version = "0.7", features = ["cuda"] }
+tenferro-gpu = { version = "0.7", default-features = false, features = ["cuda"] }
 ```
 
 The CUDA provider needs a compatible NVIDIA toolkit and driver. Set
