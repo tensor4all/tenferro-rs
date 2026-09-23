@@ -68,7 +68,11 @@ fn the_shared_fold_rounds_at_every_step() {
     // between the stalled chain and the exact sum.
     let ones = values(&[1.0; 300]);
     let total = scalar_fold::<Bf16, Bf16Add>("sum", &ones, Bf16::zero()).expect("shared fold");
-    assert!((256.0..=300.0).contains(&total.to_f32()), "{}", total.to_f32());
+    assert!(
+        (256.0..=300.0).contains(&total.to_f32()),
+        "{}",
+        total.to_f32()
+    );
     assert_eq!(sum_with_per_step_rounding(ones.as_slice()).to_f32(), 256.0);
 }
 
