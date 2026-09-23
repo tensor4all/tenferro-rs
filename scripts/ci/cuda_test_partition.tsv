@@ -465,7 +465,7 @@ host	tenferro-gpu	cubecl::error::tests::unsupported_dtype_preserves_classificati
 host	tenferro-gpu	cubecl::error::tests::workspace_overflow_preserves_classification_and_source
 host	tenferro-gpu	cubecl::ffi::cutensor::tests::cutensor_loader_missing_library_is_typed_io_error
 host	tenferro-gpu	cubecl::ffi::cutensor::tests::cutensor_sm70_guard_uses_reproduced_version_boundary
-host	tenferro-gpu	cubecl::tests::shared_workspace_tests::default_retention_cap_is_one_gib
+host	tenferro-gpu	cubecl::tests::shared_workspace_tests::default_retention_cap_is_ten_gib
 host	tenferro-gpu	cubecl::tests::shared_workspace_tests::plan_workspace_reuses_retains_exact_and_falls_back_to_temporary
 host	tenferro-gpu	cubecl::tests::shared_workspace_tests::shared_workspace_capacity_rounds_to_power_of_two_with_a_floor
 gpu	tenferro-gpu	cubecl::interop::tests::fill_zero::fill_zero_clears_a_compact_region_at_a_nonzero_offset

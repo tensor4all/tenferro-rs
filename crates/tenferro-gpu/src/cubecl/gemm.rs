@@ -1451,7 +1451,9 @@ where
         WorkspacePlan::Temporary(capacity) => {
             // The request does not fit the retention cap. Run it in a
             // temporary buffer that is retired through the event queue after
-            // the call; the slot keeps whatever buffer it already had.
+            // the call; the slot keeps whatever buffer it already had. Record
+            // the use so a caller can tell that the cap is binding.
+            backend.note_cutensor_temporary_workspace();
             let temporary = alloc_workspace(backend.runtime(), capacity)?;
             let cached = state
                 .plans

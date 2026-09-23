@@ -117,6 +117,11 @@ fn cuda_cutensor_shared_workspace_does_not_evict_plan_cache_by_bytes() {
     assert_eq!(gpu.cutensor_plan_cache_max_entries().unwrap().get(), 2);
     assert!(gpu.cutensor_workspace_bytes().unwrap() >= 1 << 20);
     assert!(gpu.cuda_extension_cache_stats().unwrap().retained_bytes < 64 * 1024);
+    assert_eq!(
+        gpu.cutensor_workspace_temporary_uses(),
+        0,
+        "the default cap must not be binding for these shapes"
+    );
     gpu.clear_cuda_extension_cache().unwrap();
     assert_eq!(gpu.cutensor_workspace_bytes().unwrap(), 0);
     for (actual, expected) in results {
@@ -130,8 +135,8 @@ fn cuda_cutensor_default_retention_cap_survives_cache_clear() {
     let gpu = gpu_backend();
     assert_eq!(
         gpu.cutensor_workspace_max_retained_bytes(),
-        1 << 30,
-        "the default retention cap is 1 GiB"
+        10 << 30,
+        "the default retention cap is 10 GiB"
     );
     gpu.set_cutensor_workspace_max_retained_bytes(3 * 1024 * 1024)
         .unwrap();
@@ -162,6 +167,11 @@ fn cuda_cutensor_zero_retention_cap_runs_without_retaining_scratch() {
         gpu.cutensor_workspace_stats().unwrap(),
         CutensorWorkspaceStats::default(),
         "a zero cap must retain no scratch"
+    );
+    assert_eq!(
+        gpu.cutensor_workspace_temporary_uses(),
+        3,
+        "a zero cap must route every scratch-requiring contraction to a temporary workspace"
     );
     let stats = gpu.cutensor_plan_cache_stats().unwrap();
     assert_eq!(

@@ -249,6 +249,8 @@ fn cuda_backend_exposes_extension_cache_retained_byte_controls() {
         CudaBackend::cutensor_workspace_max_retained_bytes;
     let _cutensor_workspace_cap_setter: fn(&CudaBackend, u64) -> crate::Result<()> =
         CudaBackend::set_cutensor_workspace_max_retained_bytes;
+    let _cutensor_temporary_uses: fn(&CudaBackend) -> u64 =
+        CudaBackend::cutensor_workspace_temporary_uses;
     let _cutensor_getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
         CudaBackend::cutensor_plan_cache_max_entries;
     let _cutensor_setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =

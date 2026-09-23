@@ -358,6 +358,10 @@ struct CudaBackendState {
     // Backend-level so the configured cap survives clearing or evicting the
     // extension-cache entry that owns the shared scratch pool itself.
     cutensor_workspace_max_retained_bytes: AtomicU64,
+    // Backend-level for the same reason, and cumulative across cache clears:
+    // it is a diagnostic for whether the cap is set below the workload's real
+    // requirement, not a per-cache statistic.
+    cutensor_workspace_temporary_uses: AtomicU64,
     rt: CudaRuntime,
 }
 
@@ -393,8 +397,11 @@ const DEFAULT_CUDA_EXTENSION_CACHE_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 ///
 /// This bounds only the scratch the backend keeps for reuse, not total device
 /// memory: a contraction whose requirement exceeds the remaining cap still runs
-/// in a temporary workspace. See `CudaBackend::cutensor_workspace_stats`.
-const DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES: u64 = 1 << 30;
+/// in a temporary workspace. It is deliberately permissive, because there is no
+/// single optimal cap across workloads and the cap never affects correctness;
+/// callers that need to bound retained device memory configure a smaller value.
+/// On a device with less free memory than this the cap simply never binds.
+const DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES: u64 = 10 << 30;
 
 struct CudaExtensionCacheEntry {
     value: Box<dyn Any + Send>,
@@ -799,6 +806,7 @@ impl CudaBackend {
                 cutensor_workspace_max_retained_bytes: AtomicU64::new(
                     DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES,
                 ),
+                cutensor_workspace_temporary_uses: AtomicU64::new(0),
                 rt: CudaRuntime::new(device_id)?,
             }),
         })
@@ -963,6 +971,24 @@ impl CudaBackend {
     ///
     /// Read this to size a retention cap: it is the high-water demand of the
     /// workload shapes that have run so far.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // `gpu_available` never panics without a CUDA driver, so this
+    /// // example also runs in CPU-only doctest environments.
+    /// if gpu_available() {
+    ///     let device = cuda_devices()?.remove(0);
+    ///     let backend = CudaBackend::new(device.id())?;
+    ///     let stats = backend.cutensor_workspace_stats()?;
+    ///     println!("{:?}", (stats.retained_entries, stats.retained_bytes));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
@@ -973,6 +999,23 @@ impl CudaBackend {
     /// Return the device bytes retained by the shared cuTENSOR contraction
     /// scratch. Equal to
     /// [`CudaBackend::cutensor_workspace_stats`]`().retained_bytes`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // `gpu_available` never panics without a CUDA driver, so this
+    /// // example also runs in CPU-only doctest environments.
+    /// if gpu_available() {
+    ///     let device = cuda_devices()?.remove(0);
+    ///     let backend = CudaBackend::new(device.id())?;
+    ///     println!("{} bytes retained", backend.cutensor_workspace_bytes()?);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
@@ -983,11 +1026,28 @@ impl CudaBackend {
     /// Return the configured retention cap for shared cuTENSOR contraction
     /// scratch, in bytes.
     ///
-    /// The default is 1 GiB. See
+    /// The default is 10 GiB. See
     /// [`CudaBackend::set_cutensor_workspace_max_retained_bytes`] for the
     /// contract; this value is not a device-memory reservation. The cap is
     /// plain backend state, so reading it cannot fail and never creates cache
     /// state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // `gpu_available` never panics without a CUDA driver, so this
+    /// // example also runs in CPU-only doctest environments.
+    /// if gpu_available() {
+    ///     let device = cuda_devices()?.remove(0);
+    ///     let backend = CudaBackend::new(device.id())?;
+    ///     println!("cap {} bytes", backend.cutensor_workspace_max_retained_bytes());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn cutensor_workspace_max_retained_bytes(&self) -> u64 {
         self.cutensor_workspace_limit()
     }
@@ -1002,7 +1062,7 @@ impl CudaBackend {
     /// room.
     ///
     /// `0` disables retention entirely; it is not "unlimited". The default
-    /// (1 GiB) is finite but is not a practical memory protection, and neither
+    /// (10 GiB) is finite but is not a practical memory protection, and neither
     /// the cap nor the reported statistics bound total device memory.
     ///
     /// Setting a cap below the steady-state working set makes matching
@@ -1016,6 +1076,23 @@ impl CudaBackend {
     /// The setting is stored on the backend, so it survives
     /// `CudaBackend::clear_cuda_extension_cache` and extension-cache eviction,
     /// and is shared by clones of this backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // `gpu_available` never panics without a CUDA driver, so this
+    /// // example also runs in CPU-only doctest environments.
+    /// if gpu_available() {
+    ///     let device = cuda_devices()?.remove(0);
+    ///     let backend = CudaBackend::new(device.id())?;
+    ///     backend.set_cutensor_workspace_max_retained_bytes(4 << 30)?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the plan-cache mutex is
@@ -1032,6 +1109,51 @@ impl CudaBackend {
         self.inner
             .cutensor_workspace_max_retained_bytes
             .load(Ordering::Relaxed)
+    }
+
+    /// Return how many contractions ran in a temporary shared-scratch
+    /// workspace because their requirement did not fit the retention cap.
+    ///
+    /// This is the direct signal that the cap is binding. A nonzero value means
+    /// the matching contractions allocated and retired their scratch on every
+    /// call instead of reusing a retained buffer; the high-water from
+    /// [`CudaBackend::cutensor_workspace_bytes`] then under-reports the real
+    /// requirement. Raise
+    /// [`CudaBackend::set_cutensor_workspace_max_retained_bytes`] until this
+    /// stops increasing, or accept the churn deliberately.
+    ///
+    /// The count is cumulative for the backend, shared by clones, and is not
+    /// reset by `CudaBackend::clear_cuda_extension_cache`; diff two reads to
+    /// measure an interval. Reading it cannot fail and never creates cache
+    /// state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // `gpu_available` never panics without a CUDA driver, so this
+    /// // example also runs in CPU-only doctest environments.
+    /// if gpu_available() {
+    ///     let device = cuda_devices()?.remove(0);
+    ///     let backend = CudaBackend::new(device.id())?;
+    ///     println!("{} temporary uses", backend.cutensor_workspace_temporary_uses());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn cutensor_workspace_temporary_uses(&self) -> u64 {
+        self.inner
+            .cutensor_workspace_temporary_uses
+            .load(Ordering::Relaxed)
+    }
+
+    /// Record one cap-driven temporary workspace use.
+    fn note_cutensor_temporary_workspace(&self) {
+        self.inner
+            .cutensor_workspace_temporary_uses
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Return deferred cuTENSOR workspace retirement counters.
