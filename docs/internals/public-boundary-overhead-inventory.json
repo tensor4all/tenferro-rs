@@ -2235,6 +2235,7 @@
             "log_abs_det_from_lu_factor",
             "lu",
             "lu_factor",
+            "lu_factor_solve",
             "lu_solve_prepared",
             "qr",
             "rank_revealing_qr",

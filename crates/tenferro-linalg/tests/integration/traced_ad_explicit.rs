@@ -1783,8 +1783,10 @@ fn traced_complex_solve_vjp_matches_finite_diff() {
     // Split each complex entry into (re, im) coordinates for finite differences.
     let pack = |v: &[Complex64]| v.iter().flat_map(|z| [z.re, z.im]).collect::<Vec<f64>>();
     let unpack = |v: &[f64]| {
-        v.chunks_exact(2)
-            .map(|p| Complex64::new(p[0], p[1]))
+        v.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[re, im]| Complex64::new(re, im))
             .collect::<Vec<_>>()
     };
     let loss_value = |a: &[Complex64], b: &[Complex64]| get_c64_data(&eval(&loss_of(a, b).2))[0].re;
