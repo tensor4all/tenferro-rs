@@ -22,8 +22,8 @@ all-features = true
 name = "tenferro_cpu_fused"
 
 [dependencies]
-tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.7.0" }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.0" }
+tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.7.1" }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.1" }
 num-complex.workspace = true
 num-traits.workspace = true
 strided-basic.workspace = true
