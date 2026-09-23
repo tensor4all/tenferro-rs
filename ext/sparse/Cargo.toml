@@ -37,13 +37,3 @@ inherits = "test"
 debug = 0
 incremental = false
 strip = "symbols"
-
-# Local proof that the strided-rs CPU kernel migration is drop-in. Remove this
-# section once the strided-rs PR lands and the root strided rev is bumped.
-[patch."https://github.com/tensor4all/strided-rs.git"]
-strided-view = { path = "../../../strided-rs-cpu-migration/strided-view" }
-strided-traits = { path = "../../../strided-rs-cpu-migration/strided-traits" }
-strided-perm = { path = "../../../strided-rs-cpu-migration/strided-perm" }
-strided-basic = { path = "../../../strided-rs-cpu-migration/strided-basic" }
-strided-fused = { path = "../../../strided-rs-cpu-migration/strided-fused" }
-strided-kernel = { path = "../../../strided-rs-cpu-migration/strided-kernel" }

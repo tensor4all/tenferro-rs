@@ -61,13 +61,13 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# strided-rs #254 merge commit; update only with an intentional dependency bump.
-strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1be41ce4e656376cb3aa533d97a7711243b1b9ce", version = "0.4.0" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1be41ce4e656376cb3aa533d97a7711243b1b9ce", version = "0.4.0" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1be41ce4e656376cb3aa533d97a7711243b1b9ce", version = "0.4.0", features = ["parallel"] }
-strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1be41ce4e656376cb3aa533d97a7711243b1b9ce", version = "0.4.0", default-features = false }
-strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1be41ce4e656376cb3aa533d97a7711243b1b9ce", version = "0.4.0", default-features = false, features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "1be41ce4e656376cb3aa533d97a7711243b1b9ce", version = "0.4.0", features = ["parallel"] }
+# strided-rs #266 merge commit; update only with an intentional dependency bump.
+strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "23b8582f7aaff09ad93a532a0c1d9e3b16ee58f8", version = "0.4.1" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "23b8582f7aaff09ad93a532a0c1d9e3b16ee58f8", version = "0.4.1" }
+strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "23b8582f7aaff09ad93a532a0c1d9e3b16ee58f8", version = "0.4.1", features = ["parallel"] }
+strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "23b8582f7aaff09ad93a532a0c1d9e3b16ee58f8", version = "0.4.1", default-features = false }
+strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "23b8582f7aaff09ad93a532a0c1d9e3b16ee58f8", version = "0.4.1", default-features = false, features = ["parallel"] }
+strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "23b8582f7aaff09ad93a532a0c1d9e3b16ee58f8", version = "0.4.1", features = ["parallel"] }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
@@ -113,13 +113,3 @@ incremental = true
 inherits = "test"
 incremental = false
 strip = "symbols"
-
-# Local proof that the strided-rs CPU kernel migration is drop-in. Remove this
-# section and bump the strided rev once the strided-rs PR lands.
-[patch."https://github.com/tensor4all/strided-rs.git"]
-strided-view = { path = "../strided-rs-cpu-migration/strided-view" }
-strided-traits = { path = "../strided-rs-cpu-migration/strided-traits" }
-strided-perm = { path = "../strided-rs-cpu-migration/strided-perm" }
-strided-basic = { path = "../strided-rs-cpu-migration/strided-basic" }
-strided-fused = { path = "../strided-rs-cpu-migration/strided-fused" }
-strided-kernel = { path = "../strided-rs-cpu-migration/strided-kernel" }
