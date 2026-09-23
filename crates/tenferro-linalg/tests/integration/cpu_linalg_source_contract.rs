@@ -630,7 +630,11 @@ fn lapack_ffi_unsafe_blocks_document_safety_invariants() {
 #[test]
 fn lapack_right_triangular_solve_uses_right_side_trsm_without_physical_transposes() {
     let source = cpu_lapack_source("triangular_solve.rs");
-    let solve_right = source_section(&source, "fn solve_right", "fn triangular_solve_2d");
+    let solve_right = source_section(
+        &source,
+        "} else {\n            if !unit_diagonal {",
+        "tensor_from_vec_with_template(b.shape().to_vec(), output, b)",
+    );
 
     assert!(
         solve_right.contains("T::trsm("),
@@ -688,15 +692,15 @@ fn lapack_batched_helpers_reuse_input_scratch_instead_of_copying_per_batch() {
 #[test]
 fn lapack_full_piv_lu_rejects_positive_getc2_info() {
     let source = cpu_lapack_full_piv_lu_source();
-    let factor = source_section(&source, "fn factor_getc2", "fn full_piv_lu_2d");
+    let factor = source_section(&source, "fn getc2_in_place", "fn factor_getc2");
 
     assert!(
         factor.contains("check_lapack_info(op, \"getc2\", info.min(0))?;"),
-        "factor_getc2 should still report negative LAPACK argument errors"
+        "getc2_in_place should still report negative LAPACK argument errors"
     );
     assert!(
         factor.contains("if info > 0"),
-        "factor_getc2 should not discard positive getc2 singularity info"
+        "getc2_in_place should not discard positive getc2 singularity info"
     );
     assert!(
         factor.contains("crate::Error::Singular"),
@@ -790,19 +794,18 @@ fn linalg_batched_helpers_use_checked_products_and_slice_ranges() {
     );
 
     let faer_source = cpu_faer_linalg_source();
-    let batch_count = source_section(&faer_source, "fn batch_count", "fn checked_repeated_len");
-    assert!(
-        !batch_count.contains(".iter().product"),
-        "faer batch_count must use checked products"
-    );
     let lu_factor = source_section(
         &faer_source,
-        "pub(crate) fn lu_factor<T: FaerLinalg>",
+        "pub(crate) fn lu_factor<T: FaerLinalg + FaerPackedLu>",
         "pub(crate) fn full_piv_lu<T: FaerLinalg>",
     );
     assert!(
+        !lu_factor.contains(".iter().product") && lu_factor.contains("checked_product("),
+        "faer LU factor batch counts must use checked products"
+    );
+    assert!(
         !lu_factor.contains("batch * matrix_len") && !lu_factor.contains("start + matrix_len"),
-        "faer LU factor batching must use checked_slice_range for batch windows"
+        "faer LU factor batching must iterate checked chunks instead of raw batch offsets"
     );
 }
 

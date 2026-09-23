@@ -1361,3 +1361,85 @@ fn matmul_2x2_c64(lhs: &[Complex64], rhs: &[Complex64]) -> Vec<Complex64> {
         })
         .collect()
 }
+
+/// Tracked eager solve runs one fused factor solve; its backward reuses the
+/// saved factors. The gradient pairing matches central finite differences of
+/// the concrete partial pivot solve on a batched, pivoting system.
+#[test]
+fn tracked_batched_solve_backward_matches_finite_diff() {
+    let mut a_data = vec![
+        0.3, -0.2, 0.1, 0.2, 0.4, -0.3, -0.1, 0.25, 0.15, //
+        -0.35, 0.05, 0.2, 0.1, -0.15, 0.3, 0.2, 0.1, -0.25,
+    ];
+    for k in 0..2 {
+        for col in 0..3 {
+            a_data[k * 9 + (col + 1) % 3 + col * 3] += 4.0;
+        }
+    }
+    let b_data = vec![
+        1.0, -2.0, 0.5, 0.25, 1.5, -1.0, -0.5, 2.0, 1.0, 0.75, -1.25, 0.5,
+    ];
+    let loss_value = |a: &[f64], b: &[f64]| {
+        let mut backend = CpuBackend::new();
+        let x = crate::support::with_cpu_linalg(&mut backend, |session| {
+            session.solve(
+                &Tensor::from_vec_col_major(vec![3, 3, 2], a.to_vec()).unwrap(),
+                &Tensor::from_vec_col_major(vec![3, 2, 2], b.to_vec()).unwrap(),
+            )
+        })
+        .unwrap();
+        f64_data(&x).iter().map(|v| v * v).sum::<f64>()
+    };
+
+    let ctx = ad_test_ctx();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![3, 3, 2], a_data.clone()).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let b = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![3, 2, 2], b_data.clone()).unwrap(),
+        ctx,
+    )
+    .unwrap();
+    let x = a.solve(&b).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0, 1, 2])).unwrap();
+    let _ = loss.backward().unwrap();
+    let grad_a = a.grad().unwrap().unwrap().to_tensor().unwrap();
+    let grad_b = b.grad().unwrap().unwrap().to_tensor().unwrap();
+
+    let step = 1.0e-6;
+    for (label, grad, is_a) in [("A", &grad_a, true), ("B", &grad_b, false)] {
+        let base = if is_a { &a_data } else { &b_data };
+        let direction: Vec<f64> = (0..base.len())
+            .map(|i| ((i * 5) % 7) as f64 * 0.05 - 0.15)
+            .collect();
+        let shifted = |sign: f64| {
+            base.iter()
+                .zip(&direction)
+                .map(|(v, d)| v + sign * step * d)
+                .collect::<Vec<_>>()
+        };
+        let (plus, minus) = if is_a {
+            (
+                loss_value(&shifted(1.0), &b_data),
+                loss_value(&shifted(-1.0), &b_data),
+            )
+        } else {
+            (
+                loss_value(&a_data, &shifted(1.0)),
+                loss_value(&a_data, &shifted(-1.0)),
+            )
+        };
+        let fd = (plus - minus) / (2.0 * step);
+        let analytic: f64 = f64_data(grad)
+            .iter()
+            .zip(&direction)
+            .map(|(g, d)| g * d)
+            .sum();
+        assert!(
+            (analytic - fd).abs() < 1.0e-6 * (1.0 + fd.abs()),
+            "tracked solve VJP wrt {label}: analytic {analytic}, finite difference {fd}"
+        );
+    }
+}

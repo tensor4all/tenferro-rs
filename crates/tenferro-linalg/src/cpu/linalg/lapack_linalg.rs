@@ -21,6 +21,9 @@ pub(crate) use qr::{
     from_factors_2d as householder_qr_from_factors, q_columns_2d as householder_qr_q_columns, qr,
     rank_revealing_qr, raw_r_2d as householder_qr_r,
 };
-pub(crate) use solve::{solve, solve_from_views, solve_into};
+pub(crate) use solve::{
+    lu_factor_solve_batched_in_place, lu_solve_prepared_batched_in_place, solve, solve_from_views,
+    solve_into,
+};
 pub(crate) use svd::{svd, svd_full, svd_values};
 pub(crate) use triangular_solve::triangular_solve;

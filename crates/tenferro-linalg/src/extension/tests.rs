@@ -46,6 +46,7 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
         LinalgOp::FullPivLuSolve { transpose_a: false },
         LinalgOp::FullPivLuSolve { transpose_a: true },
         LinalgOp::Solve,
+        LinalgOp::LuFactorSolve,
         LinalgOp::Svd {
             derivative_eps: 0.0,
             gauge: SvdGauge::Raw,

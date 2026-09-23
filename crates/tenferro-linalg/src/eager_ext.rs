@@ -1,6 +1,7 @@
 // Solve residual policy reference: PyTorch 8dd3b763, derivatives.yaml's
 // _linalg_solve_ex and FunctionsManual.cpp::linalg_solve_backward. The tracked
-// implementation composes tenferro's existing LuFactor/LuSolvePrepared ops.
+// implementation runs the fused LuFactorSolve op, whose saved factors feed the
+// LuSolvePrepared adjoint solve.
 use std::sync::Arc;
 
 use tenferro_ad::error::{Error, Result};
@@ -1244,33 +1245,21 @@ pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
         });
     }
     crate::validation::validate_solve_inputs(a.dtype(), a.shape(), b.dtype(), b.shape())?;
-    // Follow the existing traced composite. Like PyTorch's _linalg_solve_ex /
-    // FunctionsManual.cpp::linalg_solve_backward, retain LU/pivots and X for
-    // backward, while the explicit A operand preserves higher-order semantics.
-    let mut factors = apply_linalg_eager(LinalgOp::LuFactor, &[a])?.into_iter();
-    let (packed_lu, pivots) = match (
-        factors.next(),
-        factors.next(),
-        factors.next(),
-        factors.next(),
+    // Like PyTorch's _linalg_solve_ex / FunctionsManual.cpp::linalg_solve_backward,
+    // one fused factor+solve retains LU/pivots and X for backward, while the
+    // explicit A operand preserves higher-order semantics.
+    let mut outputs = apply_linalg_eager(LinalgOp::LuFactorSolve, &[a, b])?.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
     ) {
-        (Some(lu), Some(pivots), Some(_parity), None) => (lu, pivots),
-        _ => {
-            return Err(Error::Internal(
-                "lu_factor eager op returned an unexpected number of outputs".into(),
-            ))
-        }
-    };
-    one_output(
-        apply_linalg_eager(
-            LinalgOp::LuSolvePrepared {
-                transpose_a: false,
-                conjugate_a: false,
-            },
-            &[a, &packed_lu, &pivots, b],
-        )?,
-        "solve",
-    )
+        (Some(x), Some(_packed_lu), Some(_pivots), None) => Ok(x),
+        _ => Err(Error::Internal(
+            "lu_factor_solve eager op returned an unexpected number of outputs".into(),
+        )),
+    }
 }
 
 /// Cholesky factorization for eager tensors.

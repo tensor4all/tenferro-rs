@@ -18,25 +18,21 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 }
 
 #[test]
-fn traced_solve_builds_factor_then_prepared_solve() {
+fn traced_solve_builds_one_fused_factor_solve() {
     let source = crate_source("src/traced.rs");
     let solve_source = source_section(
         &source,
         "pub fn solve",
-        "/// Build a traced full-pivot LU solve op",
+        "/// Build a traced least-squares solve",
     );
 
     assert!(
-        solve_source.contains("LinalgOp::LuFactor"),
-        "traced solve should emit an internal packed LU factor op"
+        solve_source.contains("LinalgOp::LuFactorSolve"),
+        "traced solve should emit the fused factor+solve op"
     );
     assert!(
-        solve_source.contains("LinalgOp::LuSolvePrepared"),
-        "traced solve should emit an internal prepared LU solve op"
-    );
-    assert!(
-        !solve_source.contains("LinalgOp::Solve"),
-        "traced solve should not emit the legacy monolithic solve op"
+        !solve_source.contains("LinalgOp::LuSolvePrepared"),
+        "traced solve should not split into a separate prepared solve op"
     );
 }
 

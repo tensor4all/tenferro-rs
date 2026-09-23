@@ -62,11 +62,6 @@ pub(crate) trait FaerLinalg:
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
-    fn lu_factor_2d(
-        ctx: &CpuExecutionContext<'_>,
-        buffers: &mut BufferPool,
-        input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)>;
     fn full_piv_lu_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -510,10 +505,6 @@ fn checked_product(
         .ok_or_else(|| invalid_config(op, format!("{role} element count overflows usize")))
 }
 
-fn batch_count(op: &'static str, batch_shape: &[usize]) -> tenferro_tensor::Result<usize> {
-    Ok(checked_product(op, "batch shape", batch_shape)?.max(1))
-}
-
 fn checked_repeated_len(
     op: &'static str,
     role: &'static str,
@@ -944,26 +935,6 @@ fn permutation_matrix<T: Copy + Default>(
         data[row + source * n] = one;
     }
     Ok(data)
-}
-
-fn swap_sequence_from_permutation(
-    perm: &[usize],
-    k: usize,
-    op: &'static str,
-) -> tenferro_tensor::Result<Vec<i32>> {
-    let mut current: Vec<usize> = (0..perm.len()).collect();
-    let mut pivots = Vec::with_capacity(k);
-    for (step, &wanted) in perm.iter().take(k).enumerate() {
-        let pivot = current
-            .iter()
-            .position(|&row| row == wanted)
-            .ok_or_else(|| invalid_config(op, "invalid row permutation"))?;
-        current.swap(step, pivot);
-        let pivot_one_based = i32::try_from(pivot + 1)
-            .map_err(|_| invalid_config(op, "pivot index exceeds i32 range"))?;
-        pivots.push(pivot_one_based);
-    }
-    Ok(pivots)
 }
 
 impl_complex_vec_helpers!(
@@ -1855,49 +1826,6 @@ macro_rules! impl_faer_linalg_for_real {
             tensor_from_vec_with_template(vec![k, n], u_data, placement)?,
             tensor_from_vec_with_template(vec![], vec![parity], placement)?,
         ])
-    }
-
-    fn lu_factor_2d(
-        ctx: &CpuExecutionContext<'_>,
-        buffers: &mut BufferPool,
-        input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)> {
-        let (m, n) = matrix_dims(input, "lu_factor")?;
-        let k = m.min(n);
-        let mut lu = Mat::zeros(m, n);
-        lu.copy_from(MatRef::from_column_major_slice(input.host_data()?, m, n));
-        let mut perm = vec![0usize; m];
-        let mut perm_inv = vec![0usize; m];
-        let mut mem = MemBuffer::new(
-            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, Self>(
-                m,
-                n,
-                ctx.faer_parallelism(),
-                Default::default(),
-            ),
-        );
-        let stack = MemStack::new(&mut mem);
-        let info = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
-            lu.as_mut(),
-            &mut perm,
-            &mut perm_inv,
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        )
-        .0;
-        let parity = if info.transposition_count % 2 == 0 {
-            1.0
-        } else {
-            -1.0
-        };
-        let pivots = swap_sequence_from_permutation(&perm, k, "lu_factor")?;
-
-        Ok((
-            tensor_from_vec_with_template(vec![m, n], col_major_vec_from_mat(buffers, lu.as_ref())?, input.placement())?,
-            tensor_from_vec_with_template(vec![k], pivots, input.placement())?,
-            tensor_from_vec_with_template(vec![], vec![parity], input.placement())?,
-        ))
     }
 
     fn full_piv_lu_2d(
@@ -2837,53 +2765,6 @@ macro_rules! impl_faer_linalg_for_complex {
         ])
     }
 
-    fn lu_factor_2d(
-        ctx: &CpuExecutionContext<'_>,
-        _buffers: &mut BufferPool,
-        input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)> {
-        let (m, n) = matrix_dims(input, "lu_factor")?;
-        let k = m.min(n);
-        let mut lu = Mat::zeros(m, n);
-        lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(input.host_data()?),
-            m,
-            n,
-        ));
-        let mut perm = vec![0usize; m];
-        let mut perm_inv = vec![0usize; m];
-        let mut mem = MemBuffer::new(
-            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
-                m,
-                n,
-                ctx.faer_parallelism(),
-                Default::default(),
-            ),
-        );
-        let stack = MemStack::new(&mut mem);
-        let info = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
-            lu.as_mut(),
-            &mut perm,
-            &mut perm_inv,
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        )
-        .0;
-        let parity = if info.transposition_count % 2 == 0 {
-            <$complex>::new(1.0, 0.0)
-        } else {
-            <$complex>::new(-1.0, 0.0)
-        };
-        let pivots = swap_sequence_from_permutation(&perm, k, "lu_factor")?;
-
-        Ok((
-            tensor_from_vec_with_template(vec![m, n], $vec_from_mat(_buffers, lu.as_ref())?, input.placement())?,
-            tensor_from_vec_with_template(vec![k], pivots, input.placement())?,
-            tensor_from_vec_with_template(vec![], vec![parity], input.placement())?,
-        ))
-    }
-
     fn full_piv_lu_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -3752,7 +3633,7 @@ pub(crate) fn lu<T: FaerLinalg>(
     })
 }
 
-pub(crate) fn lu_factor<T: FaerLinalg>(
+pub(crate) fn lu_factor<T: FaerLinalg + FaerPackedLu>(
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -3760,7 +3641,8 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch(input, "lu_factor")?;
         let k = m.min(n);
-        let parity_len = batch_count("lu_factor", batch_shape)?;
+        // An empty batch has no parity entries; an unbatched empty matrix has one.
+        let parity_len = checked_product("lu_factor", "batch shape", batch_shape)?;
         return Ok((
             tensor_from_vec_with_template(input.shape().to_vec(), Vec::new(), input.placement())?,
             tensor_from_vec_with_template(
@@ -3777,37 +3659,23 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     }
 
     let (m, n, batch_shape) = matrix_core_and_batch(input, "lu_factor")?;
-    if batch_shape.is_empty() {
-        return T::lu_factor_2d(ctx, buffers, input);
-    }
-
     let k = m.min(n);
-    let matrix_len = checked_product("lu_factor", "matrix shape", &[m, n])?;
-    let batch_total = batch_count("lu_factor", batch_shape)?;
-    let lu_len = checked_repeated_len("lu_factor", "packed LU", matrix_len, batch_total)?;
+    let batch_total = checked_product("lu_factor", "batch shape", batch_shape)?;
     let pivot_len = checked_repeated_len("lu_factor", "pivots", k, batch_total)?;
-    let mut lu_data = buffers.acquire_with_capacity::<T>(lu_len);
-    let mut pivot_data = Vec::with_capacity(pivot_len);
+    let mut lu_data = buffers.acquire_with_capacity::<T>(input.n_elements());
+    lu_data.extend_from_slice(input.host_data()?);
+    let mut pivot_data = <i32 as PoolScalar>::pool_acquire_zeroed(buffers, pivot_len);
     let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
-
-    let first_range = checked_slice_range("lu_factor", 0, matrix_len)?;
-    let mut batch_input = tensor_from_pooled_slice_with_template(
-        buffers,
-        vec![m, n],
-        &input.host_data()?[first_range],
-        input.placement(),
+    parity_data.resize(batch_total, T::parity_one());
+    lu_factor_batched_in_place(
+        ctx,
+        "lu_factor",
+        m,
+        n,
+        &mut lu_data,
+        &mut pivot_data,
+        &mut parity_data,
     )?;
-
-    for batch in 0..batch_total {
-        if batch > 0 {
-            let range = checked_slice_range("lu_factor", batch, matrix_len)?;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
-        }
-        let (packed, pivots, parity) = T::lu_factor_2d(ctx, buffers, &batch_input)?;
-        lu_data.extend_from_slice(packed.host_data()?);
-        pivot_data.extend_from_slice(pivots.host_data()?);
-        parity_data.extend_from_slice(parity.host_data()?);
-    }
 
     Ok((
         tensor_from_vec_with_template(input.shape().to_vec(), lu_data, input.placement())?,
@@ -5295,6 +5163,13 @@ fn vector_with_batch_shape(len: usize, batch_shape: &[usize]) -> Vec<usize> {
     shape.extend_from_slice(batch_shape);
     shape
 }
+
+#[path = "faer_linalg/packed_lu.rs"]
+mod packed_lu;
+pub(crate) use packed_lu::{
+    lu_factor_batched_in_place, lu_factor_solve_batched_in_place,
+    lu_solve_prepared_batched_in_place, FaerPackedLu,
+};
 
 #[cfg(test)]
 #[path = "faer_linalg/tests.rs"]

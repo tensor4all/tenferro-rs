@@ -112,6 +112,30 @@ That feature boundary is deliberate:
 Some public APIs are naturally primal-only, especially structured status/result
 surfaces such as factorization contracts with pivots or `info` metadata.
 
+## Solve Lowering
+
+Traced `solve` and tracked eager `solve` emit one `LuFactorSolve` extension op
+with outputs `(x, packed_lu, pivots)`. The CPU backend implements it as one
+fused kernel: each matrix is factored in a pooled scratch buffer and solved in
+place, and that scratch buffer becomes the packed LU output, so a primal only
+program does the same work as the plain `Solve` kernel. The backend default,
+used by CUDA, composes `lu_factor` with `lu_solve_prepared`.
+
+Linearization emits `LuSolvePrepared` on the saved factors, and the transpose
+rule solves the adjoint system with the same factors. Reverse mode therefore
+factors A exactly once.
+
+`LuFactorSolve` is never pruned to `Solve`. Traced AD prunes unused extension
+outputs of the source program before differentiating it; a prune to `Solve`
+would drop the saved factors and make the adjoint refactor A. The untracked
+eager surface, which never differentiates, still constructs `Solve` directly.
+
+Batched CPU LAPACK kernels and the faer packed LU kernels follow one loop
+discipline: one workspace query per call, scratch reused across the batch,
+results written directly into the batched output, and no per matrix tensor or
+`Vec` allocation. `lu_solve_prepared` applies the pivots inside the provider solve
+(one `getrs` per matrix for every transpose and conjugate flag).
+
 ## Current Implementation Status
 
 The architectural boundary is now active rather than transitional:

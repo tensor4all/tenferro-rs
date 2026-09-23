@@ -1179,6 +1179,29 @@ pub trait LinalgBackend: BackendSession {
             ),
         ))
     }
+
+    /// Factor `a` and solve `a x = b`, returning `(x, packed_lu, pivots)`.
+    ///
+    /// This is the fused primal of `lu_factor` followed by
+    /// `lu_solve_prepared`. The default composes those two hooks; a backend
+    /// overrides it to run both steps in one batched kernel without the
+    /// intermediate parity output.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of `lu_factor` and `lu_solve_prepared`, including
+    /// `Error::Extension` for an exactly singular `a` with a nonempty `b`.
+    #[doc(hidden)]
+    fn lu_factor_solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let mut factors = self.lu_factor(a)?.into_iter();
+        let (Some(packed_lu), Some(pivots)) = (factors.next(), factors.next()) else {
+            return Err(tenferro_tensor::Error::Internal(
+                "lu_factor_solve: lu_factor returned fewer than two outputs".into(),
+            ));
+        };
+        let x = self.lu_solve_prepared(a, &packed_lu, &pivots, b, false, false)?;
+        Ok(vec![x, packed_lu, pivots])
+    }
 }
 
 pub(crate) fn solve_read_into_default<B: LinalgBackend + ?Sized>(

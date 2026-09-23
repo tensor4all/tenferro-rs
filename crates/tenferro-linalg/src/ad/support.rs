@@ -165,6 +165,9 @@ impl LinalgAdOpKind {
             // route (linearize + custom linear transpose) with FullPivLuSolve
             // and is not separately exposed in the public manifest.
             LinalgOp::Solve => Self::FullPivLuSolve,
+            // The fused solve is the AD carrier of `solve`, so it reports the
+            // same support entry as the plain solve kernel.
+            LinalgOp::LuFactorSolve => Self::FullPivLuSolve,
             LinalgOp::Svd { .. } => Self::Svd,
             LinalgOp::SvdFull => Self::SvdFull,
             LinalgOp::SvdVals { .. } => Self::SvdVals,

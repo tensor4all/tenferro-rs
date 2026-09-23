@@ -4,11 +4,10 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batch_element_count, batched_binary_result, check_lapack_info, checked_product, dim_i32,
-    has_zero_dim, leading_upper_triangle_from_lapack, lower_triangle_from_lapack,
-    matrix_core_and_batch_result, matrix_dims, matrix_with_batch_shape, pooled_copy, pooled_zeroed,
+    batch_element_count, check_lapack_info, checked_product, dim_i32, has_zero_dim,
+    leading_upper_triangle_from_lapack, lower_triangle_from_lapack, matrix_core_and_batch_result,
+    matrix_with_batch_shape, pooled_copy, pooled_zeroed, release_scratch,
     square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
-    transpose_col_major_data,
 };
 
 // SAFETY: declarations retain the provider's LAPACK LP64 ABI; callers validate buffers.
@@ -446,17 +445,21 @@ fn permutation_matrix<T: LapackFullPivLu>(
     Ok(data)
 }
 
-fn factor_getc2<T: LapackFullPivLu>(
-    buffers: &mut BufferPool,
+/// Run `?getc2` on one compact `n x n` matrix in place.
+///
+/// Reference LAPACK sets `IPIV(N) = JPIV(N) = N` on return, but some
+/// providers (Apple Accelerate) leave that last entry untouched. The last
+/// step of a complete-pivot elimination never swaps, and `?gesc2` only
+/// applies the first `N - 1` interchanges, so writing `N` here is exact.
+fn getc2_in_place<T: LapackFullPivLu>(
     op: &'static str,
     data: &mut [T],
-    n: usize,
-) -> tenferro_tensor::Result<(Vec<i32>, Vec<i32>, i32)> {
-    let n_i32 = dim_i32(n, op)?;
-    let mut ipiv = pooled_zeroed::<i32>(buffers, n);
-    let mut jpiv = pooled_zeroed::<i32>(buffers, n);
+    n_i32: i32,
+    ipiv: &mut [i32],
+    jpiv: &mut [i32],
+) -> tenferro_tensor::Result<()> {
     let mut info = 0;
-    T::getc2(n_i32, data, n_i32, &mut ipiv, &mut jpiv, &mut info);
+    T::getc2(n_i32, data, n_i32, ipiv, jpiv, &mut info);
     check_lapack_info(op, "getc2", info.min(0))?;
     if info > 0 {
         return Err(crate::error::into_tensor_error(
@@ -464,7 +467,24 @@ fn factor_getc2<T: LapackFullPivLu>(
             crate::Error::Singular { op },
         ));
     }
-    Ok((ipiv, jpiv, info))
+    if let (Some(last_row), Some(last_col)) = (ipiv.last_mut(), jpiv.last_mut()) {
+        *last_row = n_i32;
+        *last_col = n_i32;
+    }
+    Ok(())
+}
+
+fn factor_getc2<T: LapackFullPivLu>(
+    buffers: &mut BufferPool,
+    op: &'static str,
+    data: &mut [T],
+    n: usize,
+) -> tenferro_tensor::Result<(Vec<i32>, Vec<i32>)> {
+    let n_i32 = dim_i32(n, op)?;
+    let mut ipiv = pooled_zeroed::<i32>(buffers, n);
+    let mut jpiv = pooled_zeroed::<i32>(buffers, n);
+    getc2_in_place(op, data, n_i32, &mut ipiv, &mut jpiv)?;
+    Ok((ipiv, jpiv))
 }
 
 fn full_piv_lu_2d<T: LapackFullPivLu>(
@@ -473,7 +493,7 @@ fn full_piv_lu_2d<T: LapackFullPivLu>(
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let n = square_matrix_dim(input, "full_piv_lu")?;
     let mut lu = pooled_copy(buffers, input.host_data()?);
-    let (ipiv, jpiv, _info) = factor_getc2(buffers, "full_piv_lu", &mut lu, n)?;
+    let (ipiv, jpiv) = factor_getc2(buffers, "full_piv_lu", &mut lu, n)?;
 
     let row_perm = permutation_from_lapack_pivots(&ipiv, "full_piv_lu")?;
     let col_perm = permutation_from_lapack_pivots(&jpiv, "full_piv_lu")?;
@@ -507,58 +527,6 @@ fn full_piv_lu_2d<T: LapackFullPivLu>(
         tensor_from_vec_with_template(vec![n, n], q_data, input)?,
         tensor_from_vec_with_template(vec![], vec![parity], input)?,
     ])
-}
-
-fn solve_2d<T: LapackFullPivLu>(
-    buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
-    transpose_a: bool,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let n = square_matrix_dim(a, "full_piv_lu_solve")?;
-    let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve")?;
-    if b_rows != n {
-        return Err(tenferro_tensor::Error::shape_mismatch(
-            "full_piv_lu_solve",
-            vec![n],
-            vec![b_rows],
-        ));
-    }
-
-    let mut lu = if transpose_a {
-        transpose_col_major_data(a.host_data()?, n, n)
-    } else {
-        a.host_data()?.to_vec()
-    };
-    let (ipiv, jpiv, info) = factor_getc2(buffers, "full_piv_lu_solve", &mut lu, n)?;
-    if info > 0 {
-        return Err(crate::error::into_tensor_error(
-            "full_piv_lu_solve",
-            crate::Error::Singular {
-                op: "full_piv_lu_solve",
-            },
-        ));
-    }
-
-    let mut rhs = pooled_copy(buffers, b.host_data()?);
-    let n_i32 = dim_i32(n, "full_piv_lu_solve")?;
-    for col in 0..b_cols {
-        let start = col * n;
-        let end = start + n;
-        let mut scale = T::scale_one();
-        T::gesc2(
-            n_i32,
-            &lu,
-            n_i32,
-            &mut rhs[start..end],
-            &ipiv,
-            &jpiv,
-            &mut scale,
-        );
-        T::apply_inverse_scale(&mut rhs[start..end], scale);
-    }
-
-    tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
 }
 
 pub(crate) fn full_piv_lu<T: LapackFullPivLu>(
@@ -605,26 +573,62 @@ pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
     b: &TypedTensor<T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
+    const OP: &str = "full_piv_lu_solve";
+    let (n, a_batch_shape) = square_core_and_batch_result(a, OP)?;
+    let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch_result(b, OP)?;
+    if b_rows != n {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            OP,
+            vec![n],
+            vec![b_rows],
+        ));
+    }
+    if a_batch_shape != b_batch_shape {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            OP,
+            a_batch_shape.to_vec(),
+            b_batch_shape.to_vec(),
+        ));
+    }
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        let (n, a_batch_shape) = square_core_and_batch_result(a, "full_piv_lu_solve")?;
-        let (b_rows, _, b_batch_shape) = matrix_core_and_batch_result(b, "full_piv_lu_solve")?;
-        if b_rows != n {
-            return Err(tenferro_tensor::Error::shape_mismatch(
-                "full_piv_lu_solve",
-                vec![n],
-                vec![b_rows],
-            ));
-        }
-        if a_batch_shape != b_batch_shape {
-            return Err(tenferro_tensor::Error::shape_mismatch(
-                "full_piv_lu_solve",
-                a_batch_shape.to_vec(),
-                b_batch_shape.to_vec(),
-            ));
-        }
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }
-    batched_binary_result("full_piv_lu_solve", buffers, a, b, |buffers, a, b| {
-        solve_2d(buffers, a, b, transpose_a)
-    })
+
+    let matrix_len = checked_product(OP, "matrix", &[n, n])?;
+    let rhs_len = checked_product(OP, "rhs", &[n, b_cols])?;
+    let n_i32 = dim_i32(n, OP)?;
+    let mut lu = buffers.acquire_with_capacity::<T>(matrix_len);
+    let mut ipiv = pooled_zeroed::<i32>(buffers, n);
+    let mut jpiv = pooled_zeroed::<i32>(buffers, n);
+    let mut output = pooled_copy(buffers, b.host_data()?);
+    // INVARIANT: owned tensors are compact column-major, the batch shapes
+    // match, and no dimension is zero, so both chunk iterators yield the same
+    // number of nonempty matrix and RHS blocks, and every RHS block splits
+    // into `b_cols` exact columns of length `n`. The LU and pivot scratch is
+    // private and refilled per matrix. The serial loop is intentional: the
+    // LAPACK provider owns threading.
+    for (matrix, rhs) in a
+        .host_data()?
+        .chunks_exact(matrix_len)
+        .zip(output.chunks_exact_mut(rhs_len))
+    {
+        lu.clear();
+        if transpose_a {
+            for col in 0..n {
+                lu.extend((0..n).map(|row| matrix[col + row * n]));
+            }
+        } else {
+            lu.extend_from_slice(matrix);
+        }
+        getc2_in_place(OP, &mut lu, n_i32, &mut ipiv, &mut jpiv)?;
+        for column in rhs.chunks_exact_mut(n) {
+            let mut scale = T::scale_one();
+            T::gesc2(n_i32, &lu, n_i32, column, &ipiv, &jpiv, &mut scale);
+            T::apply_inverse_scale(column, scale);
+        }
+    }
+    release_scratch(buffers, lu);
+    release_scratch(buffers, ipiv);
+    release_scratch(buffers, jpiv);
+    tensor_from_vec_with_template(b.shape().to_vec(), output, b)
 }

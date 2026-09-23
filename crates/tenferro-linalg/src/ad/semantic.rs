@@ -188,49 +188,55 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
                     SemanticAdRuleRole::LinearTranspose,
                 )?;
                 let mut result = vec![AdValue::Absent; 4];
-                let Some(ct) = request
-                    .cotangent_outputs()
-                    .first()
-                    .copied()
-                    .and_then(AdValue::value)
-                else {
-                    return Ok(result.into_boxed_slice());
-                };
-                if active_inputs[0] || active_inputs[3] {
-                    let rhs_cotangent = builder.add_extension(
-                        Arc::new(LinalgExtensionOp::new(LinalgOp::LuSolvePrepared {
-                            transpose_a: !transpose_a,
-                            conjugate_a: !conjugate_a,
-                        })),
-                        &[primal_inputs[0], primal_inputs[1], primal_inputs[2], ct],
-                    )?[0];
-                    if active_inputs[0] {
-                        let solution = primal_outputs.first().copied().ok_or_else(|| {
-                            semantic_internal(
-                                SemanticAdRuleRole::LinearTranspose,
-                                "lu_solve_prepared transpose requires its primal solution",
-                            )
-                        })?;
-                        let rank = builder.value_metadata(primal_inputs[0])?.shape().len();
-                        let matrix_cotangent = semantic_solve_matrix_cotangent(
-                            builder,
-                            rhs_cotangent,
-                            solution,
-                            true,
-                            transpose_a,
-                            rank,
-                        )?;
-                        result[0] = AdValue::Value(if conjugate_a {
-                            conjugate_if_complex(builder, matrix_cotangent)?
-                        } else {
-                            matrix_cotangent
-                        });
-                    }
-                    if active_inputs[3] {
-                        result[3] = AdValue::Value(rhs_cotangent);
-                    }
-                }
+                let (a_cotangent, b_cotangent) = semantic_prepared_solve_transpose(
+                    builder,
+                    SemanticPreparedSolve {
+                        op: "lu_solve_prepared",
+                        a: primal_inputs[0],
+                        packed_lu: primal_inputs[1],
+                        pivots: primal_inputs[2],
+                        solution: primal_outputs.first().copied(),
+                    },
+                    request.cotangent_outputs(),
+                    (active_inputs[0], active_inputs[3]),
+                    transpose_a,
+                    conjugate_a,
+                )?;
+                result[0] = a_cotangent;
+                result[3] = b_cotangent;
                 Ok(result.into_boxed_slice())
+            }
+            // The fused solve saves its own factors as outputs 1 and 2, so the
+            // adjoint solve reuses them instead of refactoring `a`. The factor
+            // outputs carry no cotangent (see the `LuFactor` linearize rule).
+            LinalgOp::LuFactorSolve => {
+                let active_inputs = request.active_inputs();
+                let (Some(&a_active), Some(&b_active), Some(&packed_lu), Some(&pivots)) = (
+                    active_inputs.first(),
+                    active_inputs.get(1),
+                    primal_outputs.get(1),
+                    primal_outputs.get(2),
+                ) else {
+                    return Err(semantic_internal(
+                        SemanticAdRuleRole::LinearTranspose,
+                        "lu_factor_solve transpose expected inputs (a, b) and outputs (x, lu, pivots)",
+                    ));
+                };
+                let (a_cotangent, b_cotangent) = semantic_prepared_solve_transpose(
+                    builder,
+                    SemanticPreparedSolve {
+                        op: "lu_factor_solve",
+                        a: primal_inputs[0],
+                        packed_lu,
+                        pivots,
+                        solution: primal_outputs.first().copied(),
+                    },
+                    request.cotangent_outputs(),
+                    (a_active, b_active),
+                    false,
+                    false,
+                )?;
+                Ok(vec![a_cotangent, b_cotangent].into_boxed_slice())
             }
             LinalgOp::FullPivLuSolve { .. } => semantic_custom_transpose(
                 request.op(),
@@ -286,6 +292,73 @@ fn lu_solve_prepared_transpose_active_inputs(
     // factorization. Pivot and parity slots remain non-cotangent-producing
     // residuals.
     Ok([active_inputs[0], false, false, active_inputs[3]])
+}
+
+/// Primal values of one prepared LU solve `op(A) x = b`.
+struct SemanticPreparedSolve {
+    op: &'static str,
+    a: ProgramValue,
+    packed_lu: ProgramValue,
+    pivots: ProgramValue,
+    solution: Option<ProgramValue>,
+}
+
+/// Cotangents `(gA, gB)` of a prepared LU solve `op(A) x = b`.
+///
+/// `gB = op(A)^{-H} gX` is one prepared solve against the saved factors with
+/// both flags flipped, and `gA = -op(gB x^H)` reads the saved solution
+/// (PyTorch `linalg_solve_backward`).
+fn semantic_prepared_solve_transpose(
+    builder: &mut SemanticProgramBuilder,
+    primal: SemanticPreparedSolve,
+    cotangent_outputs: &[AdValue],
+    (a_active, b_active): (bool, bool),
+    transpose_a: bool,
+    conjugate_a: bool,
+) -> Result<(AdValue, AdValue), SemanticAdError> {
+    let Some(ct) = cotangent_outputs.first().copied().and_then(AdValue::value) else {
+        return Ok((AdValue::Absent, AdValue::Absent));
+    };
+    if !a_active && !b_active {
+        return Ok((AdValue::Absent, AdValue::Absent));
+    }
+    let rhs_cotangent = builder.add_extension(
+        Arc::new(LinalgExtensionOp::new(LinalgOp::LuSolvePrepared {
+            transpose_a: !transpose_a,
+            conjugate_a: !conjugate_a,
+        })),
+        &[primal.a, primal.packed_lu, primal.pivots, ct],
+    )?[0];
+    let a_cotangent = if a_active {
+        let solution = primal.solution.ok_or_else(|| {
+            semantic_internal(
+                SemanticAdRuleRole::LinearTranspose,
+                format!("{} transpose requires its primal solution", primal.op),
+            )
+        })?;
+        let rank = builder.value_metadata(primal.a)?.shape().len();
+        let matrix_cotangent = semantic_solve_matrix_cotangent(
+            builder,
+            rhs_cotangent,
+            solution,
+            true,
+            transpose_a,
+            rank,
+        )?;
+        AdValue::Value(if conjugate_a {
+            conjugate_if_complex(builder, matrix_cotangent)?
+        } else {
+            matrix_cotangent
+        })
+    } else {
+        AdValue::Absent
+    };
+    let b_cotangent = if b_active {
+        AdValue::Value(rhs_cotangent)
+    } else {
+        AdValue::Absent
+    };
+    Ok((a_cotangent, b_cotangent))
 }
 
 #[allow(clippy::too_many_arguments)]

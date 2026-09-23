@@ -1113,6 +1113,7 @@ fn op_label(op: &StdTensorOp) -> String {
         StdTensorOp::Extension(ext) => {
             let debug = format!("{ext:?}");
             for linalg_op in [
+                "LuFactorSolve",
                 "Lu",
                 "Qr",
                 "TriangularSolve",
@@ -1608,4 +1609,217 @@ fn finite_diff_directional_complex(
         *minus -= step * direction;
     }
     (f(&plus) - f(&minus)) / (2.0 * step)
+}
+
+/// Batched 3x3 systems whose dominant cyclic subdiagonal forces row pivoting.
+fn pivoting_solve_fixture() -> (Vec<f64>, Vec<f64>) {
+    let mut a = vec![
+        0.3, -0.2, 0.1, 0.2, 0.4, -0.3, -0.1, 0.25, 0.15, //
+        -0.35, 0.05, 0.2, 0.1, -0.15, 0.3, 0.2, 0.1, -0.25,
+    ];
+    for k in 0..2 {
+        for col in 0..3 {
+            a[k * 9 + (col + 1) % 3 + col * 3] += 4.0;
+        }
+    }
+    let b = vec![
+        1.0, -2.0, 0.5, 0.25, 1.5, -1.0, -0.5, 2.0, 1.0, 0.75, -1.25, 0.5,
+    ];
+    (a, b)
+}
+
+fn solve_linalg_op_debugs(output: &TracedTensor) -> Vec<String> {
+    graph_op_debugs(output)
+        .into_iter()
+        .filter(|debug| debug.contains("op: LuFactor") || debug.contains("op: Solve"))
+        .collect()
+}
+
+#[test]
+fn traced_primal_solve_compiles_to_one_fused_factor_solve() {
+    let (a_data, b_data) = pivoting_solve_fixture();
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 3, 2], a_data.clone()))
+        .unwrap();
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2, 2], b_data.clone()))
+        .unwrap();
+    let x = a.solve(&b).unwrap();
+
+    let ops = solve_linalg_op_debugs(&x);
+    assert_eq!(ops.len(), 1, "one fused op per solve: {ops:#?}");
+    assert!(ops[0].contains("op: LuFactorSolve"), "{ops:#?}");
+
+    // The compiler keeps the fused op (no LuFactor then LuSolvePrepared split)
+    // even though a primal only program never reads the factors.
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&x).unwrap();
+    let extension_ops: Vec<String> = program
+        .program()
+        .operations()
+        .filter_map(|operation| match operation.op() {
+            tenferro_runtime::program::SemanticOpRef::Extension(ext) => Some(format!("{ext:?}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(extension_ops.len(), 1, "{extension_ops:#?}");
+    assert!(
+        extension_ops[0].contains("op: LuFactorSolve"),
+        "primal solve should compile to the fused factor solve: {extension_ops:#?}"
+    );
+
+    let solved = eval(&x);
+    let expected = support::with_cpu_linalg(&mut tenferro_cpu::CpuBackend::new(), |session| {
+        use tenferro_linalg::LinalgBackend;
+        session.solve(
+            &f64_tensor(vec![3, 3, 2], a_data.clone()),
+            &f64_tensor(vec![3, 2, 2], b_data.clone()),
+        )
+    })
+    .unwrap();
+    assert_close_slice(get_f64_data(&solved), get_f64_data(&expected), 1.0e-13);
+}
+
+#[test]
+fn traced_solve_vjp_reuses_fused_factors_and_matches_finite_diff() {
+    let ad = ad_context();
+    let (a_data, b_data) = pivoting_solve_fixture();
+    let weights: Vec<f64> = (0..12).map(|i| 0.5 + 0.125 * i as f64).collect();
+    let loss_of = |a: &[f64], b: &[f64]| {
+        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 3, 2], a.to_vec()))
+            .unwrap();
+        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2, 2], b.to_vec()))
+            .unwrap();
+        let x = a.solve(&b).unwrap();
+        (
+            a,
+            b,
+            weighted_square_sum(&x, vec![3, 2, 2], weights.clone()),
+        )
+    };
+
+    let (a, b, loss) = loss_of(&a_data, &b_data);
+    let grad_a = ad.grad(&loss, &a).unwrap();
+    let grad_b = ad.grad(&loss, &b).unwrap();
+    let grads = eval_many(&[&grad_a, &grad_b]);
+
+    // The adjoint solve reads the fused op's saved factors: the gradient
+    // graph holds exactly one factorization, the fused forward op.
+    let ops = solve_linalg_op_debugs(&grad_a);
+    let factorizations = ops.iter().filter(|op| op.contains("op: LuFactor")).count();
+    let fused = ops
+        .iter()
+        .filter(|op| op.contains("op: LuFactorSolve"))
+        .count();
+    assert_eq!((factorizations, fused), (1, 1), "{ops:#?}");
+
+    let a_direction: Vec<f64> = (0..18).map(|i| ((i * 7) % 5) as f64 * 0.1 - 0.2).collect();
+    let b_direction: Vec<f64> = (0..12).map(|i| ((i * 3) % 4) as f64 * 0.15 - 0.2).collect();
+    let dot = |g: &[f64], d: &[f64]| g.iter().zip(d).map(|(g, d)| g * d).sum::<f64>();
+    let fd_a = finite_diff_directional_scalar(
+        |xs| get_f64_data(&eval(&loss_of(xs, &b_data).2))[0],
+        &a_data,
+        &a_direction,
+        1.0e-6,
+    );
+    let fd_b = finite_diff_directional_scalar(
+        |xs| get_f64_data(&eval(&loss_of(&a_data, xs).2))[0],
+        &b_data,
+        &b_direction,
+        1.0e-6,
+    );
+    assert_close_scalar(
+        "solve VJP wrt A",
+        dot(get_f64_data(&grads[0]), &a_direction),
+        fd_a,
+        1.0e-6,
+    );
+    assert_close_scalar(
+        "solve VJP wrt B",
+        dot(get_f64_data(&grads[1]), &b_direction),
+        fd_b,
+        1.0e-6,
+    );
+
+    // JVP through the same lowering agrees with the VJP pairing.
+    let a_tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 3, 2], a_direction.clone()))
+            .unwrap();
+    let jvp = eval(&ad.jvp(&loss, &a, &a_tangent).unwrap());
+    assert_close_scalar("solve JVP wrt A", get_f64_data(&jvp)[0], fd_a, 1.0e-6);
+    let b_tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2, 2], b_direction.clone()))
+            .unwrap();
+    let jvp = eval(&ad.jvp(&loss, &b, &b_tangent).unwrap());
+    assert_close_scalar("solve JVP wrt B", get_f64_data(&jvp)[0], fd_b, 1.0e-6);
+}
+
+#[test]
+fn traced_complex_solve_vjp_matches_finite_diff() {
+    use num_complex::Complex64;
+    let ad = ad_context();
+    let (a_re, b_re) = pivoting_solve_fixture();
+    let a_data: Vec<Complex64> = a_re
+        .iter()
+        .enumerate()
+        .map(|(i, &re)| Complex64::new(re, 0.1 * ((i % 3) as f64 - 1.0)))
+        .collect();
+    let b_data: Vec<Complex64> = b_re
+        .iter()
+        .enumerate()
+        .map(|(i, &re)| Complex64::new(re, 0.2 * ((i % 4) as f64 - 1.5)))
+        .collect();
+    // Real loss sum |x|^2 of the complex solution.
+    let loss_of = |a: &[Complex64], b: &[Complex64]| {
+        let a = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![3, 3, 2], a.to_vec()))
+            .unwrap();
+        let b = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![3, 2, 2], b.to_vec()))
+            .unwrap();
+        let x = a.solve(&b).unwrap();
+        let loss = reduce_all(&(&x.conj().unwrap() * &x).unwrap());
+        (a, b, loss)
+    };
+    let (a, b, loss) = loss_of(&a_data, &b_data);
+    let grads = eval_many(&[&ad.grad(&loss, &a).unwrap(), &ad.grad(&loss, &b).unwrap()]);
+
+    // Split each complex entry into (re, im) coordinates for finite differences.
+    let pack = |v: &[Complex64]| v.iter().flat_map(|z| [z.re, z.im]).collect::<Vec<f64>>();
+    let unpack = |v: &[f64]| {
+        v.chunks_exact(2)
+            .map(|p| Complex64::new(p[0], p[1]))
+            .collect::<Vec<_>>()
+    };
+    let loss_value = |a: &[Complex64], b: &[Complex64]| get_c64_data(&eval(&loss_of(a, b).2))[0].re;
+    for (label, grad, base, is_a) in [
+        ("A", &grads[0], &a_data, true),
+        ("B", &grads[1], &b_data, false),
+    ] {
+        let direction: Vec<f64> = (0..2 * base.len())
+            .map(|i| ((i * 5) % 7) as f64 * 0.05 - 0.15)
+            .collect();
+        let fd = finite_diff_directional_scalar(
+            |xs| {
+                let z = unpack(xs);
+                if is_a {
+                    loss_value(&z, &b_data)
+                } else {
+                    loss_value(&a_data, &z)
+                }
+            },
+            &pack(base),
+            &direction,
+            1.0e-6,
+        );
+        // tenferro follows the PyTorch convention: the gradient of a real loss
+        // is dL/dRe + i dL/dIm, so the directional derivative is Re <g, d>.
+        let analytic: f64 = get_c64_data(grad)
+            .iter()
+            .zip(unpack(&direction))
+            .map(|(g, d)| g.re * d.re + g.im * d.im)
+            .sum();
+        assert_close_scalar(
+            &format!("complex solve VJP wrt {label}"),
+            analytic,
+            fd,
+            1.0e-6,
+        );
+    }
 }

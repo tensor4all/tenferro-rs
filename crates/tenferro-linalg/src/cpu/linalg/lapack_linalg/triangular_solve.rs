@@ -6,9 +6,8 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batched_binary_result, check_lapack_info, dim_i32, has_zero_dim, matrix_core_and_batch_result,
-    matrix_dims, pooled_copy, square_core_and_batch_result, square_matrix_dim,
-    tensor_from_vec_with_template,
+    check_lapack_info, checked_product, dim_i32, has_zero_dim, matrix_core_and_batch_result,
+    pooled_copy, square_core_and_batch_result, tensor_from_vec_with_template,
 };
 
 pub(crate) trait LapackTriangularSolve:
@@ -291,114 +290,22 @@ fn cblas_diag(unit_diagonal: bool) -> CBLAS_DIAG {
     }
 }
 
+/// Reject an exactly zero diagonal of one compact `n x n` triangular matrix.
 fn validate_non_unit_diagonal<T: LapackTriangularSolve>(
-    a: &TypedTensor<T>,
+    matrix: &[T],
     n: usize,
-    unit_diagonal: bool,
 ) -> tenferro_tensor::Result<()> {
-    if unit_diagonal {
-        return Ok(());
-    }
-
-    let data = a.host_data()?;
-    for idx in 0..n {
-        if data[idx + idx * n] == T::zero() {
-            return Err(crate::error::into_tensor_error(
-                "triangular_solve",
-                crate::Error::Singular {
-                    op: "triangular_solve",
-                },
-            ));
-        }
+    // INVARIANT: callers pass one compact `n x n` chunk, so every diagonal
+    // index `idx * (n + 1)` is in bounds.
+    if (0..n).any(|idx| matrix[idx + idx * n] == T::zero()) {
+        return Err(crate::error::into_tensor_error(
+            "triangular_solve",
+            crate::Error::Singular {
+                op: "triangular_solve",
+            },
+        ));
     }
     Ok(())
-}
-
-fn solve_left<T: LapackTriangularSolve>(
-    buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
-    lower: bool,
-    transpose_a: bool,
-    unit_diagonal: bool,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let n = square_matrix_dim(a, "triangular_solve")?;
-    let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
-    if b_rows != n {
-        return Err(tenferro_tensor::Error::shape_mismatch(
-            "triangular_solve",
-            vec![n],
-            vec![b_rows],
-        ));
-    }
-
-    let mut rhs = pooled_copy(buffers, b.host_data()?);
-    let mut info = 0;
-    T::trtrs(TrtrsArgs {
-        uplo: if lower { b'L' } else { b'U' },
-        trans: if transpose_a { b'T' } else { b'N' },
-        diag: if unit_diagonal { b'U' } else { b'N' },
-        n: dim_i32(n, "triangular_solve")?,
-        nrhs: dim_i32(b_cols, "triangular_solve")?,
-        a: a.host_data()?,
-        lda: dim_i32(n, "triangular_solve")?,
-        b: &mut rhs,
-        ldb: dim_i32(n, "triangular_solve")?,
-        info: &mut info,
-    });
-    check_lapack_info("triangular_solve", "trtrs", info)?;
-    tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
-}
-
-fn solve_right<T: LapackTriangularSolve>(
-    buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
-    lower: bool,
-    transpose_a: bool,
-    unit_diagonal: bool,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let n = square_matrix_dim(a, "triangular_solve")?;
-    let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
-    if b_cols != n {
-        return Err(tenferro_tensor::Error::shape_mismatch(
-            "triangular_solve",
-            vec![n],
-            vec![b_cols],
-        ));
-    }
-
-    validate_non_unit_diagonal(a, n, unit_diagonal)?;
-    let mut rhs = pooled_copy(buffers, b.host_data()?);
-    T::trsm(TrsmArgs {
-        side: CBLAS_SIDE::CblasRight,
-        uplo: cblas_uplo(lower),
-        transa: cblas_transpose(transpose_a),
-        diag: cblas_diag(unit_diagonal),
-        m: dim_i32(b_rows, "triangular_solve")?,
-        n: dim_i32(n, "triangular_solve")?,
-        a: a.host_data()?,
-        lda: dim_i32(n, "triangular_solve")?,
-        b: &mut rhs,
-        ldb: dim_i32(b_rows, "triangular_solve")?,
-    });
-    tensor_from_vec_with_template(vec![b_rows, n], rhs, b)
-}
-
-fn triangular_solve_2d<T: LapackTriangularSolve>(
-    buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
-    left_side: bool,
-    lower: bool,
-    transpose_a: bool,
-    unit_diagonal: bool,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if left_side {
-        solve_left(buffers, a, b, lower, transpose_a, unit_diagonal)
-    } else {
-        solve_right(buffers, a, b, lower, transpose_a, unit_diagonal)
-    }
 }
 
 pub(crate) fn triangular_solve<T: LapackTriangularSolve>(
@@ -410,27 +317,76 @@ pub(crate) fn triangular_solve<T: LapackTriangularSolve>(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
+    const OP: &str = "triangular_solve";
+    let (n, a_batch_shape) = square_core_and_batch_result(a, OP)?;
+    let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch_result(b, OP)?;
+    let rhs_core_dim = if left_side { b_rows } else { b_cols };
+    if rhs_core_dim != n {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            OP,
+            vec![n],
+            vec![rhs_core_dim],
+        ));
+    }
+    if a_batch_shape != b_batch_shape {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            OP,
+            a_batch_shape.to_vec(),
+            b_batch_shape.to_vec(),
+        ));
+    }
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        let (n, a_batch_shape) = square_core_and_batch_result(a, "triangular_solve")?;
-        let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch_result(b, "triangular_solve")?;
-        let rhs_core_dim = if left_side { b_rows } else { b_cols };
-        if rhs_core_dim != n {
-            return Err(tenferro_tensor::Error::shape_mismatch(
-                "triangular_solve",
-                vec![n],
-                vec![rhs_core_dim],
-            ));
-        }
-        if a_batch_shape != b_batch_shape {
-            return Err(tenferro_tensor::Error::shape_mismatch(
-                "triangular_solve",
-                a_batch_shape.to_vec(),
-                b_batch_shape.to_vec(),
-            ));
-        }
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }
-    batched_binary_result("triangular_solve", buffers, a, b, |buffers, a, b| {
-        triangular_solve_2d(buffers, a, b, left_side, lower, transpose_a, unit_diagonal)
-    })
+
+    let matrix_len = checked_product(OP, "matrix", &[n, n])?;
+    let rhs_len = checked_product(OP, "rhs", &[b_rows, b_cols])?;
+    let n_i32 = dim_i32(n, OP)?;
+    let rows_i32 = dim_i32(b_rows, OP)?;
+    let cols_i32 = dim_i32(b_cols, OP)?;
+    let mut output = pooled_copy(buffers, b.host_data()?);
+    // INVARIANT: owned tensors are compact column-major, the batch shapes
+    // match, and no dimension is zero, so both chunk iterators yield the same
+    // number of nonempty matrix and RHS blocks. Each provider call reads its
+    // own triangle and overwrites only its own RHS block in the output. The
+    // serial loop is intentional: the BLAS/LAPACK provider owns threading.
+    for (matrix, rhs) in a
+        .host_data()?
+        .chunks_exact(matrix_len)
+        .zip(output.chunks_exact_mut(rhs_len))
+    {
+        if left_side {
+            let mut info = 0;
+            T::trtrs(TrtrsArgs {
+                uplo: if lower { b'L' } else { b'U' },
+                trans: if transpose_a { b'T' } else { b'N' },
+                diag: if unit_diagonal { b'U' } else { b'N' },
+                n: n_i32,
+                nrhs: cols_i32,
+                a: matrix,
+                lda: n_i32,
+                b: rhs,
+                ldb: n_i32,
+                info: &mut info,
+            });
+            check_lapack_info(OP, "trtrs", info)?;
+        } else {
+            if !unit_diagonal {
+                validate_non_unit_diagonal(matrix, n)?;
+            }
+            T::trsm(TrsmArgs {
+                side: CBLAS_SIDE::CblasRight,
+                uplo: cblas_uplo(lower),
+                transa: cblas_transpose(transpose_a),
+                diag: cblas_diag(unit_diagonal),
+                m: rows_i32,
+                n: n_i32,
+                a: matrix,
+                lda: n_i32,
+                b: rhs,
+                ldb: rows_i32,
+            });
+        }
+    }
+    tensor_from_vec_with_template(b.shape().to_vec(), output, b)
 }

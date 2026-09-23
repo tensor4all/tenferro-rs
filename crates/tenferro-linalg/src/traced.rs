@@ -1041,27 +1041,22 @@ pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// `ShapeConstraintViolation`, `ShapeConstraintEvaluation`, or
 /// `ShapeExpressionEvaluation`.
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
-    let mut factor_outputs =
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
-    let (packed_lu, pivots) = match (
-        factor_outputs.next(),
-        factor_outputs.next(),
-        factor_outputs.next(),
-        factor_outputs.next(),
+    // One fused op factors and solves in a single backend call and saves
+    // (x, packed LU, pivots), so AD reuses the factors for the adjoint solve.
+    let mut outputs = apply(
+        Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactorSolve)),
+        &[a, b],
+    )?
+    .into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
     ) {
-        (Some(packed_lu), Some(pivots), Some(_parity), None) => (packed_lu, pivots),
-        _ => return Err(unexpected_output_count("lu_factor", 3)),
-    };
-    one_output(
-        apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::LuSolvePrepared {
-                transpose_a: false,
-                conjugate_a: false,
-            })),
-            &[a, &packed_lu, &pivots, b],
-        )?,
-        "solve",
-    )
+        (Some(x), Some(_packed_lu), Some(_pivots), None) => Ok(x),
+        _ => Err(unexpected_output_count("lu_factor_solve", 3)),
+    }
 }
 
 /// Build a traced least-squares solve `argmin_x ||A x - b||_2` for a tall or
