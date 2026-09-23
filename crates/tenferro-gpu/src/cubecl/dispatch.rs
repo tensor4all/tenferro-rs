@@ -630,6 +630,13 @@ pub(crate) fn typed_tensor_mut_array_arg<T: CubeElement + TensorScalar + Clone>(
     op: &'static str,
 ) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
     let len = tensor.n_elements();
+    // INVARIANT (issue #1868, issue #1875): every mutable CubeCL binding of an
+    // existing allocation drops the memoized device address, because the
+    // kernel about to be queued writes this buffer. The next raw-FFI access
+    // then resolves through `get_resource`, whose blocking server round trip
+    // also pushes the queued kernel onto the CUstream, so the vendor call
+    // cannot overtake it.
+    cubecl_buffer(tensor, op)?.invalidate_device_addr();
     let prepared = downcast_prepared(tensor.prepare_device_write(op)?, op)?;
     Ok(prepared.into_array_arg(len))
 }
@@ -646,6 +653,13 @@ pub(crate) fn typed_view_mut_array_arg<T: CubeElement + TensorScalar + Clone>(
     view: &mut TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+    // INVARIANT (issue #1868, issue #1875): every mutable CubeCL binding of an
+    // existing allocation drops the memoized device address, because the
+    // kernel about to be queued writes this buffer. The next raw-FFI access
+    // then resolves through `get_resource`, whose blocking server round trip
+    // also pushes the queued kernel onto the CUstream, so the vendor call
+    // cannot overtake it.
+    cubecl_view_mut_buffer(view, op)?.invalidate_device_addr();
     let prepared = downcast_prepared(view.prepare_device_write(op)?, op)?;
     Ok(prepared.into_array_arg(view.n_elements()))
 }

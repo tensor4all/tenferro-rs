@@ -3,8 +3,9 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use super::super::dispatch::{cubecl_buffer, launch_nullary_into};
 use super::super::gemm::typed_device_ptr;
+use super::super::interop::scale_typed_tensor;
 use super::super::{cube_count_for_len, cube_dim_1d};
-use crate::cuda::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
+use crate::cuda::{download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use crate::kernels::structural;
 use tenferro_tensor::Tensor;
 
@@ -70,6 +71,60 @@ fn queued_cubecl_write_drops_the_memoized_device_address() {
         .is_some());
 }
 
+/// Issue #1875: the in-place scale binding must drop the memoized device
+/// address too.
+///
+/// `scale_typed_tensor_for_op` and `scale_typed_view` bind an existing
+/// destination through `typed_view_mut_array_arg` and queue a scale kernel.
+/// That is the same hazard as the audited `dispatch.rs` `launch_*` helpers, but
+/// the older source-contract test scanned only helper names with a
+/// `&TypedTensor` output, so it could never fail for this path.
+#[test]
+#[ignore = "requires CUDA"]
+fn queued_scale_write_drops_the_memoized_device_address() {
+    assert!(gpu_available(), "requires a CUDA device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let rt = backend.runtime().clone();
+    let host = Tensor::from_vec_col_major(vec![64_usize], vec![1.0_f64; 64]).unwrap();
+    let mut x = upload_tensor(&rt, &host).unwrap();
+
+    typed_device_ptr(&rt, x.as_typed::<f64>().unwrap(), "test").unwrap();
+    assert!(
+        cubecl_buffer::<f64>(x.as_typed::<f64>().unwrap(), "test")
+            .unwrap()
+            .cached_device_addr()
+            .is_some(),
+        "a raw-FFI access should memoize the address"
+    );
+
+    let typed = x.as_typed_mut::<f64>().unwrap();
+    scale_typed_tensor(&rt, typed, 2.0_f64, |client, count, dim, out, factor| {
+        // SAFETY: the scaling bridge validates residency, buffer length, and
+        // the one-dimensional launch domain before this unchecked launch.
+        unsafe {
+            structural::scale_in_place_float_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
+                client, count, dim, out, factor,
+            );
+        }
+    })
+    .unwrap();
+    assert!(
+        cubecl_buffer::<f64>(x.as_typed::<f64>().unwrap(), "test")
+            .unwrap()
+            .cached_device_addr()
+            .is_none(),
+        "the queued scale must invalidate the memoized address so the next \
+         raw-FFI access takes the `get_resource` round trip"
+    );
+
+    let host = download_tensor(&rt, &x).unwrap();
+    assert_eq!(
+        host.as_slice::<f64>().unwrap(),
+        vec![2.0_f64; 64].as_slice(),
+        "the scale itself must still run"
+    );
+}
+
 /// Issue #1868: every launch helper that writes an existing tensor must drop
 /// that buffer's memoized device address.
 ///
@@ -110,5 +165,48 @@ fn every_in_place_launch_helper_invalidates_the_memoized_address() {
     assert!(
         checked >= 4,
         "expected the in-place launch helpers to be found, saw {checked}"
+    );
+}
+
+/// Issue #1875: the same rule must hold at the mutable CubeCL binding helpers.
+///
+/// A helper that converts a mutable tensor or view into an `ArrayArg` is about
+/// to have a kernel write that buffer, whatever the caller's shape. The older
+/// check keyed on `launch_*` names with a `&TypedTensor` output and therefore
+/// never reached `typed_tensor_mut_array_arg` / `typed_view_mut_array_arg`,
+/// which is where the in-place scale and fill paths bind their destination.
+#[test]
+fn every_write_binding_helper_invalidates_the_memoized_address() {
+    let source = include_str!("../dispatch.rs");
+    let mut checked = 0usize;
+    let mut offset = 0usize;
+    while let Some(found) = source[offset..].find("pub(crate) fn ") {
+        let start = offset + found;
+        let end = source[start + 1..]
+            .find("\npub(crate) fn ")
+            .map(|idx| start + 1 + idx)
+            .unwrap_or(source.len());
+        let body = &source[start..end];
+        let name = body["pub(crate) fn ".len()..]
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .next()
+            .unwrap_or_default();
+        offset = end;
+        // Only CubeCL array bindings can queue a scheduler-managed write.
+        // `prepared_*_mut_access` returns a raw provider access instead and
+        // keeps its own explicit enqueue ordering.
+        if !body.contains("ArrayArg<CubeclCudaRuntime>") || !body.contains("prepare_device_write") {
+            continue;
+        }
+        assert!(
+            body.contains("invalidate_device_addr()"),
+            "{name} binds a mutable CubeCL array but does not invalidate its \
+             memoized device address; see issues #1868 and #1875"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 2,
+        "expected the mutable CubeCL binding helpers to be found, saw {checked}"
     );
 }
