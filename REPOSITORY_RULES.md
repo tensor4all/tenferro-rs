@@ -531,7 +531,8 @@ Tests follow implementation ownership.
   | Category | Required implementation |
   |---|---|
   | Elementwise (`add`, `mul`, `neg`, `exp`, fused eager replay, ...) | `strided-kernel` (`map_into`, `zip_map2_into`, `ErasedFusedPlan`, etc.) |
-  | Reduction (`reduce_sum`, `reduce_prod`) | `strided-kernel` (`ErasedReducePlan::compile_axes`) |
+  | Reduction (`reduce_sum`, `reduce_prod`, `reduce_max`, `reduce_min`) | `strided-kernel` (`ErasedReducePlan::compile_axes`) |
+  | Static slice, reverse, pad, concatenate | `strided-kernel` (`ErasedSlicePlan`, `ErasedReversePlan`, `ErasedPadPlan`, `ErasedConcatenatePlan`) |
   | Structural (`transpose`, `broadcast`, `extract_diag`, `embed_diagonal`, `tril`/`triu`) | `strided-kernel` (view/copy and dense full-overwrite kernels) |
   | AXPBY (`y = alpha*x + beta*y`) | `strided-kernel::axpby_accum` |
   | Gather | `strided-kernel` (`ErasedGatherPlan`) |
@@ -547,7 +548,7 @@ Tests follow implementation ownership.
   | Affine-strided copy and permutation | Bulk `copy_into` traversal and serial/parallel kernel selection | Shape, stride, offset, reachable-range, dtype, placement, and destination validation; backend-scoped allocation and error mapping |
   | Broadcast | Zero-stride broadcast views and bulk copy/map traversal | Broadcast dimension semantics, output shape, placement, and allocation |
   | Unary map, binary zip-map, and fused elementwise replay | Affine iteration, tiling, static specialization, and erased replay execution | Operation semantics, dtype dispatch/promotion, capability checks, and errors |
-  | Sum/product reductions | Axis and multi-axis strided reduction replay | Axis validation, identities, dtype policy, output wrapping, and max/min NaN policy exceptions |
+  | Sum/product/max/min reductions | Axis and multi-axis strided reduction replay, including max/min NaN propagation | Axis validation, identities, dtype policy, and output wrapping |
   | Gather | Indexed-read traversal and erased replay dispatch | Gather semantics, index validation/normalization, dtype dispatch, output allocation, and error translation |
   | Additive scatter and fixed-window dynamic slice/update | Indexed replay traversal for matching erased plans | Index validation/normalization, clamp semantics, dtype dispatch, output allocation, and error translation |
   | Other indirect indexing | No ownership until a suitable general primitive exists | Indirect-index semantics and current dedicated kernels |
@@ -585,10 +586,18 @@ Tests follow implementation ownership.
   Memory reuse and thread policy are execution resources, not tensor metadata;
   backend-neutral tensor/view types expose metadata-only layout transforms and
   do not own data-moving convenience methods.
-- Exceptions with dedicated implementations: `reshape` (metadata-only), max/min
-  reductions until strided exposes matching NaN semantics, and indexing ops
-  without a matching strided plan such as static slice, pad, concatenate, and
-  reverse.
+- Exceptions with dedicated implementations: `reshape` (metadata-only) and
+  indexing ops without a matching strided plan. Max/min reductions and static
+  slice, pad, concatenate, and reverse delegate to strided plans since #1877;
+  do not reintroduce tenferro-owned traversals for them.
+- Delegation moves performance accountability, it does not remove it. When a
+  tenferro op delegates to a strided entry, the strided entry must meet
+  strided-rs's own rules (per-op monomorphized loops, parallel leaves of serial
+  quality) at the layouts tenferro uses. A delegated op that is slower at four
+  threads than at one, or more than 2x behind PyTorch or Julia at tensor
+  sizes, is filed upstream with a strided-level reproduction
+  ([strided-rs#269](https://github.com/tensor4all/strided-rs/issues/269)), not
+  accepted as a tenferro baseline.
 - CPU provider features are additive. At least one of `cpu-faer` or `cpu-blas`
   is enabled; both together must compile. `CpuBackend` owns runtime provider
   selection: `CpuBackend::new()` picks the default compiled provider
