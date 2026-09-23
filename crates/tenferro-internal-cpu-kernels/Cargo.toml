@@ -22,9 +22,9 @@ all-features = true
 name = "tenferro_internal_cpu_kernels"
 
 [dependencies]
-tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.7.0" }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.0" }
-tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.7.0" }
+tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.7.1" }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.1" }
+tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.7.1" }
 num-complex.workspace = true
 num-traits.workspace = true
 smallvec.workspace = true
