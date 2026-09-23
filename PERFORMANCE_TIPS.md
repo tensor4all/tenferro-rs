@@ -160,13 +160,31 @@ Audit hints:
   algebra. Do not reimplement linalg kernels in downstream layers when the
   CPU/GPU backend owns the operation.
 
+- Batched CPU linalg (LU factor, prepared LU solve, triangular solve, full
+  pivot LU, eigh, SVD, QR, Cholesky, solve) runs as one tight loop per call:
+  compute scratch requirements before execution, query the provider workspace
+  once per call, allocate scratch once and reuse
+  it across the batch, and write each matrix result directly into the batch
+  output. Do not build per-matrix `TypedTensor`s, call a `*_2d` helper that
+  allocates per matrix, take pool buffers that are never returned, or allocate
+  `Vec`s for pivots or permutations inside the batch loop. The eager solve and
+  QR rewrite (26abf5ec) is the reference pattern. Small matrices at large
+  batch (for example 2x2 with batch 1024) are the regression case, because
+  per-matrix overhead dominates there while LAPACK time is negligible
+  ([#1878](https://github.com/tensor4all/tenferro-rs/issues/1878)).
+
 Audit hints:
 
 - Detect: row-major index arithmetic (`i * cols + j`), row-major round-trips,
   batch dimensions placed left of compute dimensions, or hand-written GEMM,
   solve, or decomposition loops outside the owning backend.
+- Detect: workspace queries (`lwork = -1` style calls), `from_host_vec`,
+  `pooled_copy`, `pooled_zeroed`, per-matrix tensor construction, or `Vec`
+  allocation inside a batched linalg loop, including through
+  `batched_multi`/`batched_binary_result`-style helpers.
 - Fix: column-major strides from the layout value, batch on the right, and
-  the existing backend operation.
+  the existing backend operation. Hoist the workspace query and scratch out of
+  the batch loop and write into the batch output in place.
 
 ## Range Checks And Slicing
 
@@ -212,9 +230,8 @@ Audit hints:
   explicit boundary.
 - Pass faer parallelism through `CpuContext` only; never choose `Par::Rayon`
   or thread counts inside operation helpers.
-- Compute linalg scratch requirements before execution and allocate reusable
-  scratch once per operation. No repeated `Vec` allocation in decomposition,
-  solve, or batched inner loops.
+- Scratch and batching follow the batched linalg rule in Dense Layout And
+  Linear Algebra, which applies to faer and LAPACK providers alike.
 
 Audit hints:
 
@@ -239,13 +256,30 @@ Audit hints:
 - Do not call `Backend::plan()` or equivalent inside execution loops;
   pre-compute plans and pass them in.
 
+- Resolve a runtime operation enum, dtype, or flag once per call or worker
+  range, never per element. A closure that matches on a runtime op inside a
+  tensor-sized loop defeats vectorization; this defect class hid in strided
+  erased entries behind tenferro's delegation
+  ([strided-rs#269](https://github.com/tensor4all/strided-rs/issues/269)).
+- Trace lowering and tracked eager AD must not route a primal op around the
+  fast path that untracked eager uses. Splitting an op into prepared
+  primitives (for example `solve` into `LuFactor` plus `LuSolvePrepared`) to
+  expose residuals needs either a fused primal kernel that also emits the
+  residuals or a lowering that keeps the fused op when the intermediate has no
+  other consumer. Trace and tracked eager primal time for such an op stays
+  within 1.25x of untracked eager at the benchmark sizes.
+
 Audit hints:
 
 - Detect: near-identical dtype-specific bodies; `vec![0 ...]` or `Vec::new()`
   inside loops; zero-fill before a full overwrite; index multiplication per
   element; `plan(` or equivalent called per execution.
+- Detect: `match op` or dtype dispatch inside a per-element closure passed to
+  a traversal; a trace or AD lowering that emits several primitives for an op
+  that eager executes as one fused provider call.
 - Fix: generic helpers or macros with dispatch at the outer boundary, hoisted
-  scratch, incremental offsets, and precomputed plans.
+  scratch, incremental offsets, and precomputed plans. Keep the fused primal
+  op in lowering and attach residuals to it.
 
 ## Performance-Sensitive Tests And Benchmarks
 
@@ -276,6 +310,25 @@ Audit hints:
   first- and higher-order derivatives preserved. Cover both dropped forward
   output handles and multiple differentiated inputs when testing reuse.
 
+- Thread settings in benchmark harnesses are enforced and verified, not only
+  requested: construct `CpuBackend`/`CpuContext` with the requested degree,
+  assert the effective degree at startup, and fail on conflicting thread
+  environment variables. A `--num-threads 1` flag that left the ambient Rayon
+  pool running multi-threaded once produced a 7x wrong one-thread row.
+- For tensor-sized CPU cases, compare one and four threads in the same run: a
+  four-thread time that is not faster than the one-thread time is a finding,
+  even when the one-thread row matches the reference.
+- Every public op family has benchmark rows. Adding a public op, or routing an
+  existing op through a new kernel (for example max/min reductions moving to
+  strided), adds its rows to tenferro-benchmark in the same change or links
+  the benchmark PR. When the op delegates to strided, the matching rows also
+  exist in strided-rs-benchmark-suite so the defect is caught at the strided
+  level first. Cover all reduction ops (sum, prod, max, min) over all axes and
+  single axes, and batched linalg at small matrix sizes.
+- Benchmark each execution mode that users can select (untracked eager,
+  tracked eager, trace) for the same op, so a lowering that bypasses the eager
+  fast path shows up as a mode gap.
+
 Audit hints:
 
 - Detect: element-wise reference loops that re-run contraction or graph
@@ -284,6 +337,10 @@ Audit hints:
 - Detect: AD rules declare residuals but eager execution rebinds only original
   inputs and replays their producer graph; separate backward executions per
   leaf; unconditional elementwise rematerialization without measured benefit.
+- Detect: a thread flag parsed but not used to build the backend context;
+  missing startup verification of the effective thread count; a public op or
+  reduction variant with no tenferro-benchmark row; an op benchmarked in one
+  execution mode only.
 - Fix: materialize once and compare whole results, release-mode Criterion
   benchmarks with pinned threads across representative sizes. Connect saved
   residual values to backward execution and add call-count regression tests;
