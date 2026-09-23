@@ -321,7 +321,7 @@ macro_rules! test_elementwise_wrapper {
     ($name:ident($($arg:ident: $ty:ty),*) => $with_pool:ident) => {
         pub(crate) fn $name($($arg: $ty),*) -> crate::Result<Tensor> {
             let mut buffers = BufferPool::new();
-            elementwise::$with_pool(&mut buffers, $($arg),*)
+            elementwise::$with_pool(&mut buffers, &strided_kernel::ExecContext::serial(), $($arg),*)
         }
     };
 }

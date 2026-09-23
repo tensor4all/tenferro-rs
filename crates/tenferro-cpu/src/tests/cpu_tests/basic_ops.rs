@@ -216,14 +216,14 @@ fn test_integer_maximum_minimum_and_reductions() {
     );
 
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![i32::MIN, 1, i32::MAX, -5]).unwrap();
-    let max_cols = reduce_max(&input, &[0]).unwrap();
-    let min_cols = reduce_min(&input, &[0]).unwrap();
+    let max_cols = reduce_max(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+    let min_cols = reduce_min(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(max_cols.as_slice::<i32>().unwrap(), &[1, i32::MAX]);
     assert_eq!(min_cols.as_slice::<i32>().unwrap(), &[i32::MIN, -5]);
 
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![i64::MIN, 4, i64::MAX, -7]).unwrap();
-    let max_cols = reduce_max(&input, &[0]).unwrap();
-    let min_cols = reduce_min(&input, &[0]).unwrap();
+    let max_cols = reduce_max(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+    let min_cols = reduce_min(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(max_cols.as_slice::<i64>().unwrap(), &[4, i64::MAX]);
     assert_eq!(min_cols.as_slice::<i64>().unwrap(), &[i64::MIN, -7]);
 }
@@ -865,22 +865,22 @@ fn test_reduce_max_and_min() {
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
 
-    let max_cols = reduce_max(&t, &[0]).unwrap();
+    let max_cols = reduce_max(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(max_cols.shape(), &[3]);
     assert_eq!(get_f64(&max_cols, &[0]), 2.0);
     assert_eq!(get_f64(&max_cols, &[1]), 4.0);
     assert_eq!(get_f64(&max_cols, &[2]), 6.0);
 
-    let max_all = reduce_max(&t, &[0, 1]).unwrap();
+    let max_all = reduce_max(&t, &[0, 1], &strided_kernel::ExecContext::serial()).unwrap();
     assert!(max_all.shape().is_empty());
     assert_eq!(get_f64(&max_all, &[]), 6.0);
 
-    let min_rows = reduce_min(&t, &[1]).unwrap();
+    let min_rows = reduce_min(&t, &[1], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(min_rows.shape(), &[2]);
     assert_eq!(get_f64(&min_rows, &[0]), 1.0);
     assert_eq!(get_f64(&min_rows, &[1]), 2.0);
 
-    let min_all = reduce_min(&t, &[0, 1]).unwrap();
+    let min_all = reduce_min(&t, &[0, 1], &strided_kernel::ExecContext::serial()).unwrap();
     assert!(min_all.shape().is_empty());
     assert_eq!(get_f64(&min_all, &[]), 1.0);
 }

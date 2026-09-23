@@ -326,20 +326,23 @@ impl TensorDeviceTransfer for CpuExecSession<'_> {
     }
 }
 
-/// Simple delegation that reuses an entered managed session when available.
-macro_rules! delegate {
-    ($name:ident($($arg:ident : $ty:ty),*) => $body:expr) => {
-        fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
-            self.run_native_fresh(|_| $body)
-        }
-    };
-}
-
 /// Delegation for operations whose outputs can be allocated from the session pool.
 macro_rules! delegate_with_pool {
     ($name:ident($($arg:ident : $ty:ty),*) => $callee:path) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
             self.run_native_fresh(|buffers| $callee(buffers, $($arg),*))
+        }
+    };
+}
+
+/// Delegation for pooled operations whose kernels take the session's strided
+/// execution context.
+macro_rules! delegate_with_pool_context {
+    ($name:ident($($arg:ident : $ty:ty),*) => $callee:path) => {
+        fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
+            self.run_native_fresh_with_context(|context, buffers| {
+                $callee(buffers, &context.strided_exec_context(), $($arg),*)
+            })
         }
     };
 }
@@ -359,43 +362,53 @@ impl TensorElementwise for CpuExecSession<'_> {
                 inputs,
                 out,
                 &exec_context,
-                |inputs, out| elementwise_read_into_fallback_with_pool(buffers, op, inputs, out),
+                |inputs, out| {
+                    elementwise_read_into_fallback_with_pool(
+                        buffers,
+                        &exec_context,
+                        op,
+                        inputs,
+                        out,
+                    )
+                },
             )
         })
     }
 
-    delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
+    delegate_with_pool_context!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.run_native_fresh(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
+        self.run_native_fresh_with_context(|context, buffers| {
+            elementwise::add_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
+        })
     }
 
-    delegate_with_pool!(sub(lhs: &Tensor, rhs: &Tensor) => elementwise::sub_with_pool);
-    delegate_with_pool!(sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::sub_read_with_pool);
-    delegate_with_pool!(mul(lhs: &Tensor, rhs: &Tensor) => elementwise::mul_with_pool);
-    delegate_with_pool!(mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::mul_read_with_pool);
-    delegate_with_pool!(neg(input: &Tensor) => elementwise::neg_with_pool);
-    delegate_with_pool!(neg_read(input: TensorRead<'_>) => elementwise::neg_read_with_pool);
-    delegate_with_pool!(conj(input: &Tensor) => elementwise::conj_with_pool);
-    delegate_with_pool!(conj_read(input: TensorRead<'_>) => elementwise::conj_read_with_pool);
-    delegate_with_pool!(div(lhs: &Tensor, rhs: &Tensor) => elementwise::div_with_pool);
-    delegate_with_pool!(div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::div_read_with_pool);
-    delegate_with_pool!(rem(lhs: &Tensor, rhs: &Tensor) => elementwise::rem_with_pool);
-    delegate_with_pool!(rem_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::rem_read_with_pool);
-    delegate_with_pool!(abs(input: &Tensor) => elementwise::abs_with_pool);
-    delegate_with_pool!(abs_read(input: TensorRead<'_>) => elementwise::abs_read_with_pool);
-    delegate_with_pool!(sign(input: &Tensor) => elementwise::sign_with_pool);
-    delegate_with_pool!(sign_read(input: TensorRead<'_>) => elementwise::sign_read_with_pool);
-    delegate_with_pool!(maximum(lhs: &Tensor, rhs: &Tensor) => elementwise::maximum_with_pool);
-    delegate_with_pool!(maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::maximum_read_with_pool);
-    delegate_with_pool!(minimum(lhs: &Tensor, rhs: &Tensor) => elementwise::minimum_with_pool);
-    delegate_with_pool!(minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::minimum_read_with_pool);
-    delegate_with_pool!(compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) => elementwise::compare_with_pool);
-    delegate_with_pool!(compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) => elementwise::compare_read_with_pool);
-    delegate_with_pool!(select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) => elementwise::select_with_pool);
-    delegate_with_pool!(select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) => elementwise::select_read_with_pool);
-    delegate_with_pool!(clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) => elementwise::clamp_with_pool);
-    delegate_with_pool!(clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) => elementwise::clamp_read_with_pool);
+    delegate_with_pool_context!(sub(lhs: &Tensor, rhs: &Tensor) => elementwise::sub_with_pool);
+    delegate_with_pool_context!(sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::sub_read_with_pool);
+    delegate_with_pool_context!(mul(lhs: &Tensor, rhs: &Tensor) => elementwise::mul_with_pool);
+    delegate_with_pool_context!(mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::mul_read_with_pool);
+    delegate_with_pool_context!(neg(input: &Tensor) => elementwise::neg_with_pool);
+    delegate_with_pool_context!(neg_read(input: TensorRead<'_>) => elementwise::neg_read_with_pool);
+    delegate_with_pool_context!(conj(input: &Tensor) => elementwise::conj_with_pool);
+    delegate_with_pool_context!(conj_read(input: TensorRead<'_>) => elementwise::conj_read_with_pool);
+    delegate_with_pool_context!(div(lhs: &Tensor, rhs: &Tensor) => elementwise::div_with_pool);
+    delegate_with_pool_context!(div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::div_read_with_pool);
+    delegate_with_pool_context!(rem(lhs: &Tensor, rhs: &Tensor) => elementwise::rem_with_pool);
+    delegate_with_pool_context!(rem_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::rem_read_with_pool);
+    delegate_with_pool_context!(abs(input: &Tensor) => elementwise::abs_with_pool);
+    delegate_with_pool_context!(abs_read(input: TensorRead<'_>) => elementwise::abs_read_with_pool);
+    delegate_with_pool_context!(sign(input: &Tensor) => elementwise::sign_with_pool);
+    delegate_with_pool_context!(sign_read(input: TensorRead<'_>) => elementwise::sign_read_with_pool);
+    delegate_with_pool_context!(maximum(lhs: &Tensor, rhs: &Tensor) => elementwise::maximum_with_pool);
+    delegate_with_pool_context!(maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::maximum_read_with_pool);
+    delegate_with_pool_context!(minimum(lhs: &Tensor, rhs: &Tensor) => elementwise::minimum_with_pool);
+    delegate_with_pool_context!(minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::minimum_read_with_pool);
+    delegate_with_pool_context!(compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) => elementwise::compare_with_pool);
+    delegate_with_pool_context!(compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) => elementwise::compare_read_with_pool);
+    delegate_with_pool_context!(select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) => elementwise::select_with_pool);
+    delegate_with_pool_context!(select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) => elementwise::select_read_with_pool);
+    delegate_with_pool_context!(clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) => elementwise::clamp_with_pool);
+    delegate_with_pool_context!(clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) => elementwise::clamp_read_with_pool);
 }
 
 impl TensorAnalytic for CpuExecSession<'_> {
@@ -535,16 +548,32 @@ impl TensorReduction for CpuExecSession<'_> {
         })
     }
 
-    delegate!(reduce_max(input: &Tensor, axes: &[usize]) => reduction::reduce_max(input, axes));
-
-    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh(|buffers| reduction::reduce_max_read(buffers, input, axes))
+    fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, _| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_max(input, axes, &exec_context)
+        })
     }
 
-    delegate!(reduce_min(input: &Tensor, axes: &[usize]) => reduction::reduce_min(input, axes));
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_max_read(buffers, input, axes, &exec_context)
+        })
+    }
+
+    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, _| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_min(input, axes, &exec_context)
+        })
+    }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh(|buffers| reduction::reduce_min_read(buffers, input, axes))
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_min_read(buffers, input, axes, &exec_context)
+        })
     }
 }
 
@@ -926,9 +955,16 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<Tensor>> {
-        self.run_native_fresh(|buffers| {
+        self.run_native_fresh_with_context(|context, buffers| {
             elementwise::broadcast_multiply_read_with_pool(
-                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+                buffers,
+                &context.strided_exec_context(),
+                lhs,
+                lhs_shape,
+                lhs_dims,
+                rhs,
+                rhs_shape,
+                rhs_dims,
             )
         })
     }
@@ -943,9 +979,10 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_dims: &[usize],
     ) -> crate::Result<Option<TensorValue>> {
         let domain = self.entry.domain_id();
-        self.run_native(|buffers| {
+        self.run_native_with_context(|context, buffers| {
             elementwise::broadcast_multiply_value_with_pool_and_tag(
                 buffers,
+                &context.strided_exec_context(),
                 lhs,
                 lhs_shape,
                 lhs_dims,

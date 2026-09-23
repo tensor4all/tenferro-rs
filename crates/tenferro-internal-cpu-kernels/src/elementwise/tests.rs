@@ -72,6 +72,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             let other = TypedTensor::<$ty>::from_vec_col_major(vec![], vec![2]).unwrap();
             let owned = mul_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
@@ -83,6 +84,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             assert_eq!(owned.as_slice::<$ty>().unwrap(), &[expected]);
             let view = mul_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_view(TensorView::$variant(scalar.as_view())),
                 TensorRead::from_view(TensorView::$variant(other.as_view())),
             )
@@ -90,6 +92,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             assert_eq!(view.as_slice::<$ty>().unwrap(), &[expected]);
             let broadcast = broadcast_multiply_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
@@ -111,6 +114,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             ];
             let owned_scalar_vector = mul_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
@@ -126,6 +130,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let owned_vector_scalar = mul_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     vector.duplicate().unwrap(),
                 )),
@@ -142,6 +147,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
 
             let view_scalar_vector = mul_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_view(TensorView::$variant(scalar.as_view())),
                 TensorRead::from_view(TensorView::$variant(vector.as_view())),
             )
@@ -153,6 +159,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let view_vector_scalar = mul_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_view(TensorView::$variant(vector.as_view())),
                 TensorRead::from_view(TensorView::$variant(scalar.as_view())),
             )
@@ -165,6 +172,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
 
             let broadcast_scalar_vector = broadcast_multiply_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
@@ -185,6 +193,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let broadcast_vector_scalar = broadcast_multiply_read_with_pool(
                 &mut buffers,
+                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(vector)),
                 &[3],
                 &[0],
@@ -206,24 +215,25 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
 }
 
 #[test]
-fn rank_n_outer_product_fast_path_accepts_matrix_operands() {
+fn broadcast_multiply_rank_n_outer_product_matches_reference() {
     let mut buffers = BufferPool::default();
     let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let rhs_data = [7.0_f64, 8.0, 9.0, 10.0];
     let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
     let rhs = TypedTensorView::from_slice([2, 2], [1, 2], 0, &rhs_data).unwrap();
 
-    let out = try_outer_product_with_pool(
+    let out = broadcast_multiply_read_with_pool(
         &mut buffers,
-        &lhs,
+        &ExecContext::serial(),
+        TensorRead::from_view(TensorView::F64(lhs)),
         &[2, 3, 2, 2],
         &[0, 1],
-        &rhs,
+        TensorRead::from_view(TensorView::F64(rhs)),
         &[2, 3, 2, 2],
         &[2, 3],
     )
     .unwrap()
-    .expect("rank-N x rank-M pure outer products should use the fast path");
+    .expect("f64 broadcast multiply is supported");
 
     assert_eq!(out.shape(), &[2, 3, 2, 2]);
     let expected: Vec<f64> = (0..2)
@@ -235,11 +245,11 @@ fn rank_n_outer_product_fast_path_accepts_matrix_operands() {
             })
         })
         .collect();
-    assert_eq!(out.as_slice().unwrap(), expected.as_slice());
+    assert_eq!(out.as_slice::<f64>().unwrap(), expected.as_slice());
 }
 
 #[test]
-fn batched_outer_product_fast_path_accepts_shared_batch_axis() {
+fn broadcast_multiply_shared_batch_outer_product_matches_reference() {
     let mut buffers = BufferPool::default();
     let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let rhs_data = [
@@ -248,17 +258,18 @@ fn batched_outer_product_fast_path_accepts_shared_batch_axis() {
     let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
     let rhs = TypedTensorView::from_slice([4, 3], [1, 4], 0, &rhs_data).unwrap();
 
-    let out = try_outer_product_with_pool(
+    let out = broadcast_multiply_read_with_pool(
         &mut buffers,
-        &lhs,
+        &ExecContext::serial(),
+        TensorRead::from_view(TensorView::F64(lhs)),
         &[2, 4, 3],
         &[0, 2],
-        &rhs,
+        TensorRead::from_view(TensorView::F64(rhs)),
         &[2, 4, 3],
         &[1, 2],
     )
     .unwrap()
-    .expect("shared-batch outer products should use the fast path");
+    .expect("f64 broadcast multiply is supported");
 
     assert_eq!(out.shape(), &[2, 4, 3]);
     let expected: Vec<f64> = (0..3)
@@ -266,91 +277,7 @@ fn batched_outer_product_fast_path_accepts_shared_batch_axis() {
             (0..4).flat_map(move |o| (0..2).map(move |j| lhs_data[j + 2 * t] * rhs_data[o + 4 * t]))
         })
         .collect();
-    assert_eq!(out.as_slice().unwrap(), expected.as_slice());
-}
-
-#[test]
-fn outer_product_fast_path_rejects_degenerate_1x1_batched_elementwise() {
-    let lhs_data = [1.0_f64; 5];
-    let rhs_data = [2.0_f64; 5];
-    let lhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &lhs_data).unwrap();
-    let rhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &rhs_data).unwrap();
-
-    let plan =
-        split_outer_product_plan(&lhs, &[1, 1, 5], &[0, 2], &rhs, &[1, 1, 5], &[1, 2]).unwrap();
-
-    assert!(
-        plan.is_none(),
-        "1x1 per batch should use the ordinary zip-map path"
-    );
-}
-
-#[test]
-fn outer_product_fast_path_rejects_scaling_and_unsupported_axis_layouts() {
-    let vector_data = vec![1.0_f64; 5];
-    let matrix_data = vec![2.0_f64; 15];
-    let vector = TypedTensorView::from_slice([5], [1], 0, &vector_data).unwrap();
-    let matrix = TypedTensorView::from_slice([5, 3], [1, 5], 0, &matrix_data).unwrap();
-
-    assert!(
-        split_outer_product_plan(&vector, &[5, 3], &[0], &matrix, &[5, 3], &[0, 1])
-            .unwrap()
-            .is_none(),
-        "lhs scaling over a shared axis is not an outer product"
-    );
-    assert!(
-        split_outer_product_plan(&matrix, &[5, 3], &[0, 1], &vector, &[5, 3], &[0])
-            .unwrap()
-            .is_none(),
-        "rhs scaling over a shared axis is not an outer product"
-    );
-
-    let lhs_data = vec![1.0_f64; 6];
-    let rhs_data = vec![2.0_f64; 20];
-    let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
-    let rhs = TypedTensorView::from_slice([4, 5], [1, 4], 0, &rhs_data).unwrap();
-    assert!(
-        split_outer_product_plan(&lhs, &[2, 4, 3, 5], &[0, 2], &rhs, &[2, 4, 3, 5], &[1, 3])
-            .unwrap()
-            .is_none(),
-        "interleaved free axes are not supported by the materialized fast path"
-    );
-
-    let lhs_data = [1.0_f64, 2.0];
-    let rhs_data = [3.0_f64, 4.0, 5.0];
-    let lhs = TypedTensorView::from_slice([2], [1], 0, &lhs_data).unwrap();
-    let rhs = TypedTensorView::from_slice([3], [1], 0, &rhs_data).unwrap();
-    assert!(
-        split_outer_product_plan(&lhs, &[2, 3, 4], &[0], &rhs, &[2, 3, 4], &[1])
-            .unwrap()
-            .is_none(),
-        "every output axis must be covered by lhs, rhs, or a shared batch axis"
-    );
-}
-
-#[test]
-fn outer_product_fast_path_rejects_pure_shared_batch_elementwise() {
-    let mut buffers = BufferPool::default();
-    let lhs_data = [1.0_f64; 24];
-    let rhs_data = [2.0_f64; 24];
-    let lhs = TypedTensorView::from_slice([2, 3, 4], [1, 2, 6], 0, &lhs_data).unwrap();
-    let rhs = TypedTensorView::from_slice([4, 2, 3], [1, 4, 8], 0, &rhs_data).unwrap();
-
-    let out = try_outer_product_with_pool(
-        &mut buffers,
-        &lhs,
-        &[2, 3, 4],
-        &[0, 1, 2],
-        &rhs,
-        &[2, 3, 4],
-        &[2, 0, 1],
-    )
-    .unwrap();
-
-    assert!(
-        out.is_none(),
-        "pure shared-batch elementwise should use the ordinary zip-map path"
-    );
+    assert_eq!(out.as_slice::<f64>().unwrap(), expected.as_slice());
 }
 
 #[test]
@@ -367,6 +294,7 @@ fn broadcast_multiply_fallback_handles_permuted_elementwise_without_materializat
 
     let out = broadcast_multiply_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&lhs),
         &[2, 3, 4],
         &[0, 1, 2],
@@ -406,6 +334,7 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
 
     let lhs_scalar = broadcast_multiply_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&scalar),
         &[3],
         &[],
@@ -419,6 +348,7 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
 
     let rhs_scalar = broadcast_multiply_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&vector),
         &[3],
         &[0],
@@ -434,6 +364,7 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
     let both_scalar = broadcast_multiply_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&scalar),
         &[3],
         &[],
@@ -453,6 +384,7 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
     );
     let complex_value = broadcast_multiply_value_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&complex_scalar),
         &[2],
         &[],
@@ -479,6 +411,7 @@ fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
 
     let out = try_lazy_outer_product_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         &lhs,
         &[2, 3, 4],
         &[0, 1],
@@ -489,11 +422,14 @@ fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
     .unwrap()
     .expect("non-canonical lhs physical order should use lazy outer-product output");
 
-    assert_eq!(out.shape, vec![2, 3, 4]);
-    assert_ne!(out.strides, col_major_strides(&out.shape).unwrap());
-    let value =
-        lazy_outer_product_value(Tensor::from_typed::<f64>(out.base), out.shape, out.strides)
-            .unwrap();
+    assert_ne!(out.strides, col_major_strides(&[2, 3, 4]).unwrap());
+    let value = TensorValue::from_parts(
+        Tensor::from_typed::<f64>(out.base),
+        vec![2, 3, 4],
+        out.strides,
+        0,
+    )
+    .unwrap();
     let tensor = crate::materialize_tensor_read(&mut buffers, "test", value.tensor_read()).unwrap();
     let expected: Vec<f64> = (0..4)
         .flat_map(|k| {
@@ -514,6 +450,7 @@ fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
 
     let out = try_lazy_outer_product_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         &lhs,
         &[4, 2, 3],
         &[1, 2],
@@ -524,11 +461,14 @@ fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
     .unwrap()
     .expect("rhs-prefix output should still support lazy non-canonical lhs order");
 
-    assert_eq!(out.shape, vec![4, 2, 3]);
-    assert_ne!(out.strides, col_major_strides(&out.shape).unwrap());
-    let value =
-        lazy_outer_product_value(Tensor::from_typed::<f64>(out.base), out.shape, out.strides)
-            .unwrap();
+    assert_ne!(out.strides, col_major_strides(&[4, 2, 3]).unwrap());
+    let value = TensorValue::from_parts(
+        Tensor::from_typed::<f64>(out.base),
+        vec![4, 2, 3],
+        out.strides,
+        0,
+    )
+    .unwrap();
     let tensor = crate::materialize_tensor_read(&mut buffers, "test", value.tensor_read()).unwrap();
     let expected: Vec<f64> = (0..3)
         .flat_map(|j| {
@@ -635,90 +575,128 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
     let lower_view = lower.as_view();
     let upper_view = upper.as_view();
 
-    let same_shape =
-        typed_binary_view_with_pool("test_binary", &mut buffers, &lhs_view, &rhs_view, |x, y| {
-            x + y
-        })
-        .unwrap();
+    let same_shape = zip_with_pool(
+        "test_binary",
+        ErasedZipOp::Add,
+        &mut buffers,
+        &ExecContext::serial(),
+        &lhs_view,
+        &rhs_view,
+    )
+    .unwrap();
     assert_eq!(same_shape.as_slice().unwrap(), &[11.0, 24.0]);
 
-    let scalar_lhs = typed_binary_view_with_pool(
+    let scalar_lhs = zip_with_pool(
         "test_binary",
+        ErasedZipOp::Multiply,
         &mut buffers,
+        &ExecContext::serial(),
         &scalar_view,
         &rhs_view,
-        |x, y| x * y,
     )
     .unwrap();
     assert_eq!(scalar_lhs.as_slice().unwrap(), &[20.0, 40.0]);
 
-    let scalar_rhs = typed_binary_view_with_pool(
+    let scalar_rhs = zip_with_pool(
         "test_binary",
+        ErasedZipOp::Multiply,
         &mut buffers,
+        &ExecContext::serial(),
         &lhs_view,
         &scalar_view,
-        |x, y| x * y,
     )
     .unwrap();
     assert_eq!(scalar_rhs.as_slice().unwrap(), &[2.0, 8.0]);
 
     assert_shape_mismatch(
-        typed_binary_view_with_pool(
+        zip_with_pool(
             "test_binary",
+            ErasedZipOp::Add,
             &mut buffers,
+            &ExecContext::serial(),
             &lhs_view,
             &short_view,
-            |x, y| x + y,
         ),
         "test_binary",
     );
 
-    let negated =
-        typed_unary_view_with_pool("test_unary", &mut buffers, &lhs_view, |x| -x).unwrap();
+    let negated = map_with_pool::<f64, f64, _>(
+        "test_unary",
+        ErasedMapOp::Negate,
+        &mut buffers,
+        &ExecContext::serial(),
+        &lhs_view,
+    )
+    .unwrap();
     assert_eq!(negated.as_slice().unwrap(), &[-1.0, -4.0]);
 
-    let compared = typed_same_shape_binary_view_with_pool(
-        "test_same_shape",
+    let compared = typed_compare_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         &lhs_view,
         &rhs_view,
-        |x, y| x < y,
+        &CompareDir::Lt,
     )
     .unwrap();
     assert_eq!(compared.as_slice().unwrap(), &[true, true]);
     assert_shape_mismatch(
-        typed_same_shape_binary_view_with_pool(
-            "test_same_shape",
+        typed_compare_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             &lhs_view,
             &short_view,
-            |x, y| x < y,
+            &CompareDir::Lt,
         ),
-        "test_same_shape",
+        "compare",
     );
 
-    let selected =
-        typed_select_view_with_pool(&mut buffers, &pred_view, &lhs_view, &rhs_view).unwrap();
+    let selected = typed_select_with_pool(
+        &mut buffers,
+        &ExecContext::serial(),
+        &pred_view,
+        &lhs_view,
+        &rhs_view,
+    )
+    .unwrap();
     assert_eq!(selected.as_slice().unwrap(), &[1.0, 20.0]);
     assert_shape_mismatch(
-        typed_select_view_with_pool(&mut buffers, &pred_view, &short_view, &rhs_view),
+        typed_select_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &pred_view,
+            &short_view,
+            &rhs_view,
+        ),
         "select",
     );
     assert_shape_mismatch(
-        typed_select_view_with_pool(&mut buffers, &pred_view, &lhs_view, &short_view),
+        typed_select_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &pred_view,
+            &lhs_view,
+            &short_view,
+        ),
         "select",
     );
 
-    let clamped =
-        typed_clamp_view_with_pool(&mut buffers, &lhs_view, &lower_view, &upper_view).unwrap();
+    let clamped = typed_clamp_with_pool(
+        &mut buffers,
+        &ExecContext::serial(),
+        &lhs_view,
+        &lower_view,
+        &upper_view,
+    )
+    .unwrap();
     assert_eq!(clamped.as_slice().unwrap(), &[1.0, 4.0]);
 
     let degenerate_lower: TypedTensor<f64> =
         TypedTensor::from_vec_col_major(vec![2], vec![5.0_f64, 5.0]).unwrap();
     let degenerate_upper: TypedTensor<f64> =
         TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 3.0]).unwrap();
-    let degenerate = typed_clamp_view_with_pool(
+    let degenerate = typed_clamp_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         &lhs_view,
         &degenerate_lower.as_view(),
         &degenerate_upper.as_view(),
@@ -727,11 +705,23 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
     assert_eq!(degenerate.as_slice().unwrap(), &[3.0, 3.0]);
 
     assert_shape_mismatch(
-        typed_clamp_view_with_pool(&mut buffers, &lhs_view, &short_view, &upper_view),
+        typed_clamp_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &lhs_view,
+            &short_view,
+            &upper_view,
+        ),
         "clamp",
     );
     assert_shape_mismatch(
-        typed_clamp_view_with_pool(&mut buffers, &lhs_view, &lower_view, &short_view),
+        typed_clamp_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &lhs_view,
+            &lower_view,
+            &short_view,
+        ),
         "clamp",
     );
 }
@@ -918,6 +908,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let add_f32 = add_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F32(f32_a.as_view())),
         TensorRead::from_tensor(&f32_b_tensor),
     )
@@ -926,6 +917,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let add_c32_scalar = add_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F32(f32_scalar.as_view())),
         TensorRead::from_tensor(&c32_b_tensor),
     )
@@ -937,6 +929,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let add_c64_scalar = add_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(c64_b.as_view())),
         TensorRead::from_tensor(&f64_scalar_tensor),
     )
@@ -948,6 +941,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let mul_f64 = mul_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F64(f64_a.as_view())),
         TensorRead::from_tensor(&f64_b_tensor),
     )
@@ -956,6 +950,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let mul_c32_scalar = mul_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&c32_b_tensor),
         TensorRead::from_view(TensorView::F32(f32_scalar.as_view())),
     )
@@ -968,6 +963,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_dtype_mismatch(
         mul_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F64(f64_a.as_view())),
         ),
@@ -976,6 +972,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let div_c32 = div_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F32(f32_scalar.as_view())),
         TensorRead::from_view(TensorView::C32(c32_b.as_view())),
     )
@@ -987,6 +984,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let div_c64 = div_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(c64_a.as_view())),
         TensorRead::from_view(TensorView::F64(f64_scalar.as_view())),
     )
@@ -998,6 +996,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let div_f32 = div_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&f32_b_tensor),
         TensorRead::from_tensor(&f32_scalar_tensor),
     )
@@ -1006,6 +1005,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let div_f64 = div_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&f64_b_tensor),
         TensorRead::from_view(TensorView::F64(f64_scalar.as_view())),
     )
@@ -1014,12 +1014,14 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let neg = neg_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(c64_a.as_view())),
     )
     .unwrap();
     assert_c64_close(neg.as_slice::<Complex<f64>>().unwrap()[0], c64(-3.0, -4.0));
     let neg_i32 = neg_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I32(i32_a.as_view())),
     )
     .unwrap();
@@ -1027,6 +1029,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let conj = conj_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C32(c32_a.as_view())),
     )
     .unwrap();
@@ -1034,6 +1037,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported(
         conj_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::Bool(bool_a.as_view())),
         ),
         "conj",
@@ -1041,6 +1045,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let abs = abs_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(c64_a.as_view())),
     )
     .unwrap();
@@ -1048,6 +1053,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let sign = sign_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F64(f64_a.as_view())),
     )
     .unwrap();
@@ -1055,6 +1061,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let sign_complex = sign_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C32(c32_a.as_view())),
     )
     .unwrap();
@@ -1070,6 +1077,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
             .unwrap();
     let tiny_sign = sign_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(tiny_complex.as_view())),
     )
     .unwrap();
@@ -1082,6 +1090,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
             .unwrap();
     let zero_sign = sign_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(zero_complex.as_view())),
     )
     .unwrap();
@@ -1093,6 +1102,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         maximum_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
             TensorRead::from_tensor(&c32_b_tensor),
         ),
@@ -1102,6 +1112,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         minimum_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C64(c64_a.as_view())),
             TensorRead::from_tensor(&c64_b_tensor),
         ),
@@ -1111,6 +1122,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let cmp_i32 = compare_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I32(i32_a.as_view())),
         TensorRead::from_view(TensorView::I32(i32_b.as_view())),
         &CompareDir::Lt,
@@ -1120,6 +1132,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let cmp_i64 = compare_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I64(i64_a.as_view())),
         TensorRead::from_view(TensorView::I64(i64_b.as_view())),
         &CompareDir::Ge,
@@ -1129,6 +1142,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let cmp_bool = compare_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::Bool(bool_a.as_view())),
         TensorRead::from_view(TensorView::Bool(bool_b.as_view())),
         &CompareDir::Eq,
@@ -1139,6 +1153,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         compare_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
             TensorRead::from_view(TensorView::C32(c32_b.as_view())),
             &CompareDir::Gt,
@@ -1149,6 +1164,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let select_i64 = select_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::Bool(pred.as_view())),
         TensorRead::from_view(TensorView::I64(i64_a.as_view())),
         TensorRead::from_view(TensorView::I64(i64_b.as_view())),
@@ -1158,6 +1174,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let select_bool = select_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::Bool(pred.as_view())),
         TensorRead::from_view(TensorView::Bool(bool_a.as_view())),
         TensorRead::from_view(TensorView::Bool(bool_b.as_view())),
@@ -1167,6 +1184,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let select_c32 = select_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::Bool(pred.as_view())),
         TensorRead::from_view(TensorView::C32(c32_a.as_view())),
         TensorRead::from_view(TensorView::C32(c32_b.as_view())),
@@ -1180,6 +1198,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_dtype_mismatch(
         select_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::Bool(pred.as_view())),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F64(f64_a.as_view())),
@@ -1189,6 +1208,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_dtype_mismatch(
         select_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F32(f32_b.as_view())),
@@ -1199,6 +1219,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         clamp_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
             TensorRead::from_view(TensorView::C32(c32_b.as_view())),
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
@@ -1209,6 +1230,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         clamp_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C64(c64_a.as_view())),
             TensorRead::from_view(TensorView::C64(c64_b.as_view())),
             TensorRead::from_view(TensorView::C64(c64_a.as_view())),
@@ -1220,6 +1242,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_dtype_mismatch(
         clamp_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F32(f32_b.as_view())),
             TensorRead::from_view(TensorView::F64(f64_b.as_view())),
@@ -1248,9 +1271,11 @@ fn ordered_compare_fixed_dispatch_preserves_owned_and_view_semantics() {
     let mut buffers = BufferPool::new();
 
     for (dir, expected) in cases {
-        let owned = compare_with_pool(&mut buffers, &lhs, &rhs, &dir).unwrap();
+        let owned =
+            compare_with_pool(&mut buffers, &ExecContext::serial(), &lhs, &rhs, &dir).unwrap();
         let borrowed = compare_read_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             TensorRead::from_view(TensorView::F64(lhs_typed.as_view())),
             TensorRead::from_view(TensorView::F64(rhs_typed.as_view())),
             &dir,
@@ -1266,13 +1291,13 @@ fn ordered_compare_fixed_dispatch_preserves_owned_and_view_semantics() {
 fn ordered_compare_owned_and_read_routes_use_fixed_dispatch() {
     let source = include_str!("../elementwise.rs");
     let helper = source
-        .split_once("fn typed_ordered_compare_view_with_pool")
-        .and_then(|(_, suffix)| suffix.split_once("fn typed_select_view_with_pool"))
+        .split_once("fn typed_compare_with_pool")
+        .and_then(|(_, suffix)| suffix.split_once("fn typed_select_with_pool"))
         .map(|(body, _)| body)
         .expect("fixed comparison helper must remain defined");
     assert!(
-        helper.contains("compare_into_uninit("),
-        "fixed comparison helper must dispatch through strided compare_into_uninit"
+        helper.contains("erased_compare_into_uninit("),
+        "fixed comparison helper must dispatch through strided erased_compare_into_uninit"
     );
 
     for (start, end, route) in [
@@ -1293,7 +1318,7 @@ fn ordered_compare_owned_and_read_routes_use_fixed_dispatch() {
             .map(|(body, _)| body)
             .unwrap_or_else(|| panic!("{route} comparison route must remain defined"));
         assert!(
-            body.matches("typed_ordered_compare_view_with_pool").count() >= 5,
+            body.matches("typed_compare_with_pool").count() >= 5,
             "{route} real, integer, and Bool comparisons must use fixed dispatch"
         );
     }
@@ -1312,6 +1337,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_f32 = TypedTensorView::from_slice([4], [1], 0, &rhs_f32_data).unwrap();
     let value_f32 = broadcast_multiply_value_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F32(lhs_f32.clone())),
         &lhs_shape,
         &lhs_dims,
@@ -1335,6 +1361,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_i32 = TypedTensorView::from_slice([4], [1], 0, &rhs_i32_data).unwrap();
     let value_i32 = broadcast_multiply_value_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I32(lhs_i32.clone())),
         &lhs_shape,
         &lhs_dims,
@@ -1352,6 +1379,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_i64 = TypedTensorView::from_slice([4], [1], 0, &rhs_i64_data).unwrap();
     let value_i64 = broadcast_multiply_value_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I64(lhs_i64.clone())),
         &lhs_shape,
         &lhs_dims,
@@ -1376,6 +1404,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_c32 = TypedTensorView::from_slice([4], [1], 0, &rhs_c32_data).unwrap();
     let value_c32 = broadcast_multiply_value_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C32(lhs_c32.clone())),
         &lhs_shape,
         &lhs_dims,
@@ -1400,6 +1429,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_c64 = TypedTensorView::from_slice([4], [1], 0, &rhs_c64_data).unwrap();
     let value_c64 = broadcast_multiply_value_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(lhs_c64.clone())),
         &lhs_shape,
         &lhs_dims,
@@ -1417,6 +1447,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
         Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![2], vec![4, 5]).unwrap());
     let materialized = broadcast_multiply_value_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&same_shape_i64_lhs),
         &[2],
         &[0],
@@ -1443,6 +1474,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     );
     assert!(broadcast_multiply_read_with_pool(
         &mut buffers,
+        &ExecContext::serial(),
         TensorRead::from_tensor(&bool_lhs),
         &[2],
         &[0],
@@ -1454,15 +1486,15 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     .is_none());
 
     assert_shape_mismatch(
-        typed_broadcast_mul_view_with_pool(
+        typed_broadcast_mul_with_pool(
             &mut buffers,
+            &ExecContext::serial(),
             &lhs_f32,
             &[2, 3, 4],
             &[0, 1],
             &lhs_f32,
             &[2, 3, 5],
             &[0, 1],
-            |x, y| x * y,
         ),
         "broadcast_multiply",
     );

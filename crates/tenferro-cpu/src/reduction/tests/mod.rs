@@ -33,8 +33,8 @@ fn reduce_max_and_min_cover_every_preset_scalar() {
     for input in &cases {
         // Either the table computes the reduction or its refusal arm answers; both are
         // dispatch bodies this module owns.
-        let _ = reduce_max(input, &[0]);
-        let _ = reduce_min(input, &[0]);
+        let _ = reduce_max(input, &[0], &strided_kernel::ExecContext::serial());
+        let _ = reduce_min(input, &[0], &strided_kernel::ExecContext::serial());
     }
 }
 
