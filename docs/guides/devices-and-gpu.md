@@ -137,16 +137,18 @@ For downstream PTX, CUBIN, NVRTC, or device-library kernels, see
 `CudaExecSession` and `cuda::raw` extension boundary.
 
 `TensorStructural::copy_read_into` can reuse an already allocated CUDA
-destination; for supported floating and complex permutation layouts it uses
-the backend-owned cuTENSOR permutation plan cache. Both operands may be
-arbitrary-stride region views at a nonzero offset inside a larger allocation:
-each side is described by its own extents, strides, and offset, so a block
-region is read and written in place instead of being canonicalized into
-scratch first. Reversed (negative-stride) and broadcast source layouts, which
-cuTENSOR descriptors cannot represent, run the native strided kernel instead.
-The source and destination must be distinct allocations. CUDA does not
-silently fall back when the required NVIDIA library stack is unavailable; the
-operation returns a typed library/provider error instead.
+destination. Both operands may be arbitrary-stride region views at a nonzero
+offset inside a larger allocation: each side is described by its own extents,
+strides, and offset, so a block region is read and written in place instead of
+being canonicalized into scratch first. Every numeric dtype uses the cuTENSOR
+permutation path, which is the bandwidth-bound optimum for a multi-axis
+permutation destination. A complex operand is planned through its real view
+with a real `alpha = 1`, so the scaling multiply is exact and cannot turn
+`(inf, finite)` into `(inf, NaN)` (issue #1891). A `NaN` payload may still be
+canonicalized. Reversed and broadcast sources, which cuTENSOR descriptors cannot
+represent, use the native copy, and a compact 2D/3D transpose into a row-major
+compact destination uses the tiled transpose kernel there. The source and
+destination must be distinct allocations.
 
 `BackendSession::axpby_read_into_accum` keeps the documented compact
 destination contract, and consumes an arbitrary-stride or offset `x` through
@@ -392,7 +394,7 @@ descriptor.
 | `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Add-scatter semantics; complex and `Bool` index tensors and integer/`Bool` operands are not implemented |
 | `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Dense structural/indexing operations |
 | `to_contiguous_read` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Same-device canonicalization of owned tensors and arbitrary valid CUDA views; CUDA `F32`/`F64`/`C32`/`C64` nonnegative-stride canonicalization uses cuTENSOR permutation, while negative-stride views use the native CUDA structural copy because cuTENSOR does not represent that layout; `Bool` is an explicit current limitation |
-| `copy_read_into` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Source must be compact column-major with offset zero and cover its full allocation; destination may be strided; allocations must not alias; `Bool` is an explicit current limitation |
+| `copy_read_into` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Source must be compact column-major with offset zero and cover its full allocation; `C32`/`C64` are value-exact through a real-view cuTENSOR plan and `F32`/`F64` may canonicalize a `NaN` payload; destination may be strided; allocations must not alias; `Bool` is an explicit current limitation |
 | `dynamic_slice` | input `F32`, `F64`, `I32`, `Bool`, `C32`, `C64` with starts `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` start tensors; `I64` inputs are not implemented |
 | `dynamic_update_slice` | No CUDA implementation | Returns an error |
 | `cholesky`, `triangular_solve`, `lu`, `svd`, `qr`, `eigh`, `solve` | `F32`, `F64`, `C32`, `C64` | cuSOLVER/cuBLAS-backed; integer and `Bool` dtypes are not implemented |

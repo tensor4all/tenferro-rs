@@ -809,7 +809,7 @@ fn cuda_runtime_copy_into_cutensor_matches_destination_reuse_and_survives_source
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
-fn cuda_runtime_copy_into_cutensor_matches_complex_destination_reuse() {
+fn cuda_runtime_copy_into_matches_complex_destination_reuse() {
     let mut gpu = gpu_backend();
     let gpu_src = upload(
         &gpu,
@@ -855,6 +855,125 @@ fn cuda_runtime_copy_into_cutensor_matches_complex_destination_reuse() {
             Complex32::new(15.0, 16.0),
         ]
     );
+}
+
+/// Issue #1891: both operands of a complex permutation must be expanded from
+/// the same logical mode list.
+///
+/// The real/imaginary mode is appended to the source and destination
+/// descriptors, so expanding one of them from an already-expanded mode list
+/// rejects the other with a rank mismatch. Materializing a strided complex view
+/// covers that, and `to_contiguous_read` is the entry point the CUDA blas1 and
+/// linalg paths use for a non-contiguous read.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_to_contiguous_read_materializes_a_strided_complex_view() {
+    fn bits(tensor: &Tensor) -> Vec<(u64, u64)> {
+        tensor
+            .as_slice::<Complex64>()
+            .expect("expected C64")
+            .iter()
+            .map(|value| (value.re.to_bits(), value.im.to_bits()))
+            .collect()
+    }
+
+    let mut gpu = gpu_backend();
+    let mut cpu = cpu_backend();
+    let host = tensor_c64(
+        vec![3, 2],
+        vec![
+            Complex64::new(f64::INFINITY, 2.0),
+            Complex64::new(-0.0, 3.0),
+            Complex64::new(1.0, 4.0),
+            Complex64::new(5.0, 6.0),
+            Complex64::new(f64::NAN, 8.0),
+            Complex64::new(9.0, 10.0),
+        ],
+    );
+    let gpu_src = upload(&gpu, &host);
+
+    let gpu_view = gpu_src
+        .as_typed::<Complex64>()
+        .expect("expected C64")
+        .as_view()
+        .transpose_view([1, 0])
+        .unwrap();
+    let got = gpu
+        .to_contiguous_read(TensorRead::from_view(TensorView::C64(gpu_view)))
+        .unwrap();
+
+    let cpu_view = host
+        .as_typed::<Complex64>()
+        .expect("expected C64")
+        .as_view()
+        .transpose_view([1, 0])
+        .unwrap();
+    let expected = cpu
+        .to_contiguous_read(TensorRead::from_view(TensorView::C64(cpu_view)))
+        .unwrap();
+
+    assert_eq!(bits(&download(&gpu, &got)), bits(&expected));
+}
+
+/// Issue #1891: the erased CUDA copy must not change complex values.
+///
+/// The cuTENSOR permutation executor scales by `alpha = 1`. For a complex dtype
+/// that multiply computes `re = 1*re - 0*im` and `im = 1*im + 0*re`, so an
+/// infinite component turns the other component into `NaN` and a finite input
+/// value is silently lost. `copy_read_into` must therefore reach a plain
+/// assignment kernel for `C32`/`C64`.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_copy_read_into_preserves_non_finite_complex_components() {
+    fn bits(tensor: &Tensor) -> Vec<(u64, u64)> {
+        tensor
+            .as_slice::<Complex64>()
+            .expect("expected C64")
+            .iter()
+            .map(|value| (value.re.to_bits(), value.im.to_bits()))
+            .collect()
+    }
+
+    let mut gpu = gpu_backend();
+    let data = vec![
+        Complex64::new(f64::INFINITY, 2.0),
+        Complex64::new(-0.0, 3.0),
+        Complex64::new(1.0, 4.0),
+        Complex64::new(5.0, f64::INFINITY),
+        Complex64::new(f64::NAN, 8.0),
+        Complex64::new(9.0, 10.0),
+    ];
+    let host = tensor_c64(vec![3, 2], data.clone());
+    let gpu_src = upload(&gpu, &host);
+
+    let mut same = upload(
+        &gpu,
+        &tensor_c64(vec![3, 2], vec![Complex64::new(0.0, 0.0); 6]),
+    );
+    gpu.copy_read_into(
+        TensorRead::from_tensor(&gpu_src),
+        TensorWrite::from_tensor(&mut same),
+    )
+    .unwrap();
+    assert_eq!(bits(&download(&gpu, &same)), bits(&host));
+
+    let mut transposed = upload(
+        &gpu,
+        &tensor_c64(vec![2, 3], vec![Complex64::new(0.0, 0.0); 6]),
+    );
+    {
+        let dst = transposed
+            .as_typed_mut::<Complex64>()
+            .expect("expected complex destination");
+        let view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
+        gpu.copy_read_into(
+            TensorRead::from_tensor(&gpu_src),
+            TensorWrite::from_view(TensorViewMut::C64(view)),
+        )
+        .unwrap();
+    }
+    let expected = cpu_backend().transpose(&host, &[1, 0]).unwrap();
+    assert_eq!(bits(&download(&gpu, &transposed)), bits(&expected));
 }
 
 #[test]
@@ -1223,9 +1342,9 @@ region_copy_case!(
     |value| Complex64::new(f64::from(value), -f64::from(value))
 );
 
-/// Issue #1832: the erased read-into entry routes F32/F64/C32/C64 through
-/// cuTENSOR, so cover an offset strided source there as well, with a rank-3
-/// permuted destination.
+/// Issue #1832: the erased read-into entry routes F32/F64 through cuTENSOR
+/// (C32/C64 use the exact native copy since #1891), so cover an offset strided
+/// source there as well, with a rank-3 permuted destination.
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_copy_read_into_moves_offset_strided_region_through_cutensor() {
