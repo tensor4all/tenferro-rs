@@ -72,22 +72,62 @@ credentials stay GitHub-hosted):
 - delete a rejected or timed-out pod immediately and move to the next
   candidate, reusing the same immutable per-run archive (#1403) — retries
   never compile Rust;
-- stop after `max_provision_attempts` with an explicit exhaustion error.
+- stop after `max_provision_attempts` with an explicit exhaustion error;
+- stop early after `max_consecutive_startup_failures` candidates failed to
+  register a runner. Consecutive failures of that kind (created, never
+  online) mean the provider is not delivering runners, and the remaining
+  attempts would only add paid pod time; one outage otherwise creates and
+  pays for every candidate without running a single test. `0` disables the
+  early stop and restores the plain bounded ladder.
 
-Capacity failures move to the next candidate without creating a pod.
+Capacity failures move to the next candidate without creating a pod, so
+nothing was paid for and they do not count toward the early stop.
 `startup_timeout_seconds` bounds each candidate's wait;
 `startup_poll_seconds` is the poll cadence.
+
+## Cost containment in the startup window
+
+Every second between pod creation and runner registration is billed at the
+GPU rate, and a rejected candidate pays it too, so the startup script keeps
+only what registration and the smoke proof need:
+
+- the driver/VRAM check, the CUDA smoke proof, and the runner bootstrap;
+- the build toolchain, `git`, `jq`, and `zstd` are installed by the test
+  job's first step, which runs after registration and only on the accepted
+  pod. `zstd` still lands before the `actions/cache` restore step there,
+  which is what keeps the cache version hash compatible with the
+  zstd-equipped hosted publisher;
+- the pinned actions-runner tarball is served from the pod's persistent
+  volume (`/workspace/runpod-ci-cache`) when an earlier pod populated it,
+  and its SHA-256 still decides whether the cached copy is usable. Every
+  step of the cache path degrades to the normal download, so a missing,
+  unwritable, or stale cache cannot fail startup.
 
 ## Observability
 
 - Each attempt logs candidate name, GPU type, hourly price
   (`costPerHr`/`adjustedCostPerHr` from the pod record), outcome, rejection
-  reason, and startup or wasted seconds with an estimated paid cost.
+  reason, and startup or wasted seconds with an estimated paid cost in
+  dollars. Rejections also accumulate, so an accepted pod reports what the
+  rejected candidates before it cost and an exhaustion error reports the
+  total.
 - The accepted pod's GPU, tier, price, startup time, and attempt count go
   to the job summary and `gpu_cost_per_hr` output; the pod-side "Check
   machine" step echoes them next to `nvidia-smi`.
 - `cleanup-runpod` reads the pod record before deletion and logs paid time
   and estimated cost for the whole run.
+
+## Local GPU validation instead of provisioning
+
+When the provider cannot deliver a runner, the paid path otherwise fails after
+spending pods, and every retry spends more. The `authorize` job therefore reads
+the PR's labels: with `gpu-validated-locally`, `gpu-execution` is skipped, so no
+pod is created, and `ci-gpu-gate` publishes success only after verifying that a
+PR comment containing a line that starts with `Local GPU validation:` exists and
+was authored by a repository admin or maintainer. The label alone never waives
+the gate, and the evidence has to name the GPU, the commit, the commands, and the
+observed result. It is a maintainer decision recorded on the PR rather than a
+default path: the paid gate stays required whenever a runner is available.
 
 ## Security invariants (unchanged)
 

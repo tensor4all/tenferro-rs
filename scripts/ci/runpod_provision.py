@@ -141,10 +141,53 @@ def provision(
     max_attempts = int(config.get("max_provision_attempts", 4))
     startup_timeout = float(config.get("startup_timeout_seconds", 600))
     poll_seconds = float(config.get("startup_poll_seconds", 10))
+    # 0 keeps the plain bounded-attempt behavior without the early stop.
+    max_consecutive_startup_failures = int(
+        config.get("max_consecutive_startup_failures", 2)
+    )
     attempts = 0
     last_reason = "no candidates attempted"
 
     kept_pods: list[str] = []
+    consecutive_startup_failures = 0
+    rejected_pods = 0
+    rejected_seconds = 0.0
+    rejected_cost = 0.0
+
+    def kept_suffix() -> str:
+        return f"; kept debug pods: {', '.join(kept_pods)}" if kept_pods else ""
+
+    def spend_summary() -> str:
+        """Paid time and list-price cost of the pods this loop rejected."""
+
+        if rejected_pods == 0:
+            return "no rejected pod time"
+        return (
+            f"{rejected_pods} rejected pod(s), {rejected_seconds:.0f}s, "
+            f"~${rejected_cost:.2f} at list price"
+        )
+
+    def record_rejected_startup(description: str) -> None:
+        """Count a created pod that never registered and stop paying early.
+
+        The bounded attempt budget alone kept creating pods the provider never
+        brought online: one outage paid for all six candidates without running
+        a single test. Consecutive failures of that kind mean the provider is
+        not delivering runners, so the remaining attempts are skipped and the
+        spend so far is reported instead of being repeated.
+        """
+
+        nonlocal consecutive_startup_failures
+        consecutive_startup_failures += 1
+        if (
+            max_consecutive_startup_failures > 0
+            and consecutive_startup_failures >= max_consecutive_startup_failures
+        ):
+            raise ProvisionExhaustedError(
+                f"stopping after {consecutive_startup_failures} consecutive pods "
+                f"failed to register a runner ({description}); {spend_summary()}"
+                f"{kept_suffix()}"
+            )
 
     def reject_and_delete(pod_id: str, description: str) -> None:
         if keep_failed_pods:
@@ -189,10 +232,14 @@ def provision(
             )
             reject_and_delete(error.result.pod_id, "unverifiable GPU assignment")
             last_reason = f"unverifiable GPU assignment: {error}"
+            record_rejected_startup("unverifiable GPU assignment")
             continue
         except RetryableRunPodError as error:
             last_reason = f"create failed: {error}"
             print(f"Candidate {tier_name} rejected before start: {last_reason}")
+            # No pod was created, so nothing was paid for and the ladder
+            # keeps going: the early stop below is about pods that ran.
+            consecutive_startup_failures = 0
             continue
         publish_pod_id(result.pod_id)
         cost = parse_cost_per_hr(result.body)
@@ -237,6 +284,8 @@ def provision(
                     f"CUDA smoke proof in {startup_seconds:.0f}s "
                     f"(GPU {result.gpu_type_id or 'unknown'}, {cost_text})."
                 )
+                if rejected_pods:
+                    print(f"Rejected before the accepted pod: {spend_summary()}.")
                 return ProvisionResult(
                     pod_id=result.pod_id,
                     gpu_type_id=result.gpu_type_id,
@@ -253,22 +302,27 @@ def provision(
             sleep(poll_seconds)
 
         elapsed = monotonic() - started
-        estimate = (
-            f"; estimated paid time {elapsed:.0f}s at {cost_text}"
-            if cost is not None
-            else ""
-        )
+        rejected_pods += 1
+        rejected_seconds += elapsed
+        estimate = f"; estimated paid time {elapsed:.0f}s at {cost_text}"
+        if cost is not None:
+            rejected_cost += elapsed / 3600.0 * cost
+            estimate = (
+                f"; estimated paid time {elapsed:.0f}s at {cost_text} "
+                f"(~${elapsed / 3600.0 * cost:.2f})"
+            )
         print(
             f"Rejecting candidate {tier_name} (pod {result.pod_id}, GPU "
             f"{result.gpu_type_id or 'unknown'}): {reason}{estimate}"
         )
         reject_and_delete(result.pod_id, reason or "startup failure")
         last_reason = reason or "unknown failure"
+        record_rejected_startup(reason or "startup failure")
 
     kept = f"; kept debug pods: {', '.join(kept_pods)}" if kept_pods else ""
     raise ProvisionExhaustedError(
         f"all {attempts} bounded provision attempts failed; "
-        f"last: {last_reason}{kept}"
+        f"last: {last_reason}; {spend_summary()}{kept}"
     )
 
 

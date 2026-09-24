@@ -51,6 +51,7 @@
   "min_vram_gb": 8,
   "max_price_candidates": 3,
   "max_provision_attempts": 6,
+  "max_consecutive_startup_failures": 2,
   "startup_timeout_seconds": 420,
   "startup_poll_seconds": 10,
   "gpu_count": 1,
