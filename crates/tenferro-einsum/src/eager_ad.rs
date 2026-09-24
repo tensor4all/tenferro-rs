@@ -11,6 +11,7 @@ use computegraph::graph::GraphBuilder;
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{ValueKey, ValueRef};
+use smallvec::SmallVec;
 use tenferro_ad::extension::{
     adopt_untracked_eager_value, apply_eager_with_targeted_extension_session,
     EagerExtensionBackendKind, EagerExtensionTarget,
@@ -27,7 +28,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{ErrorPhase, ExtensionCacheKey, ExtensionModule};
 use tenferro_tensor::{ErrorKind, ShapeMismatch, Tensor, ValidationError, ValidationKind};
 
-use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
+use crate::binary_dot::{try_build_exact_output_binary_dot_config, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph;
 use crate::cache::{
     saturating_sum, vec_retained_bytes, EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE,
@@ -194,6 +195,9 @@ impl EagerTensorEinsumExt for EagerTensor {
 /// [`Error::Planning`] when no contraction path is valid, or [`Error::Runtime`]
 /// for extension registration and backend execution failures.
 pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> {
+    if let Some(result) = try_ascii_binary_dot_general(inputs, subscripts) {
+        return result;
+    }
     let notation = parse_einsum_notation(subscripts)?;
     einsum_notation(inputs, &notation)
 }
@@ -207,6 +211,9 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 /// [`Error::Planning`] for an invalid contraction path, or [`Error::Runtime`]
 /// for extension registration and backend execution failures.
 pub fn einsum_notation(inputs: &[&EagerTensor], notation: &EinsumNotation) -> Result<EagerTensor> {
+    if let Some(result) = try_direct_binary_dot_general_notation(inputs, notation) {
+        return result;
+    }
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let subscripts = resolve_einsum_notation(notation, &shapes)?;
     let subscripts = EinsumSubscripts::from(subscripts);
@@ -303,26 +310,86 @@ fn try_direct_binary_dot_general(
     if inputs.len() != 2 || subscripts.inputs.len() != 2 {
         return None;
     }
+    try_direct_binary_dot_general_labels(
+        inputs,
+        &subscripts.inputs[0],
+        &subscripts.inputs[1],
+        &subscripts.output,
+    )
+}
 
-    let lhs_labels = &subscripts.inputs[0];
-    let rhs_labels = &subscripts.inputs[1];
-    if lhs_labels.len() != inputs[0].shape().len() || rhs_labels.len() != inputs[1].shape().len() {
+fn try_direct_binary_dot_general_notation(
+    inputs: &[&EagerTensor],
+    notation: &EinsumNotation,
+) -> Option<Result<EagerTensor>> {
+    if inputs.len() != 2 || notation.inputs.len() != 2 {
         return None;
     }
+    let labels = |axes: &[crate::EinsumAxis]| {
+        axes.iter()
+            .map(|axis| match axis {
+                crate::EinsumAxis::Label(label) => Some(*label),
+                crate::EinsumAxis::Ellipsis => None,
+            })
+            .collect::<Option<SmallVec<[u32; 8]>>>()
+    };
+    let lhs_labels = labels(&notation.inputs[0])?;
+    let rhs_labels = labels(&notation.inputs[1])?;
+    let output_labels = labels(&notation.output)?;
+    try_direct_binary_dot_general_labels(inputs, &lhs_labels, &rhs_labels, &output_labels)
+}
 
-    if let Some(plan) =
-        try_build_exact_output_binary_dot_plan(lhs_labels, rhs_labels, &subscripts.output)
-    {
-        let (lhs, rhs) = match plan.operand_order {
-            BinaryDotOperandOrder::Original => (inputs[0], inputs[1]),
-            BinaryDotOperandOrder::Swapped => (inputs[1], inputs[0]),
-        };
-        if !exact_dot_shapes(lhs.shape(), rhs.shape(), &plan.config) {
+fn try_ascii_binary_dot_general(
+    inputs: &[&EagerTensor],
+    notation: &str,
+) -> Option<Result<EagerTensor>> {
+    let (input_terms, output_term) = notation.split_once("->")?;
+    if output_term.contains("->") {
+        return None;
+    }
+    let (lhs_term, rhs_term) = input_terms.split_once(',')?;
+    if rhs_term.contains(',') || output_term.contains(',') {
+        return None;
+    }
+    let lhs_labels = parse_fast_ascii_labels(lhs_term)?;
+    let rhs_labels = parse_fast_ascii_labels(rhs_term)?;
+    let output_labels = parse_fast_ascii_labels(output_term)?;
+    try_direct_binary_dot_general_labels(inputs, &lhs_labels, &rhs_labels, &output_labels)
+}
+
+fn parse_fast_ascii_labels(term: &str) -> Option<SmallVec<[u32; 8]>> {
+    let mut labels = SmallVec::new();
+    for label in term.chars() {
+        if !label.is_ascii() || matches!(label, ',' | '-' | '>' | '(' | ')' | ' ' | '.') {
             return None;
         }
-        return Some(lhs.dot_general(rhs, plan.config).map_err(Error::Runtime));
+        labels.push(label as u32);
     }
-    None
+    Some(labels)
+}
+
+fn try_direct_binary_dot_general_labels(
+    inputs: &[&EagerTensor],
+    lhs_labels: &[u32],
+    rhs_labels: &[u32],
+    output_labels: &[u32],
+) -> Option<Result<EagerTensor>> {
+    if inputs.len() != 2
+        || lhs_labels.len() != inputs[0].shape().len()
+        || rhs_labels.len() != inputs[1].shape().len()
+    {
+        return None;
+    }
+    let (order, config) =
+        try_build_exact_output_binary_dot_config(lhs_labels, rhs_labels, output_labels)?;
+    let (lhs, rhs) = match order {
+        BinaryDotOperandOrder::Original => (inputs[0], inputs[1]),
+        BinaryDotOperandOrder::Swapped => (inputs[1], inputs[0]),
+    };
+    if !exact_dot_shapes(lhs.shape(), rhs.shape(), &config) {
+        return None;
+    }
+    Some(lhs.dot_general(rhs, config).map_err(Error::Runtime))
 }
 
 fn requires_broadcast(inputs: &[&EagerTensor], subscripts: &EinsumSubscripts) -> bool {

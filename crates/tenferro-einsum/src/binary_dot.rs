@@ -19,14 +19,106 @@ fn small_contains(labels: &[u32], label: u32) -> bool {
 }
 
 fn labels_are_unique(labels: &[u32]) -> bool {
-    let mut seen = Vec::with_capacity(labels.len());
-    for &label in labels {
-        if small_contains(&seen, label) {
-            return false;
-        }
-        seen.push(label);
+    // INVARIANT: label lists are bounded by tensor rank; the existing planner already
+    // uses quadratic membership scans, so checking prior labels avoids scratch allocation.
+    labels
+        .iter()
+        .enumerate()
+        .all(|(i, label)| !labels[..i].contains(label))
+}
+
+pub(crate) fn try_build_exact_output_binary_dot_config(
+    lhs_labels: &[u32],
+    rhs_labels: &[u32],
+    output_labels: &[u32],
+) -> Option<(BinaryDotOperandOrder, DotGeneralConfig)> {
+    try_build_exact_output_binary_dot_config_with_order(
+        lhs_labels,
+        rhs_labels,
+        output_labels,
+        BinaryDotOperandOrder::Original,
+    )
+    .or_else(|| {
+        try_build_exact_output_binary_dot_config_with_order(
+            rhs_labels,
+            lhs_labels,
+            output_labels,
+            BinaryDotOperandOrder::Swapped,
+        )
+    })
+}
+
+fn try_build_exact_output_binary_dot_config_with_order(
+    lhs_labels: &[u32],
+    rhs_labels: &[u32],
+    output_labels: &[u32],
+    operand_order: BinaryDotOperandOrder,
+) -> Option<(BinaryDotOperandOrder, DotGeneralConfig)> {
+    if !labels_are_unique(lhs_labels)
+        || !labels_are_unique(rhs_labels)
+        || !labels_are_unique(output_labels)
+    {
+        return None;
     }
-    true
+
+    let mut result_pos = 0;
+    for &label in lhs_labels {
+        if !small_contains(rhs_labels, label) {
+            if !small_contains(output_labels, label)
+                || output_labels.get(result_pos) != Some(&label)
+            {
+                return None;
+            }
+            result_pos += 1;
+        } else if small_contains(output_labels, label) {
+            // Shared output labels follow both operands' free labels.
+            continue;
+        }
+    }
+    for &label in rhs_labels {
+        if !small_contains(lhs_labels, label) {
+            if !small_contains(output_labels, label)
+                || output_labels.get(result_pos) != Some(&label)
+            {
+                return None;
+            }
+            result_pos += 1;
+        }
+    }
+    for &label in lhs_labels {
+        if small_contains(rhs_labels, label) && small_contains(output_labels, label) {
+            if output_labels.get(result_pos) != Some(&label) {
+                return None;
+            }
+            result_pos += 1;
+        }
+    }
+    if result_pos != output_labels.len()
+        || !lhs_labels.iter().any(|label| {
+            small_contains(rhs_labels, *label) && !small_contains(output_labels, *label)
+        })
+    {
+        return None;
+    }
+
+    let mut config = DotGeneralConfig {
+        lhs_contracting_dims: Vec::new(),
+        rhs_contracting_dims: Vec::new(),
+        lhs_batch_dims: Vec::new(),
+        rhs_batch_dims: Vec::new(),
+    };
+    for (lhs_axis, &label) in lhs_labels.iter().enumerate() {
+        if let Some(rhs_axis) = rhs_labels.iter().position(|candidate| *candidate == label) {
+            if small_contains(output_labels, label) {
+                config.lhs_batch_dims.push(lhs_axis);
+                config.rhs_batch_dims.push(rhs_axis);
+            } else {
+                config.lhs_contracting_dims.push(lhs_axis);
+                config.rhs_contracting_dims.push(rhs_axis);
+            }
+        }
+    }
+    Some((operand_order, config))
 }
 
 pub(crate) fn try_build_binary_dot_plan(

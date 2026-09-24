@@ -191,6 +191,16 @@ Strict binary/GEMM lowering intentionally rejects repeated labels and returns
 `None`. Those cases stay on the general eager/builder path, which handles
 diagonalization explicitly.
 
+For explicit two-input ASCII string notation, eager execution first attempts a
+direct binary planner before constructing rank-unresolved notation or resolving
+label maps. The same compact planner is used by parsed integer labels and
+explicit rank-resolved notation. It handles arbitrary ranks and axis positions
+when unique labels form a supported exact-output dot; ellipsis, Unicode labels,
+repeated labels, broadcasting, and other unsupported forms retain the general
+parser/planner fallback. The direct path keeps label scratch inline for common
+ranks, but `DotGeneralConfig` owns `Vec` axis lists, so zero allocations are not
+guaranteed.
+
 ## Static And Symbolic Shapes
 
 The traced extension API chooses the lowering mode from input shape availability:
