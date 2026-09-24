@@ -1039,6 +1039,67 @@ fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
 
     println!("#1522 A100 2D sorted samples (ms): {samples_2d:?}");
     println!("#1522 A100 3D sorted samples (ms): {samples_3d:?}");
+
+    // #1891: complex copies go through the real view, whose unit-stride run is
+    // only the real/imaginary pair. Compare a permutation that keeps the
+    // complex unit-stride axis with one that moves it.
+    fn measure_c64(
+        gpu: &mut CudaBackend,
+        source: &Tensor,
+        destination: &mut Tensor,
+        permutation: &[usize],
+    ) -> Vec<f64> {
+        let mut run = || {
+            let Some(dst) = destination.as_typed_mut::<Complex64>() else {
+                panic!("expected complex destination");
+            };
+            let view = dst.as_view_mut().transpose_view(permutation).unwrap();
+            let start = Instant::now();
+            let result = gpu.copy_read_into(
+                TensorRead::from_tensor(black_box(source)),
+                TensorWrite::from_view(TensorViewMut::C64(view)),
+            );
+            black_box(result).unwrap();
+            gpu.runtime().synchronize().unwrap();
+            start.elapsed().as_secs_f64() * 1e3
+        };
+        for _ in 0..3 {
+            black_box(run());
+        }
+        let mut samples: Vec<f64> = (0..7).map(|_| run()).collect();
+        samples.sort_by(f64::total_cmp);
+        samples
+    }
+
+    let complex_source = upload(
+        &gpu,
+        &tensor_c64(
+            vec![1024, 1024, 512],
+            vec![Complex64::new(0.0, 0.0); 1024 * 1024 * 512],
+        ),
+    );
+    let mut complex_destination = upload(
+        &gpu,
+        &tensor_c64(
+            vec![1024, 1024, 512],
+            vec![Complex64::new(0.0, 0.0); 1024 * 1024 * 512],
+        ),
+    );
+    // Keeps the complex unit-stride axis in place.
+    let samples_c64_keep =
+        measure_c64(&mut gpu, &complex_source, &mut complex_destination, &[1, 0, 2]);
+    // Moves the complex unit-stride axis to the front.
+    let mut complex_moved = upload(
+        &gpu,
+        &tensor_c64(
+            vec![512, 1024, 1024],
+            vec![Complex64::new(0.0, 0.0); 1024 * 1024 * 512],
+        ),
+    );
+    let samples_c64_move =
+        measure_c64(&mut gpu, &complex_source, &mut complex_moved, &[1, 2, 0]);
+    println!("#1891 C64 keep-fast sorted samples (ms): {samples_c64_keep:?}");
+    println!("#1891 C64 move-fast sorted samples (ms): {samples_c64_move:?}");
 }
 
 /// Issue #1832: the erased read-into entry must consume an arbitrary-stride
