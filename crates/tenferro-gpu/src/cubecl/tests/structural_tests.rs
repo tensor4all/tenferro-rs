@@ -857,6 +857,64 @@ fn cuda_runtime_copy_into_matches_complex_destination_reuse() {
     );
 }
 
+/// Issue #1891: both operands of a complex permutation must be expanded from
+/// the same logical mode list.
+///
+/// The real/imaginary mode is appended to the source and destination
+/// descriptors, so expanding one of them from an already-expanded mode list
+/// rejects the other with a rank mismatch. Materializing a strided complex view
+/// covers that, and `to_contiguous_read` is the entry point the CUDA blas1 and
+/// linalg paths use for a non-contiguous read.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_to_contiguous_read_materializes_a_strided_complex_view() {
+    fn bits(tensor: &Tensor) -> Vec<(u64, u64)> {
+        tensor
+            .as_slice::<Complex64>()
+            .expect("expected C64")
+            .iter()
+            .map(|value| (value.re.to_bits(), value.im.to_bits()))
+            .collect()
+    }
+
+    let mut gpu = gpu_backend();
+    let mut cpu = cpu_backend();
+    let host = tensor_c64(
+        vec![3, 2],
+        vec![
+            Complex64::new(f64::INFINITY, 2.0),
+            Complex64::new(-0.0, 3.0),
+            Complex64::new(1.0, 4.0),
+            Complex64::new(5.0, 6.0),
+            Complex64::new(f64::NAN, 8.0),
+            Complex64::new(9.0, 10.0),
+        ],
+    );
+    let gpu_src = upload(&gpu, &host);
+
+    let gpu_view = gpu_src
+        .as_typed::<Complex64>()
+        .expect("expected C64")
+        .as_view()
+        .transpose_view([1, 0])
+        .unwrap();
+    let got = gpu
+        .to_contiguous_read(TensorRead::from_view(TensorView::C64(gpu_view)))
+        .unwrap();
+
+    let cpu_view = host
+        .as_typed::<Complex64>()
+        .expect("expected C64")
+        .as_view()
+        .transpose_view([1, 0])
+        .unwrap();
+    let expected = cpu
+        .to_contiguous_read(TensorRead::from_view(TensorView::C64(cpu_view)))
+        .unwrap();
+
+    assert_eq!(bits(&download(&gpu, &got)), bits(&expected));
+}
+
 /// Issue #1891: the erased CUDA copy must not change complex values.
 ///
 /// The cuTENSOR permutation executor scales by `alpha = 1`. For a complex dtype

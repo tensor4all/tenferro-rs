@@ -472,7 +472,9 @@ where
     let input_strides = view_strides_i64(view.strides(), op)?;
     let output_strides = compact_strides_i64(op, output.shape())?;
     let modes = identity_modes(op, view.shape().len())?;
-    let (input_extents, input_strides, modes) =
+    // Both operands are expanded from the same logical mode list, so the extra
+    // real/imaginary mode id agrees on both sides.
+    let (input_extents, input_strides, input_modes) =
         real_view_operand::<T>(op, &dims_to_i64(op, view.shape())?, &input_strides, &modes)?;
     let (output_extents, output_strides, output_modes) = real_view_operand::<T>(
         op,
@@ -493,7 +495,7 @@ where
         CutensorPermutationSpec {
             input_extents: &input_extents,
             input_strides: &input_strides,
-            input_modes: &modes,
+            input_modes: &input_modes,
             output_extents: &output_extents,
             output_strides: &output_strides,
             output_modes: &output_modes,
