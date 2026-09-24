@@ -6,9 +6,10 @@ use tenferro_tensor::{
 };
 
 use crate::eager::{
-    eager_einsum_exec, eager_einsum_exec_read, eager_einsum_exec_read_into,
-    eager_einsum_exec_read_into_accum, eager_einsum_read_subscripts_on_session,
-    eager_einsum_subscripts_on_session, plan_subscripts,
+    binary_dot_plan_for_read_into, binary_dot_plan_for_shapes, eager_einsum_exec,
+    eager_einsum_exec_read, eager_einsum_exec_read_into, eager_einsum_exec_read_into_accum,
+    eager_einsum_read_subscripts_on_session, eager_einsum_subscripts_on_session,
+    execute_binary_dot_read_into, plan_subscripts,
 };
 use crate::ellipsis::resolve_einsum_notation;
 use crate::TensorDotAxes;
@@ -1214,6 +1215,8 @@ impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
 pub struct ConcreteEinsumPlan {
     tree: ContractionTree,
     inputs: Vec<ConcreteEinsumInputSpec>,
+    output_shape: Vec<usize>,
+    binary_dot: Option<crate::binary_dot::BinaryDotPlan>,
 }
 
 impl ConcreteEinsumPlan {
@@ -1405,7 +1408,7 @@ impl ConcreteEinsumPlan {
         I: AsRef<[&'a Tensor]>,
     {
         let inputs = inputs.as_ref();
-        self.validate_inputs(&input_specs(inputs), PLAN_EXECUTE_OP)?;
+        self.validate_tensor_inputs(inputs, PLAN_EXECUTE_OP)?;
         eager_einsum_exec(session, inputs, &self.tree).map_err(Error::from)
     }
 
@@ -1450,7 +1453,7 @@ impl ConcreteEinsumPlan {
         I: AsRef<[&'a TypedTensor<T>]>,
     {
         let inputs = inputs.as_ref();
-        self.validate_inputs(&typed_input_specs(inputs), PLAN_EXECUTE_OP)?;
+        self.validate_typed_inputs(inputs, PLAN_EXECUTE_OP)?;
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
         let result = eager_einsum_exec_read(session, &reads, &self.tree)?;
         into_typed_result(result, PLAN_EXECUTE_OP)
@@ -1496,7 +1499,7 @@ impl ConcreteEinsumPlan {
         I: AsRef<[TensorRead<'a>]>,
     {
         let inputs = inputs.as_ref();
-        self.validate_inputs(&read_input_specs(inputs), PLAN_EXECUTE_OP)?;
+        self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
         eager_einsum_exec_read(session, inputs, &self.tree).map_err(Error::from)
     }
 
@@ -1546,9 +1549,15 @@ impl ConcreteEinsumPlan {
         I: AsRef<[&'a Tensor]>,
     {
         let inputs = inputs.as_ref();
-        let specs = input_specs(inputs);
-        self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
-        validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
+        self.validate_tensor_inputs(inputs, PLAN_EXECUTE_OP)?;
+        self.validate_cached_output(&out, PLAN_EXECUTE_OP)?;
+        if let Some(binary_dot) = &self.binary_dot {
+            if let [lhs, rhs] = inputs {
+                let reads = [TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)];
+                return execute_binary_dot_read_into(session, &reads, binary_dot, out)
+                    .map_err(Error::from);
+            }
+        }
         let reads: Vec<_> = inputs
             .iter()
             .map(|tensor| TensorRead::from_tensor(tensor))
@@ -1601,10 +1610,16 @@ impl ConcreteEinsumPlan {
         O: Into<TypedTensorWrite<'out, T>>,
     {
         let inputs = inputs.as_ref();
-        let specs = typed_input_specs(inputs);
-        self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
+        self.validate_typed_inputs(inputs, PLAN_EXECUTE_OP)?;
         let out = out.into().into_tensor_write();
-        validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
+        self.validate_cached_output(&out, PLAN_EXECUTE_OP)?;
+        if let Some(binary_dot) = &self.binary_dot {
+            if let [lhs, rhs] = inputs {
+                let reads = [T::tensor_read(lhs), T::tensor_read(rhs)];
+                return execute_binary_dot_read_into(session, &reads, binary_dot, out)
+                    .map_err(Error::from);
+            }
+        }
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
         eager_einsum_exec_read_into(session, &reads, &self.tree, out).map_err(Error::from)
     }
@@ -1655,9 +1670,12 @@ impl ConcreteEinsumPlan {
         I: AsRef<[TensorRead<'a>]>,
     {
         let inputs = inputs.as_ref();
-        let specs = read_input_specs(inputs);
-        self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
-        validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
+        self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
+        self.validate_cached_output(&out, PLAN_EXECUTE_OP)?;
+        if let Some(binary_dot) = &self.binary_dot {
+            return execute_binary_dot_read_into(session, inputs, binary_dot, out)
+                .map_err(Error::from);
+        }
         eager_einsum_exec_read_into(session, inputs, &self.tree, out).map_err(Error::from)
     }
 
@@ -1711,9 +1729,8 @@ impl ConcreteEinsumPlan {
         I: AsRef<[TensorRead<'a>]>,
     {
         let inputs = inputs.as_ref();
-        let specs = read_input_specs(inputs);
-        self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
-        validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
+        self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
+        self.validate_cached_output(&out, PLAN_EXECUTE_OP)?;
         eager_einsum_exec_read_into_accum(session, inputs, &self.tree, accumulation, out)
             .map_err(Error::from)
     }
@@ -1723,11 +1740,44 @@ impl ConcreteEinsumPlan {
         subscripts: &Subscripts,
     ) -> Result<Self> {
         let shapes: Vec<&[usize]> = inputs.iter().map(|input| input.shape.as_slice()).collect();
+        let binary_dot = binary_dot_plan_for_shapes(&shapes, subscripts);
         let tree = plan_subscripts(subscripts, &shapes)?;
-        Ok(Self { tree, inputs })
+        let output_shape = tree.output_shape();
+        Ok(Self {
+            tree,
+            inputs,
+            output_shape,
+            binary_dot,
+        })
     }
 
-    fn validate_inputs(&self, actual: &[ConcreteEinsumInputSpec], op: &'static str) -> Result<()> {
+    fn validate_tensor_inputs(&self, actual: &[&Tensor], op: &'static str) -> Result<()> {
+        self.validate_input_metadata(
+            actual.iter().map(|tensor| (tensor.dtype(), tensor.shape())),
+            op,
+        )
+    }
+
+    fn validate_typed_inputs<T: TensorScalar>(
+        &self,
+        actual: &[&TypedTensor<T>],
+        op: &'static str,
+    ) -> Result<()> {
+        self.validate_input_metadata(actual.iter().map(|tensor| (T::dtype(), tensor.shape())), op)
+    }
+
+    fn validate_read_inputs(&self, actual: &[TensorRead<'_>], op: &'static str) -> Result<()> {
+        self.validate_input_metadata(
+            actual.iter().map(|tensor| (tensor.dtype(), tensor.shape())),
+            op,
+        )
+    }
+
+    fn validate_input_metadata<'a>(
+        &self,
+        actual: impl ExactSizeIterator<Item = (DType, &'a [usize])>,
+        op: &'static str,
+    ) -> Result<()> {
         if actual.len() != self.inputs.len() {
             return Err(Error::invalid_argument(
                 op,
@@ -1739,20 +1789,44 @@ impl ConcreteEinsumPlan {
                 ),
             ));
         }
-
-        for (expected, actual) in self.inputs.iter().zip(actual.iter()) {
-            if expected.dtype != actual.dtype {
-                return Err(Error::dtype_mismatch(op, expected.dtype, actual.dtype));
+        for (expected, (actual_dtype, actual_shape)) in self.inputs.iter().zip(actual) {
+            if expected.dtype != actual_dtype {
+                return Err(Error::dtype_mismatch(op, expected.dtype, actual_dtype));
             }
-            if expected.shape != actual.shape {
+            if expected.shape != actual_shape {
                 return Err(Error::shape_mismatch(
                     op,
                     expected.shape.clone(),
-                    actual.shape.clone(),
+                    actual_shape.to_vec(),
                 ));
             }
         }
+        Ok(())
+    }
 
+    fn validate_cached_output(&self, out: &TensorWrite<'_>, op: &'static str) -> Result<()> {
+        let dtype = self
+            .inputs
+            .first()
+            .map(|input| input.dtype)
+            .ok_or_else(|| {
+                Error::invalid_argument(op, "inputs", "einsum requires at least one input tensor")
+            })?;
+        for input in &self.inputs[1..] {
+            if input.dtype != dtype {
+                return Err(Error::dtype_mismatch(op, dtype, input.dtype));
+            }
+        }
+        if out.dtype() != dtype {
+            return Err(Error::dtype_mismatch(op, dtype, out.dtype()));
+        }
+        if out.shape() != self.output_shape {
+            return Err(Error::shape_mismatch(
+                op,
+                out.shape().to_vec(),
+                self.output_shape.clone(),
+            ));
+        }
         Ok(())
     }
 }
@@ -1852,6 +1926,16 @@ fn tensor_einsum_into_subscripts(
     out: TensorWrite<'_>,
     op: &'static str,
 ) -> Result<()> {
+    if inputs.len() == 2 {
+        let reads = [
+            TensorRead::from_tensor(inputs[0]),
+            TensorRead::from_tensor(inputs[1]),
+        ];
+        if let Some(binary) = binary_dot_plan_for_read_into(&reads, subscripts, &out) {
+            return execute_binary_dot_read_into(session, &reads, &binary, out)
+                .map_err(Error::from);
+        }
+    }
     let plan = ConcreteEinsumPlan::prepare_subscripts_internal(input_specs(inputs), subscripts)?;
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
     plan.execute_into(inputs, session, out)
@@ -1869,9 +1953,12 @@ fn typed_view_einsum_into_subscripts<T: TensorScalar>(
         .cloned()
         .map(|view| TensorRead::from_view(T::tensor_view(view)))
         .collect();
+    let out = out.into_tensor_write();
+    if let Some(binary) = binary_dot_plan_for_read_into(&reads, subscripts, &out) {
+        return execute_binary_dot_read_into(session, &reads, &binary, out).map_err(Error::from);
+    }
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
-    let out = out.into_tensor_write();
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
     plan.execute_read_into(&reads, session, out)
 }
@@ -1884,9 +1971,12 @@ fn typed_einsum_into_subscripts<T: TensorScalar>(
     op: &'static str,
 ) -> Result<()> {
     let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
+    let out = out.into_tensor_write();
+    if let Some(binary) = binary_dot_plan_for_read_into(&reads, subscripts, &out) {
+        return execute_binary_dot_read_into(session, &reads, &binary, out).map_err(Error::from);
+    }
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
-    let out = out.into_tensor_write();
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
     plan.execute_read_into(&reads, session, out)
 }
@@ -1898,6 +1988,9 @@ fn tensor_read_einsum_into_subscripts(
     out: TensorWrite<'_>,
     op: &'static str,
 ) -> Result<()> {
+    if let Some(binary) = binary_dot_plan_for_read_into(inputs, subscripts, &out) {
+        return execute_binary_dot_read_into(session, inputs, &binary, out).map_err(Error::from);
+    }
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(inputs), subscripts)?;
     validate_output(&plan.inputs, &plan.tree, &out, op)?;

@@ -3,7 +3,6 @@ use tenferro_tensor::DotGeneralConfig;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BinaryDotOperandOrder {
     Original,
-    #[cfg(any(feature = "autodiff", test))]
     Swapped,
 }
 
@@ -43,7 +42,6 @@ pub(crate) fn try_build_binary_dot_plan(
     )
 }
 
-#[cfg(any(feature = "autodiff", test))]
 pub(crate) fn try_build_exact_output_binary_dot_plan(
     lhs_labels: &[u32],
     rhs_labels: &[u32],
