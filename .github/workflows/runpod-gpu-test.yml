@@ -232,6 +232,24 @@ jobs:
             check_permission "${pr_author}" "PR author"
             check_permission "${WORKFLOW_RUN_ACTOR}" "Source workflow actor"
 
+            # A CI run that completes after the PR was merged or closed does not
+            # need a paid gate: branch protection already consumed it, and the
+            # pull ref below stops existing once the PR is gone. Publishing
+            # run_gpu=false keeps the gate honest and stops the post-merge run
+            # from provisioning pods (REPOSITORY_RULES.md, CI Cost Discipline).
+            pr_state="$(jq -r '.state' <<<"${pr_json}")"
+            if [ "${pr_state}" != "open" ]; then
+              echo "PR #${pr_number} is ${pr_state}; skipping the paid GPU gate."
+              {
+                echo "tenferro_ref=${pr_head_sha}"
+                echo "target_head_sha=${pr_head_sha}"
+                echo "pr_number=${pr_number}"
+                echo "run_gpu=false"
+                echo "reason=pull request is ${pr_state}"
+              } >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+
             merge_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/pull/${pr_number}/merge" --jq .object.sha)"
             if [ -z "${merge_sha}" ] || [ "${merge_sha}" = "null" ]; then
               echo "::error::Failed to resolve refs/pull/${pr_number}/merge."

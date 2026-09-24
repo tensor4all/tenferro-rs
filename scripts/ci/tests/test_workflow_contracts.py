@@ -370,6 +370,19 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(f'--pod-env "{pod_env}', create)
         self.assertNotIn('--pod-env "RUNPOD_API_KEY', create)
 
+    def test_merged_or_closed_pulls_do_not_provision_pods(self) -> None:
+        """A gate run that completes after the merge must not pay for a pod."""
+
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn('pr_state="$(jq -r \'.state\' <<<"${pr_json}")"', text)
+        self.assertIn('if [ "${pr_state}" != "open" ]; then', text)
+        self.assertIn("reason=pull request is ${pr_state}", text)
+        # The state check has to come before the pull merge ref, which stops
+        # existing once the PR is merged or closed.
+        self.assertLess(
+            text.index('pr_state="$(jq -r'), text.index("git/ref/pull/${pr_number}/merge")
+        )
+
     def test_local_gpu_validation_label_substitutes_for_the_paid_gate(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         # The label decision comes from the PR's labels and skips the whole
