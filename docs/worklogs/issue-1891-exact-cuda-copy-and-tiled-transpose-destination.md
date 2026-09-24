@@ -94,6 +94,60 @@ correctness first, and the vendor path also reaches the bandwidth limit on the
 transposing layouts that motivated #1522. A tiled native permutation kernel
 would remove both gaps and is the natural follow-up.
 
+## Native permutation kernel: implemented, measured, not shipped
+
+A native replacement for the vendor permutation was attempted and abandoned on
+measurement. Recorded here so it is not repeated blindly.
+
+What was built:
+
+- `tiled_transpose_kernel` took the source's slow-axis and batch strides as
+  explicit parameters instead of assuming a compact source, and
+  `tiled_transpose_eligible` was relaxed to "the plan is a transpose between the
+  two unit-stride axes".
+- The tile axes were moved into a one-dimensional grid ordered with the
+  destination tiles varying fastest, so that a source-fast extent larger than
+  the 65535 CUDA allows for `gridDim.y` is representable and adjacent blocks
+  write adjacent destination tiles.
+- `copy_view_to_view_typed` built the plan for any destination view that is a
+  compact layout under some axis order, not only a row-major compact one.
+
+The generalized path is correct (its `C64` `[4, 3, 2]` permuted case matches the
+CPU reference) but slow, and it is slower than the kernel it replaces:
+
+| case | previous native | generalized native | real-view vendor |
+|---|---:|---:|---:|
+| `C64` `[1024, 1024, 512]` permuted `[1, 2, 0]` | 84.8 ms | 229 ms | 31.2 ms |
+| `F64` same | 84.3 ms | 115 ms | 5.37 ms |
+
+Diagnosis, from `C64` `[rows, 512]` transposed into a row-major compact view
+(destination plan `[512, rows]`), release, A100:
+
+| rows | bytes moved | throughput |
+|---:|---:|---:|
+| 32768 | 1.07 GB | 1435 GB/s |
+| 262144 | 8.6 GB | 74 GB/s |
+| 1048576 | 8.6 GB | 76 GB/s |
+
+The same access pattern is at bandwidth for a small allocation and collapses by
+19x once the working set outgrows a cache/TLB capacity. The plan is a transpose
+whose two axes have strides `1` and `rows`, so one direction of the tile is
+always a 256-byte burst at a 16 MiB stride: sweeping the destination compactly
+necessarily touches one 2 MiB page per source row. cuTENSOR reaches 1.6 TB/s on
+the same operation, so it must order its work to keep the resident footprint
+small; a native replacement needs that ordering (for example a walk over the
+batch axis that keeps both operands inside a window) rather than a tile-shape
+change, since every `TENFERRO_NATIVE_TRANSPOSE_TILE` configuration measured the
+same, as did the generic strided-materialization kernel.
+
+**Next step for a native kernel:** keep the batch axis in the plan (do not let
+axis fusion merge it away), and order the block sweep so that a window of the
+source's fast axis is consumed while writing a bounded destination window, then
+verify against the `C64` `[1024, 1024, 512]` `[1, 2, 0]` case and the `[rows,
+512]` sweep above. Until then the vendor path is what makes multi-axis
+permutations bandwidth-bound, and the real-view plan above is what makes it
+exact.
+
 ## Verification
 
 - New CUDA test
