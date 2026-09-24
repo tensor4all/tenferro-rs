@@ -370,6 +370,28 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(f'--pod-env "{pod_env}', create)
         self.assertNotIn('--pod-env "RUNPOD_API_KEY', create)
 
+    def test_the_paid_workflow_refuses_every_job_itself(self) -> None:
+        """The caller's `if` is not enough: a skipped caller still must not pay.
+
+        A live dispatch showed the reusable workflow starting
+        `Start RunPod org runner` while the parent had decided to skip it, so the
+        paid jobs carry the same condition themselves.
+        """
+
+        execute = read(".github/workflows/runpod-gpu-execute.yml")
+        self.assertIn("local_gpu_validation:", execute)
+        self.assertIn("Skip every paid step", execute)
+        for job in ("  start-runpod:", "  run-gpu-tests:"):
+            block = execute[execute.index(job) : execute.index(job) + 400]
+            self.assertIn("if: inputs.local_gpu_validation != true", block, job)
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn(
+            "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation == 'true' }}",
+            text,
+        )
+        # Evidence is verified whenever the label is present.
+        self.assertIn("if [ \"${LOCAL_GPU_VALIDATION}\" = true ]; then", text)
+
     def test_merged_or_closed_pulls_do_not_provision_pods(self) -> None:
         """A gate run that completes after the merge must not pay for a pod."""
 
