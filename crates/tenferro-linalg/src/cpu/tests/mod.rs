@@ -296,6 +296,8 @@ mod backend;
 #[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
 mod batched;
 mod dtype;
+#[cfg(feature = "cpu-faer")]
+mod faer_lanes;
 mod linalg;
 mod managed_cholesky;
 mod output_affinity;

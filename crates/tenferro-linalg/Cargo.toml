@@ -92,6 +92,7 @@ cubecl-cuda = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 faer = { workspace = true, optional = true }
+rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }

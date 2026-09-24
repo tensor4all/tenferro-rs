@@ -965,6 +965,8 @@ host	tenferro-linalg	gpu::linalg::tests::eigh_batches_take_a_batched_routine_at_
 host	tenferro-linalg	gpu::linalg::tests::eigh_single_matrices_keep_the_per_matrix_entry_points
 host	tenferro-linalg	gpu::linalg::tests::explicit_driver_overrides_dimension_policy
 gpu	tenferro-linalg	gpu::linalg::tests::xgesvdp::test_cubecl_svd_xgesvdp_full_and_economy
+host	tenferro-linalg	cpu::tests::faer_lanes::batched_faer_lanes_reproduce_the_serial_batch
+host	tenferro-linalg	cpu::tests::faer_lanes::batched_faer_lanes_report_a_singular_member
 host	tenferro-linalg	traced::tests::p_norm_rejects_zero_and_non_finite_orders
 host	tenferro-linalg::integration	backend_errors::cholesky_rejects_rank_less_than_two_even_when_zero_dim
 host	tenferro-linalg::integration	backend_errors::cpu_linalg_rejects_backend_buffers_without_panicking_or_downloading
