@@ -315,10 +315,36 @@ class WorkflowContractTests(unittest.TestCase):
             text_full,
         )
         self.assertIn("PROVISION_RUNNER_GROUP_ID:", create)
-        # zstd on the pod keeps the actions/cache version hash compatible
-        # with the zstd-equipped hosted publisher; without it every pod
-        # restore misses exact-match keys.
-        self.assertIn("zstd \\", create)
+        # The build toolchain, git, jq, and zstd are installed by the test
+        # job's own first step: registration and the smoke proof must not wait
+        # for them, because every pre-registration second is billed at the GPU
+        # rate and a rejected candidate pays it too. zstd still lands before
+        # the actions/cache restore step, which is what keeps the cache version
+        # hash compatible with the zstd-equipped hosted publisher.
+        self.assertIn("RUNNER_CACHE_DIR=\"/workspace/runpod-ci-cache\"", create)
+        self.assertIn('echo "${RUNNER_SHA256}  ${RUNNER_TARBALL}" | sha256sum -c', create)
+        self.assertLess(
+            create.index('echo "${RUNNER_SHA256}  ${RUNNER_CACHED_TARBALL}"'),
+            create.index("curl -fsSL -o \"${RUNNER_TARBALL}\""),
+            "a cached runner tarball must be considered before downloading",
+        )
+        # A missing, unwritable, or stale cache must fall back to the download
+        # instead of failing the startup script under `set -e`.
+        self.assertIn("2>/dev/null || true", create)
+        self.assertIn('echo "warning: could not populate the runner tarball cache"', create)
+        whole_job = read(".github/workflows/runpod-gpu-test.yml")
+        install = whole_job.index("      - name: Install pod-side build dependencies")
+        job_install = whole_job[
+            install : whole_job.index("      - name: Checkout tenferro-rs", install)
+        ]
+        for package in ("zstd \\", "git \\", "jq \\", "build-essential \\"):
+            self.assertIn(package, job_install)
+            self.assertNotIn(package, create)
+        self.assertLess(
+            install,
+            whole_job.index("      - name: Restore CUDA/PJRT test archives"),
+            "zstd must land before the cache restore step",
+        )
         # The smoke's NVRTC-only install leaves a partial /usr/local tree;
         # the test job's runtime discovery must reject trees missing the
         # full library set instead of skipping the real runtime install.
@@ -351,6 +377,7 @@ class WorkflowContractTests(unittest.TestCase):
             "min_vram_gb",
             "max_price_candidates",
             "max_provision_attempts",
+            "max_consecutive_startup_failures",
             "startup_timeout_seconds",
             "startup_poll_seconds",
         ):

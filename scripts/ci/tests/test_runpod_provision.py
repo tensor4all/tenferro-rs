@@ -1,3 +1,4 @@
+import io
 import json
 import unittest
 from unittest import mock
@@ -391,6 +392,130 @@ class ProvisionTests(unittest.TestCase):
             )
         self.assertEqual(len(calls), CONFIG["max_provision_attempts"])
         self.assertIn("capacity unavailable", str(caught.exception))
+
+
+    def test_consecutive_startup_failures_stop_the_ladder_early(self) -> None:
+        """An outage must not pay for every candidate in the plan."""
+
+        clock = Clock()
+        created_pods: list[str] = []
+
+        def create(req, jit):
+            pod_id = f"pod-{len(created_pods) + 1}"
+            created_pods.append(pod_id)
+            return created(pod_id, req.tier_name, req.tier_name)
+
+        with self.assertRaises(ProvisionExhaustedError) as caught:
+            provision(
+                {
+                    **CONFIG,
+                    "max_provision_attempts": 4,
+                    "max_consecutive_startup_failures": 2,
+                },
+                PLAN,
+                label_prefix="runpod-1-1",
+                mint_runner=lambda label: f"jit-{label}",
+                create=create,
+                runner_online=lambda label: False,
+                pod_status=lambda pod_id: live(),
+                delete_pod=lambda pod_id: True,
+                monotonic=clock.monotonic,
+                sleep=clock.sleep,
+            )
+        self.assertEqual(created_pods, ["pod-1", "pod-2"])
+        message = str(caught.exception)
+        self.assertIn("stopping after 2 consecutive pods", message)
+        # The rejected pods' paid time and list-price cost are reported, so a
+        # provision outage shows what it cost instead of only failing.
+        self.assertIn("2 rejected pod(s)", message)
+        self.assertIn("~$0.02", message)
+
+    def test_zero_consecutive_budget_keeps_the_bounded_ladder(self) -> None:
+        clock = Clock()
+        created_pods: list[str] = []
+
+        def create(req, jit):
+            pod_id = f"pod-{len(created_pods) + 1}"
+            created_pods.append(pod_id)
+            return created(pod_id, req.tier_name, req.tier_name)
+
+        with self.assertRaises(ProvisionExhaustedError) as caught:
+            provision(
+                {
+                    **CONFIG,
+                    "max_provision_attempts": 2,
+                    "max_consecutive_startup_failures": 0,
+                },
+                PLAN,
+                label_prefix="runpod-1-1",
+                mint_runner=lambda label: f"jit-{label}",
+                create=create,
+                runner_online=lambda label: False,
+                pod_status=lambda pod_id: live(),
+                delete_pod=lambda pod_id: True,
+                monotonic=clock.monotonic,
+                sleep=clock.sleep,
+            )
+        self.assertEqual(created_pods, ["pod-1", "pod-2"])
+        self.assertIn("all 2 bounded provision attempts failed", str(caught.exception))
+
+    def test_create_failure_resets_the_consecutive_startup_counter(self) -> None:
+        """A candidate that never created a pod costs nothing, so it must not
+        count toward the early stop."""
+
+        clock = Clock()
+        tiers: list[str] = []
+
+        def create(req, jit):
+            tiers.append(req.tier_name)
+            if len(tiers) == 2:
+                raise RetryableRunPodError("RunPod capacity unavailable")
+            return created(f"pod-{len(tiers)}", "NVIDIA A40", req.tier_name)
+
+        with self.assertRaises(ProvisionExhaustedError) as caught:
+            provision(
+                {
+                    **CONFIG,
+                    "max_provision_attempts": 4,
+                    "max_consecutive_startup_failures": 2,
+                },
+                PLAN + [("a100", ["NVIDIA A100 80GB PCIe"])],
+                label_prefix="runpod-1-1",
+                mint_runner=lambda label: f"jit-{label}",
+                create=create,
+                runner_online=lambda label: False,
+                pod_status=lambda pod_id: live(),
+                delete_pod=lambda pod_id: True,
+                monotonic=clock.monotonic,
+                sleep=clock.sleep,
+            )
+        # Without the reset the second pod failure (attempt 3) would stop the
+        # ladder; the fourth attempt proves capacity failures do not count.
+        self.assertEqual(len(tiers), 4)
+        self.assertIn("stopping after 2 consecutive pods", str(caught.exception))
+
+    def test_rejection_reports_the_paid_estimate_in_dollars(self) -> None:
+        clock = Clock()
+        with self.assertRaises(ProvisionExhaustedError):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as captured:
+                provision(
+                    {**CONFIG, "max_provision_attempts": 1},
+                    PLAN,
+                    label_prefix="runpod-1-1",
+                    mint_runner=lambda label: f"jit-{label}",
+                    create=lambda req, jit: created(
+                        "pod-slow", "NVIDIA A40", req.tier_name, cost=0.44
+                    ),
+                    runner_online=lambda label: False,
+                    pod_status=lambda pod_id: live(),
+                    delete_pod=lambda pod_id: True,
+                    monotonic=clock.monotonic,
+                    sleep=clock.sleep,
+                )
+        output = captured.getvalue()
+        self.assertIn("estimated paid time", output)
+        # 100s of startup wait at $0.44/hr.
+        self.assertIn("~$0.01", output)
 
 
 class PodApiTransportTests(unittest.TestCase):

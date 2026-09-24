@@ -167,23 +167,19 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export RUNNER_ALLOW_RUNASROOT=1
 
+          # Only what runner registration and the smoke proof need runs before
+          # the runner exists. Every second here is billed at the GPU rate, and
+          # a rejected candidate pays it too, so the build toolchain, git, jq,
+          # and zstd move to the test job's first step, which only the accepted
+          # pod reaches. zstd still lands before the actions/cache restore step
+          # there, which is what keeps the cache version hash compatible with
+          # the zstd-equipped hosted publisher.
           apt-get update
-          # zstd must be present BEFORE any actions/cache restore step runs
-          # on this pod: the cache version hash includes the available
-          # compression tool, so a pod without zstd can never hit entries
-          # saved by the zstd-equipped hosted publisher (observed as
-          # "Cache not found" for exact-match keys).
           apt-get install -y \
             curl \
-            jq \
             tar \
             gzip \
-            zstd \
             ca-certificates \
-            build-essential \
-            pkg-config \
-            libssl-dev \
-            git \
             python3 \
             python3-pip
 
@@ -235,8 +231,32 @@ jobs:
           RUNNER_SHA256="4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf"
           RUNNER_TARBALL="actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
 
-          curl -fsSL -o "${RUNNER_TARBALL}" \
-            "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/${RUNNER_TARBALL}"
+          # A persistent volume mount makes the pinned tarball a local read on
+          # later pods instead of a GitHub download at the GPU rate. The
+          # checksum decides whether a cached copy is usable, and every step of
+          # the cache path is optional: a missing, unwritable, or stale cache
+          # falls back to the normal download instead of failing startup.
+          RUNNER_CACHE_DIR="/workspace/runpod-ci-cache"
+          RUNNER_CACHED_TARBALL="${RUNNER_CACHE_DIR}/${RUNNER_TARBALL}"
+          runner_cached=0
+          if [ -d /workspace ]; then
+            mkdir -p "${RUNNER_CACHE_DIR}" 2>/dev/null || true
+            if [ -f "${RUNNER_CACHED_TARBALL}" ] \
+              && echo "${RUNNER_SHA256}  ${RUNNER_CACHED_TARBALL}" \
+                | sha256sum -c - >/dev/null 2>&1 \
+              && cp "${RUNNER_CACHED_TARBALL}" "${RUNNER_TARBALL}" 2>/dev/null; then
+              runner_cached=1
+              echo "Using the cached ${RUNNER_TARBALL} from ${RUNNER_CACHE_DIR}"
+            fi
+          fi
+          if [ "${runner_cached}" = 0 ]; then
+            curl -fsSL -o "${RUNNER_TARBALL}" \
+              "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/${RUNNER_TARBALL}"
+            if [ -d /workspace ]; then
+              cp "${RUNNER_TARBALL}" "${RUNNER_CACHE_DIR}/" 2>/dev/null \
+                || echo "warning: could not populate the runner tarball cache"
+            fi
+          fi
 
           echo "${RUNNER_SHA256}  ${RUNNER_TARBALL}" | sha256sum -c
 
@@ -303,6 +323,25 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      - name: Install pod-side build dependencies
+        # These are only needed after runner registration, so a rejected
+        # candidate never pays for them. zstd must land before the
+        # actions/cache restore step below: the cache version hash includes the
+        # available compression tool, so a pod without zstd (observed as
+        # "Cache not found" for exact-match keys) can never hit entries saved
+        # by the zstd-equipped hosted publisher.
+        run: |
+          set -euxo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y \
+            git \
+            jq \
+            zstd \
+            build-essential \
+            pkg-config \
+            libssl-dev
+
       - name: Checkout tenferro-rs
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
