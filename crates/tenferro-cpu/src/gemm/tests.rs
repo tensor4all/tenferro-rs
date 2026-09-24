@@ -1,6 +1,6 @@
 use super::{
-    analyse_gemm_cached, canonical_gemm_layout, checked_batch_offset, checked_product,
-    try_fuse_dims, GemmAnalysisCache, GemmAnalysisCacheKind,
+    analyse_gemm, analyse_gemm_cached, analyse_rank2_gemm, canonical_gemm_layout,
+    checked_batch_offset, checked_product, try_fuse_dims, GemmAnalysisCache, GemmAnalysisCacheKind,
 };
 
 #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
@@ -113,6 +113,85 @@ fn checked_batch_offset_reports_batch_conversion_overflow() {
 #[test]
 fn checked_product_rejects_product_overflow() {
     assert_eq!(checked_product(&[usize::MAX, 2]), None);
+}
+
+#[test]
+fn rank2_analysis_matches_general_metadata_for_each_contract_axis() {
+    for lhs_contract in 0..2 {
+        for rhs_contract in 0..2 {
+            let lhs_shape = if lhs_contract == 0 {
+                vec![3, 2]
+            } else {
+                vec![2, 3]
+            };
+            let rhs_shape = if rhs_contract == 0 {
+                vec![3, 4]
+            } else {
+                vec![4, 3]
+            };
+            let lhs = TypedTensor::<f64>::from_vec_col_major(
+                lhs_shape.clone(),
+                vec![0.0; lhs_shape.iter().product()],
+            )
+            .unwrap();
+            let rhs = TypedTensor::<f64>::from_vec_col_major(
+                rhs_shape.clone(),
+                vec![0.0; rhs_shape.iter().product()],
+            )
+            .unwrap();
+            let config = DotGeneralConfig {
+                lhs_contracting_dims: vec![lhs_contract],
+                rhs_contracting_dims: vec![rhs_contract],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            };
+            let fast = analyse_rank2_gemm::<_, _, f64>(&lhs, &rhs, &config)
+                .unwrap()
+                .unwrap();
+            let general = analyse_gemm::<_, _, f64>(&lhs, &rhs, &config)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (fast.m, fast.n, fast.k, fast.batch_total),
+                (general.m, general.n, general.k, general.batch_total)
+            );
+            assert_eq!(
+                (fast.a_rs, fast.a_cs, fast.a_bs, fast.b_rs, fast.b_cs, fast.b_bs),
+                (
+                    general.a_rs,
+                    general.a_cs,
+                    general.a_bs,
+                    general.b_rs,
+                    general.b_cs,
+                    general.b_bs
+                )
+            );
+            assert_eq!(fast.out_shape, general.out_shape);
+        }
+    }
+}
+
+#[test]
+fn rank2_analysis_still_validates_before_using_the_special_case() {
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![0.0; 12]).unwrap();
+    let invalid = DotGeneralConfig {
+        lhs_contracting_dims: vec![2],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut cache = GemmAnalysisCache::default();
+
+    assert!(analyse_gemm_cached::<_, _, f64>(
+        &mut cache,
+        None,
+        GemmAnalysisCacheKind::Direct,
+        &lhs,
+        &rhs,
+        &invalid,
+    )
+    .is_err());
 }
 
 #[test]
