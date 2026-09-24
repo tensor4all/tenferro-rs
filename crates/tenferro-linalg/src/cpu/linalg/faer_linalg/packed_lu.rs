@@ -89,6 +89,29 @@ impl_complex_packed_lu!(
     super::complex64_to_faer_slice_mut
 );
 
+/// How many independent lanes a faer batch may run on.
+///
+/// Follows the context's existing faer policy, so a sequential or nested
+/// context (including an engine-owned `Outer` child) never fans out and a
+/// one-thread budget returns one lane. The batch axis is used only when it can
+/// occupy every lane, which keeps a small batch on faer's parallelism inside
+/// one factorization instead.
+///
+/// Measured for issue #1884 on an EPYC 7713P (f64, batch 1024, release): with
+/// four lanes the faer factor drops from 0.63/1.74/46.9 ms at one thread to
+/// 0.26/0.87/37.0 ms at n=8/16/64, and from 876 ms to 510 ms at n=256, where
+/// faer's own parallelism had made four threads *slower* than one (1294 ms).
+fn batch_lanes(ctx: &CpuExecutionContext<'_>, batch: usize) -> usize {
+    let lanes = match ctx.faer_parallelism() {
+        faer::Par::Rayon(lanes) => lanes.get(),
+        faer::Par::Seq => 1,
+    };
+    if lanes < 2 || batch < lanes {
+        return 1;
+    }
+    lanes
+}
+
 /// Reusable per-call state for factoring a batch of `m x n` matrices.
 struct PackedLuFactorScratch {
     m: usize,
@@ -101,11 +124,7 @@ struct PackedLuFactorScratch {
 }
 
 impl PackedLuFactorScratch {
-    fn new<E: faer::traits::ComplexField>(
-        ctx: &CpuExecutionContext<'_>,
-        m: usize,
-        n: usize,
-    ) -> Self {
+    fn new<E: faer::traits::ComplexField>(m: usize, n: usize, par: faer::Par) -> Self {
         Self {
             m,
             k: m.min(n),
@@ -117,7 +136,7 @@ impl PackedLuFactorScratch {
                 faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, E>(
                     m,
                     n,
-                    ctx.faer_parallelism(),
+                    par,
                     Default::default(),
                 ),
             ),
@@ -129,7 +148,7 @@ impl PackedLuFactorScratch {
     /// odd.
     fn factor<E: faer::traits::ComplexField>(
         &mut self,
-        ctx: &CpuExecutionContext<'_>,
+        par: faer::Par,
         matrix: MatMut<'_, E>,
         ipiv: &mut [i32],
         op: &'static str,
@@ -139,7 +158,7 @@ impl PackedLuFactorScratch {
             matrix,
             &mut self.perm,
             &mut self.perm_inv,
-            ctx.faer_parallelism(),
+            par,
             stack,
             Default::default(),
         )
@@ -231,7 +250,65 @@ pub(crate) fn lu_factor_batched_in_place<T: FaerPackedLu>(
     if matrix_len == 0 || batch_total == 0 {
         return Ok(());
     }
-    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(ctx, m, n);
+    let lanes = batch_lanes(ctx, batch_total);
+    if lanes > 1 {
+        // One lane owns a contiguous batch chunk and one scratch set, and
+        // factorizes its matrices sequentially, so the pool's threads are spent
+        // on independent matrices instead of on one small factorization.
+        let chunk_len = batch_total.div_ceil(lanes);
+        let failure = std::sync::Mutex::new(None::<tenferro_tensor::Error>);
+        let failed = |slot: &std::sync::Mutex<Option<tenferro_tensor::Error>>| {
+            slot.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        };
+        rayon::scope(|scope| {
+            for ((lu_chunk, pivot_chunk), parity_chunk) in lu_data
+                .chunks_mut(chunk_len * matrix_len)
+                .zip(pivot_data.chunks_mut(chunk_len * k))
+                .zip(parity_data.chunks_mut(chunk_len))
+            {
+                let failure = &failure;
+                scope.spawn(move |_| {
+                    if failed(failure) {
+                        return;
+                    }
+                    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(m, n, faer::Par::Seq);
+                    for ((matrix, ipiv), parity) in lu_chunk
+                        .chunks_exact_mut(matrix_len)
+                        .zip(pivot_chunk.chunks_exact_mut(k))
+                        .zip(parity_chunk.iter_mut())
+                    {
+                        let mat =
+                            MatMut::from_column_major_slice_mut(T::entity_slice_mut(matrix), m, n);
+                        match scratch.factor(faer::Par::Seq, mat, ipiv, op) {
+                            Ok(odd) => *parity = T::parity(odd),
+                            Err(error) => {
+                                let mut slot = failure
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                if slot.is_none() {
+                                    *slot = Some(error);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        // INVARIANT: `chunk_len * matrix_len <= lu_data.len()` because
+        // `chunk_len <= batch_total`, so the chunk boundaries above are the
+        // same arithmetic the serial path performs.
+        return match failure
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            Some(error) => Err(error),
+            None => Ok(()),
+        };
+    }
+    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(m, n, ctx.faer_parallelism());
     // INVARIANT: lengths were checked above and `matrix_len > 0` implies
     // `k > 0`, so the three chunk iterators yield exactly `batch_total`
     // aligned items. faer owns any threading inside `lu_in_place`, so the
@@ -242,7 +319,7 @@ pub(crate) fn lu_factor_batched_in_place<T: FaerPackedLu>(
         .zip(parity_data.iter_mut())
     {
         let mat = MatMut::from_column_major_slice_mut(T::entity_slice_mut(matrix), m, n);
-        let odd = scratch.factor(ctx, mat, ipiv, op)?;
+        let odd = scratch.factor(ctx.faer_parallelism(), mat, ipiv, op)?;
         *parity = T::parity(odd);
     }
     Ok(())
@@ -293,14 +370,13 @@ fn validate_pivots(op: &'static str, n: usize, ipiv: &[i32]) -> tenferro_tensor:
 /// `x = P^T L^-T U^-T b`. Conjugation conjugates `L` and `U` implicitly.
 // INVARIANT: the flags mirror the `LuSolvePrepared` op attributes one-to-one.
 fn solve_one<T: FaerPackedLu>(
-    ctx: &CpuExecutionContext<'_>,
+    par: faer::Par,
     (n, nrhs): (usize, usize),
     matrix: &[T],
     ipiv: &[i32],
     rhs: &mut [T],
     (transpose_a, conjugate_a): (bool, bool),
 ) {
-    let par = ctx.faer_parallelism();
     let conj = if conjugate_a { Conj::Yes } else { Conj::No };
     let lu = MatRef::from_column_major_slice(T::entity_slice(matrix), n, n);
     if transpose_a {
@@ -367,6 +443,37 @@ pub(crate) fn lu_solve_prepared_batched_in_place<T: FaerPackedLu>(
         batch_total,
     )?;
     validate_pivots(op, n, pivots)?;
+    let lanes = batch_lanes(ctx, batch_total);
+    if lanes > 1 {
+        // The factors and pivots are read-only and each lane owns a contiguous
+        // output range, so the lanes never alias. `solve_one` is infallible.
+        let chunk_len = batch_total.div_ceil(lanes);
+        rayon::scope(|scope| {
+            for ((matrix_chunk, ipiv_chunk), rhs_chunk) in packed_lu
+                .chunks(chunk_len * matrix_len)
+                .zip(pivots.chunks(chunk_len * n))
+                .zip(output.chunks_mut(chunk_len * rhs_len))
+            {
+                scope.spawn(move |_| {
+                    for ((matrix, ipiv), rhs) in matrix_chunk
+                        .chunks_exact(matrix_len)
+                        .zip(ipiv_chunk.chunks_exact(n))
+                        .zip(rhs_chunk.chunks_exact_mut(rhs_len))
+                    {
+                        solve_one(
+                            faer::Par::Seq,
+                            (n, nrhs),
+                            matrix,
+                            ipiv,
+                            rhs,
+                            (transpose_a, conjugate_a),
+                        );
+                    }
+                });
+            }
+        });
+        return Ok(());
+    }
     // INVARIANT: lengths were checked above, so the chunk iterators yield
     // exactly `batch_total` aligned nonempty items, and all pivots are in
     // range for `apply_row_swaps`.
@@ -376,7 +483,7 @@ pub(crate) fn lu_solve_prepared_batched_in_place<T: FaerPackedLu>(
         .zip(output.chunks_exact_mut(rhs_len))
     {
         solve_one(
-            ctx,
+            ctx.faer_parallelism(),
             (n, nrhs),
             matrix,
             ipiv,
@@ -423,8 +530,97 @@ pub(crate) fn lu_factor_solve_batched_in_place<T: FaerPackedLu>(
         ],
         batch_total,
     )?;
-    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(ctx, n, n);
     let zero = T::default();
+    let lanes = batch_lanes(ctx, batch_total);
+    if lanes > 1 {
+        // Each lane owns one contiguous packed-LU, pivot, and RHS range, so the
+        // three mutable buffers stay disjoint. A singular matrix reports the
+        // same typed error as the serial loop; which other lanes have already
+        // written their factors is then unspecified, and callers only observe
+        // the buffers on success.
+        let chunk_len = batch_total.div_ceil(lanes);
+        let failure = std::sync::Mutex::new(None::<tenferro_tensor::Error>);
+        let failed = |slot: &std::sync::Mutex<Option<tenferro_tensor::Error>>| {
+            slot.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        };
+        // One lane body, called with an RHS chunk when the RHS is nonempty. A
+        // zero-column RHS has no chunk iterator, matching the serial path.
+        let run_lane =
+            |lu_chunk: &mut [T],
+             pivot_chunk: &mut [i32],
+             rhs_chunk: Option<&mut [T]>,
+             failure: &std::sync::Mutex<Option<tenferro_tensor::Error>>| {
+                if failed(failure) {
+                    return;
+                }
+                let mut scratch = PackedLuFactorScratch::new::<T::Entity>(n, n, faer::Par::Seq);
+                let mut rhs_chunks = rhs_chunk.map(|rhs| rhs.chunks_exact_mut(rhs_len));
+                for (matrix, ipiv) in lu_chunk
+                    .chunks_exact_mut(matrix_len)
+                    .zip(pivot_chunk.chunks_exact_mut(n))
+                {
+                    let mat =
+                        MatMut::from_column_major_slice_mut(T::entity_slice_mut(matrix), n, n);
+                    if let Err(error) = scratch.factor(faer::Par::Seq, mat, ipiv, op) {
+                        let mut slot = failure
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if slot.is_none() {
+                            *slot = Some(error);
+                        }
+                        return;
+                    }
+                    let Some(rhs_chunks) = rhs_chunks.as_mut() else {
+                        continue;
+                    };
+                    let Some(rhs) = rhs_chunks.next() else {
+                        continue;
+                    };
+                    if rhs_len > 0 && (0..n).any(|i| matrix[i + i * n] == zero) {
+                        let mut slot = failure
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if slot.is_none() {
+                            *slot = Some(singular_matrix(op));
+                        }
+                        return;
+                    }
+                    solve_one(faer::Par::Seq, (n, nrhs), matrix, ipiv, rhs, (false, false));
+                }
+            };
+        rayon::scope(|scope| {
+            if rhs_len == 0 {
+                for (lu_chunk, pivot_chunk) in packed_lu
+                    .chunks_mut(chunk_len * matrix_len)
+                    .zip(pivots.chunks_mut(chunk_len * n))
+                {
+                    let failure = &failure;
+                    let run_lane = &run_lane;
+                    scope.spawn(move |_| run_lane(lu_chunk, pivot_chunk, None, failure));
+                }
+            } else {
+                for ((lu_chunk, pivot_chunk), rhs_chunk) in packed_lu
+                    .chunks_mut(chunk_len * matrix_len)
+                    .zip(pivots.chunks_mut(chunk_len * n))
+                    .zip(output.chunks_mut(chunk_len * rhs_len))
+                {
+                    let failure = &failure;
+                    let run_lane = &run_lane;
+                    scope.spawn(move |_| run_lane(lu_chunk, pivot_chunk, Some(rhs_chunk), failure));
+                }
+            }
+        });
+        return match failure
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            Some(error) => Err(error),
+            None => Ok(()),
+        };
+    }
+    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(n, n, ctx.faer_parallelism());
     // INVARIANT: lengths were checked above; a zero-column RHS yields empty
     // RHS blocks, which `chunks_mut` below cannot express with a zero chunk
     // size, so the RHS block is sliced by offset instead. faer owns any
@@ -436,7 +632,7 @@ pub(crate) fn lu_factor_solve_batched_in_place<T: FaerPackedLu>(
     {
         {
             let mat = MatMut::from_column_major_slice_mut(T::entity_slice_mut(matrix), n, n);
-            scratch.factor(ctx, mat, ipiv, op)?;
+            scratch.factor(ctx.faer_parallelism(), mat, ipiv, op)?;
         }
         if rhs_len > 0 {
             if (0..n).any(|i| matrix[i + i * n] == zero) {
@@ -444,7 +640,14 @@ pub(crate) fn lu_factor_solve_batched_in_place<T: FaerPackedLu>(
             }
             let start = batch * rhs_len;
             let rhs = &mut output[start..start + rhs_len];
-            solve_one(ctx, (n, nrhs), matrix, ipiv, rhs, (false, false));
+            solve_one(
+                ctx.faer_parallelism(),
+                (n, nrhs),
+                matrix,
+                ipiv,
+                rhs,
+                (false, false),
+            );
         }
     }
     Ok(())
