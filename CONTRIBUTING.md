@@ -160,6 +160,25 @@ a PR-branch copy of that workflow with repository secrets. See
 [Change-aware CI and trusted RunPod recovery](docs/design/change-aware-ci.md)
 for the durable design and trust boundaries.
 
+### Local GPU validation instead of the paid gate
+
+The `CI GPU gate` normally needs a RunPod pod. When RunPod cannot deliver one, or
+when the change was already exercised on a local GPU, a repository admin or
+maintainer may label the PR `gpu-validated-locally` and record the evidence as a
+PR comment containing a line that starts with `Local GPU validation:`:
+
+```text
+Local GPU validation: NVIDIA A100 80GB PCIe, CUDA 12.6, commit <sha>
+  cargo test -j 16 -p tenferro-gpu --features cuda --lib -- --ignored   # 188 passed
+  cargo test -j 16 -p tenferro-gpu --features cuda --lib <new_test>     # passed
+```
+
+The workflow then skips the paid path entirely for that PR (no pods are created)
+and publishes the gate as passing only after it verifies that the comment exists
+and that its author is an admin or maintainer. Use the label when the local run
+covers the changed GPU behavior; it is not a way to skip GPU validation for code
+that never ran on a GPU.
+
 ## Prototype code and provenance
 
 By submitting code directly to this repository, you represent that you have the

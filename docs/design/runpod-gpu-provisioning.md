@@ -117,6 +117,18 @@ only what registration and the smoke proof need:
 - `cleanup-runpod` reads the pod record before deletion and logs paid time
   and estimated cost for the whole run.
 
+## Local GPU validation instead of provisioning
+
+When the provider cannot deliver a runner, the paid path otherwise fails after
+spending pods, and every retry spends more. The `authorize` job therefore reads
+the PR's labels: with `gpu-validated-locally`, `gpu-execution` is skipped, so no
+pod is created, and `ci-gpu-gate` publishes success only after verifying that a
+PR comment containing a line that starts with `Local GPU validation:` exists and
+was authored by a repository admin or maintainer. The label alone never waives
+the gate, and the evidence has to name the GPU, the commit, the commands, and the
+observed result. It is a maintainer decision recorded on the PR rather than a
+default path: the paid gate stays required whenever a runner is available.
+
 ## Security invariants (unchanged)
 
 JIT runner registration, maintainer/admin authorization, fork rejection,

@@ -370,6 +370,33 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(f'--pod-env "{pod_env}', create)
         self.assertNotIn('--pod-env "RUNPOD_API_KEY', create)
 
+    def test_local_gpu_validation_label_substitutes_for_the_paid_gate(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        # The label decision comes from the PR's labels and skips the whole
+        # paid path, so an outage cannot be paid for repeatedly.
+        self.assertIn('grep -Fxq "gpu-validated-locally"', text)
+        self.assertIn("local_gpu_validation: ${{ steps.resolve_ref.outputs.local_gpu_validation }}", text)
+        self.assertIn(
+            "needs.authorize.outputs.local_gpu_validation != 'true'",
+            text,
+        )
+        # The label alone must not waive the gate: the evidence comment and its
+        # author's repository role are both verified before success is published.
+        self.assertIn("Local GPU validation:", text)
+        self.assertIn("verify_local_gpu_evidence", text)
+        self.assertIn(
+            'collaborators/${evidence_login}/permission', text
+        )
+        # Passing requires an accepted evidence note, not just the label.
+        self.assertIn("local_gpu_note", text)
+        self.assertIn("RunPod CI GPU gate passed (local GPU validation)", text)
+        # The rule and the evidence format are documented where contributors and
+        # reviewers look for them.
+        for path in ("REPOSITORY_RULES.md", "CONTRIBUTING.md", "docs/design/runpod-gpu-provisioning.md"):
+            doc = read(path)
+            self.assertIn("gpu-validated-locally", doc, path)
+            self.assertIn("Local GPU validation:", doc, path)
+
     def test_runpod_provision_is_bounded_and_price_ordered(self) -> None:
         config = json.loads(read("scripts/ci/runpod_config.json"))
         for key in (
