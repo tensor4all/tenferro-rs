@@ -125,8 +125,11 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
     let mut shared = SharedMemory::<E>::new(tile * pitch);
     let unit_x = UNIT_POS_X as usize;
     let unit_y = UNIT_POS_Y as usize;
-    let tile_src_fast = CUBE_POS_X as usize * tile;
-    let tile_dst_fast = CUBE_POS_Y as usize * tile;
+    // The destination tiles advance along `x`, so a block's neighbours along the
+    // fastest-varying grid axis stream the destination instead of striding
+    // through it one tile at a time.
+    let tile_dst_fast = CUBE_POS_X as usize * tile;
+    let tile_src_fast = CUBE_POS_Y as usize * tile;
     let batch_base = CUBE_POS_Z as usize * batch_stride;
 
     let mut row = unit_y;

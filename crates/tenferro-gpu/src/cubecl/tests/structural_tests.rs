@@ -976,6 +976,100 @@ fn cuda_runtime_copy_read_into_preserves_non_finite_complex_components() {
     assert_eq!(bits(&download(&gpu, &transposed)), bits(&expected));
 }
 
+/// Issue #1891: a copy whose fused plan is one 2D transpose runs on the native
+/// tiled kernel, and every other permutation keeps its previous path. Both must
+/// reproduce the permuted view exactly, including partial tiles on a shape that
+/// is not a multiple of the tile extent.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_complex_permutation_views_match_the_explicit_index_map() {
+    fn complex_permutation_views_match(shape: &[usize]) {
+        let mut gpu = gpu_backend();
+        let count: usize = shape.iter().product();
+        let values: Vec<Complex64> = (0..count)
+            .map(|index| Complex64::new(index as f64, (index % 7) as f64 - 3.0))
+            .collect();
+        let host = tensor_c64(shape.to_vec(), values.clone());
+        let source = upload(&gpu, &host);
+        let permutations = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        for permutation in permutations {
+            // The owner is the compact buffer whose permuted view holds the
+            // source, so its shape is the source shape permuted by the inverse.
+            let mut owner_shape = vec![0usize; shape.len()];
+            for (view_axis, &owner_axis) in permutation.iter().enumerate() {
+                owner_shape[owner_axis] = shape[view_axis];
+            }
+            let mut expected = vec![Complex64::new(0.0, 0.0); count];
+            for (source_flat, value) in values.iter().enumerate() {
+                let mut coordinates = [0usize; 3];
+                let mut remainder = source_flat;
+                for axis in 0..shape.len() {
+                    coordinates[axis] = remainder % shape[axis];
+                    remainder /= shape[axis];
+                }
+                let mut owner_coordinates = [0usize; 3];
+                for (view_axis, &owner_axis) in permutation.iter().enumerate() {
+                    owner_coordinates[owner_axis] = coordinates[view_axis];
+                }
+                let mut owner_flat = 0usize;
+                let mut stride = 1usize;
+                for axis in 0..shape.len() {
+                    owner_flat += owner_coordinates[axis] * stride;
+                    stride *= owner_shape[axis];
+                }
+                expected[owner_flat] = *value;
+            }
+
+            let mut destination = upload(&gpu, &tensor_c64(owner_shape.clone(), expected.clone()));
+            {
+                let typed = destination
+                    .as_typed_mut::<Complex64>()
+                    .expect("expected a complex destination");
+                let view = typed
+                    .as_view_mut()
+                    .transpose_view(permutation)
+                    .expect("permutation is valid for this shape");
+                gpu.copy_read_into(
+                    TensorRead::from_tensor(black_box(&source)),
+                    TensorWrite::from_view(TensorViewMut::C64(view)),
+                )
+                .expect("permuted view copy must succeed");
+            }
+            let actual = download(&gpu, &destination);
+            let actual = actual.as_typed::<Complex64>().expect("complex destination");
+            let actual: Vec<(u64, u64)> = actual
+                .as_slice()
+                .expect("host data")
+                .iter()
+                .map(|value| (value.re.to_bits(), value.im.to_bits()))
+                .collect();
+            let expected: Vec<(u64, u64)> = expected
+                .iter()
+                .map(|value| (value.re.to_bits(), value.im.to_bits()))
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "shape {shape:?} permutation {permutation:?}"
+            );
+        }
+    }
+
+    // A rotation of a square leading pair fuses to one tiled transpose, and the
+    // odd extents exercise the kernel's partial tiles. The rectangular shape
+    // keeps a three-axis plan, so it verifies the vendor path still agrees.
+    complex_permutation_views_match(&[64, 64, 17]);
+    complex_permutation_views_match(&[33, 33, 5]);
+    complex_permutation_views_match(&[16, 16, 1]);
+    complex_permutation_views_match(&[5, 7, 11]);
+}
+
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU with a max single allocation above 4 GiB"]
 fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
@@ -1086,8 +1180,12 @@ fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
         ),
     );
     // Keeps the complex unit-stride axis in place.
-    let samples_c64_keep =
-        measure_c64(&mut gpu, &complex_source, &mut complex_destination, &[1, 0, 2]);
+    let samples_c64_keep = measure_c64(
+        &mut gpu,
+        &complex_source,
+        &mut complex_destination,
+        &[1, 0, 2],
+    );
     // Moves the complex unit-stride axis to the front.
     let mut complex_moved = upload(
         &gpu,
@@ -1096,10 +1194,50 @@ fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
             vec![Complex64::new(0.0, 0.0); 1024 * 1024 * 512],
         ),
     );
-    let samples_c64_move =
-        measure_c64(&mut gpu, &complex_source, &mut complex_moved, &[1, 2, 0]);
+    let samples_c64_move = measure_c64(&mut gpu, &complex_source, &mut complex_moved, &[1, 2, 0]);
     println!("#1891 C64 keep-fast sorted samples (ms): {samples_c64_keep:?}");
     println!("#1891 C64 move-fast sorted samples (ms): {samples_c64_move:?}");
+
+    // Mirror orientation: the destination's unit-stride axis is the large one.
+    {
+        let mut complex_mirror = upload(
+            &gpu,
+            &tensor_c64(
+                vec![1024, 512, 1024],
+                vec![Complex64::new(0.0, 0.0); 1024 * 1024 * 512],
+            ),
+        );
+        let samples_c64_mirror =
+            measure_c64(&mut gpu, &complex_source, &mut complex_mirror, &[2, 0, 1]);
+        println!("#1891 C64 mirrored sorted samples (ms): {samples_c64_mirror:?}");
+    }
+
+    // The square transpose that the tiled kernel already handled before this
+    // change, so a grid-order regression would show up here.
+    {
+        let square_source = upload(
+            &gpu,
+            &tensor_c64(
+                vec![8192, 8192],
+                vec![Complex64::new(0.0, 0.0); 8192 * 8192],
+            ),
+        );
+        let mut square_c64 = upload(
+            &gpu,
+            &tensor_c64(
+                vec![8192, 8192],
+                vec![Complex64::new(0.0, 0.0); 8192 * 8192],
+            ),
+        );
+        let samples_square_c64 = measure_c64(&mut gpu, &square_source, &mut square_c64, &[1, 0]);
+        println!("#1891 C64 square sorted samples (ms): {samples_square_c64:?}");
+
+        let square_f64 = upload(&gpu, &tensor_f64(vec![8192, 8192], vec![0.0; 8192 * 8192]));
+        let mut square_f64_dst =
+            upload(&gpu, &tensor_f64(vec![8192, 8192], vec![0.0; 8192 * 8192]));
+        let samples_square_f64 = measure(&mut gpu, &square_f64, &mut square_f64_dst, &[1, 0]);
+        println!("#1891 F64 square sorted samples (ms): {samples_square_f64:?}");
+    }
 }
 
 /// Issue #1832: the erased read-into entry must consume an arbitrary-stride

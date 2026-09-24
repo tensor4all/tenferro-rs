@@ -78,6 +78,19 @@ impl NativeTransposeTile {
         Ok(Some(config))
     }
 
+    /// The same layout with a different tile extent.
+    ///
+    /// A larger tile covers more elements per block, which is what keeps the
+    /// grid inside the per-dimension launch limit on an extent-heavy matrix.
+    pub(crate) const fn with_tile(self, tile: u32) -> Self {
+        Self { tile, ..self }
+    }
+
+    /// Shared memory one tile occupies for an element of `element_bytes`.
+    pub(crate) fn shared_bytes(self, element_bytes: usize) -> usize {
+        self.tile as usize * (self.tile as usize + self.padding as usize) * element_bytes
+    }
+
     const fn new(tile: u32, block_rows: u32, padding: u32, vector_width: u32) -> Self {
         Self {
             tile,
@@ -87,19 +100,26 @@ impl NativeTransposeTile {
         }
     }
 
+    /// Grid dimensions for one tiled transpose launch.
+    ///
+    /// The extents are the kernel's own roles, so the destination-fast tiles
+    /// land on `x` even when that axis is the second one of the plan.
     pub(crate) fn dispatch_grid(
         self,
         op: &'static str,
-        dims: &[usize],
+        dst_fast_extent: usize,
+        src_fast_extent: usize,
+        batch: usize,
         max_dimension: u32,
     ) -> crate::Result<Option<(u32, u32, u32)>> {
-        let x = u32::try_from(dims[1].div_ceil(self.tile as usize)).map_err(|_| {
+        let (x_extent, y_extent) = (dst_fast_extent, src_fast_extent);
+        let x = u32::try_from(x_extent.div_ceil(self.tile as usize)).map_err(|_| {
             crate::Error::invalid_argument(op, "shape", "tiled transpose x grid exceeds u32::MAX")
         })?;
-        let y = u32::try_from(dims[0].div_ceil(self.tile as usize)).map_err(|_| {
+        let y = u32::try_from(y_extent.div_ceil(self.tile as usize)).map_err(|_| {
             crate::Error::invalid_argument(op, "shape", "tiled transpose y grid exceeds u32::MAX")
         })?;
-        let z = u32::try_from(dims.get(2).copied().unwrap_or(1)).map_err(|_| {
+        let z = u32::try_from(batch).map_err(|_| {
             crate::Error::invalid_argument(op, "shape", "tiled transpose z grid exceeds u32::MAX")
         })?;
         if x > max_dimension || y > max_dimension || z > max_dimension {
@@ -186,6 +206,43 @@ impl NativeStridedCopyPlan {
             dst_offset,
             len,
         })
+    }
+
+    /// The two-dimensional orientation [`tiled_transpose_kernel`] implements.
+    ///
+    /// That kernel reads `src[dst_fast * src_fast_extent + src_fast]` and
+    /// writes `dst[dst_fast + src_fast * dst_fast_extent]`. Both matrix
+    /// orientations describe such a copy, and the kernel covers both by taking
+    /// the extents in its own order:
+    ///
+    /// * row-major source, column-major destination:
+    ///   `src = [dims[1], 1]`, `dst = [1, dims[0]]`
+    /// * column-major source, row-major destination:
+    ///   `src = [1, dims[0]]`, `dst = [dims[1], 1]`
+    ///
+    /// Any other rank or stride pattern (including the multi-axis plans that
+    /// axis fusion cannot reduce) has no matching kernel.
+    ///
+    /// [`tiled_transpose_kernel`]: crate::kernels::structural::tiled_transpose_kernel
+    ///
+    /// Returns `(dst_fast_extent, src_fast_extent)`.
+    pub(crate) fn tiled_transpose_matrix(&self) -> Option<(usize, usize)> {
+        let [extent_0, extent_1] = *self.dims.as_slice() else {
+            return None;
+        };
+        let (extent_0, extent_1) = (
+            isize::try_from(extent_0).ok()?,
+            isize::try_from(extent_1).ok()?,
+        );
+        match (self.src_strides.as_slice(), self.dst_strides.as_slice()) {
+            ([src_fast, 1], [1, dst_fast]) if *src_fast == extent_1 && *dst_fast == extent_0 => {
+                Some((extent_0 as usize, extent_1 as usize))
+            }
+            ([1, src_fast], [dst_fast, 1]) if *src_fast == extent_0 && *dst_fast == extent_1 => {
+                Some((extent_1 as usize, extent_0 as usize))
+            }
+            _ => None,
+        }
     }
 }
 
