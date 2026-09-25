@@ -718,8 +718,8 @@ jobs:
       archive_cache_key: ${{ needs.cuda-archive.outputs.archive_cache_key }}
       archive_artifact_name: ${{ needs.cuda-archive.outputs.archive_artifact_name }}
       keep_failed_pods: ${{ inputs.keep_failed_pods || false }}
-      gpu_required: ${{ needs.authorize.outputs.gpu_required == 'true' }}
-      local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation == 'true' }}
+      gpu_required: ${{ needs.authorize.outputs.gpu_required }}
+      local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation }}
     secrets:
       RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
       GH_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID }}
