@@ -388,11 +388,6 @@ impl TensorAnalytic for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn log(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("log");
-        Ok(marker())
-    }
-
     fn sin(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("sin");
         Ok(marker())
@@ -427,7 +422,9 @@ impl TensorAnalytic for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.log(crate::backend::read_owned_tensor("log", input)?)
+        let _ = crate::backend::read_owned_tensor("log", input)?;
+        self.calls.push("log");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

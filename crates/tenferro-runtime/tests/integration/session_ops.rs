@@ -1267,7 +1267,6 @@ macro_rules! panic_analytic {
         impl TensorAnalytic for $ty {
             panic_backend_methods! {
                 exp(input: &Tensor) -> TensorResult;
-                log(input: &Tensor) -> TensorResult;
                 sin(input: &Tensor) -> TensorResult;
                 cos(input: &Tensor) -> TensorResult;
                 tanh(input: &Tensor) -> TensorResult;
@@ -1284,7 +1283,8 @@ macro_rules! panic_analytic {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn log_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.log(tenferro_tensor::backend::read_owned_tensor("log", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("log", input)?;
+                panic!("log should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1698,10 +1698,6 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
     }
 
     fn exp_read(&mut self, _input: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn log(&mut self, _input: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 

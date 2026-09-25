@@ -757,7 +757,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 vec![exec.rem(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Exp => vec![exec.exp(inputs[0])?],
-            StdTensorOp::Log => vec![exec.log(inputs[0])?],
+            StdTensorOp::Log => vec![exec.log_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Sin => vec![exec.sin(inputs[0])?],
             StdTensorOp::Cos => vec![exec.cos(inputs[0])?],
             StdTensorOp::Tanh => vec![exec.tanh(inputs[0])?],

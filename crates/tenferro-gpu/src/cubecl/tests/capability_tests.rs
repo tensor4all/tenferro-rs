@@ -251,7 +251,9 @@ fn run_supported_case(
         PrimitiveOpKind::Select => assert_select_matches(cpu, gpu, entry),
         PrimitiveOpKind::Clamp => assert_clamp_matches(cpu, gpu, entry),
         PrimitiveOpKind::Exp => assert_unary_matches(cpu, gpu, entry, |b, x| b.exp(x)),
-        PrimitiveOpKind::Log => assert_unary_matches(cpu, gpu, entry, |b, x| b.log(x)),
+        PrimitiveOpKind::Log => assert_unary_matches(cpu, gpu, entry, |b, x| {
+            b.with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(x)))
+        }),
         PrimitiveOpKind::Sin => assert_unary_matches(cpu, gpu, entry, |b, x| b.sin(x)),
         PrimitiveOpKind::Cos => assert_unary_matches(cpu, gpu, entry, |b, x| b.cos(x)),
         PrimitiveOpKind::Tanh => assert_unary_matches(cpu, gpu, entry, |b, x| b.tanh(x)),
@@ -434,7 +436,9 @@ fn run_cpu_unary(
         PrimitiveOpKind::Abs => cpu.abs(input),
         PrimitiveOpKind::Sign => cpu.sign(input),
         PrimitiveOpKind::Exp => cpu.exp(input),
-        PrimitiveOpKind::Log => cpu.log(input),
+        PrimitiveOpKind::Log => {
+            cpu.with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(input)))
+        }
         PrimitiveOpKind::Sin => cpu.sin(input),
         PrimitiveOpKind::Cos => cpu.cos(input),
         PrimitiveOpKind::Tanh => cpu.tanh(input),

@@ -144,7 +144,6 @@ macro_rules! impl_minimal_tensor_backend {
         impl TensorAnalytic for $ty {
             unreachable_backend_methods! {
                 exp(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
-                log(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
                 sin(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
                 cos(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
                 tanh(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
@@ -160,7 +159,8 @@ macro_rules! impl_minimal_tensor_backend {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-                self.log(tenferro_tensor::backend::read_owned_tensor("log", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("log", input)?;
+                panic!("log should not be called by this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and

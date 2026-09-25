@@ -546,7 +546,7 @@ macro_rules! define_unary_analytic_dispatch {
 }
 
 define_unary_analytic_dispatch!(exp, exp_with_pool, exp_read_with_pool, Exp, exp_elem);
-define_unary_analytic_dispatch!(log, log_with_pool, log_read_with_pool, Log, log_elem);
+define_unary_analytic_dispatch!(read_only: log, log_read_with_pool, Log, log_elem);
 define_unary_analytic_dispatch!(sin, sin_with_pool, sin_read_with_pool, Sin, sin_elem);
 define_unary_analytic_dispatch!(cos, cos_with_pool, cos_read_with_pool, Cos, cos_elem);
 define_unary_analytic_dispatch!(tanh, tanh_with_pool, tanh_read_with_pool, Tanh, tanh_elem);

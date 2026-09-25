@@ -1647,7 +1647,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     impl TensorAnalytic for DefaultOnlyBackend {
         panic_backend_methods! {
         exp(input: &Tensor) -> crate::Result<Tensor>;
-        log(input: &Tensor) -> crate::Result<Tensor>;
         sin(input: &Tensor) -> crate::Result<Tensor>;
         cos(input: &Tensor) -> crate::Result<Tensor>;
         tanh(input: &Tensor) -> crate::Result<Tensor>;
@@ -1663,7 +1662,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            self.log(tenferro_tensor::backend::read_owned_tensor("log", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("log", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.log_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2113,7 +2116,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     impl TensorAnalytic for DefaultOnlyExec {
         panic_backend_methods! {
         exp(input: &Tensor) -> crate::Result<Tensor>;
-        log(input: &Tensor) -> crate::Result<Tensor>;
         sin(input: &Tensor) -> crate::Result<Tensor>;
         cos(input: &Tensor) -> crate::Result<Tensor>;
         tanh(input: &Tensor) -> crate::Result<Tensor>;
@@ -2129,7 +2131,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            self.log(tenferro_tensor::backend::read_owned_tensor("log", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("log", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.log_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
