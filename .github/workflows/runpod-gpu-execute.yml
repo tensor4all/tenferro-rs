@@ -26,17 +26,6 @@ on:
       keep_failed_pods:
         type: boolean
         default: false
-      gpu_required:
-        description: The change classification requires GPU validation.
-        # Strings, not booleans: a boolean input compared with `true` did not
-        # skip the paid jobs in a live dispatch even though the caller logged
-        # local_gpu_validation=true, so the decision is compared as text.
-        type: string
-        default: "false"
-      local_gpu_validation:
-        description: Skip every paid step; a recorded local GPU run owns the gate.
-        type: string
-        default: "false"
     secrets:
       RUNPOD_API_KEY:
         required: true
@@ -80,13 +69,6 @@ env:
 jobs:
   start-runpod:
     name: Start RunPod org runner
-    # The decision travels as inputs and is applied here, never on the caller:
-    # a caller job that is skipped does not pass its `with:` block, and the
-    # called jobs are scheduled anyway, which is how a labelled PR still began
-    # provisioning pods.
-    if: >-
-      inputs.gpu_required == 'true' &&
-      inputs.local_gpu_validation != 'true'
     runs-on: ubuntu-latest
     # Bounded provision attempts may create, smoke-test, and delete several
     # candidate pods before one is accepted. Must exceed the worst case of
@@ -105,8 +87,9 @@ jobs:
       gpu_type_id: ${{ steps.create_pod.outputs.gpu_type_id }}
       gpu_tier: ${{ steps.create_pod.outputs.gpu_tier }}
       gpu_cost_per_hr: ${{ steps.create_pod.outputs.gpu_cost_per_hr }}
-      # Set when a recorded local GPU run owns the gate, so no paid step runs.
-      paid_path_skipped: ${{ steps.local_gpu_validation.outputs.skip }}
+      # True when this PR must not spend: merged or closed, a recorded local GPU
+      # run, or a change classification that does not need GPU validation.
+      paid_path_skipped: ${{ steps.paid_path.outputs.run_paid_path == 'false' }}
 
     steps:
       - name: Require trusted parent context
@@ -118,24 +101,48 @@ jobs:
       - name: Checkout trusted RunPod client
         uses: actions/checkout@v5
 
-      - name: Skip paid steps when a local GPU run owns the gate
-        id: local_gpu_validation
-        if: inputs.pr_number != '0'
+      - name: Decide whether the paid path runs
+        id: paid_path
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-          # Job-level `if`s in this called workflow did not see the caller's
-          # inputs in a live dispatch, but `inputs` is populated inside steps,
-          # so the label decision is applied here.
+          # Job-level `if`s in a called workflow do not see the caller's inputs
+          # (measured: a labelled PR still provisioned while its caller job was
+          # skipped, and a skipped caller never passes `with:`), so the decision
+          # is computed here and applied to the paid steps. Missing information
+          # defaults to running the paid path, which keeps validation fail-safe.
+          if [ "${PR_NUMBER}" = "0" ]; then
+            echo "run_paid_path=true" >> "${GITHUB_OUTPUT}"
+            echo "Trusted manual revision validation: running the paid path."
+            exit 0
+          fi
+          pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .state)"
+          if [ "${pr_state}" != "open" ]; then
+            echo "run_paid_path=false" >> "${GITHUB_OUTPUT}"
+            echo "PR #${PR_NUMBER} is ${pr_state}: skipping every paid step."
+            exit 0
+          fi
           if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
             --jq '.[].name' | grep -Fxq "gpu-validated-locally"; then
-            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            echo "run_paid_path=false" >> "${GITHUB_OUTPUT}"
             echo "Label gpu-validated-locally is set: skipping every paid step."
-          else
-            echo "skip=false" >> "${GITHUB_OUTPUT}"
+            exit 0
           fi
+          changed_paths=/tmp/paid-path-changed-paths.txt
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            --jq '.[].filename' > "${changed_paths}"
+          policy_args=()
+          while IFS= read -r path; do
+            if [ -n "${path}" ]; then
+              policy_args+=(--path "${path}")
+            fi
+          done < "${changed_paths}"
+          run_gpu="$(python3 scripts/ci/change_policy.py "${policy_args[@]}" | jq -r '.run_gpu')"
+          echo "run_paid_path=${run_gpu}" >> "${GITHUB_OUTPUT}"
+          echo "Change classification requires GPU validation: ${run_gpu}."
 
       - name: Revalidate queued PR before provisioning
         if: inputs.pr_number != '0'
@@ -188,7 +195,7 @@ jobs:
       # variable to its id.
       - name: Provision cheapest compatible RunPod pod
         id: create_pod
-        if: steps.local_gpu_validation.outputs.skip != 'true'
+        if: steps.paid_path.outputs.run_paid_path != 'false'
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           RUNPOD_IMAGE: ${{ env.RUNPOD_IMAGE }}
@@ -351,10 +358,8 @@ jobs:
 
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
-    if: >-
-      needs.start-runpod.outputs.paid_path_skipped != 'true' &&
-      inputs.gpu_required == 'true' &&
-      inputs.local_gpu_validation != 'true'
+    # Same-workflow job outputs are reliable, unlike the caller's inputs.
+    if: needs.start-runpod.outputs.paid_path_skipped != 'true'
     needs: start-runpod
 
     env:
