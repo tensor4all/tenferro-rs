@@ -64,7 +64,13 @@ fn run_chain_one_shot(a: &Tensor, b: &Tensor, ops: &mut CpuBackend) -> Tensor {
     ops.reduce_sum(&x, &[0]).expect("reduce_sum")
 }
 
-/// The same 10-op chain through one shared execution scope.
+/// The same 10-op chain through one execution scope wrapping one session entry.
+///
+/// Written as `with_execution_scope` + `with_backend_session` so that it
+/// survives the route/API unification of issue #1926: both spellings remain
+/// public boundaries, while the one-shot operation methods do not. The scope
+/// holds the resource permit and this single entry reuses it. Because the chain
+/// runs on the session surface, it also supports the broadcast operand set.
 fn run_chain_execution_scope(
     a: &Tensor,
     b: &Tensor,
@@ -73,16 +79,18 @@ fn run_chain_execution_scope(
 ) -> Tensor {
     owner
         .with_execution_scope(|| {
-            let x = ops.add(a, b).expect("add 1");
-            let x = ops.exp(&x).expect("exp 1");
-            let x = ops.mul(&x, a).expect("mul 1");
-            let x = ops.add(&x, b).expect("add 2");
-            let x = ops.exp(&x).expect("exp 2");
-            let x = ops.mul(&x, a).expect("mul 2");
-            let x = ops.add(&x, b).expect("add 3");
-            let x = ops.exp(&x).expect("exp 3");
-            let x = ops.mul(&x, a).expect("mul 3");
-            ops.reduce_sum(&x, &[0]).expect("reduce_sum")
+            ops.with_backend_session(|session| {
+                let x = a.add(b, session).expect("add 1");
+                let x = x.exp(session).expect("exp 1");
+                let x = x.mul(a, session).expect("mul 1");
+                let x = x.add(b, session).expect("add 2");
+                let x = x.exp(session).expect("exp 2");
+                let x = x.mul(a, session).expect("mul 2");
+                let x = x.add(b, session).expect("add 3");
+                let x = x.exp(session).expect("exp 3");
+                let x = x.mul(a, session).expect("mul 3");
+                x.reduce_sum(&[0], session).expect("reduce_sum")
+            })
         })
         .expect("scope admission should succeed")
 }
@@ -99,34 +107,31 @@ fn bench_session_chain(c: &mut Criterion) {
         // Validation outside the timed region: the chain must reduce to a
         // finite scalar, and every registered arm must agree.
         //
-        // The `one_shot` and `execution_scope` arms are only registered for the
-        // no-broadcast operand set. Both use the operation methods on a backend
-        // object, and `TensorElementwise::add`/`mul` require equal shapes; the
-        // NumPy-style broadcasting lives in the session extension surface. The
-        // broadcast arm therefore has no one-shot equivalent and is measured
-        // through `one_session` only.
+        // The `one_shot` arm is only registered for the no-broadcast operand
+        // set: it uses the operation methods on a backend object, and
+        // `TensorElementwise::add`/`mul` require equal shapes. The NumPy-style
+        // broadcasting lives in the session extension surface, so the broadcast
+        // arm has no one-shot equivalent. `one_session` and `execution_scope`
+        // run on the session surface and are registered for both arms.
         let one_session = run_chain_one_session(&a, &b, &mut backend);
-        assert!(
-            one_session.shape().is_empty(),
-            "one_session: chain must reduce to a scalar"
+        let scope = run_chain_execution_scope(&a, &b, &backend, &mut ops);
+        for (name, out) in [("one_session", &one_session), ("scope", &scope)] {
+            assert!(out.shape().is_empty(), "{name}: chain must reduce to a scalar");
+            assert!(out.as_slice::<f64>().unwrap()[0].is_finite(), "{name}: finite");
+        }
+        assert_eq!(
+            one_session.as_slice::<f64>().unwrap()[0],
+            scope.as_slice::<f64>().unwrap()[0],
+            "one_session and scope must agree"
         );
-        assert!(one_session.as_slice::<f64>().unwrap()[0].is_finite());
         if !broadcast {
             let one_shot = run_chain_one_shot(&a, &b, &mut ops);
-            let scope = run_chain_execution_scope(&a, &b, &backend, &mut ops);
-            for (name, out) in [("one_shot", &one_shot), ("scope", &scope)] {
-                assert!(out.shape().is_empty(), "{name}: scalar");
-                assert!(out.as_slice::<f64>().unwrap()[0].is_finite(), "{name}: finite");
-            }
+            assert!(one_shot.shape().is_empty(), "one_shot: scalar");
+            assert!(one_shot.as_slice::<f64>().unwrap()[0].is_finite(), "one_shot: finite");
             assert_eq!(
                 one_session.as_slice::<f64>().unwrap()[0],
                 one_shot.as_slice::<f64>().unwrap()[0],
                 "one_session and one_shot must agree"
-            );
-            assert_eq!(
-                one_session.as_slice::<f64>().unwrap()[0],
-                scope.as_slice::<f64>().unwrap()[0],
-                "one_session and scope must agree"
             );
         }
 
@@ -136,17 +141,17 @@ fn bench_session_chain(c: &mut Criterion) {
                 black_box(out);
             });
         });
+        group.bench_function("execution_scope", |bench| {
+            bench.iter(|| {
+                let out =
+                    run_chain_execution_scope(black_box(&a), black_box(&b), &backend, &mut ops);
+                black_box(out);
+            });
+        });
         if !broadcast {
             group.bench_function("one_shot", |bench| {
                 bench.iter(|| {
                     let out = run_chain_one_shot(black_box(&a), black_box(&b), &mut ops);
-                    black_box(out);
-                });
-            });
-            group.bench_function("execution_scope", |bench| {
-                bench.iter(|| {
-                    let out =
-                        run_chain_execution_scope(black_box(&a), black_box(&b), &backend, &mut ops);
                     black_box(out);
                 });
             });

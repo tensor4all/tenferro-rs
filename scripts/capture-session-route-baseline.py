@@ -33,7 +33,7 @@ SCHEMA = "tenferro.session-route-baseline.v1"
 # package|bench -> required case count at the capturing harness revision.
 EXPECTED_CASES: dict[str, int] = {
     "tenferro-cpu|route_matrix": 47,
-    "tenferro-runtime|session_chain": 5,
+    "tenferro-runtime|session_chain": 6,
     "tenferro-runtime|elementwise_fusion": 14,
     "tenferro-ad|eager_dispatch_baseline": 28,
     "tenferro-ad|eager_backward_shape_churn": 1,

@@ -85,9 +85,18 @@ fn add_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
         .expect("session add should succeed")
 }
 
+// `scope` arms are written as `with_execution_scope` + `with_backend_session`
+// so that they survive the route/API unification of issue #1926: both spellings
+// remain public boundaries, while the one-shot operation methods do not. The
+// scope holds the resource permit and each execution entry reuses it.
+
 fn add_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
     owner
-        .with_execution_scope(|| ops.add(a, b))
+        .with_execution_scope(|| {
+            ops.with_backend_session(|session| {
+                session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
+            })
+        })
         .expect("scope admission should succeed")
         .expect("scope add should succeed")
 }
@@ -111,7 +120,15 @@ fn dot_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
 
 fn dot_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
     owner
-        .with_execution_scope(|| ops.dot_general(a, b, &dot_config()))
+        .with_execution_scope(|| {
+            ops.with_backend_session(|session| {
+                session.dot_general_read(
+                    TensorRead::from_tensor(a),
+                    TensorRead::from_tensor(b),
+                    &dot_config(),
+                )
+            })
+        })
         .expect("scope admission should succeed")
         .expect("scope dot should succeed")
 }
@@ -128,7 +145,11 @@ fn reduce_session(owner: &mut CpuBackend, a: &Tensor) -> Tensor {
 
 fn reduce_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor) -> Tensor {
     owner
-        .with_execution_scope(|| ops.reduce_sum(a, &[0]))
+        .with_execution_scope(|| {
+            ops.with_backend_session(|session| {
+                session.reduce_sum_read(TensorRead::from_tensor(a), &[0])
+            })
+        })
         .expect("scope admission should succeed")
         .expect("scope reduce_sum should succeed")
 }
@@ -154,7 +175,9 @@ fn slice_scope(
     config: &SliceConfig,
 ) -> Tensor {
     owner
-        .with_execution_scope(|| ops.slice(a, config))
+        .with_execution_scope(|| {
+            ops.with_backend_session(|session| TensorIndexing::slice(session, a, config))
+        })
         .expect("scope admission should succeed")
         .expect("scope slice should succeed")
 }
@@ -187,11 +210,23 @@ fn add_marginal_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tenso
 }
 
 fn add_marginal_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
+    // One execution scope holding the permit, and CHAIN_LEN separate session
+    // entries inside it. This isolates permit reuse from session construction:
+    // compare with `session/marginal16` (one session for the whole chain) and
+    // with the before-only `oneshot/marginal16` (a fresh entry per operation).
     owner
         .with_execution_scope(|| {
-            let mut x = ops.add(a, b).expect("scope add should succeed");
+            let mut x = ops
+                .with_backend_session(|session| {
+                    session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
+                })
+                .expect("scope add should succeed");
             for _ in 1..CHAIN_LEN {
-                x = ops.add(&x, b).expect("scope add should succeed");
+                x = ops
+                    .with_backend_session(|session| {
+                        session.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(b))
+                    })
+                    .expect("scope add should succeed");
             }
             x
         })
