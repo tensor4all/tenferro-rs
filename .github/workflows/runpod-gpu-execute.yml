@@ -28,12 +28,15 @@ on:
         default: false
       gpu_required:
         description: The change classification requires GPU validation.
-        type: boolean
-        default: false
+        # Strings, not booleans: a boolean input compared with `true` did not
+        # skip the paid jobs in a live dispatch even though the caller logged
+        # local_gpu_validation=true, so the decision is compared as text.
+        type: string
+        default: "false"
       local_gpu_validation:
         description: Skip every paid step; a recorded local GPU run owns the gate.
-        type: boolean
-        default: false
+        type: string
+        default: "false"
     secrets:
       RUNPOD_API_KEY:
         required: true
@@ -81,7 +84,9 @@ jobs:
     # a caller job that is skipped does not pass its `with:` block, and the
     # called jobs are scheduled anyway, which is how a labelled PR still began
     # provisioning pods.
-    if: inputs.gpu_required == true && inputs.local_gpu_validation != true
+    if: >-
+      inputs.gpu_required == 'true' &&
+      inputs.local_gpu_validation != 'true'
     runs-on: ubuntu-latest
     # Bounded provision attempts may create, smoke-test, and delete several
     # candidate pods before one is accepted. Must exceed the worst case of
@@ -324,7 +329,9 @@ jobs:
 
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
-    if: inputs.gpu_required == true && inputs.local_gpu_validation != true
+    if: >-
+      inputs.gpu_required == 'true' &&
+      inputs.local_gpu_validation != 'true'
     needs: start-runpod
 
     env:

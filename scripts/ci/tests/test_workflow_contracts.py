@@ -382,17 +382,14 @@ class WorkflowContractTests(unittest.TestCase):
         execute = read(".github/workflows/runpod-gpu-execute.yml")
         for input_name in ("gpu_required:", "local_gpu_validation:"):
             self.assertIn(input_name, execute)
-        expected = "if: inputs.gpu_required == true && inputs.local_gpu_validation != true"
+        expected = "inputs.gpu_required == 'true' &&\n      inputs.local_gpu_validation != 'true'"
         for job in ("  start-runpod:", "  run-gpu-tests:"):
             block = execute[execute.index(job) : execute.index(job) + 500]
             self.assertIn(expected, block, job)
         text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn("gpu_required: ${{ needs.authorize.outputs.gpu_required }}", text)
         self.assertIn(
-            "gpu_required: ${{ needs.authorize.outputs.gpu_required == 'true' }}",
-            text,
-        )
-        self.assertIn(
-            "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation == 'true' }}",
+            "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation }}",
             text,
         )
         # The caller must not gate itself: that is what dropped the inputs.
@@ -427,7 +424,7 @@ class WorkflowContractTests(unittest.TestCase):
         # The decision reaches the paid workflow as an input, which its own jobs
         # apply (see test_the_paid_workflow_decides_from_its_own_inputs).
         self.assertIn(
-            "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation == 'true' }}",
+            "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation }}",
             text,
         )
         # The label alone must not waive the gate: the evidence comment and its
