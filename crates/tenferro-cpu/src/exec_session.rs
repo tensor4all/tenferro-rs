@@ -412,7 +412,6 @@ impl TensorElementwise for CpuExecSession<'_> {
 
 impl TensorAnalytic for CpuExecSession<'_> {
     // Analytic
-    delegate_with_pool!(exp(input: &Tensor) => analytic::exp_with_pool);
     delegate_with_pool!(exp_read(input: TensorRead<'_>) => analytic::exp_read_with_pool);
     delegate_with_pool!(log_read(input: TensorRead<'_>) => analytic::log_read_with_pool);
     delegate_with_pool!(sin_read(input: TensorRead<'_>) => analytic::sin_read_with_pool);

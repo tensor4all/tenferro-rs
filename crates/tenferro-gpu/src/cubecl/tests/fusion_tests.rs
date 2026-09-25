@@ -1,7 +1,7 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
 use tenferro_tensor::{
-    BackendSessionHost, TensorAnalytic, TensorElementwise, TensorFusion, TensorRead, TensorView,
+    BackendSessionHost, TensorElementwise, TensorFusion, TensorRead, TensorView,
 };
 
 use super::{
@@ -456,7 +456,9 @@ fn test_fused_unary_chain() {
     let t2 = cpu
         .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&t1)))
         .unwrap();
-    let expected = cpu.exp(&t2).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&t2)))
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let gpu_a = upload(&gpu, &a);

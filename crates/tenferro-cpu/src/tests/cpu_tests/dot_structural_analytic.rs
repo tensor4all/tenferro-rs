@@ -922,7 +922,9 @@ fn test_cpu_backend_analytic_ops_real() {
     let exp_input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![0.0, 1.0]).unwrap(),
     );
-    let exp_out = backend.exp(&exp_input).unwrap();
+    let exp_out = backend
+        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&exp_input)))
+        .unwrap();
     assert_f64_close(get_f64(&exp_out, &[0]), 1.0);
     assert_f64_close(get_f64(&exp_out, &[1]), std::f64::consts::E);
 
@@ -1007,7 +1009,9 @@ fn test_cpu_backend_analytic_ops_complex() {
         )
         .unwrap(),
     );
-    let exp_out = backend.exp(&exp_input).unwrap();
+    let exp_out = backend
+        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&exp_input)))
+        .unwrap();
     assert_c64_close(get_c64(&exp_out, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&exp_out, &[1]), Complex64::new(1.0, 1.0).exp());
 

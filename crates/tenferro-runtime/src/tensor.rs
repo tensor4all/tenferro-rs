@@ -25,7 +25,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn exp(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.exp(self)
+        session.exp_read(TensorRead::from_tensor(self))
     }
 
     fn reduce_sum(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {

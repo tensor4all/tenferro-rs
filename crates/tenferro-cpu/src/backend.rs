@@ -3180,10 +3180,6 @@ impl TensorElementwise for CpuBackend {
 }
 
 impl TensorAnalytic for CpuBackend {
-    fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::exp_with_pool(buffers, input))
-    }
-
     fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| analytic::exp_read_with_pool(buffers, input))
     }

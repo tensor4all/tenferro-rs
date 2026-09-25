@@ -11,7 +11,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::{BackendSessionHost, TensorAnalytic, TensorElementwise, TensorReduction};
+use tenferro_tensor::BackendSessionHost;
 
 /// `a` is a 1x8 constant row in the no-broadcast arm and a 1x1 row (the
 /// singleton broadcast source) in the broadcast arm.
@@ -42,24 +42,6 @@ fn run_chain_one_session(a: &Tensor, b: &Tensor, backend: &mut CpuBackend) -> Te
         let x = x.mul(a, session).expect("mul 3");
         x.reduce_sum(&[0], session).expect("reduce_sum")
     })
-}
-
-/// The same 10-op chain through the operation methods on the backend object.
-///
-/// This is the coexisting one-shot spelling that issue #1926 removes; the
-/// numbers are the before-side reference for the unification and are not
-/// reproducible after the spelling is deleted.
-fn run_chain_one_shot(a: &Tensor, b: &Tensor, ops: &mut CpuBackend) -> Tensor {
-    let x = ops.add(a, b).expect("add 1");
-    let x = ops.exp(&x).expect("exp 1");
-    let x = ops.mul(&x, a).expect("mul 1");
-    let x = ops.add(&x, b).expect("add 2");
-    let x = ops.exp(&x).expect("exp 2");
-    let x = ops.mul(&x, a).expect("mul 2");
-    let x = ops.add(&x, b).expect("add 3");
-    let x = ops.exp(&x).expect("exp 3");
-    let x = ops.mul(&x, a).expect("mul 3");
-    ops.reduce_sum(&x, &[0]).expect("reduce_sum")
 }
 
 /// The same 10-op chain through one execution scope wrapping one session entry.
@@ -103,14 +85,12 @@ fn bench_session_chain(c: &mut Criterion) {
         let mut ops = backend.clone();
 
         // Validation outside the timed region: the chain must reduce to a
-        // finite scalar, and every registered arm must agree.
+        // finite scalar, and both registered arms must agree.
         //
-        // The `one_shot` arm is only registered for the no-broadcast operand
-        // set: it uses the operation methods on a backend object, and
-        // `TensorElementwise::add`/`mul` require equal shapes. The NumPy-style
-        // broadcasting lives in the session extension surface, so the broadcast
-        // arm has no one-shot equivalent. `one_session` and `execution_scope`
-        // run on the session surface and are registered for both arms.
+        // The `one_shot` arm that measured the deleted per-operation entry
+        // spelling is gone with that spelling (issue #1926); its baseline
+        // numbers remain in docs/testing/session-route-baseline.json as
+        // before-only references.
         let one_session = run_chain_one_session(&a, &b, &mut backend);
         let scope = run_chain_execution_scope(&a, &b, &backend, &mut ops);
         for (name, out) in [("one_session", &one_session), ("scope", &scope)] {
@@ -128,20 +108,6 @@ fn bench_session_chain(c: &mut Criterion) {
             scope.as_slice::<f64>().unwrap()[0],
             "one_session and scope must agree"
         );
-        if !broadcast {
-            let one_shot = run_chain_one_shot(&a, &b, &mut ops);
-            assert!(one_shot.shape().is_empty(), "one_shot: scalar");
-            assert!(
-                one_shot.as_slice::<f64>().unwrap()[0].is_finite(),
-                "one_shot: finite"
-            );
-            assert_eq!(
-                one_session.as_slice::<f64>().unwrap()[0],
-                one_shot.as_slice::<f64>().unwrap()[0],
-                "one_session and one_shot must agree"
-            );
-        }
-
         group.bench_function("one_session", |bench| {
             bench.iter(|| {
                 let out = run_chain_one_session(black_box(&a), black_box(&b), &mut backend);
@@ -155,14 +121,6 @@ fn bench_session_chain(c: &mut Criterion) {
                 black_box(out);
             });
         });
-        if !broadcast {
-            group.bench_function("one_shot", |bench| {
-                bench.iter(|| {
-                    let out = run_chain_one_shot(black_box(&a), black_box(&b), &mut ops);
-                    black_box(out);
-                });
-            });
-        }
         group.finish();
     }
 }

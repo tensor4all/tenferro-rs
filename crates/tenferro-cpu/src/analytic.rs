@@ -241,26 +241,6 @@ fn map_unary<T: Copy + PoolScalar>(
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
-fn typed_unary_with_pool<T>(
-    op: &'static str,
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-    f: impl Fn(T) -> T + Copy + Sync,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + PoolScalar + 'static,
-{
-    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
-    map_unary(
-        op,
-        &mut out.as_uninit_view_mut()?,
-        &typed_view(op, input)?,
-        f,
-    )?;
-    // SAFETY: the successful map replay writes every logical destination element.
-    unsafe { out.assume_init() }
-}
-
 fn typed_unary_view_with_pool<T, R>(
     op: &'static str,
     buffers: &mut BufferPool,
@@ -280,19 +260,6 @@ where
     )?;
     // SAFETY: the successful map replay writes every logical destination element.
     unsafe { out.assume_init() }
-}
-
-fn typed_unary_tensor_with_pool<T>(
-    op: &'static str,
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-    f: impl Fn(T) -> T + Copy + Sync,
-) -> crate::Result<Tensor>
-where
-    T: Copy + PoolScalar + TensorScalar + 'static,
-{
-    let out = typed_unary_with_pool(op, buffers, input, f)?;
-    Ok(T::typed_tensor_into_tensor(out))
 }
 
 fn typed_unary_view_tensor_with_pool<T, R>(
@@ -448,14 +415,15 @@ where
     unsafe { out.assume_init() }
 }
 
-/// Generate only the read half.
-///
-/// Used for an operation whose owner one-shot was removed by issue #1926: the
-/// owned `*_with_pool` helper no longer has a library caller, so generating it
-/// would leave dead code. Each arm below adds its own test-only owned
-/// convenience on top of whichever helper it keeps.
-macro_rules! define_unary_analytic_read_with_pool {
+macro_rules! define_unary_analytic_dispatch {
     ($dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
+        #[cfg(test)]
+        pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
+            with_test_pool(|buffers| {
+                $dispatch_read_with_pool_fn(buffers, TensorRead::from_tensor(input))
+            })
+        }
+
         pub(crate) fn $dispatch_read_with_pool_fn(
             buffers: &mut BufferPool,
             input: TensorRead<'_>,
@@ -485,75 +453,15 @@ macro_rules! define_unary_analytic_read_with_pool {
     };
 }
 
-macro_rules! define_unary_analytic_dispatch {
-    // The owner one-shot was removed, so the read half is the only entry point
-    // and the test-only convenience is built on it.
-    (read_only: $dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
-        #[cfg(test)]
-        pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
-            with_test_pool(|buffers| {
-                $dispatch_read_with_pool_fn(buffers, TensorRead::from_tensor(input))
-            })
-        }
-
-        define_unary_analytic_read_with_pool!(
-            $dispatch_fn,
-            $dispatch_read_with_pool_fn,
-            $op_kind,
-            $elem_fn
-        );
-    };
-
-    ($dispatch_fn:ident, $dispatch_with_pool_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
-        #[cfg(test)]
-        pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
-            with_test_pool(|buffers| $dispatch_with_pool_fn(buffers, input))
-        }
-
-        pub(crate) fn $dispatch_with_pool_fn(
-            buffers: &mut BufferPool,
-            input: &Tensor,
-        ) -> crate::Result<Tensor> {
-            require_cpu_capability(
-                PrimitiveOpKind::$op_kind,
-                stringify!($dispatch_fn),
-                input.dtype(),
-                CapabilityAxis::OwnedResult,
-            )?;
-            tenferro_tensor::with_scalar!(
-                input,
-                float_complex,
-                backend = BackendId::Cpu,
-                op = stringify!($dispatch_fn),
-                |tensor| -> crate::Result<Tensor> {
-                    typed_unary_tensor_with_pool(
-                        stringify!($dispatch_fn),
-                        buffers,
-                        tensor,
-                        UnaryAnalyticElem::$elem_fn,
-                    )
-                }
-            )
-        }
-
-        define_unary_analytic_read_with_pool!(
-            $dispatch_fn,
-            $dispatch_read_with_pool_fn,
-            $op_kind,
-            $elem_fn
-        );
-    };
-}
-
-define_unary_analytic_dispatch!(exp, exp_with_pool, exp_read_with_pool, Exp, exp_elem);
-define_unary_analytic_dispatch!(read_only: log, log_read_with_pool, Log, log_elem);
-define_unary_analytic_dispatch!(read_only: sin, sin_read_with_pool, Sin, sin_elem);
-define_unary_analytic_dispatch!(read_only: cos, cos_read_with_pool, Cos, cos_elem);
-define_unary_analytic_dispatch!(read_only: tanh, tanh_read_with_pool, Tanh, tanh_elem);
-define_unary_analytic_dispatch!(read_only: sqrt, sqrt_read_with_pool, Sqrt, sqrt_elem);
-define_unary_analytic_dispatch!(read_only: rsqrt, rsqrt_read_with_pool, Rsqrt, rsqrt_elem);
-define_unary_analytic_dispatch!(read_only: expm1, expm1_read_with_pool, Expm1, expm1_elem);
-define_unary_analytic_dispatch!(read_only: log1p, log1p_read_with_pool, Log1p, log1p_elem);
+define_unary_analytic_dispatch!(exp, exp_read_with_pool, Exp, exp_elem);
+define_unary_analytic_dispatch!(log, log_read_with_pool, Log, log_elem);
+define_unary_analytic_dispatch!(sin, sin_read_with_pool, Sin, sin_elem);
+define_unary_analytic_dispatch!(cos, cos_read_with_pool, Cos, cos_elem);
+define_unary_analytic_dispatch!(tanh, tanh_read_with_pool, Tanh, tanh_elem);
+define_unary_analytic_dispatch!(sqrt, sqrt_read_with_pool, Sqrt, sqrt_elem);
+define_unary_analytic_dispatch!(rsqrt, rsqrt_read_with_pool, Rsqrt, rsqrt_elem);
+define_unary_analytic_dispatch!(expm1, expm1_read_with_pool, Expm1, expm1_elem);
+define_unary_analytic_dispatch!(log1p, log1p_read_with_pool, Log1p, log1p_elem);
 
 #[cfg(test)]
 pub(crate) fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {

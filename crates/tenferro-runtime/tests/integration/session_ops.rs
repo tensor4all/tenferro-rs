@@ -1266,14 +1266,14 @@ macro_rules! panic_analytic {
     ($ty:ident) => {
         impl TensorAnalytic for $ty {
             panic_backend_methods! {
-                exp(input: &Tensor) -> TensorResult;
                 pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn exp_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
+                panic!("exp should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1687,10 +1687,6 @@ impl TensorElementwise for WrongDTypeSessionBackend {
 }
 
 impl TensorAnalytic for WrongDTypeSessionBackend {
-    fn exp(&mut self, _input: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn exp_read(&mut self, _input: TensorRead<'_>) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }

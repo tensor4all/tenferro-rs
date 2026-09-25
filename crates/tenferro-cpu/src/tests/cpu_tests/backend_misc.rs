@@ -1646,13 +1646,16 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorAnalytic for DefaultOnlyBackend {
         panic_backend_methods! {
-        exp(input: &Tensor) -> crate::Result<Tensor>;
         pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         }
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.exp_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2127,13 +2130,16 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorAnalytic for DefaultOnlyExec {
         panic_backend_methods! {
-        exp(input: &Tensor) -> crate::Result<Tensor>;
         pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         }
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.exp_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

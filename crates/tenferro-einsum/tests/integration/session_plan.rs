@@ -324,13 +324,13 @@ macro_rules! panic_analytic {
     ($ty:ident) => {
         impl TensorAnalytic for $ty {
             panic_backend_methods! {
-                exp(input: &Tensor) -> TensorResult;
                 pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
             }
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
-                self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
+                panic!("exp should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -666,10 +666,6 @@ impl TensorElementwise for SessionCountingBackend {
 }
 
 impl TensorAnalytic for SessionCountingBackend {
-    fn exp(&mut self, input: &Tensor) -> TensorResult {
-        self.inner.exp(input)
-    }
-
     fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> TensorResult {
         self.inner.pow(lhs, rhs)
     }
@@ -677,7 +673,8 @@ impl TensorAnalytic for SessionCountingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
-        self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
+        panic!("exp should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

@@ -33,7 +33,7 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
             })
             .collect();
         let output = match op {
-            0 => backend.exp(&owned),
+            0 => backend.with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&owned))),
             1 => backend.with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&owned))),
             2 => backend.with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&owned))),
             3 => backend.with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&owned))),

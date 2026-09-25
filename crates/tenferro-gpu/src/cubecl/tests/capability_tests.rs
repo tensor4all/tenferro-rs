@@ -250,7 +250,9 @@ fn run_supported_case(
         PrimitiveOpKind::Compare => assert_compare_matches(cpu, gpu, entry),
         PrimitiveOpKind::Select => assert_select_matches(cpu, gpu, entry),
         PrimitiveOpKind::Clamp => assert_clamp_matches(cpu, gpu, entry),
-        PrimitiveOpKind::Exp => assert_unary_matches(cpu, gpu, entry, |b, x| b.exp(x)),
+        PrimitiveOpKind::Exp => assert_unary_matches(cpu, gpu, entry, |b, x| {
+            b.with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(x)))
+        }),
         PrimitiveOpKind::Log => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(x)))
         }),
@@ -443,7 +445,9 @@ fn run_cpu_unary(
         PrimitiveOpKind::Conj => cpu.conj(input),
         PrimitiveOpKind::Abs => cpu.abs(input),
         PrimitiveOpKind::Sign => cpu.sign(input),
-        PrimitiveOpKind::Exp => cpu.exp(input),
+        PrimitiveOpKind::Exp => {
+            cpu.with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(input)))
+        }
         PrimitiveOpKind::Log => {
             cpu.with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(input)))
         }

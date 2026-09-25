@@ -980,10 +980,6 @@ impl TensorElementwise for WebGpuBackend {
 }
 
 impl TensorAnalytic for WebGpuBackend {
-    fn exp(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_exp")
-    }
-
     fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
         unsupported!("webgpu_pow")
     }

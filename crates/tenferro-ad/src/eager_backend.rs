@@ -451,13 +451,13 @@ impl TensorElementwise for RecordingBackend {
 #[cfg(test)]
 impl TensorAnalytic for RecordingBackend {
     delegate_recording_backend_methods! {
-        fn exp(input: &Tensor) -> TensorResult<Tensor>;
         fn pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
     }
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+        let input = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
+        self.inner.exp_read(TensorRead::from_tensor(input))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -771,7 +771,6 @@ impl TensorElementwise for EagerBackend {
 
 impl TensorAnalytic for EagerBackend {
     delegate_tensor_backend_methods! {
-        fn exp(input: &Tensor) -> TensorResult<Tensor>;
         fn exp_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn log_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn sin_read(input: TensorRead<'_>) -> TensorResult<Tensor>;

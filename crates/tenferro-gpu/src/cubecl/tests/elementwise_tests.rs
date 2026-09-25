@@ -1286,8 +1286,12 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.exp(&positive).unwrap();
-    let gpu_out = gpu.exp(&gpu_positive).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&positive)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&gpu_positive)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -1634,7 +1638,9 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let err = gpu.exp(&gpu_lhs).unwrap_err();
+    let err = gpu
+        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&gpu_lhs)))
+        .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "exp", DType::C64);
 
     let err = gpu
