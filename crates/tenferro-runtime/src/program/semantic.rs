@@ -223,13 +223,22 @@ fn core_semantic_op_retained_bytes(op: &CoreSemanticOp) -> Option<usize> {
     }
 }
 
+#[cfg(test)]
+mod tests;
+
 fn dot_general_config_retained_bytes(config: &tenferro_tensor::DotGeneralConfig) -> Option<usize> {
-    checked_sum([
-        vec_bytes::<usize>(config.lhs_contracting_dims.len())?,
-        vec_bytes::<usize>(config.rhs_contracting_dims.len())?,
-        vec_bytes::<usize>(config.lhs_batch_dims.len())?,
-        vec_bytes::<usize>(config.rhs_batch_dims.len())?,
-    ])
+    // Inline axes are part of the enclosing operation's size.
+    [
+        &config.lhs_contracting_dims,
+        &config.rhs_contracting_dims,
+        &config.lhs_batch_dims,
+        &config.rhs_batch_dims,
+    ]
+    .into_iter()
+    .filter(|axes| axes.spilled())
+    .try_fold(0usize, |sum, axes| {
+        sum.checked_add(vec_bytes::<usize>(axes.len())?)
+    })
 }
 
 fn gather_config_retained_bytes(config: &tenferro_tensor::GatherConfig) -> Option<usize> {

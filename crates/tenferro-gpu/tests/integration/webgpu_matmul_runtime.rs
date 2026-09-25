@@ -60,17 +60,17 @@ fn assert_f32_close(actual: &[f32], expected: &[f32]) {
 fn dot_general_config_for_shapes(lhs_shape: &[usize], rhs_shape: &[usize]) -> DotGeneralConfig {
     if lhs_shape.len() == 3 && rhs_shape.len() == 3 {
         DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![2],
-            rhs_batch_dims: vec![2],
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [2].as_slice().into(),
+            rhs_batch_dims: [2].as_slice().into(),
         }
     } else {
         DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         }
     }
 }
@@ -208,10 +208,10 @@ fn webgpu_f32_dot_general_with_conj_is_identity_when_adapter_available() {
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let mut cpu = CpuBackend::new();
@@ -251,10 +251,10 @@ fn webgpu_dot_general_runs_rank2_f32_matmul_when_adapter_available() {
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let gpu_lhs = backend
@@ -336,10 +336,10 @@ fn webgpu_dot_general_supports_batched_f32_contract_shape_when_adapter_available
     )
     .unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![2],
-        rhs_batch_dims: vec![2],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2].as_slice().into(),
+        rhs_batch_dims: [2].as_slice().into(),
     };
 
     let gpu_lhs = backend
@@ -377,10 +377,10 @@ fn webgpu_dot_general_packs_noncontiguous_lhs_free_axes_when_adapter_available()
     let lhs = Tensor::from_vec_col_major(vec![2, 3, 2], lhs_data.clone()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![3, 2], rhs_data.clone()).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let gpu_lhs = backend
@@ -440,10 +440,10 @@ fn webgpu_dot_general_supports_batched_c32_contract_shape_when_adapter_available
     let lhs = Tensor::from_vec_col_major(vec![2, 3, 2], lhs_data.clone()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![3, 2, 2], rhs_data.clone()).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![2],
-        rhs_batch_dims: vec![2],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2].as_slice().into(),
+        rhs_batch_dims: [2].as_slice().into(),
     };
 
     let gpu_lhs = backend
@@ -471,10 +471,10 @@ fn webgpu_dot_general_rejects_f64_and_c64_without_cpu_fallback_when_adapter_avai
 
     let mut backend = WebGpuBackend::new_default().unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let lhs_f64 = Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).unwrap();
@@ -532,10 +532,10 @@ fn webgpu_dot_general_runs_rank2_c32_matmul_when_adapter_available() {
     let lhs = Tensor::from_vec_col_major(vec![2, 2], lhs_data.clone()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2], rhs_data.clone()).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let gpu_lhs = backend

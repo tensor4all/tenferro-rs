@@ -80,10 +80,10 @@ pub(crate) fn dot_general_config(
     };
 
     let config = DotGeneralConfig {
-        lhs_contracting_dims,
-        rhs_contracting_dims,
-        lhs_batch_dims: Vec::new(),
-        rhs_batch_dims: Vec::new(),
+        lhs_contracting_dims: lhs_contracting_dims.into(),
+        rhs_contracting_dims: rhs_contracting_dims.into(),
+        lhs_batch_dims: Default::default(),
+        rhs_batch_dims: Default::default(),
     };
     config
         .validate_dims_with_ranks(lhs_rank, rhs_rank)

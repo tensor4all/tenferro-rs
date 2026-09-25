@@ -25,10 +25,10 @@ fn dot_general_transpose_rejects_out_of_bounds_dims_without_panicking() {
     let cotangent = builder.add_input(tensor_input(3));
     let op = StdTensorOp::DotGeneral {
         config: DotGeneralConfig {
-            lhs_contracting_dims: vec![2],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [2].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         },
     };
 

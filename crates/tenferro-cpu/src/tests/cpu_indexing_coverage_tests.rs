@@ -838,10 +838,10 @@ fn cpu_exec_session_covers_dot_errors_and_reclaim_dispatch() {
             TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
         );
         let dot_cfg = DotGeneralConfig {
-            lhs_contracting_dims: vec![0],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [0].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         };
         assert!(matches!(
             exec.dot_general(&f64_vec, &f32_vec, &dot_cfg),

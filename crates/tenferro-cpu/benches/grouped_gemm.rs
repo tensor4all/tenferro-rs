@@ -112,10 +112,10 @@ fn run_grouped(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
 fn run_sequential(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
     let mut out = fixture.out.duplicate().unwrap();
     let dot_config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: Vec::new(),
-        rhs_batch_dims: Vec::new(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: Default::default(),
+        rhs_batch_dims: Default::default(),
     };
     let accumulation = DotGeneralAccumulation {
         lhs_conj: false,

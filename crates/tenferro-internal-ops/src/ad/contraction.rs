@@ -780,8 +780,7 @@ fn transpose_plan_for_lhs(
 )> {
     let n_batch = config.lhs_batch_dims.len();
     let output_rank = lhs_free.len() + rhs_free.len() + n_batch;
-    let ct_rhs_free_positions: Vec<usize> =
-        (lhs_free.len()..lhs_free.len() + rhs_free.len()).collect();
+    let ct_rhs_free_positions = (lhs_free.len()..lhs_free.len() + rhs_free.len()).collect();
 
     let rhs_contracting_order = compute_free_dims(rhs_rank, rhs_free, &config.rhs_batch_dims)?;
     let mut result_order = Vec::with_capacity(lhs_rank);
@@ -803,7 +802,7 @@ fn transpose_plan_for_lhs(
 
     let new_config = DotGeneralConfig {
         lhs_contracting_dims: ct_rhs_free_positions,
-        rhs_contracting_dims: rhs_free.to_vec(),
+        rhs_contracting_dims: rhs_free.into(),
         lhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
         rhs_batch_dims: config.rhs_batch_dims.clone(),
     };
@@ -828,7 +827,7 @@ fn transpose_plan_for_rhs(
     Vec<usize>,
 )> {
     let n_batch = config.lhs_batch_dims.len();
-    let ct_lhs_free_positions: Vec<usize> = (0..lhs_free.len()).collect();
+    let ct_lhs_free_positions = (0..lhs_free.len()).collect();
 
     let lhs_contracting_order = compute_free_dims(lhs_rank, lhs_free, &config.lhs_batch_dims)?;
     let mut result_order = Vec::with_capacity(rhs_rank);
@@ -850,7 +849,7 @@ fn transpose_plan_for_rhs(
 
     let output_rank = lhs_free.len() + rhs_free.len() + n_batch;
     let new_config = DotGeneralConfig {
-        lhs_contracting_dims: lhs_free.to_vec(),
+        lhs_contracting_dims: lhs_free.into(),
         rhs_contracting_dims: ct_lhs_free_positions,
         lhs_batch_dims: config.lhs_batch_dims.clone(),
         rhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),

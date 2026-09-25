@@ -44,10 +44,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![1.0_f64, 2.0, 3.0, 4.0],
     )?)?;
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     // Independent fixed 2x2 reference, column-major; never timed.
     let mut expected = [1.0_f64, 2.0, 3.0, 4.0];

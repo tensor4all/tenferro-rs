@@ -282,10 +282,10 @@ fn representative_graph_values_all_have_queryable_tensor_metadata() {
     let dot = builder.add_operation(
         StdTensorOp::DotGeneral {
             config: DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         },
         vec![ValueRef::Local(mul), ValueRef::Local(dot_rhs)],

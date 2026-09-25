@@ -140,10 +140,10 @@ fn rank2_analysis_matches_general_metadata_for_each_contract_axis() {
             )
             .unwrap();
             let config = DotGeneralConfig {
-                lhs_contracting_dims: vec![lhs_contract],
-                rhs_contracting_dims: vec![rhs_contract],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [lhs_contract].as_slice().into(),
+                rhs_contracting_dims: [rhs_contract].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             };
             let fast = analyse_rank2_gemm::<_, _, f64>(&lhs, &rhs, &config)
                 .unwrap()
@@ -175,23 +175,43 @@ fn rank2_analysis_matches_general_metadata_for_each_contract_axis() {
 fn rank2_analysis_still_validates_before_using_the_special_case() {
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![0.0; 12]).unwrap();
-    let invalid = DotGeneralConfig {
-        lhs_contracting_dims: vec![2],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
-    let mut cache = GemmAnalysisCache::default();
-
-    assert!(analyse_gemm_cached::<_, _, f64>(
-        &mut cache,
-        None,
-        GemmAnalysisCacheKind::Direct,
-        &lhs,
-        &rhs,
-        &invalid,
-    )
-    .is_err());
+    let invalid: [[&[usize]; 4]; 12] = [
+        [&[2], &[0], &[], &[]],
+        [&[1], &[2], &[], &[]],
+        [&[1], &[], &[], &[]],
+        [&[], &[0], &[], &[]],
+        [&[1, 1], &[0, 0], &[], &[]],
+        [&[1], &[0, 0], &[], &[]],
+        [&[1], &[0], &[0], &[]],
+        [&[1], &[0], &[], &[1]],
+        [&[1], &[0], &[1], &[1]],
+        [&[1], &[0], &[0], &[0]],
+        [&[0], &[0], &[], &[]],
+        [&[usize::MAX], &[0], &[], &[]],
+    ];
+    for [lc, rc, lb, rb] in invalid {
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: lc.into(),
+            rhs_contracting_dims: rc.into(),
+            lhs_batch_dims: lb.into(),
+            rhs_batch_dims: rb.into(),
+        };
+        assert!(analyse_rank2_gemm::<_, _, f64>(&lhs, &rhs, &config)
+            .unwrap()
+            .is_none());
+        let expected = super::validate_dot_general::<_, _, f64>(&lhs, &rhs, &config).unwrap_err();
+        let actual = analyse_gemm_cached::<_, _, f64>(
+            &mut GemmAnalysisCache::default(),
+            None,
+            GemmAnalysisCacheKind::Direct,
+            &lhs,
+            &rhs,
+            &config,
+        )
+        .err()
+        .expect("invalid axes must be rejected");
+        assert_eq!(actual.to_string(), expected.to_string());
+    }
 }
 
 #[test]
@@ -199,10 +219,10 @@ fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![0, 1],
-        rhs_contracting_dims: vec![1, 0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [0, 1].as_slice().into(),
+        rhs_contracting_dims: [1, 0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut cache = GemmAnalysisCache::default();
 
@@ -245,10 +265,10 @@ fn canonical_gemm_layout_remains_behind_dot_general_validation() {
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
     let invalid = DotGeneralConfig {
-        lhs_contracting_dims: vec![2],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [2].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut cache = GemmAnalysisCache::default();
 
@@ -271,10 +291,10 @@ fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut cache = GemmAnalysisCache::default();
 
@@ -317,10 +337,10 @@ fn gemm_analysis_cache_matches_view_layouts_before_reusing_a_plan() {
     let lhs_view = lhs.as_view();
     let rhs_view = rhs.as_view();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut cache = GemmAnalysisCache::default();
 
@@ -355,10 +375,10 @@ fn gemm_analysis_cache_shrink_invalidates_entries_instead_of_truncating_by_slot(
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut cache = GemmAnalysisCache::with_capacity(8);
 
@@ -420,10 +440,10 @@ fn faer_read_transposed_view_uses_provider_runtime() {
     .unwrap();
     let rhs = Tensor::from_typed::<f64>(rhs);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend =
         crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Faer).unwrap();
@@ -448,10 +468,10 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
     let rhs =
         TypedTensor::from_vec_col_major(vec![2, 3], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![1],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [1].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend =
         crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Blas).unwrap();

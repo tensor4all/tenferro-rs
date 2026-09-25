@@ -249,10 +249,10 @@ fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
     let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![black_box(3.0_f64)]).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let accumulation = DotGeneralAccumulation::overwrite(DType::F64).unwrap();
 
@@ -348,10 +348,10 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
         strides: vec![1, 1],
     };
     let dot = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     for _ in 0..32 {

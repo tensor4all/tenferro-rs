@@ -245,8 +245,8 @@ fn is_dot_canonical(config: &DotGeneralConfig, lhs_rank: usize, rhs_rank: usize)
     let lhs_expected_contracting = if lhs_has_free { 1 } else { 0 };
     let lhs_expected_batch: Vec<usize> =
         ((lhs_expected_contracting + 1)..(lhs_expected_contracting + 1 + nb)).collect();
-    if config.lhs_contracting_dims != vec![lhs_expected_contracting]
-        || config.lhs_batch_dims != lhs_expected_batch
+    if config.lhs_contracting_dims.as_slice() != [lhs_expected_contracting]
+        || config.lhs_batch_dims.as_slice() != lhs_expected_batch.as_slice()
     {
         return false;
     }
@@ -260,7 +260,9 @@ fn is_dot_canonical(config: &DotGeneralConfig, lhs_rank: usize, rhs_rank: usize)
     let rhs_free_count = usize::from(rhs_has_free);
     let rhs_expected_batch: Vec<usize> =
         ((rhs_free_count + 1)..(rhs_free_count + 1 + nb)).collect();
-    if config.rhs_contracting_dims != vec![0] || config.rhs_batch_dims != rhs_expected_batch {
+    if config.rhs_contracting_dims.as_slice() != [0]
+        || config.rhs_batch_dims.as_slice() != rhs_expected_batch.as_slice()
+    {
         return false;
     }
 
@@ -388,8 +390,8 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
     let lhs_free_count_canon = usize::from(fi_l > 0);
     let rhs_free_count_canon = usize::from(fi_r > 0);
     let canonical_config = DotGeneralConfig {
-        lhs_contracting_dims: vec![lhs_free_count_canon],
-        rhs_contracting_dims: vec![0],
+        lhs_contracting_dims: [lhs_free_count_canon].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
         lhs_batch_dims: ((lhs_free_count_canon + 1)..(lhs_free_count_canon + 1 + nb)).collect(),
         rhs_batch_dims: ((rhs_free_count_canon + 1)..(rhs_free_count_canon + 1 + nb)).collect(),
     };

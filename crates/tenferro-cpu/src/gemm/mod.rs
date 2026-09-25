@@ -808,14 +808,24 @@ where
     if lhs.shape().len() != 2
         || rhs.shape().len() != 2
         || config.lhs_contracting_dims.len() != 1
+        || config.rhs_contracting_dims.len() != 1
         || !config.lhs_batch_dims.is_empty()
+        || !config.rhs_batch_dims.is_empty()
     {
         return Ok(None);
     }
 
-    // `analyse_gemm_cached` validates all axis groups and paired extents first.
     let lhs_contract = config.lhs_contracting_dims[0];
     let rhs_contract = config.rhs_contracting_dims[0];
+    // One axis per rank-2 operand cannot duplicate or overlap another role.
+    // Validate bounds and paired extents here; rejected configurations go through
+    // the general validator below, preserving its errors for every other case.
+    if lhs_contract >= 2
+        || rhs_contract >= 2
+        || lhs.shape()[lhs_contract] != rhs.shape()[rhs_contract]
+    {
+        return Ok(None);
+    }
     let lhs_free = 1 - lhs_contract;
     let rhs_free = 1 - rhs_contract;
     let lhs_shape = lhs.shape();
@@ -992,10 +1002,12 @@ where
         }
     }
 
-    validate_dot_general(lhs, rhs, config)?;
     let dims = match analyse_rank2_gemm(lhs, rhs, config)? {
         Some(dims) => Some(dims),
-        None => analyse_gemm(lhs, rhs, config)?,
+        None => {
+            validate_dot_general(lhs, rhs, config)?;
+            analyse_gemm(lhs, rhs, config)?
+        }
     };
     if let Some(slot) = cache_slot {
         cache.store(

@@ -30,10 +30,10 @@ fn blas1_scalars_do_not_overwrite_live_session_results() {
     let lhs = matrix(8, 6, 0.25);
     let rhs = matrix(6, 4, -1.5);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     // Several live results from the pool, exactly as a sweep accumulates a

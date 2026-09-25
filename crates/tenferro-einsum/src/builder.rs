@@ -325,10 +325,10 @@ fn binary_contract(
             .collect::<Result<_>>()?;
 
         let config = DotGeneralConfig {
-            lhs_contracting_dims: lhs_contracting_dims.into_vec(),
-            rhs_contracting_dims: rhs_contracting_dims.into_vec(),
-            lhs_batch_dims: lhs_batch_dims.into_vec(),
-            rhs_batch_dims: rhs_batch_dims.into_vec(),
+            lhs_contracting_dims,
+            rhs_contracting_dims,
+            lhs_batch_dims,
+            rhs_batch_dims,
         };
 
         // DotGeneral output order: lhs_free + rhs_free + batch (col-major batch trailing)

@@ -332,10 +332,10 @@ fn direct_and_cached_sessions_share_the_installed_provider_slot() {
     let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     backend.dot_general(&lhs, &rhs, &config).unwrap();
@@ -923,10 +923,10 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![0],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut cache = gemm::GemmAnalysisCache::default();
 
@@ -1058,10 +1058,10 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
     let rhs =
         Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![0],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let dot_error = backend.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, &config);

@@ -762,12 +762,18 @@ fn instruction_retained_bytes(instruction: &Instruction<StdTensorOp>) -> usize {
 
 fn std_tensor_op_retained_bytes(op: &StdTensorOp) -> usize {
     match op {
-        StdTensorOp::DotGeneral { config } => saturating_sum([
-            vec_retained_bytes(&config.lhs_contracting_dims),
-            vec_retained_bytes(&config.rhs_contracting_dims),
-            vec_retained_bytes(&config.lhs_batch_dims),
-            vec_retained_bytes(&config.rhs_batch_dims),
-        ]),
+        // Inline axes are already counted in Instruction<StdTensorOp>.
+        StdTensorOp::DotGeneral { config } => saturating_sum(
+            [
+                &config.lhs_contracting_dims,
+                &config.rhs_contracting_dims,
+                &config.lhs_batch_dims,
+                &config.rhs_batch_dims,
+            ]
+            .into_iter()
+            .filter(|axes| axes.spilled())
+            .map(|axes| axes.capacity().saturating_mul(size_of::<usize>())),
+        ),
         StdTensorOp::Transpose { perm } => vec_retained_bytes(perm),
         StdTensorOp::Reshape { to_shape } => vec_retained_bytes(to_shape),
         StdTensorOp::BroadcastInDim { shape, dims } => {

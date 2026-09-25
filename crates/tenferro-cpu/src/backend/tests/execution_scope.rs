@@ -29,10 +29,10 @@ fn shared_scope_installs_once_and_reuses_resources_across_operations() {
                     let wrong = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
                     let mut cache = gemm::GemmAnalysisCache::default();
                     let config = DotGeneralConfig {
-                        lhs_contracting_dims: vec![1],
-                        rhs_contracting_dims: vec![0],
-                        lhs_batch_dims: vec![],
-                        rhs_batch_dims: vec![],
+                        lhs_contracting_dims: [1].as_slice().into(),
+                        rhs_contracting_dims: [0].as_slice().into(),
+                        lhs_batch_dims: [].as_slice().into(),
+                        rhs_batch_dims: [].as_slice().into(),
                     };
                     for iteration in 0..16 {
                         assert!(backend.add(&x, &wrong).is_err());

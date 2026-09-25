@@ -50,10 +50,10 @@ fn dot_and_fusion_vec_outputs_use_the_selected_domain() {
     let fusion_lhs = placed_f64(vec![fusion_len], vec![1.0; fusion_len], remote);
     let fusion_rhs = placed_f64(vec![fusion_len], vec![2.0; fusion_len], remote);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let fusion = ElementwiseFusionPlan::new(
         DType::F64,
@@ -86,10 +86,10 @@ fn metadata_only_reshape_and_caller_owned_output_are_not_retagged() {
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
     let mut output = placed_f64(vec![2, 2], vec![0.0; 4], remote);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let reshaped = backend.reshape(&input, &[4]).unwrap();
@@ -200,10 +200,10 @@ fn validation_failure_does_not_mutate_or_retag_caller_owned_output() {
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
     let mut output = placed_f64(vec![2, 2], vec![9.0, 8.0, 7.0, 6.0], remote);
     let invalid = DotGeneralConfig {
-        lhs_contracting_dims: vec![2],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [2].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let error = backend

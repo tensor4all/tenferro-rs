@@ -217,10 +217,10 @@ fn matmul_preserve_trailing_batch(lhs: &EagerTensor, rhs: &EagerTensor) -> Resul
     lhs.dot_general(
         rhs,
         DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: batch_dims.clone(),
-            rhs_batch_dims: batch_dims,
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: batch_dims.clone().into(),
+            rhs_batch_dims: batch_dims.into(),
         },
     )
 }

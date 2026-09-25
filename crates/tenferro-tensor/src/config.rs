@@ -1,3 +1,5 @@
+use smallvec::SmallVec;
+
 use crate::{Error, Result, ValidationError};
 
 const DOT_GENERAL_OP: &str = "dot_general";
@@ -8,6 +10,8 @@ fn invalid_dot_general_config(message: impl Into<String>) -> Error {
 
 /// DotGeneral dimension configuration.
 ///
+/// Each axis list stores up to four axes inline and spills to the heap for
+/// larger contractions; this is not a tensor-rank limit.
 /// Records only the dim-numbering roles (contracting / batch; free is derived).
 /// Rank info travels with the enclosing `StdTensorOp::DotGeneral` variant at
 /// the trace/StdTensorOp layer, and with `ExecInstruction::output_shapes` at
@@ -24,18 +28,18 @@ fn invalid_dot_general_config(message: impl Into<String>) -> Error {
 /// use tenferro_tensor::DotGeneralConfig;
 ///
 /// let config = DotGeneralConfig {
-///     lhs_contracting_dims: vec![1],
-///     rhs_contracting_dims: vec![0],
-///     lhs_batch_dims: vec![],
-///     rhs_batch_dims: vec![],
+///     lhs_contracting_dims: [1].as_slice().into(),
+///     rhs_contracting_dims: [0].as_slice().into(),
+///     lhs_batch_dims: [].as_slice().into(),
+///     rhs_batch_dims: [].as_slice().into(),
 /// };
 /// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct DotGeneralConfig {
-    pub lhs_contracting_dims: Vec<usize>,
-    pub rhs_contracting_dims: Vec<usize>,
-    pub lhs_batch_dims: Vec<usize>,
-    pub rhs_batch_dims: Vec<usize>,
+    pub lhs_contracting_dims: SmallVec<[usize; 4]>,
+    pub rhs_contracting_dims: SmallVec<[usize; 4]>,
+    pub lhs_batch_dims: SmallVec<[usize; 4]>,
+    pub rhs_batch_dims: SmallVec<[usize; 4]>,
 }
 
 impl DotGeneralConfig {
@@ -67,10 +71,10 @@ impl DotGeneralConfig {
     /// use tenferro_tensor::DotGeneralConfig;
     ///
     /// let config = DotGeneralConfig {
-    ///     lhs_contracting_dims: vec![1],
-    ///     rhs_contracting_dims: vec![0],
-    ///     lhs_batch_dims: vec![],
-    ///     rhs_batch_dims: vec![],
+    ///     lhs_contracting_dims: [1].as_slice().into(),
+    ///     rhs_contracting_dims: [0].as_slice().into(),
+    ///     lhs_batch_dims: [].as_slice().into(),
+    ///     rhs_batch_dims: [].as_slice().into(),
     /// };
     /// config.validate_dims_with_ranks(2, 2).unwrap();
     /// ```

@@ -701,19 +701,19 @@ fn binary_contract<'a>(
         )?
     } else {
         let (labels, config) = profile_eager_einsum_section("binary.build_dot_config", || {
-            let lhs_contracting_dims: Vec<usize> = contracting_labels
+            let lhs_contracting_dims = contracting_labels
                 .iter()
                 .map(|label| find_label_axis(&lhs.labels, *label))
                 .collect::<Result<_>>()?;
-            let rhs_contracting_dims: Vec<usize> = contracting_labels
+            let rhs_contracting_dims = contracting_labels
                 .iter()
                 .map(|label| find_label_axis(&rhs.labels, *label))
                 .collect::<Result<_>>()?;
-            let lhs_batch_dims: Vec<usize> = batch_labels
+            let lhs_batch_dims = batch_labels
                 .iter()
                 .map(|label| find_label_axis(&lhs.labels, *label))
                 .collect::<Result<_>>()?;
-            let rhs_batch_dims: Vec<usize> = batch_labels
+            let rhs_batch_dims = batch_labels
                 .iter()
                 .map(|label| find_label_axis(&rhs.labels, *label))
                 .collect::<Result<_>>()?;
