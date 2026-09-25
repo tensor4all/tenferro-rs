@@ -1,8 +1,8 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
 use tenferro_tensor::{
-    DType, StridedSliceSpec, Tensor, TensorAnalytic, TensorBuffer, TensorFusion, TensorRead,
-    TensorView, TypedTensor,
+    BackendSessionHost, DType, StridedSliceSpec, Tensor, TensorAnalytic, TensorBuffer,
+    TensorFusion, TensorRead, TensorView, TypedTensor,
 };
 
 #[test]
@@ -39,7 +39,9 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
             3 => backend.cos(&owned),
             4 => backend.tanh(&owned),
             5 => backend.sqrt(&owned),
-            6 => backend.rsqrt(&owned),
+            6 => {
+                backend.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&owned)))
+            }
             7 => backend.expm1(&owned),
             8 => backend.log1p(&owned),
             _ => unreachable!(),

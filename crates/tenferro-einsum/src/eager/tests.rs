@@ -396,10 +396,6 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
         Err(unexpected("sqrt"))
     }
 
-    fn rsqrt(&mut self, _input: &Tensor) -> Result<Tensor> {
-        Err(unexpected("rsqrt"))
-    }
-
     fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
         Err(unexpected("pow"))
     }
@@ -450,7 +446,8 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
-        self.rsqrt(tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
+        Err(unexpected("rsqrt"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

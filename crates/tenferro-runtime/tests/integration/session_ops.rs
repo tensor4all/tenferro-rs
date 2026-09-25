@@ -1272,7 +1272,6 @@ macro_rules! panic_analytic {
                 cos(input: &Tensor) -> TensorResult;
                 tanh(input: &Tensor) -> TensorResult;
                 sqrt(input: &Tensor) -> TensorResult;
-                rsqrt(input: &Tensor) -> TensorResult;
                 pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 expm1(input: &Tensor) -> TensorResult;
                 log1p(input: &Tensor) -> TensorResult;
@@ -1317,7 +1316,8 @@ macro_rules! panic_analytic {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn rsqrt_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.rsqrt(tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
+                panic!("rsqrt should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1691,7 +1691,6 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
         sin(input: &Tensor) -> TensorResult;
         cos(input: &Tensor) -> TensorResult;
         tanh(input: &Tensor) -> TensorResult;
-        rsqrt(input: &Tensor) -> TensorResult;
         expm1(input: &Tensor) -> TensorResult;
         log1p(input: &Tensor) -> TensorResult;
     }
@@ -1748,7 +1747,8 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
-        self.rsqrt(tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
+        panic!("rsqrt should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

@@ -115,7 +115,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn rsqrt(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.rsqrt(self)
+        session.rsqrt_read(TensorRead::from_tensor(self))
     }
 
     fn compare(

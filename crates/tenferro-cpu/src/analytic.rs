@@ -448,7 +448,62 @@ where
     unsafe { out.assume_init() }
 }
 
+/// Generate only the read half.
+///
+/// Used for an operation whose owner one-shot was removed by issue #1926: the
+/// owned `*_with_pool` helper no longer has a library caller, so generating it
+/// would leave dead code. Each arm below adds its own test-only owned
+/// convenience on top of whichever helper it keeps.
+macro_rules! define_unary_analytic_read_with_pool {
+    ($dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
+        pub(crate) fn $dispatch_read_with_pool_fn(
+            buffers: &mut BufferPool,
+            input: TensorRead<'_>,
+        ) -> crate::Result<Tensor> {
+            let dtype = input.dtype();
+            require_cpu_capability(
+                PrimitiveOpKind::$op_kind,
+                stringify!($dispatch_fn),
+                dtype,
+                CapabilityAxis::ReadInputs,
+            )?;
+            tenferro_tensor::with_scalar_read!(
+                input,
+                float_complex,
+                backend = BackendId::Cpu,
+                op = stringify!($dispatch_fn),
+                |view| -> crate::Result<Tensor> {
+                    typed_unary_view_tensor_with_pool(
+                        stringify!($dispatch_fn),
+                        buffers,
+                        &view,
+                        UnaryAnalyticElem::$elem_fn,
+                    )
+                }
+            )
+        }
+    };
+}
+
 macro_rules! define_unary_analytic_dispatch {
+    // The owner one-shot was removed, so the read half is the only entry point
+    // and the test-only convenience is built on it.
+    (read_only: $dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
+        #[cfg(test)]
+        pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
+            with_test_pool(|buffers| {
+                $dispatch_read_with_pool_fn(buffers, TensorRead::from_tensor(input))
+            })
+        }
+
+        define_unary_analytic_read_with_pool!(
+            $dispatch_fn,
+            $dispatch_read_with_pool_fn,
+            $op_kind,
+            $elem_fn
+        );
+    };
+
     ($dispatch_fn:ident, $dispatch_with_pool_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
         #[cfg(test)]
         pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
@@ -481,32 +536,12 @@ macro_rules! define_unary_analytic_dispatch {
             )
         }
 
-        pub(crate) fn $dispatch_read_with_pool_fn(
-            buffers: &mut BufferPool,
-            input: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let dtype = input.dtype();
-            require_cpu_capability(
-                PrimitiveOpKind::$op_kind,
-                stringify!($dispatch_fn),
-                dtype,
-                CapabilityAxis::ReadInputs,
-            )?;
-            tenferro_tensor::with_scalar_read!(
-                input,
-                float_complex,
-                backend = BackendId::Cpu,
-                op = stringify!($dispatch_fn),
-                |view| -> crate::Result<Tensor> {
-                    typed_unary_view_tensor_with_pool(
-                        stringify!($dispatch_fn),
-                        buffers,
-                        &view,
-                        UnaryAnalyticElem::$elem_fn,
-                    )
-                }
-            )
-        }
+        define_unary_analytic_read_with_pool!(
+            $dispatch_fn,
+            $dispatch_read_with_pool_fn,
+            $op_kind,
+            $elem_fn
+        );
     };
 }
 
@@ -516,13 +551,7 @@ define_unary_analytic_dispatch!(sin, sin_with_pool, sin_read_with_pool, Sin, sin
 define_unary_analytic_dispatch!(cos, cos_with_pool, cos_read_with_pool, Cos, cos_elem);
 define_unary_analytic_dispatch!(tanh, tanh_with_pool, tanh_read_with_pool, Tanh, tanh_elem);
 define_unary_analytic_dispatch!(sqrt, sqrt_with_pool, sqrt_read_with_pool, Sqrt, sqrt_elem);
-define_unary_analytic_dispatch!(
-    rsqrt,
-    rsqrt_with_pool,
-    rsqrt_read_with_pool,
-    Rsqrt,
-    rsqrt_elem
-);
+define_unary_analytic_dispatch!(read_only: rsqrt, rsqrt_read_with_pool, Rsqrt, rsqrt_elem);
 define_unary_analytic_dispatch!(
     expm1,
     expm1_with_pool,

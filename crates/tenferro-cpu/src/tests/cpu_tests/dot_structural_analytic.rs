@@ -954,7 +954,9 @@ fn test_cpu_backend_analytic_ops_real() {
         TypedTensor::from_vec_col_major(vec![2], vec![1.0, 4.0]).unwrap(),
     );
     let sqrt_out = backend.sqrt(&sqrt_input).unwrap();
-    let rsqrt_out = backend.rsqrt(&sqrt_input).unwrap();
+    let rsqrt_out = backend
+        .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&sqrt_input)))
+        .unwrap();
     assert_f64_close(get_f64(&sqrt_out, &[0]), 1.0);
     assert_f64_close(get_f64(&sqrt_out, &[1]), 2.0);
     assert_f64_close(get_f64(&rsqrt_out, &[0]), 1.0);
@@ -1029,7 +1031,9 @@ fn test_cpu_backend_analytic_ops_complex() {
         .unwrap(),
     );
     let sqrt_out = backend.sqrt(&sqrt_input).unwrap();
-    let rsqrt_out = backend.rsqrt(&sqrt_input).unwrap();
+    let rsqrt_out = backend
+        .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&sqrt_input)))
+        .unwrap();
     assert_c64_close(get_c64(&sqrt_out, &[0]), Complex64::new(1.0, 0.0).sqrt());
     assert_c64_close(get_c64(&sqrt_out, &[1]), Complex64::new(4.0, 3.0).sqrt());
     assert_c64_close_tol(
