@@ -44,11 +44,12 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+trybuild.workspace = true
 # Path-only (unversioned): the versioned form resolves against crates.io during
 # `cargo package` and would fail because tenferro-cpu publishes after
 # tenferro-runtime, forming a publish cycle. Dev-dependencies are stripped from
 # the published manifest, so an unversioned path dev-dependency is sufficient.
-tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false, features = ["cpu-faer"] }
 
 [[bench]]
 name = "elementwise_fusion"
@@ -65,6 +66,10 @@ path = "tests/integration.rs"
 [[test]]
 name = "prelude"
 path = "tests/prelude.rs"
+
+[[test]]
+name = "session_surface_contract"
+path = "tests/session_surface_contract.rs"
 
 [[test]]
 name = "binary_allocations"
