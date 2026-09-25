@@ -565,6 +565,51 @@ fn public_einsum_read_into_swaps_binary_operands_for_exact_output_order() {
 }
 
 #[test]
+fn typed_view_read_into_compact_planner_handles_notation_and_parsed_labels() {
+    let mut backend = CpuBackend::new();
+    let lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(
+        vec![4, 3],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    )
+    .unwrap();
+    let notation = EinsumNotation::new(
+        &[
+            &[EinsumAxis::Label(105), EinsumAxis::Label(106)],
+            &[EinsumAxis::Label(112), EinsumAxis::Label(106)],
+        ],
+        &[EinsumAxis::Label(112), EinsumAxis::Label(105)],
+    );
+    let parsed = crate::EinsumSubscripts::new(&[&[105, 106], &[112, 106]], &[112, 105]);
+    let mut notation_out =
+        TypedTensor::<f64>::from_vec_col_major(vec![4, 2], vec![-1.0; 8]).unwrap();
+    let mut parsed_out = TypedTensor::<f64>::from_vec_col_major(vec![4, 2], vec![-1.0; 8]).unwrap();
+
+    backend
+        .with_backend_session(|session| {
+            [lhs.as_view(), rhs.as_view()].einsum_read_into_notation(
+                &notation,
+                session,
+                &mut notation_out,
+            )?;
+            [lhs.as_view(), rhs.as_view()].einsum_read_into_subscripts(
+                &parsed,
+                session,
+                &mut parsed_out,
+            )
+        })
+        .unwrap();
+
+    let expected = [61.0, 70.0, 79.0, 88.0, 76.0, 88.0, 100.0, 112.0];
+    assert_eq!(notation_out.as_slice().unwrap(), &expected);
+    assert_eq!(parsed_out.as_slice().unwrap(), &expected);
+}
+
+#[test]
 fn swapped_binary_einsum_preserves_complex_values() {
     let mut backend = CpuBackend::new();
     let lhs = TypedTensor::<Complex64>::from_vec_col_major(
@@ -743,6 +788,15 @@ fn einsum_into_gemm_fast_path_uses_exact_output_operand_order() {
 #[test]
 fn ordinary_binary_read_into_dispatches_before_tree_preparation() {
     let source = include_str!("concrete.rs");
+    let typed = source
+        .split("TypedTensorReadEinsumIntoExt<T> for [TypedTensorView")
+        .nth(1)
+        .expect("non-AD typed-view implementation");
+    assert!(
+        typed.find("parse_fast_ascii_binary_labels").unwrap()
+            < typed.find("parse_einsum_notation").unwrap(),
+        "the measured non-AD string API must dispatch before the generic parser"
+    );
     let start = source
         .find("fn tensor_read_einsum_into_subscripts(")
         .expect("missing read-into entry point");
@@ -752,14 +806,18 @@ fn ordinary_binary_read_into_dispatches_before_tree_preparation() {
         .expect("missing following function");
     let body = &tail[..end];
     let dispatch = body
-        .find("binary_dot_plan_for_read_into")
-        .expect("ordinary binary read-into should try its fast path");
+        .find("read_binary_dot_config")
+        .expect("ordinary binary read-into should use the compact config path");
     let tree = body
         .find("prepare_subscripts_internal")
         .expect("general einsum planning fallback should remain");
     assert!(
         dispatch < tree,
-        "binary direct dispatch must precede tree creation"
+        "compact binary dispatch must precede tree creation"
+    );
+    assert!(
+        !body.contains("binary_dot_plan_for_read_into"),
+        "concrete read-into must not build result/target label vectors"
     );
 }
 

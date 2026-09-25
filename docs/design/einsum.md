@@ -191,15 +191,18 @@ Strict binary/GEMM lowering intentionally rejects repeated labels and returns
 `None`. Those cases stay on the general eager/builder path, which handles
 diagonalization explicitly.
 
-For explicit two-input ASCII string notation, eager execution first attempts a
-direct binary planner before constructing rank-unresolved notation or resolving
-label maps. The same compact planner is used by parsed integer labels and
-explicit rank-resolved notation. It handles arbitrary ranks and axis positions
-when unique labels form a supported exact-output dot; ellipsis, Unicode labels,
-repeated labels, broadcasting, and other unsupported forms retain the general
-parser/planner fallback. The direct path keeps label scratch inline for common
-ranks, but `DotGeneralConfig` owns `Vec` axis lists, so zero allocations are not
-guaranteed.
+The non-AD concrete `_into` APIs use a compact binary-dot configuration path
+for supported two-input contractions. Concrete owned and borrowed-view string
+calls attempt this path before parsing owned notation; borrowed-view notation
+and parsed-label calls inspect
+borrowed labels before resolution or owned-subscript conversion. The planner
+supports arbitrary ranks and axis positions when unique labels form a supported
+exact-output dot; ellipsis, Unicode string labels, repeated labels, broadcasting,
+and other unsupported forms keep the existing parser/planner fallback. It uses
+borrowed ASCII byte labels for string calls and inline integer-label scratch for
+explicit notation, but `DotGeneralConfig` still owns `Vec` axis lists, so zero
+allocations are not guaranteed. The separate `EagerTensor`
+API has its own AD-aware dispatch and is not covered by this concrete path.
 
 ## Static And Symbolic Shapes
 

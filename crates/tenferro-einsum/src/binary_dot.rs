@@ -14,11 +14,11 @@ pub(crate) struct BinaryDotPlan {
     pub(crate) config: DotGeneralConfig,
 }
 
-fn small_contains(labels: &[u32], label: u32) -> bool {
+fn small_contains<L: PartialEq>(labels: &[L], label: L) -> bool {
     labels.contains(&label)
 }
 
-fn labels_are_unique(labels: &[u32]) -> bool {
+fn labels_are_unique<L: PartialEq>(labels: &[L]) -> bool {
     // INVARIANT: label lists are bounded by tensor rank; the existing planner already
     // uses quadratic membership scans, so checking prior labels avoids scratch allocation.
     labels
@@ -27,11 +27,17 @@ fn labels_are_unique(labels: &[u32]) -> bool {
         .all(|(i, label)| !labels[..i].contains(label))
 }
 
-pub(crate) fn try_build_exact_output_binary_dot_config(
-    lhs_labels: &[u32],
-    rhs_labels: &[u32],
-    output_labels: &[u32],
+pub(crate) fn try_build_exact_output_binary_dot_config<L: Copy + PartialEq>(
+    lhs_labels: &[L],
+    rhs_labels: &[L],
+    output_labels: &[L],
 ) -> Option<(BinaryDotOperandOrder, DotGeneralConfig)> {
+    if !labels_are_unique(lhs_labels)
+        || !labels_are_unique(rhs_labels)
+        || !labels_are_unique(output_labels)
+    {
+        return None;
+    }
     try_build_exact_output_binary_dot_config_with_order(
         lhs_labels,
         rhs_labels,
@@ -48,19 +54,12 @@ pub(crate) fn try_build_exact_output_binary_dot_config(
     })
 }
 
-fn try_build_exact_output_binary_dot_config_with_order(
-    lhs_labels: &[u32],
-    rhs_labels: &[u32],
-    output_labels: &[u32],
+fn try_build_exact_output_binary_dot_config_with_order<L: Copy + PartialEq>(
+    lhs_labels: &[L],
+    rhs_labels: &[L],
+    output_labels: &[L],
     operand_order: BinaryDotOperandOrder,
 ) -> Option<(BinaryDotOperandOrder, DotGeneralConfig)> {
-    if !labels_are_unique(lhs_labels)
-        || !labels_are_unique(rhs_labels)
-        || !labels_are_unique(output_labels)
-    {
-        return None;
-    }
-
     let mut result_pos = 0;
     for &label in lhs_labels {
         if !small_contains(rhs_labels, label) {

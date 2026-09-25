@@ -2,10 +2,7 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
-use super::{
-    backend_broadcast_multiply_untracked, einsum, einsum_notation, einsum_subscripts,
-    einsum_whole_program_untracked,
-};
+use super::{backend_broadcast_multiply_untracked, einsum, einsum_whole_program_untracked};
 use crate::{ContractionTree, Subscripts};
 
 #[test]
@@ -30,65 +27,6 @@ fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
         &[2.0_f64; 12]
     );
     assert_eq!(ctx.cache_stats().unwrap().extensions.entries, 0);
-}
-
-#[test]
-fn binary_string_dispatch_handles_general_rank_and_swapped_output_order() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3, 4], vec![1.0_f64; 24]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![5, 4, 3], vec![1.0_f64; 60]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-
-    let out = einsum(&[&lhs, &rhs], "xyz,pzy->pxy").unwrap();
-    let notation = crate::parse_einsum_notation("xyz,pzy->pxy").unwrap();
-    let notation_out = einsum_notation(&[&lhs, &rhs], &notation).unwrap();
-    let subscripts = crate::EinsumSubscripts::new(
-        &[
-            &[b'x' as u32, b'y' as u32, b'z' as u32],
-            &[b'p' as u32, b'z' as u32, b'y' as u32],
-        ],
-        &[b'p' as u32, b'x' as u32, b'y' as u32],
-    );
-    let parsed_out = einsum_subscripts(&[&lhs, &rhs], &subscripts).unwrap();
-
-    assert_eq!(out.shape(), &[5, 2, 3]);
-    assert_eq!(out.value().unwrap().as_slice::<f64>().unwrap(), &[4.0; 30]);
-    assert_eq!(
-        notation_out.value().unwrap().as_slice::<f64>().unwrap(),
-        &[4.0; 30]
-    );
-    assert_eq!(
-        parsed_out.value().unwrap().as_slice::<f64>().unwrap(),
-        &[4.0; 30]
-    );
-    assert_eq!(ctx.cache_stats().unwrap().extensions.entries, 0);
-}
-
-#[test]
-fn binary_string_dispatch_falls_back_for_unicode_and_malformed_notation() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-
-    let out = einsum(&[&lhs, &rhs], "αj,jβ->αβ").unwrap();
-    assert_eq!(out.shape(), &[2, 4]);
-    assert_eq!(out.value().unwrap().as_slice::<f64>().unwrap(), &[3.0; 8]);
-    assert!(einsum(&[&lhs, &rhs], "ij,jk=>ik").is_err());
 }
 
 #[test]

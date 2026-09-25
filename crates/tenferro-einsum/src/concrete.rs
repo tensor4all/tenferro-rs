@@ -1,12 +1,14 @@
 //! Public concrete tensor einsum extension API.
 
+use smallvec::SmallVec;
 use tenferro_tensor::{
     BackendSession, DType, DotGeneralAccumulation, Tensor, TensorRead, TensorScalar, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorWrite,
 };
 
+use crate::binary_dot::BinaryDotOperandOrder;
 use crate::eager::{
-    binary_dot_plan_for_read_into, binary_dot_plan_for_shapes, eager_einsum_exec,
+    binary_dot_config_for_into, binary_dot_plan_for_shapes, eager_einsum_exec,
     eager_einsum_exec_read, eager_einsum_exec_read_into, eager_einsum_exec_read_into_accum,
     eager_einsum_read_subscripts_on_session, eager_einsum_subscripts_on_session,
     execute_binary_dot_read_into, plan_subscripts,
@@ -264,6 +266,13 @@ impl TensorEinsumIntoExt for [&Tensor] {
         session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
+        if let ([lhs, rhs], Some((a, b, c))) = (self, parse_fast_ascii_binary_labels(subscripts)) {
+            let reads = [TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)];
+            if let Some((order, config)) = read_binary_dot_config_for_labels(&reads, a, b, c, &out)
+            {
+                return execute_binary_dot_config_read_into(session, &reads, order, &config, out);
+            }
+        }
         let notation = parse_einsum_notation(subscripts)?;
         self.einsum_into_notation(&notation, session, out)
     }
@@ -656,8 +665,17 @@ impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
     where
         O: Into<TypedTensorWrite<'out, T>>,
     {
+        let out = out.into().into_tensor_write();
+        if let ([lhs, rhs], Some((a, b, c))) = (self, parse_fast_ascii_binary_labels(subscripts)) {
+            let reads = [T::tensor_read(lhs), T::tensor_read(rhs)];
+            if let Some((order, config)) = read_binary_dot_config_for_labels(&reads, a, b, c, &out)
+            {
+                return execute_binary_dot_config_read_into(session, &reads, order, &config, out);
+            }
+        }
         let notation = parse_einsum_notation(subscripts)?;
-        self.einsum_into_notation(&notation, session, out)
+        let subscripts = resolve_typed_notation(self, &notation)?;
+        typed_einsum_into_subscripts(session, self, &subscripts, out, TYPED_TENSOR_EINSUM_INTO_OP)
     }
 
     fn einsum_into_notation<'out, O>(
@@ -674,7 +692,7 @@ impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
             session,
             self,
             &subscripts,
-            out.into(),
+            out.into().into_tensor_write(),
             TYPED_TENSOR_EINSUM_INTO_OP,
         )
     }
@@ -693,7 +711,7 @@ impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
             session,
             self,
             &subscripts,
-            out.into(),
+            out.into().into_tensor_write(),
             TYPED_TENSOR_EINSUM_INTO_OP,
         )
     }
@@ -860,8 +878,23 @@ impl<'a, T: TensorScalar> TypedTensorReadEinsumIntoExt<T> for [TypedTensorView<'
     where
         O: Into<TypedTensorWrite<'out, T>>,
     {
+        let out = out.into().into_tensor_write();
+        if let Some((lhs, rhs, output)) = parse_fast_ascii_binary_labels(subscripts) {
+            if let Some((order, config)) =
+                typed_view_binary_dot_config(self, lhs, rhs, output, &out)
+            {
+                return execute_typed_view_binary_dot_into(session, self, order, &config, out);
+            }
+        }
         let notation = parse_einsum_notation(subscripts)?;
-        self.einsum_read_into_notation(&notation, session, out)
+        let subscripts = resolve_view_notation(self, &notation)?;
+        typed_view_einsum_into_subscripts(
+            session,
+            self,
+            &subscripts,
+            out,
+            TYPED_TENSOR_READ_EINSUM_INTO_OP,
+        )
     }
 
     fn einsum_read_into_notation<'out, O>(
@@ -873,12 +906,20 @@ impl<'a, T: TensorScalar> TypedTensorReadEinsumIntoExt<T> for [TypedTensorView<'
     where
         O: Into<TypedTensorWrite<'out, T>>,
     {
+        let out = out.into().into_tensor_write();
+        if let Some([lhs, rhs, output]) = borrowed_notation_labels(notation) {
+            if let Some((order, config)) =
+                typed_view_binary_dot_config(self, &lhs, &rhs, &output, &out)
+            {
+                return execute_typed_view_binary_dot_into(session, self, order, &config, out);
+            }
+        }
         let subscripts = resolve_view_notation(self, notation)?;
         typed_view_einsum_into_subscripts(
             session,
             self,
             &subscripts,
-            out.into(),
+            out,
             TYPED_TENSOR_READ_EINSUM_INTO_OP,
         )
     }
@@ -892,12 +933,20 @@ impl<'a, T: TensorScalar> TypedTensorReadEinsumIntoExt<T> for [TypedTensorView<'
     where
         O: Into<TypedTensorWrite<'out, T>>,
     {
+        let out = out.into().into_tensor_write();
+        if let [lhs, rhs] = subscripts.inputs.as_slice() {
+            if let Some((order, config)) =
+                typed_view_binary_dot_config(self, lhs, rhs, &subscripts.output, &out)
+            {
+                return execute_typed_view_binary_dot_into(session, self, order, &config, out);
+            }
+        }
         let subscripts = Subscripts::from(subscripts);
         typed_view_einsum_into_subscripts(
             session,
             self,
             &subscripts,
-            out.into(),
+            out,
             TYPED_TENSOR_READ_EINSUM_INTO_OP,
         )
     }
@@ -1119,6 +1168,13 @@ impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
         session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
+        if let Some((lhs, rhs, output)) = parse_fast_ascii_binary_labels(subscripts) {
+            if let Some((order, config)) =
+                read_binary_dot_config_for_labels(self, lhs, rhs, output, &out)
+            {
+                return execute_binary_dot_config_read_into(session, self, order, &config, out);
+            }
+        }
         let notation = parse_einsum_notation(subscripts)?;
         self.einsum_read_into_notation(&notation, session, out)
     }
@@ -1129,6 +1185,13 @@ impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
         session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
+        if let Some([lhs, rhs, output]) = borrowed_notation_labels(notation) {
+            if let Some((order, config)) =
+                read_binary_dot_config_for_labels(self, &lhs, &rhs, &output, &out)
+            {
+                return execute_binary_dot_config_read_into(session, self, order, &config, out);
+            }
+        }
         let subscripts = resolve_read_notation(self, notation)?;
         tensor_read_einsum_into_subscripts(
             session,
@@ -1145,6 +1208,13 @@ impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
         session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
+        if let [lhs, rhs] = subscripts.inputs.as_slice() {
+            if let Some((order, config)) =
+                read_binary_dot_config_for_labels(self, lhs, rhs, &subscripts.output, &out)
+            {
+                return execute_binary_dot_config_read_into(session, self, order, &config, out);
+            }
+        }
         let subscripts = Subscripts::from(subscripts);
         tensor_read_einsum_into_subscripts(
             session,
@@ -1919,6 +1989,56 @@ fn typed_view_einsum_subscripts<T: TensorScalar>(
     into_typed_result(result, op)
 }
 
+fn read_binary_dot_config_for_labels<L: Copy + PartialEq>(
+    inputs: &[TensorRead<'_>],
+    lhs_labels: &[L],
+    rhs_labels: &[L],
+    output_labels: &[L],
+    out: &TensorWrite<'_>,
+) -> Option<(BinaryDotOperandOrder, tenferro_tensor::DotGeneralConfig)> {
+    if inputs.len() != 2
+        || inputs[0].dtype() != inputs[1].dtype()
+        || out.dtype() != inputs[0].dtype()
+    {
+        return None;
+    }
+    binary_dot_config_for_into(
+        inputs[0].shape(),
+        inputs[1].shape(),
+        lhs_labels,
+        rhs_labels,
+        output_labels,
+        out.shape(),
+    )
+}
+
+fn read_binary_dot_config(
+    inputs: &[TensorRead<'_>],
+    subscripts: &Subscripts,
+    out: &TensorWrite<'_>,
+) -> Option<(BinaryDotOperandOrder, tenferro_tensor::DotGeneralConfig)> {
+    let [lhs, rhs] = subscripts.inputs.as_slice() else {
+        return None;
+    };
+    read_binary_dot_config_for_labels(inputs, lhs, rhs, &subscripts.output, out)
+}
+
+fn execute_binary_dot_config_read_into(
+    session: &mut dyn BackendSession,
+    inputs: &[TensorRead<'_>],
+    order: BinaryDotOperandOrder,
+    config: &tenferro_tensor::DotGeneralConfig,
+    out: TensorWrite<'_>,
+) -> Result<()> {
+    let (lhs, rhs) = match order {
+        BinaryDotOperandOrder::Original => (0, 1),
+        BinaryDotOperandOrder::Swapped => (1, 0),
+    };
+    session
+        .dot_general_read_into(inputs[lhs].clone(), inputs[rhs].clone(), config, out)
+        .map_err(Error::from)
+}
+
 fn tensor_einsum_into_subscripts(
     session: &mut dyn BackendSession,
     inputs: &[&Tensor],
@@ -1931,9 +2051,8 @@ fn tensor_einsum_into_subscripts(
             TensorRead::from_tensor(inputs[0]),
             TensorRead::from_tensor(inputs[1]),
         ];
-        if let Some(binary) = binary_dot_plan_for_read_into(&reads, subscripts, &out) {
-            return execute_binary_dot_read_into(session, &reads, &binary, out)
-                .map_err(Error::from);
+        if let Some((order, config)) = read_binary_dot_config(&reads, subscripts, &out) {
+            return execute_binary_dot_config_read_into(session, &reads, order, &config, out);
         }
     }
     let plan = ConcreteEinsumPlan::prepare_subscripts_internal(input_specs(inputs), subscripts)?;
@@ -1941,11 +2060,75 @@ fn tensor_einsum_into_subscripts(
     plan.execute_into(inputs, session, out)
 }
 
+fn parse_fast_ascii_binary_labels(notation: &str) -> Option<(&[u8], &[u8], &[u8])> {
+    let (terms, output) = notation.split_once("->")?;
+    let (lhs, rhs) = terms.split_once(',')?;
+    // Borrow labels directly. Separators or unsupported labels in any term send
+    // the entire expression through the canonical parser, including its errors.
+    [lhs, rhs, output]
+        .iter()
+        .all(|term| term.bytes().all(|byte| byte.is_ascii_alphabetic()))
+        .then_some((lhs.as_bytes(), rhs.as_bytes(), output.as_bytes()))
+}
+
+fn borrowed_notation_labels(notation: &EinsumNotation) -> Option<[SmallVec<[u32; 8]>; 3]> {
+    let [lhs, rhs] = notation.inputs.as_slice() else {
+        return None;
+    };
+    let labels = |axes: &[crate::EinsumAxis]| {
+        axes.iter()
+            .map(|axis| match axis {
+                crate::EinsumAxis::Label(label) => Some(*label),
+                crate::EinsumAxis::Ellipsis => None,
+            })
+            .collect::<Option<SmallVec<[u32; 8]>>>()
+    };
+    Some([labels(lhs)?, labels(rhs)?, labels(&notation.output)?])
+}
+
+fn typed_view_binary_dot_config<T: TensorScalar, L: Copy + PartialEq>(
+    inputs: &[TypedTensorView<'_, T>],
+    lhs_labels: &[L],
+    rhs_labels: &[L],
+    output_labels: &[L],
+    out: &TensorWrite<'_>,
+) -> Option<(BinaryDotOperandOrder, tenferro_tensor::DotGeneralConfig)> {
+    if inputs.len() != 2 || out.dtype() != T::dtype() {
+        return None;
+    }
+    binary_dot_config_for_into(
+        inputs[0].shape(),
+        inputs[1].shape(),
+        lhs_labels,
+        rhs_labels,
+        output_labels,
+        out.shape(),
+    )
+}
+
+fn execute_typed_view_binary_dot_into<T: TensorScalar>(
+    session: &mut dyn BackendSession,
+    inputs: &[TypedTensorView<'_, T>],
+    order: BinaryDotOperandOrder,
+    config: &tenferro_tensor::DotGeneralConfig,
+    out: TensorWrite<'_>,
+) -> Result<()> {
+    let (lhs, rhs) = match order {
+        BinaryDotOperandOrder::Original => (0, 1),
+        BinaryDotOperandOrder::Swapped => (1, 0),
+    };
+    let lhs = TensorRead::from_view(T::tensor_view(inputs[lhs].clone()));
+    let rhs = TensorRead::from_view(T::tensor_view(inputs[rhs].clone()));
+    session
+        .dot_general_read_into(lhs, rhs, config, out)
+        .map_err(Error::from)
+}
+
 fn typed_view_einsum_into_subscripts<T: TensorScalar>(
     session: &mut dyn BackendSession,
     inputs: &[TypedTensorView<'_, T>],
     subscripts: &Subscripts,
-    out: TypedTensorWrite<'_, T>,
+    out: TensorWrite<'_>,
     op: &'static str,
 ) -> Result<()> {
     let reads: Vec<_> = inputs
@@ -1953,10 +2136,6 @@ fn typed_view_einsum_into_subscripts<T: TensorScalar>(
         .cloned()
         .map(|view| TensorRead::from_view(T::tensor_view(view)))
         .collect();
-    let out = out.into_tensor_write();
-    if let Some(binary) = binary_dot_plan_for_read_into(&reads, subscripts, &out) {
-        return execute_binary_dot_read_into(session, &reads, &binary, out).map_err(Error::from);
-    }
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
@@ -1967,14 +2146,29 @@ fn typed_einsum_into_subscripts<T: TensorScalar>(
     session: &mut dyn BackendSession,
     inputs: &[&TypedTensor<T>],
     subscripts: &Subscripts,
-    out: TypedTensorWrite<'_, T>,
+    out: TensorWrite<'_>,
     op: &'static str,
 ) -> Result<()> {
-    let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-    let out = out.into_tensor_write();
-    if let Some(binary) = binary_dot_plan_for_read_into(&reads, subscripts, &out) {
-        return execute_binary_dot_read_into(session, &reads, &binary, out).map_err(Error::from);
+    if inputs.len() == 2 {
+        if let [lhs, rhs] = subscripts.inputs.as_slice() {
+            if let Some((order, config)) = binary_dot_config_for_into(
+                inputs[0].shape(),
+                inputs[1].shape(),
+                lhs,
+                rhs,
+                &subscripts.output,
+                out.shape(),
+            ) {
+                if out.dtype() == T::dtype() {
+                    let reads = [T::tensor_read(inputs[0]), T::tensor_read(inputs[1])];
+                    return execute_binary_dot_config_read_into(
+                        session, &reads, order, &config, out,
+                    );
+                }
+            }
+        }
     }
+    let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
@@ -1988,8 +2182,8 @@ fn tensor_read_einsum_into_subscripts(
     out: TensorWrite<'_>,
     op: &'static str,
 ) -> Result<()> {
-    if let Some(binary) = binary_dot_plan_for_read_into(inputs, subscripts, &out) {
-        return execute_binary_dot_read_into(session, inputs, &binary, out).map_err(Error::from);
+    if let Some((order, config)) = read_binary_dot_config(inputs, subscripts, &out) {
+        return execute_binary_dot_config_read_into(session, inputs, order, &config, out);
     }
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(inputs), subscripts)?;
