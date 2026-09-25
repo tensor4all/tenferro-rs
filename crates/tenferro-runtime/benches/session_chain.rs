@@ -11,7 +11,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::{
+    BackendSessionHost, TensorAnalytic, TensorElementwise, TensorReduction,
+};
 
 /// `a` is a 1x8 constant row in the no-broadcast arm and a 1x1 row (the
 /// singleton broadcast source) in the broadcast arm.
@@ -44,21 +46,89 @@ fn run_chain_one_session(a: &Tensor, b: &Tensor, backend: &mut CpuBackend) -> Te
     })
 }
 
+/// The same 10-op chain through the operation methods on the backend object.
+///
+/// This is the coexisting one-shot spelling that issue #1926 removes; the
+/// numbers are the before-side reference for the unification and are not
+/// reproducible after the spelling is deleted.
+fn run_chain_one_shot(a: &Tensor, b: &Tensor, ops: &mut CpuBackend) -> Tensor {
+    let x = ops.add(a, b).expect("add 1");
+    let x = ops.exp(&x).expect("exp 1");
+    let x = ops.mul(&x, a).expect("mul 1");
+    let x = ops.add(&x, b).expect("add 2");
+    let x = ops.exp(&x).expect("exp 2");
+    let x = ops.mul(&x, a).expect("mul 2");
+    let x = ops.add(&x, b).expect("add 3");
+    let x = ops.exp(&x).expect("exp 3");
+    let x = ops.mul(&x, a).expect("mul 3");
+    ops.reduce_sum(&x, &[0]).expect("reduce_sum")
+}
+
+/// The same 10-op chain through one shared execution scope.
+fn run_chain_execution_scope(
+    a: &Tensor,
+    b: &Tensor,
+    owner: &CpuBackend,
+    ops: &mut CpuBackend,
+) -> Tensor {
+    owner
+        .with_execution_scope(|| {
+            let x = ops.add(a, b).expect("add 1");
+            let x = ops.exp(&x).expect("exp 1");
+            let x = ops.mul(&x, a).expect("mul 1");
+            let x = ops.add(&x, b).expect("add 2");
+            let x = ops.exp(&x).expect("exp 2");
+            let x = ops.mul(&x, a).expect("mul 2");
+            let x = ops.add(&x, b).expect("add 3");
+            let x = ops.exp(&x).expect("exp 3");
+            let x = ops.mul(&x, a).expect("mul 3");
+            ops.reduce_sum(&x, &[0]).expect("reduce_sum")
+        })
+        .expect("scope admission should succeed")
+}
+
 fn bench_session_chain(c: &mut Criterion) {
     for (arm, broadcast) in [("no_broadcast", false), ("broadcast", true)] {
         let mut group = c.benchmark_group(format!("session_chain/{arm}"));
         let a = operand_a(broadcast);
         let b = operand_b();
-        let mut backend = CpuBackend::new();
+        // One explicit worker, per the repository dispatch/overhead rule.
+        let mut backend = CpuBackend::with_threads(1).expect("one-worker backend");
+        let mut ops = backend.clone();
 
         // Validation outside the timed region: the chain must reduce to a
-        // finite scalar.
+        // finite scalar, and every registered arm must agree.
+        //
+        // The `one_shot` and `execution_scope` arms are only registered for the
+        // no-broadcast operand set. Both use the operation methods on a backend
+        // object, and `TensorElementwise::add`/`mul` require equal shapes; the
+        // NumPy-style broadcasting lives in the session extension surface. The
+        // broadcast arm therefore has no one-shot equivalent and is measured
+        // through `one_session` only.
         let one_session = run_chain_one_session(&a, &b, &mut backend);
         assert!(
             one_session.shape().is_empty(),
-            "chain must reduce to a scalar"
+            "one_session: chain must reduce to a scalar"
         );
         assert!(one_session.as_slice::<f64>().unwrap()[0].is_finite());
+        if !broadcast {
+            let one_shot = run_chain_one_shot(&a, &b, &mut ops);
+            let scope = run_chain_execution_scope(&a, &b, &backend, &mut ops);
+            for (name, out) in [("one_shot", &one_shot), ("scope", &scope)] {
+                assert!(out.shape().is_empty(), "{name}: scalar");
+                assert!(out.as_slice::<f64>().unwrap()[0].is_finite(), "{name}: finite");
+            }
+            assert_eq!(
+                one_session.as_slice::<f64>().unwrap()[0],
+                one_shot.as_slice::<f64>().unwrap()[0],
+                "one_session and one_shot must agree"
+            );
+            assert_eq!(
+                one_session.as_slice::<f64>().unwrap()[0],
+                scope.as_slice::<f64>().unwrap()[0],
+                "one_session and scope must agree"
+            );
+        }
 
         group.bench_function("one_session", |bench| {
             bench.iter(|| {
@@ -66,6 +136,21 @@ fn bench_session_chain(c: &mut Criterion) {
                 black_box(out);
             });
         });
+        if !broadcast {
+            group.bench_function("one_shot", |bench| {
+                bench.iter(|| {
+                    let out = run_chain_one_shot(black_box(&a), black_box(&b), &mut ops);
+                    black_box(out);
+                });
+            });
+            group.bench_function("execution_scope", |bench| {
+                bench.iter(|| {
+                    let out =
+                        run_chain_execution_scope(black_box(&a), black_box(&b), &backend, &mut ops);
+                    black_box(out);
+                });
+            });
+        }
         group.finish();
     }
 }
@@ -152,7 +237,7 @@ fn run_phase1_chain_one_session(ops: &Phase1Operands, backend: &mut CpuBackend) 
 fn bench_session_chain_phase1(c: &mut Criterion) {
     let mut group = c.benchmark_group("session_chain/phase1");
     let ops = Phase1Operands::new();
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuBackend::with_threads(1).expect("one-worker backend");
 
     // Validation outside the timed region: the known scalar result -8.0
     // (see the chain comment above).
