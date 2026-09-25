@@ -370,6 +370,33 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(f'--pod-env "{pod_env}', create)
         self.assertNotIn('--pod-env "RUNPOD_API_KEY', create)
 
+    def test_the_paid_workflow_applies_the_label_decision_in_a_step(self) -> None:
+        """Job-level `if`s in the called workflow did not see the inputs.
+
+        A live labelled dispatch showed `Revalidate queued PR before
+        provisioning` running (so `inputs` reaches steps) while `start-runpod`
+        was still scheduled from its job `if`. The decision is therefore applied
+        inside a step that also skips provisioning.
+        """
+
+        execute = read(".github/workflows/runpod-gpu-execute.yml")
+        self.assertIn("id: local_gpu_validation", execute)
+        self.assertIn("paid_path_skipped: ${{ steps.local_gpu_validation.outputs.skip }}", execute)
+        # The label read is the same text the parent authorizes on.
+        self.assertIn('grep -Fxq "gpu-validated-locally"', execute)
+        # Provisioning and the runner wait both depend on the step output.
+        provision = execute[
+            execute.index("      - name: Provision cheapest compatible RunPod pod") : execute.index(
+                "      - name: Provision cheapest compatible RunPod pod"
+            )
+            + 300
+        ]
+        self.assertIn("if: steps.local_gpu_validation.outputs.skip != 'true'", provision)
+        tests_job = execute[
+            execute.index("  run-gpu-tests:") : execute.index("  run-gpu-tests:") + 400
+        ]
+        self.assertIn("needs.start-runpod.outputs.paid_path_skipped != 'true'", tests_job)
+
     def test_the_paid_workflow_decides_from_its_own_inputs(self) -> None:
         """The decision must travel as inputs, not as a caller `if`.
 

@@ -105,6 +105,8 @@ jobs:
       gpu_type_id: ${{ steps.create_pod.outputs.gpu_type_id }}
       gpu_tier: ${{ steps.create_pod.outputs.gpu_tier }}
       gpu_cost_per_hr: ${{ steps.create_pod.outputs.gpu_cost_per_hr }}
+      # Set when a recorded local GPU run owns the gate, so no paid step runs.
+      paid_path_skipped: ${{ steps.local_gpu_validation.outputs.skip }}
 
     steps:
       - name: Require trusted parent context
@@ -115,6 +117,25 @@ jobs:
           case "${GITHUB_EVENT_NAME}" in workflow_run|workflow_dispatch) ;; *) exit 1 ;; esac
       - name: Checkout trusted RunPod client
         uses: actions/checkout@v5
+
+      - name: Skip paid steps when a local GPU run owns the gate
+        id: local_gpu_validation
+        if: inputs.pr_number != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Job-level `if`s in this called workflow did not see the caller's
+          # inputs in a live dispatch, but `inputs` is populated inside steps,
+          # so the label decision is applied here.
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
+            --jq '.[].name' | grep -Fxq "gpu-validated-locally"; then
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            echo "Label gpu-validated-locally is set: skipping every paid step."
+          else
+            echo "skip=false" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Revalidate queued PR before provisioning
         if: inputs.pr_number != '0'
@@ -167,6 +188,7 @@ jobs:
       # variable to its id.
       - name: Provision cheapest compatible RunPod pod
         id: create_pod
+        if: steps.local_gpu_validation.outputs.skip != 'true'
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           RUNPOD_IMAGE: ${{ env.RUNPOD_IMAGE }}
@@ -330,6 +352,7 @@ jobs:
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
     if: >-
+      needs.start-runpod.outputs.paid_path_skipped != 'true' &&
       inputs.gpu_required == 'true' &&
       inputs.local_gpu_validation != 'true'
     needs: start-runpod
