@@ -1,11 +1,11 @@
 {
   "baseline_commit": "25da8d431",
   "campaign": "session-route-unification",
-  "captured_at_utc": "2026-09-25T15:00:33+00:00",
+  "captured_at_utc": "2026-09-25T21:50:02+00:00",
   "deleted_route_predicate": "/oneshot/ or trailing one_shot",
   "environment": {
     "cpu_affinity": "0",
-    "host_loadavg_at_start": "4.19 5.22 5.05",
+    "host_loadavg_at_start": "10.89 20.08 26.11",
     "measurement_time_s": "5",
     "nproc_as_seen_by_runner": "1",
     "sample_size": "100",
@@ -13,7 +13,7 @@
     "thread_env": "RAYON=1 OMP=1 OPENBLAS=1 MKL=1 VECLIB=1 NUMEXPR=1 TENFERRO_BENCH_THREADS=1",
     "warm_up_time_s": "2"
   },
-  "harness_commit": "1202238872a2fc7e68f40d5960aa37c3be3f83ae",
+  "harness_commit": "b16c8ce3f348d0e28a53958f2b3ab92a1a8fc7db",
   "issue": 1926,
   "label": "baseline",
   "schema": "tenferro.session-route-baseline.v1",
@@ -21,9 +21,9 @@
     "tenferro-ad|eager_backward_shape_churn": {
       "cases": {
         "tenferro_ad/eager_backward_shape_churn/threads_1/bond_dimension_sequence/16": {
-          "high_ns": 7328400.0,
-          "low_ns": 7215100.0,
-          "mid_ns": 7268800.0
+          "high_ns": 7771800.0,
+          "low_ns": 7628000.0,
+          "mid_ns": 7699700.0
         }
       },
       "source": "crates/tenferro-ad/benches/eager_backward_shape_churn.rs"
@@ -31,144 +31,144 @@
     "tenferro-ad|eager_dispatch_baseline": {
       "cases": {
         "eager_dispatch_baseline/lazy/add_f64/1": {
-          "high_ns": 13493.0,
-          "low_ns": 13270.0,
-          "mid_ns": 13372.0
+          "high_ns": 15120.0,
+          "low_ns": 14774.0,
+          "mid_ns": 14952.0
         },
         "eager_dispatch_baseline/lazy/add_f64/64": {
-          "high_ns": 13785.0,
-          "low_ns": 13513.0,
-          "mid_ns": 13639.0
+          "high_ns": 15082.0,
+          "low_ns": 14679.0,
+          "mid_ns": 14878.0
         },
         "eager_dispatch_baseline/lazy/add_f64/8": {
-          "high_ns": 13434.0,
-          "low_ns": 13252.0,
-          "mid_ns": 13336.0
+          "high_ns": 14842.0,
+          "low_ns": 14427.0,
+          "mid_ns": 14633.0
         },
         "eager_dispatch_baseline/lazy/dot_general_f64/1": {
-          "high_ns": 13855.0,
-          "low_ns": 13660.0,
-          "mid_ns": 13751.0
+          "high_ns": 14681.0,
+          "low_ns": 14191.0,
+          "mid_ns": 14419.0
         },
         "eager_dispatch_baseline/lazy/dot_general_f64/2": {
-          "high_ns": 14142.0,
-          "low_ns": 13868.0,
-          "mid_ns": 13991.0
+          "high_ns": 14938.0,
+          "low_ns": 14593.0,
+          "mid_ns": 14765.0
         },
         "eager_dispatch_baseline/lazy/neg_f64/1": {
-          "high_ns": 11590.0,
-          "low_ns": 11329.0,
-          "mid_ns": 11446.0
+          "high_ns": 12722.0,
+          "low_ns": 12428.0,
+          "mid_ns": 12578.0
         },
         "eager_dispatch_baseline/lazy/neg_f64/64": {
-          "high_ns": 11756.0,
-          "low_ns": 11596.0,
-          "mid_ns": 11671.0
+          "high_ns": 13156.0,
+          "low_ns": 12865.0,
+          "mid_ns": 13013.0
         },
         "eager_dispatch_baseline/lazy/neg_f64/8": {
-          "high_ns": 11656.0,
-          "low_ns": 11477.0,
-          "mid_ns": 11561.0
+          "high_ns": 12656.0,
+          "low_ns": 12341.0,
+          "mid_ns": 12498.0
         },
         "eager_dispatch_baseline/lazy/reduce_sum_f64/1": {
-          "high_ns": 12203.0,
-          "low_ns": 11996.0,
-          "mid_ns": 12091.0
+          "high_ns": 13044.0,
+          "low_ns": 12728.0,
+          "mid_ns": 12880.0
         },
         "eager_dispatch_baseline/lazy/reduce_sum_f64/64": {
-          "high_ns": 12526.0,
-          "low_ns": 12249.0,
-          "mid_ns": 12376.0
+          "high_ns": 13648.0,
+          "low_ns": 13342.0,
+          "mid_ns": 13495.0
         },
         "eager_dispatch_baseline/lazy/reduce_sum_f64/8": {
-          "high_ns": 12448.0,
-          "low_ns": 12184.0,
-          "mid_ns": 12307.0
+          "high_ns": 13638.0,
+          "low_ns": 13338.0,
+          "mid_ns": 13490.0
         },
         "eager_dispatch_baseline/lazy/slice_f64/1": {
-          "high_ns": 2192.7,
-          "low_ns": 2151.5,
-          "mid_ns": 2170.7000000000003
+          "high_ns": 2222.7000000000003,
+          "low_ns": 2169.2,
+          "mid_ns": 2194.7999999999997
         },
         "eager_dispatch_baseline/lazy/slice_f64/64": {
-          "high_ns": 2149.9,
-          "low_ns": 2112.8999999999996,
-          "mid_ns": 2129.5
+          "high_ns": 2314.4,
+          "low_ns": 2241.4,
+          "mid_ns": 2276.9
         },
         "eager_dispatch_baseline/lazy/slice_f64/8": {
-          "high_ns": 2202.0,
-          "low_ns": 2171.3,
-          "mid_ns": 2185.4
+          "high_ns": 2356.1,
+          "low_ns": 2303.2,
+          "mid_ns": 2329.7
         },
         "eager_dispatch_baseline/materialized/add_f64/1": {
-          "high_ns": 15511.0,
-          "low_ns": 15280.0,
-          "mid_ns": 15390.0
+          "high_ns": 16713.0,
+          "low_ns": 16286.000000000002,
+          "mid_ns": 16500.0
         },
         "eager_dispatch_baseline/materialized/add_f64/64": {
-          "high_ns": 15616.0,
-          "low_ns": 15343.0,
-          "mid_ns": 15471.0
+          "high_ns": 16772.0,
+          "low_ns": 16431.0,
+          "mid_ns": 16602.0
         },
         "eager_dispatch_baseline/materialized/add_f64/8": {
-          "high_ns": 15534.0,
-          "low_ns": 15250.0,
-          "mid_ns": 15378.0
+          "high_ns": 16873.0,
+          "low_ns": 16482.0,
+          "mid_ns": 16682.0
         },
         "eager_dispatch_baseline/materialized/dot_general_f64/1": {
-          "high_ns": 15891.0,
-          "low_ns": 15681.0,
-          "mid_ns": 15779.0
+          "high_ns": 17239.0,
+          "low_ns": 16940.0,
+          "mid_ns": 17087.0
         },
         "eager_dispatch_baseline/materialized/dot_general_f64/2": {
-          "high_ns": 15828.0,
-          "low_ns": 15530.0,
-          "mid_ns": 15670.0
+          "high_ns": 17178.0,
+          "low_ns": 16792.0,
+          "mid_ns": 16980.0
         },
         "eager_dispatch_baseline/materialized/neg_f64/1": {
-          "high_ns": 13440.0,
-          "low_ns": 13249.0,
-          "mid_ns": 13339.0
+          "high_ns": 14147.0,
+          "low_ns": 13870.0,
+          "mid_ns": 14004.0
         },
         "eager_dispatch_baseline/materialized/neg_f64/64": {
-          "high_ns": 13633.0,
-          "low_ns": 13396.0,
-          "mid_ns": 13506.0
+          "high_ns": 14390.0,
+          "low_ns": 14171.0,
+          "mid_ns": 14278.0
         },
         "eager_dispatch_baseline/materialized/neg_f64/8": {
-          "high_ns": 13404.0,
-          "low_ns": 13193.0,
-          "mid_ns": 13287.0
+          "high_ns": 13996.0,
+          "low_ns": 13689.0,
+          "mid_ns": 13837.0
         },
         "eager_dispatch_baseline/materialized/reduce_sum_f64/1": {
-          "high_ns": 13706.0,
-          "low_ns": 13494.0,
-          "mid_ns": 13593.0
+          "high_ns": 14159.0,
+          "low_ns": 13836.0,
+          "mid_ns": 13986.0
         },
         "eager_dispatch_baseline/materialized/reduce_sum_f64/64": {
-          "high_ns": 13872.0,
-          "low_ns": 13715.0,
-          "mid_ns": 13789.0
+          "high_ns": 14767.0,
+          "low_ns": 14549.0,
+          "mid_ns": 14656.0
         },
         "eager_dispatch_baseline/materialized/reduce_sum_f64/8": {
-          "high_ns": 14043.0,
-          "low_ns": 13679.0,
-          "mid_ns": 13845.0
+          "high_ns": 15046.0,
+          "low_ns": 14724.0,
+          "mid_ns": 14882.0
         },
         "eager_dispatch_baseline/materialized/slice_f64/1": {
-          "high_ns": 2785.8,
-          "low_ns": 2736.6000000000004,
-          "mid_ns": 2759.0
+          "high_ns": 2896.3,
+          "low_ns": 2822.6,
+          "mid_ns": 2857.4
         },
         "eager_dispatch_baseline/materialized/slice_f64/64": {
-          "high_ns": 2825.2000000000003,
-          "low_ns": 2772.7,
-          "mid_ns": 2797.2000000000003
+          "high_ns": 2895.1,
+          "low_ns": 2854.5,
+          "mid_ns": 2874.7
         },
         "eager_dispatch_baseline/materialized/slice_f64/8": {
-          "high_ns": 2824.8,
-          "low_ns": 2785.2000000000003,
-          "mid_ns": 2803.4
+          "high_ns": 2901.0,
+          "low_ns": 2838.6,
+          "mid_ns": 2868.2
         }
       },
       "source": "crates/tenferro-ad/benches/eager_dispatch_baseline.rs"
@@ -176,264 +176,394 @@
     "tenferro-cpu|route_matrix": {
       "cases": {
         "route_matrix/cast_f64_f32/oneshot/single": {
-          "high_ns": 9253.9,
-          "low_ns": 9118.5,
-          "mid_ns": 9181.4
+          "high_ns": 9698.4,
+          "low_ns": 9526.300000000001,
+          "mid_ns": 9610.0
         },
         "route_matrix/cast_f64_f32/session/single": {
-          "high_ns": 9409.2,
-          "low_ns": 9250.3,
-          "mid_ns": 9324.0
+          "high_ns": 10132.0,
+          "low_ns": 9882.5,
+          "mid_ns": 10003.0
         },
         "route_matrix/dot_general_f64/oneshot/single/2": {
-          "high_ns": 9407.199999999999,
-          "low_ns": 9265.1,
-          "mid_ns": 9330.7
+          "high_ns": 11688.0,
+          "low_ns": 11224.0,
+          "mid_ns": 11415.0
         },
         "route_matrix/dot_general_f64/oneshot/single/256": {
-          "high_ns": 643760.0,
-          "low_ns": 634340.0,
-          "mid_ns": 638810.0
+          "high_ns": 762140.0,
+          "low_ns": 760430.0,
+          "mid_ns": 761290.0
         },
         "route_matrix/dot_general_f64/oneshot/single/64": {
-          "high_ns": 21166.0,
-          "low_ns": 20873.0,
-          "mid_ns": 21006.0
+          "high_ns": 24270.0,
+          "low_ns": 24014.0,
+          "mid_ns": 24141.0
         },
         "route_matrix/dot_general_f64/scope/single/2": {
-          "high_ns": 9571.1,
-          "low_ns": 9369.400000000001,
-          "mid_ns": 9463.1
+          "high_ns": 10854.0,
+          "low_ns": 10725.0,
+          "mid_ns": 10791.0
         },
         "route_matrix/dot_general_f64/scope/single/256": {
-          "high_ns": 642850.0,
-          "low_ns": 632200.0,
-          "mid_ns": 636980.0
+          "high_ns": 672850.0,
+          "low_ns": 661650.0,
+          "mid_ns": 667010.0
         },
         "route_matrix/dot_general_f64/scope/single/64": {
-          "high_ns": 21420.0,
-          "low_ns": 21153.0,
-          "mid_ns": 21275.0
+          "high_ns": 24279.0,
+          "low_ns": 23783.0,
+          "mid_ns": 24029.0
         },
         "route_matrix/dot_general_f64/session/single/2": {
-          "high_ns": 9345.1,
-          "low_ns": 9168.699999999999,
-          "mid_ns": 9251.2
+          "high_ns": 10897.0,
+          "low_ns": 10651.0,
+          "mid_ns": 10764.0
         },
         "route_matrix/dot_general_f64/session/single/256": {
-          "high_ns": 643380.0,
-          "low_ns": 633470.0,
-          "mid_ns": 638060.0
+          "high_ns": 707970.0,
+          "low_ns": 690530.0,
+          "mid_ns": 698580.0
         },
         "route_matrix/dot_general_f64/session/single/64": {
-          "high_ns": 21171.0,
-          "low_ns": 20853.0,
-          "mid_ns": 21007.0
+          "high_ns": 24555.0,
+          "low_ns": 24519.0,
+          "mid_ns": 24537.0
         },
         "route_matrix/elementwise_add_f64/oneshot/marginal16/1": {
-          "high_ns": 134280.0,
-          "low_ns": 132790.0,
-          "mid_ns": 133470.0
+          "high_ns": 148450.0,
+          "low_ns": 145810.0,
+          "mid_ns": 147110.0
         },
         "route_matrix/elementwise_add_f64/oneshot/marginal16/4096": {
-          "high_ns": 149060.0,
-          "low_ns": 146900.0,
-          "mid_ns": 147890.0
+          "high_ns": 171980.0,
+          "low_ns": 169640.0,
+          "mid_ns": 170770.0
         },
         "route_matrix/elementwise_add_f64/oneshot/marginal16/64": {
-          "high_ns": 134050.0,
-          "low_ns": 132060.0,
-          "mid_ns": 132970.0
+          "high_ns": 153650.0,
+          "low_ns": 151240.0,
+          "mid_ns": 152440.0
         },
         "route_matrix/elementwise_add_f64/oneshot/marginal16/65536": {
-          "high_ns": 455790.0,
-          "low_ns": 450970.0,
-          "mid_ns": 453210.0
+          "high_ns": 530830.0,
+          "low_ns": 500560.0,
+          "mid_ns": 514530.0
         },
         "route_matrix/elementwise_add_f64/oneshot/single/1": {
-          "high_ns": 8907.199999999999,
-          "low_ns": 8732.1,
-          "mid_ns": 8814.3
+          "high_ns": 9717.7,
+          "low_ns": 9558.0,
+          "mid_ns": 9637.800000000001
         },
         "route_matrix/elementwise_add_f64/oneshot/single/4096": {
-          "high_ns": 9838.6,
-          "low_ns": 9575.900000000001,
-          "mid_ns": 9697.5
+          "high_ns": 10902.0,
+          "low_ns": 10696.0,
+          "mid_ns": 10800.0
         },
         "route_matrix/elementwise_add_f64/oneshot/single/64": {
-          "high_ns": 9017.0,
-          "low_ns": 8812.300000000001,
-          "mid_ns": 8907.9
+          "high_ns": 10299.0,
+          "low_ns": 10109.0,
+          "mid_ns": 10207.0
         },
         "route_matrix/elementwise_add_f64/oneshot/single/65536": {
-          "high_ns": 29295.0,
-          "low_ns": 28906.0,
-          "mid_ns": 29084.0
+          "high_ns": 30727.0,
+          "low_ns": 30225.0,
+          "mid_ns": 30470.0
         },
         "route_matrix/elementwise_add_f64/scope/marginal16/1": {
-          "high_ns": 28417.0,
-          "low_ns": 28045.0,
-          "mid_ns": 28219.0
+          "high_ns": 35151.0,
+          "low_ns": 34414.0,
+          "mid_ns": 34784.0
         },
         "route_matrix/elementwise_add_f64/scope/marginal16/4096": {
-          "high_ns": 45185.0,
-          "low_ns": 44199.0,
-          "mid_ns": 44644.0
+          "high_ns": 53135.0,
+          "low_ns": 52126.0,
+          "mid_ns": 52627.0
         },
         "route_matrix/elementwise_add_f64/scope/marginal16/64": {
-          "high_ns": 28912.0,
-          "low_ns": 28422.0,
-          "mid_ns": 28646.0
+          "high_ns": 35991.0,
+          "low_ns": 35366.0,
+          "mid_ns": 35676.0
         },
         "route_matrix/elementwise_add_f64/scope/marginal16/65536": {
-          "high_ns": 327240.0,
-          "low_ns": 322980.0,
-          "mid_ns": 325050.0
+          "high_ns": 502530.0,
+          "low_ns": 447700.0,
+          "mid_ns": 472240.0
         },
         "route_matrix/elementwise_add_f64/scope/single/1": {
-          "high_ns": 9011.1,
-          "low_ns": 8867.1,
-          "mid_ns": 8934.6
+          "high_ns": 10172.0,
+          "low_ns": 9983.3,
+          "mid_ns": 10075.0
         },
         "route_matrix/elementwise_add_f64/scope/single/4096": {
-          "high_ns": 9802.6,
-          "low_ns": 9673.199999999999,
-          "mid_ns": 9735.4
+          "high_ns": 11798.0,
+          "low_ns": 11575.0,
+          "mid_ns": 11690.0
         },
         "route_matrix/elementwise_add_f64/scope/single/64": {
-          "high_ns": 9093.3,
-          "low_ns": 8941.0,
-          "mid_ns": 9011.2
+          "high_ns": 10624.0,
+          "low_ns": 10440.0,
+          "mid_ns": 10533.0
         },
         "route_matrix/elementwise_add_f64/scope/single/65536": {
-          "high_ns": 29711.0,
-          "low_ns": 29325.0,
-          "mid_ns": 29506.0
+          "high_ns": 31464.0,
+          "low_ns": 30743.0,
+          "mid_ns": 31092.0
         },
         "route_matrix/elementwise_add_f64/session/marginal16/1": {
-          "high_ns": 28292.0,
-          "low_ns": 27931.0,
-          "mid_ns": 28094.0
+          "high_ns": 31651.0,
+          "low_ns": 30907.0,
+          "mid_ns": 31283.0
         },
         "route_matrix/elementwise_add_f64/session/marginal16/4096": {
-          "high_ns": 44681.0,
-          "low_ns": 44017.0,
-          "mid_ns": 44325.0
+          "high_ns": 50105.0,
+          "low_ns": 49257.0,
+          "mid_ns": 49667.0
         },
         "route_matrix/elementwise_add_f64/session/marginal16/64": {
-          "high_ns": 28873.0,
-          "low_ns": 28482.0,
-          "mid_ns": 28664.0
+          "high_ns": 31146.0,
+          "low_ns": 30590.0,
+          "mid_ns": 30865.0
         },
         "route_matrix/elementwise_add_f64/session/marginal16/65536": {
-          "high_ns": 328700.0,
-          "low_ns": 323720.0,
-          "mid_ns": 326080.0
+          "high_ns": 400790.0,
+          "low_ns": 400380.0,
+          "mid_ns": 400570.0
         },
         "route_matrix/elementwise_add_f64/session/single/1": {
-          "high_ns": 9178.4,
-          "low_ns": 9068.8,
-          "mid_ns": 9120.900000000001
+          "high_ns": 10114.0,
+          "low_ns": 9939.8,
+          "mid_ns": 10026.0
         },
         "route_matrix/elementwise_add_f64/session/single/4096": {
-          "high_ns": 10097.0,
-          "low_ns": 9938.1,
-          "mid_ns": 10011.0
+          "high_ns": 11416.0,
+          "low_ns": 11203.0,
+          "mid_ns": 11306.0
         },
         "route_matrix/elementwise_add_f64/session/single/64": {
-          "high_ns": 9338.2,
-          "low_ns": 9101.6,
-          "mid_ns": 9206.5
+          "high_ns": 10720.0,
+          "low_ns": 10552.0,
+          "mid_ns": 10638.0
         },
         "route_matrix/elementwise_add_f64/session/single/65536": {
-          "high_ns": 29888.0,
-          "low_ns": 29340.0,
-          "mid_ns": 29591.0
+          "high_ns": 31236.0,
+          "low_ns": 30539.0,
+          "mid_ns": 30879.0
         },
         "route_matrix/reduce_sum_f64/oneshot/single/64": {
-          "high_ns": 8802.0,
-          "low_ns": 8627.4,
-          "mid_ns": 8708.6
+          "high_ns": 9236.5,
+          "low_ns": 9055.400000000001,
+          "mid_ns": 9142.5
         },
         "route_matrix/reduce_sum_f64/oneshot/single/65536": {
-          "high_ns": 16068.000000000002,
-          "low_ns": 15763.0,
-          "mid_ns": 15906.0
+          "high_ns": 17528.0,
+          "low_ns": 17020.0,
+          "mid_ns": 17244.0
         },
         "route_matrix/reduce_sum_f64/scope/single/64": {
-          "high_ns": 9050.3,
-          "low_ns": 8939.7,
-          "mid_ns": 8992.3
+          "high_ns": 10207.0,
+          "low_ns": 9962.0,
+          "mid_ns": 10085.0
         },
         "route_matrix/reduce_sum_f64/scope/single/65536": {
-          "high_ns": 16547.0,
-          "low_ns": 16122.0,
-          "mid_ns": 16320.0
+          "high_ns": 18264.0,
+          "low_ns": 17928.0,
+          "mid_ns": 18096.0
         },
         "route_matrix/reduce_sum_f64/session/single/64": {
-          "high_ns": 9034.3,
-          "low_ns": 8911.099999999999,
-          "mid_ns": 8967.599999999999
+          "high_ns": 9728.1,
+          "low_ns": 9564.5,
+          "mid_ns": 9645.300000000001
         },
         "route_matrix/reduce_sum_f64/session/single/65536": {
-          "high_ns": 16520.0,
-          "low_ns": 16157.0,
-          "mid_ns": 16327.000000000002
+          "high_ns": 18028.0,
+          "low_ns": 17721.0,
+          "mid_ns": 17880.0
         },
         "route_matrix/slice_f64/oneshot/single/64": {
-          "high_ns": 9026.199999999999,
-          "low_ns": 8854.6,
-          "mid_ns": 8936.199999999999
+          "high_ns": 9776.199999999999,
+          "low_ns": 9561.199999999999,
+          "mid_ns": 9668.4
         },
         "route_matrix/slice_f64/oneshot/single/65536": {
-          "high_ns": 23141.0,
-          "low_ns": 22562.0,
-          "mid_ns": 22813.0
+          "high_ns": 26663.0,
+          "low_ns": 26210.0,
+          "mid_ns": 26444.0
         },
         "route_matrix/slice_f64/scope/single/64": {
-          "high_ns": 9257.4,
-          "low_ns": 9089.2,
-          "mid_ns": 9168.300000000001
+          "high_ns": 10712.0,
+          "low_ns": 10551.0,
+          "mid_ns": 10633.0
         },
         "route_matrix/slice_f64/scope/single/65536": {
-          "high_ns": 23236.0,
-          "low_ns": 22774.0,
-          "mid_ns": 22982.0
+          "high_ns": 25357.0,
+          "low_ns": 24718.0,
+          "mid_ns": 25030.0
         },
         "route_matrix/slice_f64/session/single/64": {
-          "high_ns": 9208.1,
-          "low_ns": 9052.199999999999,
-          "mid_ns": 9126.9
+          "high_ns": 10237.0,
+          "low_ns": 10058.0,
+          "mid_ns": 10148.0
         },
         "route_matrix/slice_f64/session/single/65536": {
-          "high_ns": 23477.0,
-          "low_ns": 22991.0,
-          "mid_ns": 23214.0
+          "high_ns": 26848.0,
+          "low_ns": 26468.0,
+          "mid_ns": 26658.0
         }
       },
       "source": "crates/tenferro-cpu/benches/route_matrix.rs"
     },
+    "tenferro-gpu|route_matrix_gpu": {
+      "cases": {
+        "route_matrix_gpu/dot_general_f32/oneshot/enqueue_batch16/256": {
+          "high_ns": 604780.0,
+          "low_ns": 597640.0,
+          "mid_ns": 601200.0
+        },
+        "route_matrix_gpu/dot_general_f32/oneshot/enqueue_batch16/64": {
+          "high_ns": 527740.0,
+          "low_ns": 512070.00000000006,
+          "mid_ns": 519909.99999999994
+        },
+        "route_matrix_gpu/dot_general_f32/oneshot/enqueue_batch16/8": {
+          "high_ns": 439090.0,
+          "low_ns": 432350.0,
+          "mid_ns": 435720.0
+        },
+        "route_matrix_gpu/dot_general_f32/oneshot/round_trip/256": {
+          "high_ns": 61319.0,
+          "low_ns": 60752.0,
+          "mid_ns": 61026.0
+        },
+        "route_matrix_gpu/dot_general_f32/oneshot/round_trip/64": {
+          "high_ns": 56928.0,
+          "low_ns": 56118.0,
+          "mid_ns": 56519.0
+        },
+        "route_matrix_gpu/dot_general_f32/oneshot/round_trip/8": {
+          "high_ns": 65302.00000000001,
+          "low_ns": 51713.0,
+          "mid_ns": 57484.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/enqueue_batch16/256": {
+          "high_ns": 598650.0,
+          "low_ns": 591110.0,
+          "mid_ns": 594900.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/enqueue_batch16/64": {
+          "high_ns": 526260.0,
+          "low_ns": 518110.0,
+          "mid_ns": 522280.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/enqueue_batch16/8": {
+          "high_ns": 432430.0,
+          "low_ns": 424930.0,
+          "mid_ns": 428650.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/round_trip/256": {
+          "high_ns": 62256.0,
+          "low_ns": 61613.0,
+          "mid_ns": 61927.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/round_trip/64": {
+          "high_ns": 57227.0,
+          "low_ns": 56561.0,
+          "mid_ns": 56893.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/round_trip/8": {
+          "high_ns": 49164.0,
+          "low_ns": 48515.0,
+          "mid_ns": 48855.0
+        },
+        "route_matrix_gpu/dot_general_f64/oneshot/enqueue_batch16/256": {
+          "high_ns": 562830.0,
+          "low_ns": 554390.0,
+          "mid_ns": 558490.0
+        },
+        "route_matrix_gpu/dot_general_f64/oneshot/enqueue_batch16/64": {
+          "high_ns": 637630.0,
+          "low_ns": 626320.0,
+          "mid_ns": 631810.0
+        },
+        "route_matrix_gpu/dot_general_f64/oneshot/enqueue_batch16/8": {
+          "high_ns": 440880.0,
+          "low_ns": 434950.0,
+          "mid_ns": 437890.0
+        },
+        "route_matrix_gpu/dot_general_f64/oneshot/round_trip/256": {
+          "high_ns": 60050.0,
+          "low_ns": 59442.0,
+          "mid_ns": 59740.0
+        },
+        "route_matrix_gpu/dot_general_f64/oneshot/round_trip/64": {
+          "high_ns": 64931.0,
+          "low_ns": 64251.00000000001,
+          "mid_ns": 64593.0
+        },
+        "route_matrix_gpu/dot_general_f64/oneshot/round_trip/8": {
+          "high_ns": 48883.0,
+          "low_ns": 48425.0,
+          "mid_ns": 48653.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/enqueue_batch16/256": {
+          "high_ns": 561690.0,
+          "low_ns": 554700.0,
+          "mid_ns": 558130.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/enqueue_batch16/64": {
+          "high_ns": 636520.0,
+          "low_ns": 623960.0,
+          "mid_ns": 630110.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/enqueue_batch16/8": {
+          "high_ns": 436770.0,
+          "low_ns": 430110.0,
+          "mid_ns": 433360.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/round_trip/256": {
+          "high_ns": 60372.0,
+          "low_ns": 59716.0,
+          "mid_ns": 60041.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/round_trip/64": {
+          "high_ns": 65757.0,
+          "low_ns": 64947.0,
+          "mid_ns": 65343.99999999999
+        },
+        "route_matrix_gpu/dot_general_f64/session/round_trip/8": {
+          "high_ns": 48718.0,
+          "low_ns": 48124.0,
+          "mid_ns": 48424.0
+        },
+        "route_matrix_gpu/sync_empty/synchronize": {
+          "high_ns": 17562.0,
+          "low_ns": 17453.0,
+          "mid_ns": 17508.0
+        }
+      },
+      "source": "crates/tenferro-gpu/benches/route_matrix_gpu.rs"
+    },
     "tenferro-linalg|linalg_vjp_gate": {
       "cases": {
         "tenferro_linalg/linalg_vjp_gate/threads_1/svd_values_vjp/16": {
-          "high_ns": 342460.0,
-          "low_ns": 336510.0,
-          "mid_ns": 339300.0
+          "high_ns": 411690.0,
+          "low_ns": 391790.0,
+          "mid_ns": 400630.0
         },
         "tenferro_linalg/linalg_vjp_gate/threads_1/svd_values_vjp/8": {
-          "high_ns": 342750.0,
-          "low_ns": 336420.0,
-          "mid_ns": 339420.0
+          "high_ns": 356410.0,
+          "low_ns": 349230.0,
+          "mid_ns": 352720.0
         },
         "tenferro_linalg/linalg_vjp_gate/threads_1/triangular_solve_vjp/16": {
-          "high_ns": 327630.0,
-          "low_ns": 323250.0,
-          "mid_ns": 325310.0
+          "high_ns": 350880.0,
+          "low_ns": 343140.0,
+          "mid_ns": 347040.0
         },
         "tenferro_linalg/linalg_vjp_gate/threads_1/triangular_solve_vjp/8": {
-          "high_ns": 326320.0,
-          "low_ns": 321590.0,
-          "mid_ns": 323880.0
+          "high_ns": 342430.0,
+          "low_ns": 336250.0,
+          "mid_ns": 339310.0
         }
       },
       "source": "crates/tenferro-linalg/benches/linalg_vjp_gate.rs"
@@ -441,104 +571,109 @@
     "tenferro-runtime|elementwise_fusion": {
       "cases": {
         "runtime_elementwise_chain/f64/add_mul/prepared_graph/1048576": {
-          "high_ns": 19047000.0,
-          "low_ns": 18813000.0,
-          "mid_ns": 18921000.0
+          "high_ns": 19828000.0,
+          "low_ns": 19467000.0,
+          "mid_ns": 19646000.0
         },
         "runtime_elementwise_chain/f64/add_mul/prepared_graph/4096": {
-          "high_ns": 51663.0,
-          "low_ns": 50999.0,
-          "mid_ns": 51313.0
+          "high_ns": 54949.0,
+          "low_ns": 53735.0,
+          "mid_ns": 54331.0
         },
         "runtime_elementwise_chain/f64/add_mul/prepared_graph/65536": {
-          "high_ns": 1223300.0,
-          "low_ns": 1209100.0,
-          "mid_ns": 1215700.0
+          "high_ns": 1276700.0,
+          "low_ns": 1260600.0,
+          "mid_ns": 1268400.0
         },
         "runtime_elementwise_chain/f64/add_mul/unprepared_graph/1048576": {
-          "high_ns": 19211000.0,
-          "low_ns": 18908000.0,
-          "mid_ns": 19050000.0
+          "high_ns": 19657000.0,
+          "low_ns": 19328000.0,
+          "mid_ns": 19488000.0
         },
         "runtime_elementwise_chain/f64/add_mul/unprepared_graph/4096": {
-          "high_ns": 117000.0,
-          "low_ns": 115240.0,
-          "mid_ns": 116070.0
+          "high_ns": 125970.0,
+          "low_ns": 120700.0,
+          "mid_ns": 123010.0
         },
         "runtime_elementwise_chain/f64/add_mul/unprepared_graph/65536": {
-          "high_ns": 1273400.0,
-          "low_ns": 1255200.0,
-          "mid_ns": 1263700.0
+          "high_ns": 1324400.0,
+          "low_ns": 1296300.0,
+          "mid_ns": 1309600.0
         },
         "runtime_elementwise_chain/f64/broadcast_mul/prepared_graph/1024x1024": {
-          "high_ns": 985880.0,
-          "low_ns": 963320.0,
-          "mid_ns": 974000.0
+          "high_ns": 1114900.0,
+          "low_ns": 1081300.0,
+          "mid_ns": 1096600.0
         },
         "runtime_elementwise_chain/f64/broadcast_mul/prepared_graph/256x256": {
-          "high_ns": 126280.0,
-          "low_ns": 123640.0,
-          "mid_ns": 124890.0
+          "high_ns": 130259.99999999999,
+          "low_ns": 126700.0,
+          "mid_ns": 128400.0
         },
         "runtime_elementwise_chain/f64/broadcast_mul/unprepared_graph/1024x1024": {
-          "high_ns": 1158800.0,
-          "low_ns": 1132700.0,
-          "mid_ns": 1144500.0
+          "high_ns": 1202900.0,
+          "low_ns": 1170200.0,
+          "mid_ns": 1185200.0
         },
         "runtime_elementwise_chain/f64/broadcast_mul/unprepared_graph/256x256": {
-          "high_ns": 198370.0,
-          "low_ns": 194690.0,
-          "mid_ns": 196480.0
+          "high_ns": 207930.0,
+          "low_ns": 203350.0,
+          "mid_ns": 205590.0
         },
         "runtime_elementwise_chain/f64/broadcast_mul_add/prepared_graph/1024x1024": {
-          "high_ns": 19158000.0,
-          "low_ns": 18861000.0,
-          "mid_ns": 18999000.0
+          "high_ns": 20422000.0,
+          "low_ns": 19986000.0,
+          "mid_ns": 20201000.0
         },
         "runtime_elementwise_chain/f64/broadcast_mul_add/prepared_graph/256x256": {
-          "high_ns": 1234800.0,
-          "low_ns": 1217900.0,
-          "mid_ns": 1225800.0
+          "high_ns": 1318800.0,
+          "low_ns": 1292400.0,
+          "mid_ns": 1304900.0
         },
         "runtime_elementwise_chain/f64/broadcast_mul_add/unprepared_graph/1024x1024": {
-          "high_ns": 19132000.0,
-          "low_ns": 18867000.0,
-          "mid_ns": 18990000.0
+          "high_ns": 20133000.0,
+          "low_ns": 19782000.0,
+          "mid_ns": 19955000.0
         },
         "runtime_elementwise_chain/f64/broadcast_mul_add/unprepared_graph/256x256": {
-          "high_ns": 1292900.0,
-          "low_ns": 1276400.0,
-          "mid_ns": 1284000.0
+          "high_ns": 1394700.0,
+          "low_ns": 1361800.0,
+          "mid_ns": 1377500.0
         }
       },
       "source": "crates/tenferro-runtime/benches/elementwise_fusion.rs"
     },
     "tenferro-runtime|session_chain": {
       "cases": {
+        "session_chain/broadcast/execution_scope": {
+          "high_ns": 36054.0,
+          "low_ns": 35240.0,
+          "mid_ns": 35638.0
+        },
         "session_chain/broadcast/one_session": {
-          "high_ns": 33697.0,
-          "low_ns": 33282.0,
-          "mid_ns": 33480.0
+          "high_ns": 36304.0,
+          "low_ns": 35630.0,
+          "mid_ns": 35970.0
         },
         "session_chain/no_broadcast/execution_scope": {
-          "high_ns": 20721.0,
-          "low_ns": 20449.0,
-          "mid_ns": 20575.0
+          "high_ns": 24142.0,
+          "low_ns": 23661.0,
+          "mid_ns": 23901.0
         },
         "session_chain/no_broadcast/one_session": {
-          "high_ns": 22334.0,
-          "low_ns": 21944.0,
-          "mid_ns": 22127.0
+          "high_ns": 23061.0,
+          "low_ns": 22558.0,
+          "mid_ns": 22803.0
         },
         "session_chain/no_broadcast/one_shot": {
-          "high_ns": 84175.0,
-          "low_ns": 82623.0,
-          "mid_ns": 83345.0
+          "high_ns": 93181.0,
+          "low_ns": 91671.0,
+          "mid_ns": 92419.0
         },
         "session_chain/phase1/one_session": {
-          "high_ns": 33953.0,
-          "low_ns": 33514.0,
-          "mid_ns": 33719.0
+          "high_ns": 35809.0,
+          "low_ns": 35140.0,
+          "mid_ns": 35469.0
         }
       },
       "source": "crates/tenferro-runtime/benches/session_chain.rs"
