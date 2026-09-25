@@ -11,10 +11,10 @@ fn dot_general_exec_instr(
 ) -> ExecInstruction {
     ExecInstruction {
         op: ExecOp::DotGeneral(DotGeneralConfig {
-            lhs_contracting_dims,
-            rhs_contracting_dims,
-            lhs_batch_dims,
-            rhs_batch_dims,
+            lhs_contracting_dims: lhs_contracting_dims.into(),
+            rhs_contracting_dims: rhs_contracting_dims.into(),
+            lhs_batch_dims: lhs_batch_dims.into(),
+            rhs_batch_dims: rhs_batch_dims.into(),
         }),
         semantic_operation_index: None,
         input_slots,
@@ -135,10 +135,10 @@ fn test_dot_decomposer_multi_contracting_dim() {
     assert_eq!(dot.output_slots, vec![2]);
     match &dot.op {
         ExecOp::DotGeneral(config) => {
-            assert_eq!(config.lhs_contracting_dims, vec![1]);
-            assert_eq!(config.rhs_contracting_dims, vec![0]);
-            assert_eq!(config.lhs_batch_dims, vec![2, 3]);
-            assert_eq!(config.rhs_batch_dims, vec![2, 3]);
+            assert_eq!(config.lhs_contracting_dims.as_slice(), &[1]);
+            assert_eq!(config.rhs_contracting_dims.as_slice(), &[0]);
+            assert_eq!(config.lhs_batch_dims.as_slice(), &[2, 3]);
+            assert_eq!(config.rhs_batch_dims.as_slice(), &[2, 3]);
         }
         _ => panic!("expected canonical DotGeneral"),
     }
@@ -173,8 +173,8 @@ fn test_dot_decomposer_multi_free_dim_emits_output_reshape() {
     let dot = &program.instructions[1];
     match &dot.op {
         ExecOp::DotGeneral(config) => {
-            assert_eq!(config.lhs_contracting_dims, vec![1]);
-            assert_eq!(config.rhs_contracting_dims, vec![0]);
+            assert_eq!(config.lhs_contracting_dims.as_slice(), &[1]);
+            assert_eq!(config.rhs_contracting_dims.as_slice(), &[0]);
             assert!(config.lhs_batch_dims.is_empty());
             assert!(config.rhs_batch_dims.is_empty());
         }

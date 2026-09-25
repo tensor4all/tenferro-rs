@@ -2816,10 +2816,10 @@ fn matmul_preserve_trailing_batch<B: LinalgBackend + ?Sized>(
 ) -> tenferro_tensor::Result<Tensor> {
     let batch: Vec<usize> = (2..lhs.shape().len()).collect();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: batch.clone(),
-        rhs_batch_dims: batch,
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: batch.clone().into(),
+        rhs_batch_dims: batch.into(),
     };
     backend.dot_general_read(
         TensorRead::from_tensor(lhs),
@@ -2838,10 +2838,10 @@ fn linalg_matmul_read<B: LinalgBackend + ?Sized>(
     let rhs_batch_start = if rhs_is_vector { 1 } else { 2 };
     let rhs_batch_dims: Vec<usize> = (rhs_batch_start..rhs.shape().len()).collect();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims,
-        rhs_batch_dims,
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: lhs_batch_dims.into(),
+        rhs_batch_dims: rhs_batch_dims.into(),
     };
     backend.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
 }

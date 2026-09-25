@@ -191,6 +191,37 @@ Strict binary/GEMM lowering intentionally rejects repeated labels and returns
 `None`. Those cases stay on the general eager/builder path, which handles
 diagonalization explicitly.
 
+The non-AD concrete `_into` APIs use a compact binary-dot configuration path
+for supported two-input contractions. Concrete owned and borrowed-view string
+calls attempt this path before parsing owned notation; borrowed-view notation
+and parsed-label calls inspect
+borrowed labels before resolution or owned-subscript conversion. The planner
+supports arbitrary ranks and axis positions when unique labels form a supported
+exact-output dot; ellipsis, Unicode string labels, repeated labels, broadcasting,
+and other unsupported forms keep the existing parser/planner fallback. It uses
+borrowed ASCII byte labels for string calls and inline integer-label scratch for
+explicit notation. `DotGeneralConfig` owns four `SmallVec<[usize; 4]>` axis
+lists: each stores up to four axes inline and spills for larger lists. This is
+not a tensor-rank restriction. Ordinary low-rank direct calls therefore need no
+axis-list heap allocation. Larger expressions and general fallbacks may still
+allocate. The separate `EagerTensor` API has its own AD-aware dispatch and is not
+covered by this concrete path.
+
+This is a source-breaking field-type change: construct literal axes with
+`[1].as_slice().into()`, empty axes with `Default::default()`, and generated axes
+with `.collect()` into the inferred field type. Existing `Vec<usize>` values can
+be consumed with `.into()`; avoid constructing an intermediate `Vec` when the
+intent is allocation-free inline storage. Axis order, equality, hashing and
+canonical graph identity remain value-based. Retained-byte accounting excludes
+inline storage already counted in the enclosing operation and counts spilled
+storage under each cache's existing logical-length or capacity policy.
+
+CPU rank-two, single-contracting-axis, no-batch GEMM analysis validates the two
+axis bounds and paired extent as it derives dimensions. Other or invalid
+configurations go through the general validator/analyzer. Placement, layout,
+dtype, output, accumulation, and provider checks remain in the checked runtime
+path; there is no unchecked public execution entry point.
+
 ## Static And Symbolic Shapes
 
 The traced extension API chooses the lowering mode from input shape availability:

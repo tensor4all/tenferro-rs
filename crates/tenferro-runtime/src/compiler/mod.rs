@@ -1089,12 +1089,12 @@ fn sort_contracting_dims(config: &mut DotGeneralConfig) {
 
     if consecutive_if_sorted(lhs) && !is_sorted(lhs) {
         let perm = argsort(lhs);
-        config.lhs_contracting_dims = apply_perm(lhs, &perm);
-        config.rhs_contracting_dims = apply_perm(rhs, &perm);
+        config.lhs_contracting_dims = apply_perm(lhs, &perm).into();
+        config.rhs_contracting_dims = apply_perm(rhs, &perm).into();
     } else if consecutive_if_sorted(rhs) && !is_sorted(rhs) {
         let perm = argsort(rhs);
-        config.lhs_contracting_dims = apply_perm(lhs, &perm);
-        config.rhs_contracting_dims = apply_perm(rhs, &perm);
+        config.lhs_contracting_dims = apply_perm(lhs, &perm).into();
+        config.rhs_contracting_dims = apply_perm(rhs, &perm).into();
     }
 }
 

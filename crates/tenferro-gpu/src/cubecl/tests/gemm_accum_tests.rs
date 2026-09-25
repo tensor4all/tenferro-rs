@@ -16,10 +16,10 @@ use super::{
 
 fn matmul_config() -> DotGeneralConfig {
     DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     }
 }
 

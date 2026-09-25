@@ -3696,6 +3696,7 @@ macro_rules! impl_tensor_scalar {
         impl TensorScalar for $ty {
             type Real = $real;
 
+            #[inline]
             fn dtype() -> DType {
                 DType::$dtype
             }
@@ -3713,10 +3714,12 @@ macro_rules! impl_tensor_scalar {
                 TensorRead::from_view(TensorView::$variant(tensor.as_view()))
             }
 
+            #[inline]
             fn tensor_view<'a>(view: TypedTensorView<'a, Self>) -> TensorView<'a> {
                 TensorView::$variant(view)
             }
 
+            #[inline]
             fn tensor_view_mut<'a>(view: TypedTensorViewMut<'a, Self>) -> TensorViewMut<'a> {
                 TensorViewMut::$variant(view)
             }
@@ -5815,6 +5818,7 @@ impl<'a> TensorRead<'a> {
         Self::Tensor(tensor)
     }
 
+    #[inline]
     pub fn from_view(view: TensorView<'a>) -> Self {
         Self::View(view)
     }

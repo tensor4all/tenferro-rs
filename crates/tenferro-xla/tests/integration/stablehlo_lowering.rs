@@ -126,10 +126,10 @@ fn lowers_unbatched_dot_general() {
         .dot_general(
             &rhs,
             DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         )
         .unwrap();
@@ -198,10 +198,10 @@ fn batched_dot_general_transposes_stablehlo_batch_first_result() {
         .dot_general(
             &rhs,
             DotGeneralConfig {
-                lhs_contracting_dims: vec![2],
-                rhs_contracting_dims: vec![1],
-                lhs_batch_dims: vec![0],
-                rhs_batch_dims: vec![0],
+                lhs_contracting_dims: [2].as_slice().into(),
+                rhs_contracting_dims: [1].as_slice().into(),
+                lhs_batch_dims: [0].as_slice().into(),
+                rhs_batch_dims: [0].as_slice().into(),
             },
         )
         .unwrap();
@@ -234,10 +234,10 @@ fn equal_extent_batched_dot_general_still_transposes_batch_last_result() {
         .dot_general(
             &rhs,
             DotGeneralConfig {
-                lhs_contracting_dims: vec![2],
-                rhs_contracting_dims: vec![1],
-                lhs_batch_dims: vec![0],
-                rhs_batch_dims: vec![0],
+                lhs_contracting_dims: [2].as_slice().into(),
+                rhs_contracting_dims: [1].as_slice().into(),
+                lhs_batch_dims: [0].as_slice().into(),
+                rhs_batch_dims: [0].as_slice().into(),
             },
         )
         .unwrap();

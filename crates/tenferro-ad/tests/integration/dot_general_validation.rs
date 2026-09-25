@@ -41,10 +41,10 @@ fn assert_validation_error(config: DotGeneralConfig, expected_kind: ValidationKi
 fn traced_dot_general_rejects_out_of_bounds_contracting_dim() {
     assert_validation_error(
         DotGeneralConfig {
-            lhs_contracting_dims: vec![5],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [5].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         },
         ValidationKind::AxisOutOfBounds,
     );
@@ -54,10 +54,10 @@ fn traced_dot_general_rejects_out_of_bounds_contracting_dim() {
 fn traced_dot_general_rejects_contracting_batch_overlap() {
     assert_validation_error(
         DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![1],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [1].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         },
         ValidationKind::InvalidArgument,
     );
@@ -72,10 +72,10 @@ fn traced_dot_general_accepts_valid_config() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]))
             .unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let c = a.dot_general(&b, config).unwrap();
     let engine = cpu_runtime();
@@ -87,10 +87,10 @@ fn traced_dot_general_accepts_valid_config() {
 #[test]
 fn dot_general_config_validate_dims_ok() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![0],
-        rhs_batch_dims: vec![1],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [0].as_slice().into(),
+        rhs_batch_dims: [1].as_slice().into(),
     };
     assert!(config.validate_dims_with_ranks(2, 2).is_ok());
 }
@@ -98,10 +98,10 @@ fn dot_general_config_validate_dims_ok() {
 #[test]
 fn dot_general_config_validate_dims_out_of_bounds() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![3],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [3].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
     assert_eq!(
@@ -120,10 +120,10 @@ fn dot_general_config_validate_dims_out_of_bounds() {
 #[test]
 fn dot_general_config_validate_dims_contracting_count_mismatch() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![0, 1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [0, 1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
     assert_eq!(
@@ -135,10 +135,10 @@ fn dot_general_config_validate_dims_contracting_count_mismatch() {
 #[test]
 fn dot_general_config_validate_dims_batch_count_mismatch() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![0],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [0].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
     assert_eq!(
@@ -151,10 +151,10 @@ fn dot_general_config_validate_dims_batch_count_mismatch() {
 fn traced_dot_general_rejects_rhs_out_of_bounds_contracting_dim() {
     assert_validation_error(
         DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![5],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [5].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         },
         ValidationKind::AxisOutOfBounds,
     );
@@ -164,10 +164,10 @@ fn traced_dot_general_rejects_rhs_out_of_bounds_contracting_dim() {
 fn traced_dot_general_rejects_lhs_batch_out_of_bounds() {
     assert_validation_error(
         DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![5],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [5].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         },
         ValidationKind::AxisOutOfBounds,
     );
@@ -177,10 +177,10 @@ fn traced_dot_general_rejects_lhs_batch_out_of_bounds() {
 fn traced_dot_general_rejects_rhs_batch_out_of_bounds() {
     assert_validation_error(
         DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![5],
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [5].as_slice().into(),
         },
         ValidationKind::AxisOutOfBounds,
     );
@@ -190,10 +190,10 @@ fn traced_dot_general_rejects_rhs_batch_out_of_bounds() {
 fn traced_dot_general_rejects_rhs_contracting_batch_overlap() {
     assert_validation_error(
         DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![0],
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [0].as_slice().into(),
         },
         ValidationKind::InvalidArgument,
     );
@@ -203,10 +203,10 @@ fn traced_dot_general_rejects_rhs_contracting_batch_overlap() {
 fn traced_dot_general_rejects_duplicate_contracting_dims() {
     assert_validation_error(
         DotGeneralConfig {
-            lhs_contracting_dims: vec![0, 0],
-            rhs_contracting_dims: vec![0, 1],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [0, 0].as_slice().into(),
+            rhs_contracting_dims: [0, 1].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         },
         ValidationKind::InvalidArgument,
     );
@@ -215,10 +215,10 @@ fn traced_dot_general_rejects_duplicate_contracting_dims() {
 #[test]
 fn dot_general_config_validate_dims_rhs_out_of_bounds() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![5],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [5].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
     assert_eq!(
@@ -237,10 +237,10 @@ fn dot_general_config_validate_dims_rhs_out_of_bounds() {
 #[test]
 fn dot_general_config_validate_dims_duplicate_batch_dims() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![2],
-        rhs_contracting_dims: vec![2],
-        lhs_batch_dims: vec![0, 0],
-        rhs_batch_dims: vec![1, 1],
+        lhs_contracting_dims: [2].as_slice().into(),
+        rhs_contracting_dims: [2].as_slice().into(),
+        lhs_batch_dims: [0, 0].as_slice().into(),
+        rhs_batch_dims: [1, 1].as_slice().into(),
     };
     let err = config.validate_dims_with_ranks(3, 3).unwrap_err();
     assert_eq!(
@@ -269,10 +269,10 @@ fn traced_dot_general_accepts_batched_valid_config() {
     ))
     .unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![0, 2],
-        rhs_batch_dims: vec![1, 2],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [0, 2].as_slice().into(),
+        rhs_batch_dims: [1, 2].as_slice().into(),
     };
     let c = a.dot_general(&b, config).unwrap();
     let engine = cpu_runtime();

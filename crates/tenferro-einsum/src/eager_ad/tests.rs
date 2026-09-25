@@ -6,6 +6,36 @@ use super::{backend_broadcast_multiply_untracked, einsum, einsum_whole_program_u
 use crate::{ContractionTree, Subscripts};
 
 #[test]
+fn dot_general_retained_bytes_count_only_spilled_capacity() {
+    use tenferro_tensor::DotGeneralConfig;
+    for count in [0, 4, 5, 9] {
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: (0..count).collect(),
+            rhs_contracting_dims: (0..count).rev().collect(),
+            lhs_batch_dims: (count..2 * count).collect(),
+            rhs_batch_dims: (count..2 * count).rev().collect(),
+        };
+        let expected: usize = [
+            &config.lhs_contracting_dims,
+            &config.rhs_contracting_dims,
+            &config.lhs_batch_dims,
+            &config.rhs_batch_dims,
+        ]
+        .into_iter()
+        .filter(|axes| axes.spilled())
+        .map(|axes| axes.capacity() * size_of::<usize>())
+        .sum();
+        assert_eq!(
+            super::std_tensor_op_retained_bytes(&super::StdTensorOp::DotGeneral { config }),
+            expected
+        );
+        if count <= 4 {
+            assert_eq!(expected, 0);
+        }
+    }
+}
+
+#[test]
 fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let lhs = EagerTensor::from_tensor_in(

@@ -1729,10 +1729,10 @@ fn transpose_matrix_dot(
 ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
     let rank = 2 + config.lhs_batch_dims.len();
     let expected_batch: Vec<_> = (2..rank).collect();
-    if config.lhs_contracting_dims != [1]
-        || config.rhs_contracting_dims != [0]
-        || config.lhs_batch_dims != expected_batch
-        || config.rhs_batch_dims != expected_batch
+    if config.lhs_contracting_dims.as_slice() != [1]
+        || config.rhs_contracting_dims.as_slice() != [0]
+        || config.lhs_batch_dims.as_slice() != expected_batch.as_slice()
+        || config.rhs_batch_dims.as_slice() != expected_batch.as_slice()
     {
         return Err(semantic_internal(
             role,
@@ -1813,10 +1813,10 @@ fn semantic_matrix_multiply_config(
     }
     let batch_dims: Vec<usize> = (2..rank).collect();
     Ok(tenferro_tensor::DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: batch_dims.clone(),
-        rhs_batch_dims: batch_dims,
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: batch_dims.clone().into(),
+        rhs_batch_dims: batch_dims.into(),
     })
 }
 

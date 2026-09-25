@@ -44,10 +44,10 @@ fn test_faer_gemm_basic_f64() {
     let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let tc = ta.dot_general(&tb, config).unwrap();
 
@@ -66,10 +66,10 @@ fn test_faer_gemm_basic_f32() {
     let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let tc = ta.dot_general(&tb, config).unwrap();
 
@@ -96,10 +96,10 @@ fn test_faer_gemm_identity() {
     let ta = TracedTensor::from_tensor_concrete_shape(a.duplicate().unwrap()).unwrap();
     let ti = TracedTensor::from_tensor_concrete_shape(i).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let tc = ta.dot_general(&ti, config).unwrap();
 
@@ -137,10 +137,10 @@ fn test_batched_gemm() {
     let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1], // contract over dim 1 (K)
-        rhs_contracting_dims: vec![0], // contract over dim 0 (K)
-        lhs_batch_dims: vec![2],       // batch over dim 2
-        rhs_batch_dims: vec![2],       // batch over dim 2
+        lhs_contracting_dims: [1].as_slice().into(), // contract over dim 1 (K)
+        rhs_contracting_dims: [0].as_slice().into(), // contract over dim 0 (K)
+        lhs_batch_dims: [2].as_slice().into(),       // batch over dim 2
+        rhs_batch_dims: [2].as_slice().into(),       // batch over dim 2
     };
     let tc = ta.dot_general(&tb, config).unwrap();
 
@@ -183,10 +183,10 @@ fn test_strided_input_via_transpose_and_dot_general() {
         .dot_general(
             &tb,
             DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         )
         .unwrap();
@@ -210,10 +210,10 @@ fn test_vector_dot_product() {
     let tv = TracedTensor::from_tensor_concrete_shape(v).unwrap();
     let tw = TracedTensor::from_tensor_concrete_shape(w).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![0],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let tc = tv.dot_general(&tw, config).unwrap();
 

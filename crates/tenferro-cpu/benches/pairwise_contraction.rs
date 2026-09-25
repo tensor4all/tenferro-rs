@@ -46,22 +46,22 @@ impl Configs {
     fn new() -> Self {
         Self {
             first_site: DotGeneralConfig {
-                lhs_contracting_dims: vec![0],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [0].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
             env_bra: DotGeneralConfig {
-                lhs_contracting_dims: vec![0],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [0].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
             tmp_ket: DotGeneralConfig {
-                lhs_contracting_dims: vec![0, 1],
-                rhs_contracting_dims: vec![0, 1],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [0, 1].as_slice().into(),
+                rhs_contracting_dims: [0, 1].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         }
     }

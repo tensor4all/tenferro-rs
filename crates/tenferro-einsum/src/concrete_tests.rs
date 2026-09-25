@@ -34,6 +34,81 @@ fn public_tensor_einsum_ext_executes_dtype_erased_inputs() {
 }
 
 #[test]
+fn binary_dot_shape_check_uses_original_operand_order_for_unequal_ranks() {
+    let mut backend = CpuBackend::new();
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![4, 2, 3], vec![1.0_f64; 24]).unwrap();
+
+    let output = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum("ij,pqj->pqi", session))
+        .unwrap();
+    assert_f64_tensor(&output, &[4, 2, 2], &[3.0; 16]);
+}
+
+#[test]
+fn singleton_contracting_extent_uses_general_broadcast_fallback() {
+    let mut backend = CpuBackend::new();
+    let lhs = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64; 2]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![4, 2, 3], vec![1.0_f64; 24]).unwrap();
+
+    let output = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum("ij,pqj->pqi", session))
+        .unwrap();
+    assert_f64_tensor(&output, &[4, 2, 2], &[6.0; 16]);
+}
+
+#[test]
+fn binary_read_into_rejects_extra_inputs_without_mutating_output() {
+    let mut backend = CpuBackend::new();
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let extra = Tensor::from_vec_col_major(vec![2], vec![7.0_f64; 2]).unwrap();
+    let subscripts = crate::EinsumSubscripts::new(&[&[0, 1], &[2, 1]], &[2, 0]);
+
+    let mut owned_out = Tensor::from_vec_col_major(vec![2, 2], vec![9.0_f64; 4]).unwrap();
+    let owned = backend.with_backend_session(|session| {
+        [&lhs, &rhs, &extra].einsum_into_subscripts(
+            &subscripts,
+            session,
+            TensorWrite::from_tensor(&mut owned_out),
+        )
+    });
+    assert!(owned.is_err());
+    assert_f64_tensor(&owned_out, &[2, 2], &[9.0; 4]);
+
+    let reads = [
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        TensorRead::from_tensor(&extra),
+    ];
+    let mut read_out = Tensor::from_vec_col_major(vec![2, 2], vec![8.0_f64; 4]).unwrap();
+    let read = backend.with_backend_session(|session| {
+        reads.einsum_read_into_subscripts(
+            &subscripts,
+            session,
+            TensorWrite::from_tensor(&mut read_out),
+        )
+    });
+    assert!(read.is_err());
+    assert_f64_tensor(&read_out, &[2, 2], &[8.0; 4]);
+
+    let typed_lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
+    let typed_rhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
+    let typed_extra = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![7.0; 2]).unwrap();
+    let typed_views = [
+        typed_lhs.as_view(),
+        typed_rhs.as_view(),
+        typed_extra.as_view(),
+    ];
+    let mut typed_out = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![6.0; 4]).unwrap();
+    let typed = backend.with_backend_session(|session| {
+        typed_views.einsum_read_into_subscripts(&subscripts, session, &mut typed_out)
+    });
+    assert!(typed.is_err());
+    assert_eq!(typed_out.as_slice().unwrap(), &[6.0; 4]);
+}
+
+#[test]
 fn concrete_einsum_ellipsis_supports_diagonal_and_zero_rank_cases() {
     let mut backend = CpuBackend::new();
     let input =
@@ -463,6 +538,156 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
 }
 
 #[test]
+fn public_einsum_read_into_swaps_binary_operands_for_exact_output_order() {
+    let mut backend = CpuBackend::new();
+    let lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(
+        vec![4, 3],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    )
+    .unwrap();
+    let mut output = TypedTensor::<f64>::from_vec_col_major(vec![4, 2], vec![-1.0; 8]).unwrap();
+
+    backend
+        .with_backend_session(|session| {
+            [lhs.as_view(), rhs.as_view()].einsum_read_into("ij,pj->pi", session, &mut output)
+        })
+        .unwrap();
+
+    assert_eq!(
+        output.as_slice().unwrap(),
+        &[61.0, 70.0, 79.0, 88.0, 76.0, 88.0, 100.0, 112.0]
+    );
+}
+
+#[test]
+fn typed_view_read_into_compact_planner_handles_notation_and_parsed_labels() {
+    let mut backend = CpuBackend::new();
+    let lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(
+        vec![4, 3],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    )
+    .unwrap();
+    let notation = EinsumNotation::new(
+        &[
+            &[EinsumAxis::Label(105), EinsumAxis::Label(106)],
+            &[EinsumAxis::Label(112), EinsumAxis::Label(106)],
+        ],
+        &[EinsumAxis::Label(112), EinsumAxis::Label(105)],
+    );
+    let parsed = crate::EinsumSubscripts::new(&[&[105, 106], &[112, 106]], &[112, 105]);
+    let mut notation_out =
+        TypedTensor::<f64>::from_vec_col_major(vec![4, 2], vec![-1.0; 8]).unwrap();
+    let mut parsed_out = TypedTensor::<f64>::from_vec_col_major(vec![4, 2], vec![-1.0; 8]).unwrap();
+
+    backend
+        .with_backend_session(|session| {
+            [lhs.as_view(), rhs.as_view()].einsum_read_into_notation(
+                &notation,
+                session,
+                &mut notation_out,
+            )?;
+            [lhs.as_view(), rhs.as_view()].einsum_read_into_subscripts(
+                &parsed,
+                session,
+                &mut parsed_out,
+            )
+        })
+        .unwrap();
+
+    let expected = [61.0, 70.0, 79.0, 88.0, 76.0, 88.0, 100.0, 112.0];
+    assert_eq!(notation_out.as_slice().unwrap(), &expected);
+    assert_eq!(parsed_out.as_slice().unwrap(), &expected);
+}
+
+#[test]
+fn swapped_binary_einsum_preserves_complex_values() {
+    let mut backend = CpuBackend::new();
+    let lhs = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, -1.0),
+        ],
+    )
+    .unwrap();
+    let rhs = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 2.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let mut output = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![Complex64::new(-1.0, 0.0); 4],
+    )
+    .unwrap();
+
+    backend
+        .with_backend_session(|session| {
+            [lhs.as_view(), rhs.as_view()].einsum_read_into("ij,pj->pi", session, &mut output)
+        })
+        .unwrap();
+
+    assert_eq!(
+        output.as_slice().unwrap(),
+        &[
+            Complex64::new(10.0, 1.0),
+            Complex64::new(10.0, 2.0),
+            Complex64::new(14.0, -3.0),
+            Complex64::new(16.0, 0.0),
+        ]
+    );
+}
+
+#[test]
+fn swapped_binary_einsum_writes_strided_output_without_reordering_payload() {
+    let mut backend = CpuBackend::new();
+    let lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(
+        vec![4, 3],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    )
+    .unwrap();
+    let mut data = [-1.0; 10];
+    let out = TypedTensorViewMut::from_slice([4, 2], [1, 5], 1, &mut data).unwrap();
+
+    backend
+        .with_backend_session(|session| {
+            [lhs.as_view(), rhs.as_view()].einsum_read_into(
+                "ij,pj->pi",
+                session,
+                TypedTensorWrite::from_view(out),
+            )
+        })
+        .unwrap();
+
+    assert_eq!(
+        data,
+        [-1.0, 61.0, 70.0, 79.0, 88.0, -1.0, 76.0, 88.0, 100.0, 112.0]
+    );
+}
+
+#[test]
 fn public_einsum_into_preserves_complex_dtype() {
     let mut backend = CpuBackend::new();
     let lhs = TypedTensor::<Complex64>::from_vec_col_major(
@@ -539,6 +764,64 @@ fn public_einsum_into_rejects_output_shape_and_dtype_mismatch() {
 }
 
 #[test]
+fn einsum_into_gemm_fast_path_uses_exact_output_operand_order() {
+    let source = include_str!("eager.rs");
+    let start = source
+        .find("pub(crate) fn eager_einsum_exec_read_into")
+        .expect("missing eager_einsum_exec_read_into");
+    let tail = &source[start..];
+    let end = tail
+        .find("pub(crate) fn eager_einsum_exec_read_into_accum")
+        .expect("missing following function");
+    let body = &tail[..end];
+
+    assert!(
+        include_str!("eager.rs").contains("try_build_exact_output_binary_dot_plan"),
+        "binary read-into must plan an exact output order, including operand swapping"
+    );
+    assert!(
+        body.contains("binary_dot_plan_for_read_into"),
+        "tree-based read-into must share the exact-output planner"
+    );
+}
+
+#[test]
+fn ordinary_binary_read_into_dispatches_before_tree_preparation() {
+    let source = include_str!("concrete.rs");
+    let typed = source
+        .split("TypedTensorReadEinsumIntoExt<T> for [TypedTensorView")
+        .nth(1)
+        .expect("non-AD typed-view implementation");
+    assert!(
+        typed.find("parse_fast_ascii_binary_labels").unwrap()
+            < typed.find("parse_einsum_notation").unwrap(),
+        "the measured non-AD string API must dispatch before the generic parser"
+    );
+    let start = source
+        .find("fn tensor_read_einsum_into_subscripts(")
+        .expect("missing read-into entry point");
+    let tail = &source[start..];
+    let end = tail
+        .find("fn validate_output(")
+        .expect("missing following function");
+    let body = &tail[..end];
+    let dispatch = body
+        .find("read_binary_dot_config")
+        .expect("ordinary binary read-into should use the compact config path");
+    let tree = body
+        .find("prepare_subscripts_internal")
+        .expect("general einsum planning fallback should remain");
+    assert!(
+        dispatch < tree,
+        "compact binary dispatch must precede tree creation"
+    );
+    assert!(
+        !body.contains("binary_dot_plan_for_read_into"),
+        "concrete read-into must not build result/target label vectors"
+    );
+}
+
+#[test]
 fn einsum_into_gemm_fast_path_dispatches_to_backend_into_before_owned_fallback() {
     let source = include_str!("eager.rs");
     let start = source
@@ -551,7 +834,7 @@ fn einsum_into_gemm_fast_path_dispatches_to_backend_into_before_owned_fallback()
     let body = &tail[..end];
 
     let into_call = body
-        .find("exec.dot_general_read_into")
+        .find("execute_binary_dot_read_into")
         .expect("GEMM-compatible einsum_into must call backend read-into");
     let fallback = body
         .find("eager_einsum_exec_read(exec, inputs, tree)")
@@ -561,6 +844,24 @@ fn einsum_into_gemm_fast_path_dispatches_to_backend_into_before_owned_fallback()
         into_call < fallback,
         "GEMM-compatible einsum_into should try backend read-into before owned fallback"
     );
+}
+
+#[test]
+fn prepared_read_into_reuses_borrowed_metadata_and_binary_plan() {
+    let source = include_str!("concrete.rs");
+    let start = source
+        .find("pub fn execute_read_into<'a, I>(")
+        .expect("missing prepared read-into method");
+    let tail = &source[start..];
+    let end = tail
+        .find("pub fn execute_read_into_accum<'a, I>(")
+        .expect("missing following method");
+    let body = &tail[..end];
+
+    assert!(body.contains("validate_read_inputs(inputs"));
+    assert!(body.contains("validate_cached_output(&out"));
+    assert!(body.contains("if let Some(binary_dot) = &self.binary_dot"));
+    assert!(!body.contains("read_input_specs(inputs)"));
 }
 
 #[test]
@@ -693,6 +994,35 @@ fn concrete_einsum_plan_execute_typed_and_read_into_outputs() {
     assert_eq!(
         strided_data,
         [-1.0, 22.0, 28.0, -1.0, 49.0, 64.0, -1.0, -1.0]
+    );
+}
+
+#[test]
+fn prepared_binary_read_into_reuses_swapped_dot_metadata() {
+    let mut backend = CpuBackend::new();
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(
+        vec![4, 3],
+        vec![
+            1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    )
+    .unwrap();
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let plan = ConcreteEinsumPlan::prepare_read(&reads, "ij,pj->pi").unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![4, 2], vec![-1.0; 8]).unwrap();
+
+    backend
+        .with_backend_session(|session| {
+            plan.execute_read_into(&reads, session, TensorWrite::from_tensor(&mut out))
+        })
+        .unwrap();
+
+    assert_f64_tensor(
+        &out,
+        &[4, 2],
+        &[61.0, 70.0, 79.0, 88.0, 76.0, 88.0, 100.0, 112.0],
     );
 }
 

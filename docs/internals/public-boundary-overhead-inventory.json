@@ -1822,7 +1822,7 @@
                 "validation": [
                   {
                     "path": "crates/tenferro-einsum/src/concrete.rs",
-                    "symbol": "validate_inputs"
+                    "symbol": "validate_input_metadata"
                   }
                 ],
                 "wrapping": {

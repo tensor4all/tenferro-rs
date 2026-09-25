@@ -8,7 +8,10 @@ use tenferro_tensor::{
     TensorRead, TensorView, TensorWrite, TypedTensorView,
 };
 
-use crate::binary_dot::{try_build_binary_dot_plan, BinaryDotPlan};
+use crate::binary_dot::{
+    try_build_binary_dot_plan, try_build_exact_output_binary_dot_config,
+    try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder, BinaryDotPlan,
+};
 use crate::util::map_label_occurrences;
 use crate::{ConcreteEinsumPlan, ContractionTree, EinsumSubscripts, Subscripts};
 
@@ -698,19 +701,19 @@ fn binary_contract<'a>(
         )?
     } else {
         let (labels, config) = profile_eager_einsum_section("binary.build_dot_config", || {
-            let lhs_contracting_dims: Vec<usize> = contracting_labels
+            let lhs_contracting_dims = contracting_labels
                 .iter()
                 .map(|label| find_label_axis(&lhs.labels, *label))
                 .collect::<Result<_>>()?;
-            let rhs_contracting_dims: Vec<usize> = contracting_labels
+            let rhs_contracting_dims = contracting_labels
                 .iter()
                 .map(|label| find_label_axis(&rhs.labels, *label))
                 .collect::<Result<_>>()?;
-            let lhs_batch_dims: Vec<usize> = batch_labels
+            let lhs_batch_dims = batch_labels
                 .iter()
                 .map(|label| find_label_axis(&lhs.labels, *label))
                 .collect::<Result<_>>()?;
-            let rhs_batch_dims: Vec<usize> = batch_labels
+            let rhs_batch_dims = batch_labels
                 .iter()
                 .map(|label| find_label_axis(&rhs.labels, *label))
                 .collect::<Result<_>>()?;
@@ -896,6 +899,136 @@ pub(crate) fn eager_einsum_exec_read(
     eager_einsum_exec_values(exec, values, tree)
 }
 
+pub(crate) fn binary_dot_plan_for_shapes(
+    input_shapes: &[&[usize]],
+    subscripts: &Subscripts,
+) -> Option<BinaryDotPlan> {
+    if input_shapes.len() != 2 || subscripts.inputs.len() != 2 {
+        return None;
+    }
+    let [lhs_labels, rhs_labels] = subscripts.inputs.as_slice() else {
+        return None;
+    };
+    if input_shapes[0].len() != lhs_labels.len() || input_shapes[1].len() != rhs_labels.len() {
+        return None;
+    }
+    let plan = try_build_exact_output_binary_dot_plan(lhs_labels, rhs_labels, &subscripts.output)?;
+    let (lhs_shape, rhs_shape) = match plan.operand_order {
+        BinaryDotOperandOrder::Original => (input_shapes[0], input_shapes[1]),
+        BinaryDotOperandOrder::Swapped => (input_shapes[1], input_shapes[0]),
+    };
+    for (&lhs_axis, &rhs_axis) in plan
+        .config
+        .lhs_contracting_dims
+        .iter()
+        .zip(&plan.config.rhs_contracting_dims)
+        .chain(
+            plan.config
+                .lhs_batch_dims
+                .iter()
+                .zip(&plan.config.rhs_batch_dims),
+        )
+    {
+        if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
+            return None;
+        }
+    }
+    Some(plan)
+}
+
+pub(crate) fn binary_dot_config_for_into<L: Copy + PartialEq>(
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+    lhs_labels: &[L],
+    rhs_labels: &[L],
+    output_labels: &[L],
+    output_shape: &[usize],
+) -> Option<(BinaryDotOperandOrder, tenferro_tensor::DotGeneralConfig)> {
+    if lhs_shape.len() != lhs_labels.len()
+        || rhs_shape.len() != rhs_labels.len()
+        || output_shape.len() != output_labels.len()
+    {
+        return None;
+    }
+    let (order, config) =
+        try_build_exact_output_binary_dot_config(lhs_labels, rhs_labels, output_labels)?;
+    let (dot_lhs_shape, dot_rhs_shape) = match order {
+        BinaryDotOperandOrder::Original => (lhs_shape, rhs_shape),
+        BinaryDotOperandOrder::Swapped => (rhs_shape, lhs_shape),
+    };
+    for (&lhs_axis, &rhs_axis) in config
+        .lhs_contracting_dims
+        .iter()
+        .zip(&config.rhs_contracting_dims)
+        .chain(config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims))
+    {
+        if dot_lhs_shape[lhs_axis] != dot_rhs_shape[rhs_axis] {
+            return None;
+        }
+    }
+    for (axis, &label) in output_labels.iter().enumerate() {
+        let input_axis = lhs_labels
+            .iter()
+            .position(|&candidate| candidate == label)
+            .map(|input_axis| (lhs_shape, input_axis))
+            .or_else(|| {
+                rhs_labels
+                    .iter()
+                    .position(|&candidate| candidate == label)
+                    .map(|input_axis| (rhs_shape, input_axis))
+            })?;
+        if output_shape[axis] != input_axis.0[input_axis.1] {
+            return None;
+        }
+    }
+    Some((order, config))
+}
+
+pub(crate) fn binary_dot_plan_for_read_into(
+    inputs: &[TensorRead<'_>],
+    subscripts: &Subscripts,
+    out: &TensorWrite<'_>,
+) -> Option<BinaryDotPlan> {
+    if inputs.len() != 2 {
+        return None;
+    }
+    let input_shapes = [inputs[0].shape(), inputs[1].shape()];
+    let plan = binary_dot_plan_for_shapes(&input_shapes, subscripts)?;
+    if out.shape().len() != subscripts.output.len()
+        || inputs[0].dtype() != inputs[1].dtype()
+        || out.dtype() != inputs[0].dtype()
+    {
+        return None;
+    }
+    let [lhs_labels, rhs_labels] = subscripts.inputs.as_slice() else {
+        return None;
+    };
+    for (out_axis, &label) in subscripts.output.iter().enumerate() {
+        let (input, axis) = if let Some(axis) = lhs_labels.iter().position(|&x| x == label) {
+            (0, axis)
+        } else {
+            (1, rhs_labels.iter().position(|&x| x == label)?)
+        };
+        if out.shape().get(out_axis) != inputs[input].shape().get(axis) {
+            return None;
+        }
+    }
+    Some(plan)
+}
+
+pub(crate) fn execute_binary_dot_read_into(
+    exec: &mut dyn BackendSession,
+    inputs: &[TensorRead<'_>],
+    plan: &BinaryDotPlan,
+    out: TensorWrite<'_>,
+) -> Result<()> {
+    let (lhs, rhs) = match plan.operand_order {
+        BinaryDotOperandOrder::Original => (inputs[0].clone(), inputs[1].clone()),
+        BinaryDotOperandOrder::Swapped => (inputs[1].clone(), inputs[0].clone()),
+    };
+    exec.dot_general_read_into(lhs, rhs, &plan.config, out)
+}
+
 pub(crate) fn eager_einsum_exec_read_into(
     exec: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
@@ -904,27 +1037,10 @@ pub(crate) fn eager_einsum_exec_read_into(
 ) -> Result<()> {
     record_eager_einsum_profile("exec_read_into.enter", Duration::ZERO);
     let subscripts = &tree.subscripts;
-    if inputs.len() == 2
-        && subscripts.inputs.len() == 2
-        && inputs[0].shape().len() == subscripts.inputs[0].len()
-        && inputs[1].shape().len() == subscripts.inputs[1].len()
-    {
-        if let Some(plan) = try_build_binary_dot_plan(
-            &subscripts.inputs[0],
-            &subscripts.inputs[1],
-            &subscripts.output,
-        ) {
-            if plan.result_labels == plan.target_labels {
-                return profile_eager_einsum_section("binary.fast_dot_general_into", || {
-                    exec.dot_general_read_into(
-                        inputs[0].clone(),
-                        inputs[1].clone(),
-                        &plan.config,
-                        out,
-                    )
-                });
-            }
-        }
+    if let Some(plan) = binary_dot_plan_for_read_into(inputs, subscripts, &out) {
+        return profile_eager_einsum_section("binary.fast_dot_general_into", || {
+            execute_binary_dot_read_into(exec, inputs, &plan, out)
+        });
     }
 
     let result = eager_einsum_exec_read(exec, inputs, tree)?;

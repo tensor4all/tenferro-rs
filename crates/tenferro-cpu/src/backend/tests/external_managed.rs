@@ -1032,10 +1032,10 @@ fn external_provider_dot_uses_the_supplied_no_inner_executor() {
     let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     backend.dot_general(&lhs, &rhs, &config).unwrap();
@@ -1107,10 +1107,10 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
             &lhs,
             &rhs,
             &DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         )
         .unwrap();

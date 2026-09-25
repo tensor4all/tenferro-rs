@@ -847,10 +847,10 @@ fn semantic_core_dot_general_supports_ordered_jvp_and_hermitian_vjp() {
         [DimExpr::Const(3), DimExpr::Const(4)],
         CoreSemanticOp::DotGeneral {
             config: DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         },
     );
@@ -958,10 +958,10 @@ fn semantic_core_dot_general_jvp_and_vjp_execute_numerically() {
         [DimExpr::Const(3), DimExpr::Const(2)],
         CoreSemanticOp::DotGeneral {
             config: DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         },
     );

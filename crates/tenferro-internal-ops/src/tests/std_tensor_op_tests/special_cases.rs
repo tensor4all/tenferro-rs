@@ -368,10 +368,10 @@ fn test_std_tensor_op_convert_linearize_and_transpose_swap_dtypes() {
 fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     let matmul = StdTensorOp::DotGeneral {
         config: DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         },
     };
     let (linearize_none_result, linearize_none_graph) =
@@ -427,10 +427,10 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
 
     let scalar_contract = StdTensorOp::DotGeneral {
         config: DotGeneralConfig {
-            lhs_contracting_dims: vec![1, 0],
-            rhs_contracting_dims: vec![0, 1],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+            lhs_contracting_dims: [1, 0].as_slice().into(),
+            rhs_contracting_dims: [0, 1].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         },
     };
     let (scalar_transpose_result, _, scalar_transpose_graph) =

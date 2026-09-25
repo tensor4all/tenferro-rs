@@ -796,6 +796,67 @@ pub(crate) fn canonical_gemm_layout(
     (lhs_perm, rhs_perm, new_config)
 }
 
+fn analyse_rank2_gemm<L, R, T>(
+    lhs: &L,
+    rhs: &R,
+    config: &DotGeneralConfig,
+) -> crate::Result<Option<GemmDims>>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+{
+    if lhs.shape().len() != 2
+        || rhs.shape().len() != 2
+        || config.lhs_contracting_dims.len() != 1
+        || config.rhs_contracting_dims.len() != 1
+        || !config.lhs_batch_dims.is_empty()
+        || !config.rhs_batch_dims.is_empty()
+    {
+        return Ok(None);
+    }
+
+    let lhs_contract = config.lhs_contracting_dims[0];
+    let rhs_contract = config.rhs_contracting_dims[0];
+    // One axis per rank-2 operand cannot duplicate or overlap another role.
+    // Validate bounds and paired extents here; rejected configurations go through
+    // the general validator below, preserving its errors for every other case.
+    if lhs_contract >= 2
+        || rhs_contract >= 2
+        || lhs.shape()[lhs_contract] != rhs.shape()[rhs_contract]
+    {
+        return Ok(None);
+    }
+    let lhs_free = 1 - lhs_contract;
+    let rhs_free = 1 - rhs_contract;
+    let lhs_shape = lhs.shape();
+    let rhs_shape = rhs.shape();
+    let m = lhs_shape[lhs_free];
+    let n = rhs_shape[rhs_free];
+    let k = lhs_shape[lhs_contract];
+    dim_to_isize(m, "analyse_gemm")?;
+    dim_to_isize(n, "analyse_gemm")?;
+    dim_to_isize(k, "analyse_gemm")?;
+    let lhs_strides = lhs.strides()?;
+    let rhs_strides = rhs.strides()?;
+
+    let mut out_shape = SmallVec::<[usize; 8]>::new();
+    out_shape.push(m);
+    out_shape.push(n);
+    Ok(Some(GemmDims {
+        m,
+        n,
+        k,
+        batch_total: 1,
+        a_rs: lhs_strides[lhs_free],
+        a_cs: lhs_strides[lhs_contract],
+        a_bs: 0,
+        b_rs: rhs_strides[rhs_contract],
+        b_cs: rhs_strides[rhs_free],
+        b_bs: 0,
+        out_shape,
+    }))
+}
+
 fn analyse_gemm<L, R, T>(
     lhs: &L,
     rhs: &R,
@@ -941,8 +1002,13 @@ where
         }
     }
 
-    validate_dot_general(lhs, rhs, config)?;
-    let dims = analyse_gemm(lhs, rhs, config)?;
+    let dims = match analyse_rank2_gemm(lhs, rhs, config)? {
+        Some(dims) => Some(dims),
+        None => {
+            validate_dot_general(lhs, rhs, config)?;
+            analyse_gemm(lhs, rhs, config)?
+        }
+    };
     if let Some(slot) = cache_slot {
         cache.store(
             slot,

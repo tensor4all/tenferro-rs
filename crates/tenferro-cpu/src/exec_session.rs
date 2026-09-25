@@ -1018,12 +1018,12 @@ impl BackendSession for CpuExecSession<'_> {
             let rank = lhs.shape().len();
             (lhs, rhs, rank)
         };
-        let axes = (0..rank).collect::<Vec<_>>();
+        let axes = (0..rank).collect::<smallvec::SmallVec<[usize; 4]>>();
         let config = DotGeneralConfig {
             lhs_contracting_dims: axes.clone(),
             rhs_contracting_dims: axes,
-            lhs_batch_dims: Vec::new(),
-            rhs_batch_dims: Vec::new(),
+            lhs_batch_dims: Default::default(),
+            rhs_batch_dims: Default::default(),
         };
         self.execute_dot_allocated(None, lhs, rhs, &config, true, false)
     }

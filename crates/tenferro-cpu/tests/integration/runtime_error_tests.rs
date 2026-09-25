@@ -361,10 +361,10 @@ fn dot_general_rejects_out_of_bounds_contracting_dim() {
             &lhs,
             &rhs,
             &DotGeneralConfig {
-                lhs_contracting_dims: vec![2],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: [2].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         )
         .unwrap_err();

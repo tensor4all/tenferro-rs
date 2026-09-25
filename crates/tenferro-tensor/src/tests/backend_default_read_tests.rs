@@ -814,10 +814,10 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
         .unwrap();
 
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![0],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     backend
         .dot_general_read(
@@ -1054,10 +1054,10 @@ fn contraction_scalar_helpers_cover_supported_and_rejected_dtypes() {
 
 fn vector_contract_config() -> DotGeneralConfig {
     DotGeneralConfig {
-        lhs_contracting_dims: vec![0],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     }
 }
 

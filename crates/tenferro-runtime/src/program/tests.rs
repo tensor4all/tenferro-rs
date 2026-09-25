@@ -702,6 +702,46 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
 }
 
 #[test]
+fn dot_general_identity_uses_ordered_axes_not_storage() {
+    use tenferro_tensor::DotGeneralConfig;
+    for count in [2, 5] {
+        let build = |config: DotGeneralConfig| {
+            let mut builder = SemanticProgramBuilder::new();
+            let shape = vec![DimExpr::Const(2); count];
+            let lhs = builder
+                .input(ProgramInputSpec::new(DType::F64, shape.clone()))
+                .unwrap();
+            let rhs = builder
+                .input(ProgramInputSpec::new(DType::F64, shape))
+                .unwrap();
+            let output = builder
+                .add_op(CoreSemanticOp::DotGeneral { config }, &[lhs, rhs])
+                .unwrap()[0];
+            builder.finish(&[output]).unwrap()
+        };
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: (0..count).collect(),
+            rhs_contracting_dims: (0..count).rev().collect(),
+            lhs_batch_dims: Default::default(),
+            rhs_batch_dims: Default::default(),
+        };
+        let original = build(config.clone());
+        let mut reserved = config.clone();
+        reserved.lhs_contracting_dims.reserve(16);
+        let same = build(reserved);
+        assert_eq!(
+            original.program.semantic_fingerprint(),
+            same.program.semantic_fingerprint()
+        );
+        assert!(original.program.semantic_eq(same.program.as_ref()));
+        let mut reordered = config;
+        reordered.lhs_contracting_dims.swap(0, 1);
+        let different = build(reordered);
+        assert!(!original.program.semantic_eq(different.program.as_ref()));
+    }
+}
+
+#[test]
 fn semantic_identity_is_normalized_cached_and_excludes_bindings() {
     fn build(with_binding: bool) -> super::FrozenProgram {
         let mut builder = SemanticProgramBuilder::new();

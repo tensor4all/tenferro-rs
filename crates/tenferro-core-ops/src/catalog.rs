@@ -449,10 +449,10 @@ macro_rules! define_std_tensor_op {
                     $crate::PrimitiveOpKind::Conj => Self::Conj,
                     $crate::PrimitiveOpKind::DotGeneral => Self::DotGeneral {
                         config: DotGeneralConfig {
-                            lhs_contracting_dims: vec![0],
-                            rhs_contracting_dims: vec![0],
-                            lhs_batch_dims: vec![],
-                            rhs_batch_dims: vec![],
+                            lhs_contracting_dims: [0].as_slice().into(),
+                            rhs_contracting_dims: [0].as_slice().into(),
+                            lhs_batch_dims: [].as_slice().into(),
+                            rhs_batch_dims: [].as_slice().into(),
                         },
                     },
                     $crate::PrimitiveOpKind::Transpose => Self::Transpose { perm: vec![0] },
@@ -1042,10 +1042,10 @@ macro_rules! define_exec_op {
                         bytes: 0.0_f64.to_le_bytes().to_vec(),
                     },
                     $crate::PrimitiveOpKind::DotGeneral => Self::DotGeneral(DotGeneralConfig {
-                        lhs_contracting_dims: vec![0],
-                        rhs_contracting_dims: vec![0],
-                        lhs_batch_dims: vec![],
-                        rhs_batch_dims: vec![],
+                        lhs_contracting_dims: [0].as_slice().into(),
+                        rhs_contracting_dims: [0].as_slice().into(),
+                        lhs_batch_dims: [].as_slice().into(),
+                        rhs_batch_dims: [].as_slice().into(),
                     }),
                     $crate::PrimitiveOpKind::ReduceSum => Self::ReduceSum { axes: vec![0] },
                     $crate::PrimitiveOpKind::ReduceSumSquares => {
