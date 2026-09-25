@@ -70,6 +70,7 @@ class PodState:
     has_runtime: bool | None
 
 
+# Verification probe 2 for the gpu-validated-locally label path.
 class ProvisionExhaustedError(RunPodError):
     """Every bounded candidate attempt failed; failure is explicit."""
 
