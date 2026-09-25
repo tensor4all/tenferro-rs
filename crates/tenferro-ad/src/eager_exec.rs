@@ -765,7 +765,10 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Rsqrt => vec![exec.rsqrt_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Pow => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.pow(a.tensor(), b.tensor())?]
+                vec![exec.pow_read(
+                    TensorRead::from_tensor(a.tensor()),
+                    TensorRead::from_tensor(b.tensor()),
+                )?]
             }
             StdTensorOp::Abs => vec![exec.abs(inputs[0])?],
             StdTensorOp::Sign => vec![exec.sign(inputs[0])?],

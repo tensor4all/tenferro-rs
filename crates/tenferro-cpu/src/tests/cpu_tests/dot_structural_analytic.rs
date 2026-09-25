@@ -993,7 +993,14 @@ fn test_cpu_backend_analytic_ops_real() {
     let pow_exp = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![3.0, 0.5]).unwrap(),
     );
-    let pow_out = backend.pow(&pow_base, &pow_exp).unwrap();
+    let pow_out = backend
+        .with_backend_session(|__s| {
+            __s.pow_read(
+                TensorRead::from_tensor(&pow_base),
+                TensorRead::from_tensor(&pow_exp),
+            )
+        })
+        .unwrap();
     assert_f64_close(get_f64(&pow_out, &[0]), 8.0);
     assert_f64_close(get_f64(&pow_out, &[1]), 3.0);
 }
@@ -1116,7 +1123,14 @@ fn test_cpu_backend_analytic_ops_complex() {
         )
         .unwrap(),
     );
-    let pow_out = backend.pow(&pow_base, &pow_exp).unwrap();
+    let pow_out = backend
+        .with_backend_session(|__s| {
+            __s.pow_read(
+                TensorRead::from_tensor(&pow_base),
+                TensorRead::from_tensor(&pow_exp),
+            )
+        })
+        .unwrap();
     assert_c64_close(
         get_c64(&pow_out, &[0]),
         Complex64::new(1.0, 1.0).powc(Complex64::new(2.0, 0.0)),

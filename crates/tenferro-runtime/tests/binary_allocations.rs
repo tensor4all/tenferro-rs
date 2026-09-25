@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::TensorSessionOpsExt;
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSession, BackendSessionHost, CompareDir, Tensor};
 
 const LEN: usize = 4096;
@@ -77,13 +78,21 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
     assert_eq!(backend.num_threads(), 1);
     backend.with_backend_session(|session: &mut dyn BackendSession| {
         macro_rules! check {
-            ($name:ident) => {{
-                drop(session.$name(&a, &b).unwrap());
+            ($name:ident, $read:ident) => {{
+                drop(
+                    session
+                        .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                        .unwrap(),
+                );
                 eprintln!(
                     "{}: raw then public (effective backend threads=1)",
                     stringify!($name)
                 );
-                let (raw, baseline) = allocations(|| session.$name(&a, &b).unwrap());
+                let (raw, baseline) = allocations(|| {
+                    session
+                        .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                        .unwrap()
+                });
                 let (public, actual) = allocations(|| a.$name(&b, session).unwrap());
                 assert_eq!(
                     public.as_slice::<f64>().unwrap(),
@@ -96,14 +105,14 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
                 );
             }};
         }
-        check!(add);
-        check!(sub);
-        check!(mul);
-        check!(div);
-        check!(rem);
-        check!(pow);
-        check!(maximum);
-        check!(minimum);
+        check!(add, add_read);
+        check!(sub, sub_read);
+        check!(mul, mul_read);
+        check!(div, div_read);
+        check!(rem, rem_read);
+        check!(pow, pow_read);
+        check!(maximum, maximum_read);
+        check!(minimum, minimum_read);
         eprintln!("compare: raw then public");
         let (raw, baseline) = allocations(|| session.compare(&a, &b, &CompareDir::Lt).unwrap());
         let (public, actual) = allocations(|| a.compare(&b, CompareDir::Lt, session).unwrap());

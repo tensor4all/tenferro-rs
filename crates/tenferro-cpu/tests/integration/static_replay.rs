@@ -87,7 +87,11 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
         .zip(powers)
         .map(|(&x, n)| x.wrapping_pow(n as u32))
         .collect();
-    let out = backend.pow(&lhs, &rhs).unwrap();
+    let out = backend
+        .with_backend_session(|__s| {
+            __s.pow_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
     assert_eq!(out.as_slice::<i64>().unwrap(), expected);
     backend.reclaim_buffer(out);
     let out = backend
@@ -96,7 +100,12 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
     assert_eq!(out.as_slice::<i64>().unwrap(), expected);
     backend.reclaim_buffer(out);
     let negative = Tensor::from_vec_col_major([], vec![-1_i64]).unwrap();
-    assert!(backend.pow(&lhs, &negative).is_err());
+    assert!(backend
+        .with_backend_session(|__s| __s.pow_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&negative)
+        ))
+        .is_err());
     assert!(backend
         .pow_read(
             TensorRead::from_tensor(&lhs),

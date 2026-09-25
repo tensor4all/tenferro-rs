@@ -980,10 +980,6 @@ impl TensorElementwise for WebGpuBackend {
 }
 
 impl TensorAnalytic for WebGpuBackend {
-    fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_pow")
-    }
-
     // The old chain was: owned input -> the one-shot method -> its unsupported
     // error; view input -> the read-boundary error. WebGPU rejects the operation
     // either way, so evaluate the read input first and then raise the same

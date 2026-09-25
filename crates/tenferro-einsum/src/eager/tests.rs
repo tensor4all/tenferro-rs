@@ -372,10 +372,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
 }
 
 impl TensorAnalytic for NoBroadcastMaterializationBackend {
-    fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
-        Err(unexpected("pow"))
-    }
-
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
@@ -432,10 +428,9 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
         lhs: tenferro_tensor::TensorRead<'_>,
         rhs: tenferro_tensor::TensorRead<'_>,
     ) -> Result<Tensor> {
-        self.pow(
-            tenferro_tensor::backend::read_owned_tensor("pow", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("pow", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
+        Err(unexpected("pow"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

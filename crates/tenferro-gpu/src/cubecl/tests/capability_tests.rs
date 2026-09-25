@@ -3,8 +3,7 @@ use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use tenferro_cpu::cpu_capabilities;
 use tenferro_tensor::{
     capability_output_dtype, BackendId, BackendSessionHost, DType, OperationCapability,
-    SupportLevel, Tensor, TensorAnalytic, TensorDot, TensorElementwise, TensorRead,
-    TensorReduction,
+    SupportLevel, Tensor, TensorDot, TensorElementwise, TensorRead, TensorReduction,
 };
 
 use crate::config::CompareDir;
@@ -271,7 +270,11 @@ fn run_supported_case(
         PrimitiveOpKind::Rsqrt => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(x)))
         }),
-        PrimitiveOpKind::Pow => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.pow(l, r)),
+        PrimitiveOpKind::Pow => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
+            b.with_backend_session(|__s| {
+                __s.pow_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
+            })
+        }),
         PrimitiveOpKind::Expm1 => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| {
                 __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(x))
@@ -491,7 +494,9 @@ fn run_cpu_binary(
         PrimitiveOpKind::Rem => cpu.rem(lhs, rhs),
         PrimitiveOpKind::Maximum => cpu.maximum(lhs, rhs),
         PrimitiveOpKind::Minimum => cpu.minimum(lhs, rhs),
-        PrimitiveOpKind::Pow => cpu.pow(lhs, rhs),
+        PrimitiveOpKind::Pow => cpu.with_backend_session(|__s| {
+            __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+        }),
         _ => panic!("not a binary smoke op: {op:?}"),
     }
     .unwrap()

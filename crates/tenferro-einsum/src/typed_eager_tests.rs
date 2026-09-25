@@ -220,9 +220,6 @@ impl TensorElementwise for WrongDTypeBackend {
 }
 
 impl TensorAnalytic for WrongDTypeBackend {
-    panic_backend_methods! {
-        pow(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
-    }
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn exp_read(
@@ -300,10 +297,9 @@ impl TensorAnalytic for WrongDTypeBackend {
         lhs: tenferro_tensor::TensorRead<'_>,
         rhs: tenferro_tensor::TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.pow(
-            tenferro_tensor::backend::read_owned_tensor("pow", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("pow", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
+        panic!("pow should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

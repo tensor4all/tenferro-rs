@@ -2,9 +2,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
-    TensorAnalytic, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
+    BackendSessionHost, BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
+    GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
+    Tensor, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
     TensorStructural, TypedTensor, ValidationError,
 };
 
@@ -453,7 +453,11 @@ fn pow_returns_error_on_shape_mismatch_instead_of_panicking() {
     let rhs = f64_tensor(vec![1], vec![3.0]);
     let mut backend = CpuBackend::new();
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.pow(&lhs, &rhs)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| {
+            __s.pow_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+    }));
 
     assert!(result.is_ok(), "pow should return Err, not panic");
     let err = result.unwrap().unwrap_err();

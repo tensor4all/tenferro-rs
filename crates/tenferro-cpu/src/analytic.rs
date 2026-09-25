@@ -4,7 +4,9 @@ use std::mem::MaybeUninit;
 use strided_kernel::{map_into, reduce, zip_map2_into, StridedView};
 use tenferro_core_ops::PrimitiveOpKind;
 
-use super::{typed_view, typed_view_from_view, PooledUninitOutput};
+#[cfg(test)]
+use super::typed_view;
+use super::{typed_view_from_view, PooledUninitOutput};
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::{
     BackendId, CapabilityAxis, DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
@@ -468,6 +470,7 @@ pub(crate) fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| pow_with_pool(buffers, lhs, rhs))
 }
 
+#[cfg(test)]
 pub(crate) fn pow_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
@@ -518,6 +521,7 @@ pub(crate) fn pow_with_pool(
     }
 }
 /// The typed operands behind a same-dtype pair, or the refusal a mismatched pair reports.
+#[cfg(test)]
 fn analytic_pair_operands<'a, T: tenferro_tensor::TensorScalar>(
     lhs: &'a Tensor,
     rhs: &'a Tensor,
@@ -562,6 +566,7 @@ pub(crate) fn pow_read_with_pool(
     }
 }
 
+#[cfg(test)]
 fn typed_pow_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
@@ -612,6 +617,7 @@ where
     unsafe { out.assume_init() }
 }
 
+#[cfg(test)]
 fn typed_integer_pow_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,

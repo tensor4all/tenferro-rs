@@ -323,9 +323,6 @@ macro_rules! panic_elementwise {
 macro_rules! panic_analytic {
     ($ty:ident) => {
         impl TensorAnalytic for $ty {
-            panic_backend_methods! {
-                pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-            }
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
@@ -382,10 +379,9 @@ macro_rules! panic_analytic {
                 lhs: tenferro_tensor::TensorRead<'_>,
                 rhs: tenferro_tensor::TensorRead<'_>,
             ) -> TensorResult {
-                self.pow(
-                    tenferro_tensor::backend::read_owned_tensor("pow", lhs)?,
-                    tenferro_tensor::backend::read_owned_tensor("pow", rhs)?,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
+                panic!("pow should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -666,10 +662,6 @@ impl TensorElementwise for SessionCountingBackend {
 }
 
 impl TensorAnalytic for SessionCountingBackend {
-    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> TensorResult {
-        self.inner.pow(lhs, rhs)
-    }
-
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
@@ -726,10 +718,9 @@ impl TensorAnalytic for SessionCountingBackend {
         lhs: tenferro_tensor::TensorRead<'_>,
         rhs: tenferro_tensor::TensorRead<'_>,
     ) -> TensorResult {
-        self.pow(
-            tenferro_tensor::backend::read_owned_tensor("pow", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("pow", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
+        panic!("pow should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

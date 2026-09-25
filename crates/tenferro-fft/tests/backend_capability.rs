@@ -142,9 +142,6 @@ macro_rules! impl_minimal_tensor_backend {
         }
 
         impl TensorAnalytic for $ty {
-            unreachable_backend_methods! {
-                pow(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
-            }
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
@@ -197,7 +194,9 @@ macro_rules! impl_minimal_tensor_backend {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn pow_read(&mut self, lhs: tenferro_tensor::TensorRead<'_>, rhs: tenferro_tensor::TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-                self.pow(tenferro_tensor::backend::read_owned_tensor("pow", lhs)?, tenferro_tensor::backend::read_owned_tensor("pow", rhs)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
+                panic!("pow should not be called by this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and

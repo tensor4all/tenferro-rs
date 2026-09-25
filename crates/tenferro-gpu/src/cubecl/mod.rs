@@ -5689,36 +5689,8 @@ impl TensorAnalytic for CudaBackend {
     fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         let lhs = self.read_input(lhs)?;
         let rhs = self.read_input(rhs)?;
-        self.pow(lhs.as_tensor(), rhs.as_tensor())
-    }
-
-    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        if let Some(result) = self.unary_read_native(UnaryReadOp::Expm1, input.clone()) {
-            return result;
-        }
-        let input = self.read_input(input)?;
-        dispatch::dispatch_unary_float_only!(
-            self,
-            input.as_tensor(),
-            PrimitiveOpKind::Expm1,
-            expm1_float
-        )
-    }
-
-    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        if let Some(result) = self.unary_read_native(UnaryReadOp::Log1p, input.clone()) {
-            return result;
-        }
-        let input = self.read_input(input)?;
-        dispatch::dispatch_unary_float_only!(
-            self,
-            input.as_tensor(),
-            PrimitiveOpKind::Log1p,
-            log1p_float
-        )
-    }
-
-    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        let lhs = lhs.as_tensor();
+        let rhs = rhs.as_tensor();
         let op = op_name(
             PrimitiveOpKind::Pow,
             op_descriptor::GpuLaunchKind::BinaryFloatInt,
@@ -5856,6 +5828,32 @@ impl TensorAnalytic for CudaBackend {
                 Err(dtype_mismatch(op, lhs, rhs))
             }
         }
+    }
+
+    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        if let Some(result) = self.unary_read_native(UnaryReadOp::Expm1, input.clone()) {
+            return result;
+        }
+        let input = self.read_input(input)?;
+        dispatch::dispatch_unary_float_only!(
+            self,
+            input.as_tensor(),
+            PrimitiveOpKind::Expm1,
+            expm1_float
+        )
+    }
+
+    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        if let Some(result) = self.unary_read_native(UnaryReadOp::Log1p, input.clone()) {
+            return result;
+        }
+        let input = self.read_input(input)?;
+        dispatch::dispatch_unary_float_only!(
+            self,
+            input.as_tensor(),
+            PrimitiveOpKind::Log1p,
+            log1p_float
+        )
     }
 }
 

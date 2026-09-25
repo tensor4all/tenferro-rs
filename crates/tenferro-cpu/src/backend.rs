@@ -3208,10 +3208,6 @@ impl TensorAnalytic for CpuBackend {
         self.install_with_pool(|buffers| analytic::rsqrt_read_with_pool(buffers, input))
     }
 
-    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::pow_with_pool(buffers, lhs, rhs))
-    }
-
     fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| analytic::pow_read_with_pool(buffers, lhs, rhs))
     }
