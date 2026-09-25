@@ -1,4 +1,5 @@
 use super::*;
+use tenferro_tensor::BackendSessionHost;
 
 #[test]
 fn test_dot_general_matmul() {
@@ -1215,7 +1216,15 @@ fn test_tier2_elementwise_ops_real() {
     assert!(!get_bool(&ge, &[1]));
     assert!(get_bool(&ge, &[2]));
 
-    let select = backend.select(&pred, &on_true, &on_false).unwrap();
+    let select = backend
+        .with_backend_session(|__s| {
+            __s.select_read(
+                TensorRead::from_tensor(&pred),
+                TensorRead::from_tensor(&on_true),
+                TensorRead::from_tensor(&on_false),
+            )
+        })
+        .unwrap();
     assert_eq!(get_f64(&select, &[0]), 1.0);
     assert_eq!(get_f64(&select, &[1]), 20.0);
     assert_eq!(get_f64(&select, &[2]), 30.0);

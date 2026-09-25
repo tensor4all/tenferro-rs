@@ -248,16 +248,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn select(
-        &mut self,
-        _pred: &Tensor,
-        _on_true: &Tensor,
-        _on_false: &Tensor,
-    ) -> crate::Result<Tensor> {
-        self.calls.push("select");
-        Ok(marker())
-    }
-
     fn clamp(
         &mut self,
         _input: &Tensor,
@@ -369,11 +359,11 @@ impl TensorElementwise for DefaultReadBackend {
         on_true: TensorRead<'_>,
         on_false: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
-        self.select(
-            crate::backend::read_owned_tensor("select", pred)?,
-            crate::backend::read_owned_tensor("select", on_true)?,
-            crate::backend::read_owned_tensor("select", on_false)?,
-        )
+        let _ = crate::backend::read_owned_tensor("select", pred)?;
+        let _ = crate::backend::read_owned_tensor("select", on_true)?;
+        let _ = crate::backend::read_owned_tensor("select", on_false)?;
+        self.calls.push("select");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

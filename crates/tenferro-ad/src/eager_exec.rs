@@ -827,7 +827,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Select => {
                 let b = promote_to_dtype(exec, inputs[1], target_dtype(1))?;
                 let c = promote_to_dtype(exec, inputs[2], target_dtype(2))?;
-                vec![exec.select(inputs[0], b.tensor(), c.tensor())?]
+                vec![exec.select_read(
+                    TensorRead::from_tensor(inputs[0]),
+                    TensorRead::from_tensor(b.tensor()),
+                    TensorRead::from_tensor(c.tensor()),
+                )?]
             }
             StdTensorOp::Clamp => {
                 let input = promote_to_dtype(exec, inputs[0], target_dtype(0))?;

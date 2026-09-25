@@ -4,8 +4,8 @@ use crate::cubecl::gpu_available;
 use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    ErrorKind, TensorAnalytic, TensorElementwise, TensorFusion, TensorRead, TensorStructural,
-    TensorView, TensorWrite,
+    BackendSessionHost, ErrorKind, TensorAnalytic, TensorElementwise, TensorFusion, TensorRead,
+    TensorStructural, TensorView, TensorWrite,
 };
 
 use super::{
@@ -1344,9 +1344,23 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.select(&expected, &lhs, &rhs).unwrap();
+    cpu.with_backend_session(|__s| {
+        __s.select_read(
+            TensorRead::from_tensor(&expected),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+        )
+    })
+    .unwrap();
     let gpu_pred = upload(&gpu, &actual);
-    let gpu_out = gpu.select(&gpu_pred, &gpu_lhs, &gpu_rhs).unwrap();
+    gpu.with_backend_session(|__s| {
+        __s.select_read(
+            TensorRead::from_tensor(&gpu_pred),
+            TensorRead::from_tensor(&gpu_lhs),
+            TensorRead::from_tensor(&gpu_rhs),
+        )
+    })
+    .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -1446,8 +1460,22 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual_pred = download(&gpu, &gpu_pred);
     assert_tensor_close(&actual_pred, &expected_pred, 0.0);
 
-    let expected = cpu.select(&expected_pred, lhs, rhs).unwrap();
-    let gpu_out = gpu.select(&gpu_pred, &gpu_lhs, &gpu_rhs).unwrap();
+    cpu.with_backend_session(|__s| {
+        __s.select_read(
+            TensorRead::from_tensor(&expected_pred),
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+        )
+    })
+    .unwrap();
+    gpu.with_backend_session(|__s| {
+        __s.select_read(
+            TensorRead::from_tensor(&gpu_pred),
+            TensorRead::from_tensor(&gpu_lhs),
+            TensorRead::from_tensor(&gpu_rhs),
+        )
+    })
+    .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 }
@@ -1570,7 +1598,14 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "compare", DType::C64);
 
-    let err = gpu.select(&gpu_lhs, &gpu_lhs, &gpu_rhs).unwrap_err();
+    gpu.with_backend_session(|__s| {
+        __s.select_read(
+            TensorRead::from_tensor(&gpu_lhs),
+            TensorRead::from_tensor(&gpu_lhs),
+            TensorRead::from_tensor(&gpu_rhs),
+        )
+    })
+    .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "select", DType::C64);
 
     let err = gpu.clamp(&gpu_lhs, &gpu_lhs, &gpu_rhs).unwrap_err();

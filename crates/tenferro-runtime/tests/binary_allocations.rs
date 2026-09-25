@@ -128,7 +128,15 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
         );
         let condition = Tensor::from_vec_col_major([LEN], vec![true; LEN]).unwrap();
         eprintln!("select: raw then public");
-        let (raw, baseline) = allocations(|| session.select(&condition, &a, &b).unwrap());
+        let (raw, baseline) = allocations(|| {
+            session
+                .select_read(
+                    tenferro_tensor::TensorRead::from_tensor(&condition),
+                    tenferro_tensor::TensorRead::from_tensor(&a),
+                    tenferro_tensor::TensorRead::from_tensor(&b),
+                )
+                .unwrap()
+        });
         let (public, actual) = allocations(|| condition.where_select(&a, &b, session).unwrap());
         assert_eq!(
             public.as_slice::<f64>().unwrap(),

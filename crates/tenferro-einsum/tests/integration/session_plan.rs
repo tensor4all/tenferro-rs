@@ -188,7 +188,6 @@ macro_rules! panic_elementwise {
                 maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
-                select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult;
                 clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult;
             }
 
@@ -293,11 +292,10 @@ macro_rules! panic_elementwise {
                 on_true: TensorRead<'_>,
                 on_false: TensorRead<'_>,
             ) -> TensorResult {
-                self.select(
-                    tenferro_tensor::backend::read_owned_tensor("select", pred)?,
-                    tenferro_tensor::backend::read_owned_tensor("select", on_true)?,
-                    tenferro_tensor::backend::read_owned_tensor("select", on_false)?,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+                panic!("select should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -537,10 +535,6 @@ impl TensorElementwise for SessionCountingBackend {
         self.inner.compare(lhs, rhs, dir)
     }
 
-    fn select(&mut self, pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult {
-        self.inner.select(pred, on_true, on_false)
-    }
-
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult {
         self.inner.clamp(input, lower, upper)
     }
@@ -649,11 +643,10 @@ impl TensorElementwise for SessionCountingBackend {
         on_true: TensorRead<'_>,
         on_false: TensorRead<'_>,
     ) -> TensorResult {
-        self.select(
-            tenferro_tensor::backend::read_owned_tensor("select", pred)?,
-            tenferro_tensor::backend::read_owned_tensor("select", on_true)?,
-            tenferro_tensor::backend::read_owned_tensor("select", on_false)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+        panic!("select should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

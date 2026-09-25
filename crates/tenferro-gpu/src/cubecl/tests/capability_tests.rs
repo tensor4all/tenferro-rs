@@ -2,8 +2,9 @@ use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use tenferro_cpu::cpu_capabilities;
 use tenferro_tensor::{
-    capability_output_dtype, BackendId, DType, OperationCapability, SupportLevel, Tensor,
-    TensorAnalytic, TensorDot, TensorElementwise, TensorRead, TensorReduction,
+    capability_output_dtype, BackendId, BackendSessionHost, DType, OperationCapability,
+    SupportLevel, Tensor, TensorAnalytic, TensorDot, TensorElementwise, TensorRead,
+    TensorReduction,
 };
 
 use crate::config::CompareDir;
@@ -355,8 +356,24 @@ fn assert_select_matches(
     let gpu_pred = upload(gpu, &pred);
     let gpu_lhs = upload(gpu, &lhs);
     let gpu_rhs = upload(gpu, &rhs);
-    let expected = cpu.select(&pred, &lhs, &rhs).unwrap();
-    let gpu_output = gpu.select(&gpu_pred, &gpu_lhs, &gpu_rhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.select_read(
+                TensorRead::from_tensor(&pred),
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+            )
+        })
+        .unwrap();
+    let gpu_output = gpu
+        .with_backend_session(|__s| {
+            __s.select_read(
+                TensorRead::from_tensor(&gpu_pred),
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+            )
+        })
+        .unwrap();
     let actual = download(gpu, &gpu_output);
     assert_tensor_close(&actual, &expected, tolerance(entry.dtype));
 }

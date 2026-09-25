@@ -4821,10 +4821,98 @@ impl TensorElementwise for CudaBackend {
         on_true: TensorRead<'_>,
         on_false: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
-        let pred = self.read_input(pred)?;
-        let on_true = self.read_input(on_true)?;
-        let on_false = self.read_input(on_false)?;
-        self.select(pred.as_tensor(), on_true.as_tensor(), on_false.as_tensor())
+        let pred_owned = self.read_input(pred)?;
+        let on_true_owned = self.read_input(on_true)?;
+        let on_false_owned = self.read_input(on_false)?;
+        let pred = pred_owned.as_tensor();
+        let on_true = on_true_owned.as_tensor();
+        let on_false = on_false_owned.as_tensor();
+        let op = op_name(
+            PrimitiveOpKind::Select,
+            op_descriptor::GpuLaunchKind::SelectBoolFloatInt,
+        )?;
+        match (pred.dtype(), on_true.dtype(), on_false.dtype()) {
+            (DType::Bool, DType::F32, DType::F32) => {
+                let pred = typed_or_unsupported::<bool>(pred, op)?;
+                let on_true = typed_or_unsupported::<f32>(on_true, op)?;
+                let on_false = typed_or_unsupported::<f32>(on_false, op)?;
+                launch_select_bool(
+                    self.runtime(),
+                    pred,
+                    on_true,
+                    on_false,
+                    pred.shape(),
+                    op,
+                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                        elementwise::select_bool_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                            client, count, dim, out, pred_arg, true_arg, false_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<f32>)
+            }
+            (DType::Bool, DType::F64, DType::F64) => {
+                let pred = typed_or_unsupported::<bool>(pred, op)?;
+                let on_true = typed_or_unsupported::<f64>(on_true, op)?;
+                let on_false = typed_or_unsupported::<f64>(on_false, op)?;
+                launch_select_bool(
+                    self.runtime(),
+                    pred,
+                    on_true,
+                    on_false,
+                    pred.shape(),
+                    op,
+                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                        elementwise::select_bool_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                            client, count, dim, out, pred_arg, true_arg, false_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<f64>)
+            }
+            (DType::Bool, DType::I32, DType::I32) => {
+                let pred = typed_or_unsupported::<bool>(pred, op)?;
+                let on_true = typed_or_unsupported::<i32>(on_true, op)?;
+                let on_false = typed_or_unsupported::<i32>(on_false, op)?;
+                launch_select_bool(
+                    self.runtime(),
+                    pred,
+                    on_true,
+                    on_false,
+                    pred.shape(),
+                    op,
+                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                        elementwise::select_bool_int::launch_unchecked::<i32, CubeclCudaRuntime>(
+                            client, count, dim, out, pred_arg, true_arg, false_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<i32>)
+            }
+            (DType::Bool, DType::I64, DType::I64) => {
+                let pred = typed_or_unsupported::<bool>(pred, op)?;
+                let on_true = typed_or_unsupported::<i64>(on_true, op)?;
+                let on_false = typed_or_unsupported::<i64>(on_false, op)?;
+                launch_select_bool(
+                    self.runtime(),
+                    pred,
+                    on_true,
+                    on_false,
+                    pred.shape(),
+                    op,
+                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                        elementwise::select_bool_int::launch_unchecked::<i64, CubeclCudaRuntime>(
+                            client, count, dim, out, pred_arg, true_arg, false_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<i64>)
+            }
+            (DType::C32, DType::C32, DType::C32) | (DType::C64, DType::C64, DType::C64) => {
+                Err(unsupported_dtype(op, pred.dtype()))
+            }
+            _ => Err(ternary_dtype_mismatch(op, pred, on_true, on_false)),
+        }
     }
 
     fn clamp_read(
@@ -5448,100 +5536,6 @@ impl TensorElementwise for CudaBackend {
                 Err(unsupported_dtype(op, lhs.dtype()))
             }
             _ => Err(dtype_mismatch(op, lhs, rhs)),
-        }
-    }
-
-    fn select(
-        &mut self,
-        pred: &Tensor,
-        on_true: &Tensor,
-        on_false: &Tensor,
-    ) -> crate::Result<Tensor> {
-        let op = op_name(
-            PrimitiveOpKind::Select,
-            op_descriptor::GpuLaunchKind::SelectBoolFloatInt,
-        )?;
-        match (pred.dtype(), on_true.dtype(), on_false.dtype()) {
-            (DType::Bool, DType::F32, DType::F32) => {
-                let pred = typed_or_unsupported::<bool>(pred, op)?;
-                let on_true = typed_or_unsupported::<f32>(on_true, op)?;
-                let on_false = typed_or_unsupported::<f32>(on_false, op)?;
-                launch_select_bool(
-                    self.runtime(),
-                    pred,
-                    on_true,
-                    on_false,
-                    pred.shape(),
-                    op,
-                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                        elementwise::select_bool_float::launch_unchecked::<f32, CubeclCudaRuntime>(
-                            client, count, dim, out, pred_arg, true_arg, false_arg,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<f32>)
-            }
-            (DType::Bool, DType::F64, DType::F64) => {
-                let pred = typed_or_unsupported::<bool>(pred, op)?;
-                let on_true = typed_or_unsupported::<f64>(on_true, op)?;
-                let on_false = typed_or_unsupported::<f64>(on_false, op)?;
-                launch_select_bool(
-                    self.runtime(),
-                    pred,
-                    on_true,
-                    on_false,
-                    pred.shape(),
-                    op,
-                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                        elementwise::select_bool_float::launch_unchecked::<f64, CubeclCudaRuntime>(
-                            client, count, dim, out, pred_arg, true_arg, false_arg,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<f64>)
-            }
-            (DType::Bool, DType::I32, DType::I32) => {
-                let pred = typed_or_unsupported::<bool>(pred, op)?;
-                let on_true = typed_or_unsupported::<i32>(on_true, op)?;
-                let on_false = typed_or_unsupported::<i32>(on_false, op)?;
-                launch_select_bool(
-                    self.runtime(),
-                    pred,
-                    on_true,
-                    on_false,
-                    pred.shape(),
-                    op,
-                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                        elementwise::select_bool_int::launch_unchecked::<i32, CubeclCudaRuntime>(
-                            client, count, dim, out, pred_arg, true_arg, false_arg,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<i32>)
-            }
-            (DType::Bool, DType::I64, DType::I64) => {
-                let pred = typed_or_unsupported::<bool>(pred, op)?;
-                let on_true = typed_or_unsupported::<i64>(on_true, op)?;
-                let on_false = typed_or_unsupported::<i64>(on_false, op)?;
-                launch_select_bool(
-                    self.runtime(),
-                    pred,
-                    on_true,
-                    on_false,
-                    pred.shape(),
-                    op,
-                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                        elementwise::select_bool_int::launch_unchecked::<i64, CubeclCudaRuntime>(
-                            client, count, dim, out, pred_arg, true_arg, false_arg,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<i64>)
-            }
-            (DType::C32, DType::C32, DType::C32) | (DType::C64, DType::C64, DType::C64) => {
-                Err(unsupported_dtype(op, pred.dtype()))
-            }
-            _ => Err(ternary_dtype_mismatch(op, pred, on_true, on_false)),
         }
     }
 

@@ -86,7 +86,6 @@ delegate!(TensorElementwise {
     fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
-    fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
     fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
     fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
     fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;

@@ -66,7 +66,6 @@ impl TensorElementwise for WrongDTypeBackend {
         maximum(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         minimum(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
-        select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> tenferro_tensor::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
     }
 
@@ -198,11 +197,10 @@ impl TensorElementwise for WrongDTypeBackend {
         on_true: TensorRead<'_>,
         on_false: TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.select(
-            tenferro_tensor::backend::read_owned_tensor("select", pred)?,
-            tenferro_tensor::backend::read_owned_tensor("select", on_true)?,
-            tenferro_tensor::backend::read_owned_tensor("select", on_false)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+        panic!("select should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

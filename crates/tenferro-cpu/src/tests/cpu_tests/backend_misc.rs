@@ -1495,7 +1495,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
-        select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
 
@@ -1616,11 +1615,17 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             on_true: TensorRead<'_>,
             on_false: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
-            self.select(
-                tenferro_tensor::backend::read_owned_tensor("select", pred)?,
-                tenferro_tensor::backend::read_owned_tensor("select", on_true)?,
-                tenferro_tensor::backend::read_owned_tensor("select", on_false)?,
-            )
+            let pred = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+            let on_true = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+            let on_false = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.select_read(
+                    TensorRead::from_tensor(pred),
+                    TensorRead::from_tensor(on_true),
+                    TensorRead::from_tensor(on_false),
+                )
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1947,7 +1952,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
-        select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
 
@@ -2068,11 +2072,17 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             on_true: TensorRead<'_>,
             on_false: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
-            self.select(
-                tenferro_tensor::backend::read_owned_tensor("select", pred)?,
-                tenferro_tensor::backend::read_owned_tensor("select", on_true)?,
-                tenferro_tensor::backend::read_owned_tensor("select", on_false)?,
-            )
+            let pred = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+            let on_true = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+            let on_false = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.select_read(
+                    TensorRead::from_tensor(pred),
+                    TensorRead::from_tensor(on_true),
+                    TensorRead::from_tensor(on_false),
+                )
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

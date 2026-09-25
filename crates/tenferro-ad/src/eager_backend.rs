@@ -328,7 +328,6 @@ impl TensorElementwise for RecordingBackend {
         fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
-        fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
     }
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -423,10 +422,13 @@ impl TensorElementwise for RecordingBackend {
         on_true: TensorRead<'_>,
         on_false: TensorRead<'_>,
     ) -> TensorResult<Tensor> {
-        self.select(
-            tenferro_tensor::backend::read_owned_tensor("select", pred)?,
-            tenferro_tensor::backend::read_owned_tensor("select", on_true)?,
-            tenferro_tensor::backend::read_owned_tensor("select", on_false)?,
+        let pred = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+        let on_true = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+        let on_false = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+        self.inner.select_read(
+            TensorRead::from_tensor(pred),
+            TensorRead::from_tensor(on_true),
+            TensorRead::from_tensor(on_false),
         )
     }
 
@@ -761,7 +763,6 @@ impl TensorElementwise for EagerBackend {
         fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> TensorResult<Tensor>;
-        fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult<Tensor>;
         fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
         fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> TensorResult<Tensor>;

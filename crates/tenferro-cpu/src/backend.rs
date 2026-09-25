@@ -3132,23 +3132,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn select(
-        &mut self,
-        pred: &Tensor,
-        on_true: &Tensor,
-        on_false: &Tensor,
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::select_with_pool(
-                buffers,
-                &context.strided_exec_context(),
-                pred,
-                on_true,
-                on_false,
-            )
-        })
-    }
-
     fn select_read(
         &mut self,
         pred: TensorRead<'_>,

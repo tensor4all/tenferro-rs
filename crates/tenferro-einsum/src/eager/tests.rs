@@ -254,10 +254,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("compare"))
     }
 
-    fn select(&mut self, _pred: &Tensor, _on_true: &Tensor, _on_false: &Tensor) -> Result<Tensor> {
-        Err(unexpected("select"))
-    }
-
     fn clamp(&mut self, _input: &Tensor, _lower: &Tensor, _upper: &Tensor) -> Result<Tensor> {
         Err(unexpected("clamp"))
     }
@@ -353,11 +349,10 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         on_true: TensorRead<'_>,
         on_false: TensorRead<'_>,
     ) -> Result<Tensor> {
-        self.select(
-            tenferro_tensor::backend::read_owned_tensor("select", pred)?,
-            tenferro_tensor::backend::read_owned_tensor("select", on_true)?,
-            tenferro_tensor::backend::read_owned_tensor("select", on_false)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+        Err(unexpected("select"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

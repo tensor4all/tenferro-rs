@@ -814,15 +814,6 @@ impl TensorElementwise for WebGpuBackend {
         unsupported!("webgpu_compare")
     }
 
-    fn select(
-        &mut self,
-        _pred: &Tensor,
-        _on_true: &Tensor,
-        _on_false: &Tensor,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_select")
-    }
-
     fn clamp(
         &mut self,
         _input: &Tensor,
