@@ -13,6 +13,15 @@ are never owned by or lifetime-bound to a session.
 The one-shot API (`a.add(&b, &mut backend)`) stays available and becomes a
 thin wrapper around the session implementation where practical.
 
+> **Superseded in part by
+> [#1926](./explicit-session-boundary.md).** This document's scope is *adding*
+> the session-explicit surface, and it deliberately keeps the one-shot
+> spelling. #1926 goes further and removes session-opening *operation-level*
+> APIs, because a thin wrapper that opens a session per call is still an
+> implicit entry. The session surface defined here, the nested-entry
+> prohibition, and cache parity remain in force; only "the one-shot API stays
+> available" changes.
+
 ## Motivation (measured)
 
 Session entry for managed CPU execution is ~3 µs/op (release, pinned, 1
@@ -131,6 +140,8 @@ session API:  &mut dyn BackendSession ──────────────
 - GPU small-op launch overhead is a separate concern (fusion/static
   execution), not addressed by session reuse.
 - The one-shot API is not broken for aesthetic consistency.
+  ([#1926](./explicit-session-boundary.md) supersedes this specific
+  non-goal for session-opening operation-level APIs; the rest stand.)
 
 ## Acceptance criteria
 

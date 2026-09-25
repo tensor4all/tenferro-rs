@@ -62,27 +62,21 @@ kernels use `Par::Seq` for one thread and explicit `Par::rayon(n)` otherwise,
 so policy construction cannot inherit an unrelated ambient Rayon degree before
 joining the `CpuContext` pool.
 
-```rust
-impl TensorBackend for CpuBackend {
-    fn with_backend_session<R: Send>(
-        &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
-        let mut buffers = std::mem::take(&mut self.buffers);
-        let ctx = Arc::clone(&self.ctx);
-        let result = ctx.install(|| {
-            let mut session = CpuExecSession { ctx: &ctx, buffers: &mut buffers };
-            f(&mut session)
-        });
-        self.buffers = buffers;
-        result
-    }
-}
-```
-
 `CpuExecSession` implements `BackendSession` by calling kernel functions
 directly after the session has entered `CpuContext`. Individual ops should not
 re-enter the pool.
+
+The CPU host entry is not a direct `ctx.install` + buffer swap as it once was.
+`CpuBackend` owns no buffer field; admission, the `CpuOperationEntry` permit,
+the engine-owned `BufferPool` loan, and provider exclusion are handled by
+`CpuBackend::run_backend_session_cached`
+(`crates/tenferro-cpu/src/backend.rs`), which
+`BackendSessionHost::with_backend_session` calls. Read the source for the
+current contract; [`cpu-backend-execution.md`](./cpu-backend-execution.md)
+owns the permit and reentrancy semantics.
+
+Which functions are allowed to reach that entry is specified in
+[`explicit-session-boundary.md`](./explicit-session-boundary.md).
 
 ### CubeCL/CUDA
 
@@ -107,8 +101,11 @@ cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's `CudaRuntime`.
 
 GPU exec sessions run the closure on the calling thread, so `Send` is not
 needed for GPU; the trait still requires it because the CPU managed path does.
-Nested-entry detection for the GPU overrides is not yet wired to the portable
-debug guard (see `session-oriented-concrete-apis.md`).
+Both GPU overrides call `with_session_entry_guard`
+(`crates/tenferro-tensor/src/backend.rs`), so nested entry is caught by the
+portable in-session guard — in **debug builds only**. Release-mode nested-entry
+enforcement for the GPU overrides is still open (see
+`session-oriented-concrete-apis.md`).
 
 ### Default (no-op)
 
