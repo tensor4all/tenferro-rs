@@ -760,7 +760,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Log => vec![exec.log_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Sin => vec![exec.sin_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Cos => vec![exec.cos_read(TensorRead::from_tensor(inputs[0]))?],
-            StdTensorOp::Tanh => vec![exec.tanh(inputs[0])?],
+            StdTensorOp::Tanh => vec![exec.tanh_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Sqrt => vec![exec.sqrt(inputs[0])?],
             StdTensorOp::Rsqrt => vec![exec.rsqrt_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Pow => {

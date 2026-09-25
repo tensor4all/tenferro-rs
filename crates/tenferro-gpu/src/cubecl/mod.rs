@@ -5647,7 +5647,12 @@ impl TensorAnalytic for CudaBackend {
             return result;
         }
         let input = self.read_input(input)?;
-        self.tanh(input.as_tensor())
+        dispatch::dispatch_unary_float_only!(
+            self,
+            input.as_tensor(),
+            PrimitiveOpKind::Tanh,
+            tanh_float
+        )
     }
 
     fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5705,10 +5710,6 @@ impl TensorAnalytic for CudaBackend {
 
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Exp, exp_float)
-    }
-
-    fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Tanh, tanh_float)
     }
 
     fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {

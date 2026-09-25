@@ -59,7 +59,9 @@ fn elementwise_read_compact_view_chain_uses_native_kernels() {
     let mut cpu = cpu_backend();
     let sum = cpu.add(&host_lhs, &host_rhs).unwrap();
     let product = cpu.mul(&sum, &host_rhs).unwrap();
-    let expected = cpu.tanh(&product).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&product)))
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let lhs = upload(&gpu, &host_lhs);
@@ -1316,8 +1318,12 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.tanh(&positive).unwrap();
-    let gpu_out = gpu.tanh(&gpu_positive).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&positive)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&gpu_positive)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 

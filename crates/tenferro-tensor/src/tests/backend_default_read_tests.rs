@@ -388,11 +388,6 @@ impl TensorAnalytic for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn tanh(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("tanh");
-        Ok(marker())
-    }
-
     fn sqrt(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("sqrt");
         Ok(marker())
@@ -436,7 +431,9 @@ impl TensorAnalytic for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.tanh(crate::backend::read_owned_tensor("tanh", input)?)
+        let _ = crate::backend::read_owned_tensor("tanh", input)?;
+        self.calls.push("tanh");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

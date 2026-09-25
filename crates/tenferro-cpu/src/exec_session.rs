@@ -417,7 +417,6 @@ impl TensorAnalytic for CpuExecSession<'_> {
     delegate_with_pool!(log_read(input: TensorRead<'_>) => analytic::log_read_with_pool);
     delegate_with_pool!(sin_read(input: TensorRead<'_>) => analytic::sin_read_with_pool);
     delegate_with_pool!(cos_read(input: TensorRead<'_>) => analytic::cos_read_with_pool);
-    delegate_with_pool!(tanh(input: &Tensor) => analytic::tanh_with_pool);
     delegate_with_pool!(tanh_read(input: TensorRead<'_>) => analytic::tanh_read_with_pool);
     delegate_with_pool!(sqrt(input: &Tensor) => analytic::sqrt_with_pool);
     delegate_with_pool!(sqrt_read(input: TensorRead<'_>) => analytic::sqrt_read_with_pool);

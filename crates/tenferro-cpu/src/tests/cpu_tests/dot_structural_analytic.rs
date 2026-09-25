@@ -952,7 +952,9 @@ fn test_cpu_backend_analytic_ops_real() {
     let tanh_input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![0.0, 1.0]).unwrap(),
     );
-    let tanh_out = backend.tanh(&tanh_input).unwrap();
+    let tanh_out = backend
+        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&tanh_input)))
+        .unwrap();
     assert_f64_close(get_f64(&tanh_out, &[0]), 0.0);
     assert_f64_close(get_f64(&tanh_out, &[1]), 1.0_f64.tanh());
 
@@ -1033,7 +1035,9 @@ fn test_cpu_backend_analytic_ops_complex() {
     let cos_out = backend
         .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&trig_input)))
         .unwrap();
-    let tanh_out = backend.tanh(&trig_input).unwrap();
+    let tanh_out = backend
+        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&trig_input)))
+        .unwrap();
     assert_c64_close(get_c64(&sin_out, &[0]), Complex64::new(0.0, 0.0).sin());
     assert_c64_close(get_c64(&sin_out, &[1]), Complex64::new(0.5, -0.25).sin());
     assert_c64_close(get_c64(&cos_out, &[0]), Complex64::new(0.0, 0.0).cos());

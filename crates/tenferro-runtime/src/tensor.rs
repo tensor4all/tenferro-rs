@@ -107,7 +107,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn tanh(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.tanh(self)
+        session.tanh_read(TensorRead::from_tensor(self))
     }
 
     fn sqrt(&self, session: &mut dyn BackendSession) -> Result<Tensor> {

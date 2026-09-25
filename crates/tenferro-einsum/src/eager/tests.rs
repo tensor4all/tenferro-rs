@@ -376,10 +376,6 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
         Err(unexpected("exp"))
     }
 
-    fn tanh(&mut self, _input: &Tensor) -> Result<Tensor> {
-        Err(unexpected("tanh"))
-    }
-
     fn sqrt(&mut self, _input: &Tensor) -> Result<Tensor> {
         Err(unexpected("sqrt"))
     }
@@ -418,7 +414,8 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
-        self.tanh(tenferro_tensor::backend::read_owned_tensor("tanh", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("tanh", input)?;
+        Err(unexpected("tanh"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
