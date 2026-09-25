@@ -242,10 +242,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("sign"))
     }
 
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
-        Err(unexpected("maximum"))
-    }
-
     fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> Result<Tensor> {
         Err(unexpected("compare"))
     }
@@ -307,10 +303,9 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor> {
-        self.maximum(
-            tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
+        Err(unexpected("maximum"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

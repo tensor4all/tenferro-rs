@@ -228,11 +228,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("maximum");
-        Ok(marker())
-    }
-
     fn compare(
         &mut self,
         _lhs: &Tensor,
@@ -316,10 +311,10 @@ impl TensorElementwise for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.maximum(
-            crate::backend::read_owned_tensor("maximum", lhs)?,
-            crate::backend::read_owned_tensor("maximum", rhs)?,
-        )
+        let _ = crate::backend::read_owned_tensor("maximum", lhs)?;
+        let _ = crate::backend::read_owned_tensor("maximum", rhs)?;
+        self.calls.push("maximum");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

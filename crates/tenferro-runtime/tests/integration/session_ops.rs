@@ -1127,7 +1127,6 @@ macro_rules! panic_elementwise {
                 div(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 abs(input: &Tensor) -> TensorResult;
                 sign(input: &Tensor) -> TensorResult;
-                maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
                 clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult;
             }
@@ -1195,10 +1194,9 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-                self.maximum(
-                    tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?,
-                    tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
+                panic!("maximum should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1579,10 +1577,6 @@ impl TensorElementwise for WrongDTypeSessionBackend {
     }
 
     fn div_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 

@@ -1077,8 +1077,19 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.maximum(&lhs, &rhs).unwrap();
-    let gpu_out = gpu.maximum(&gpu_lhs, &gpu_rhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.maximum_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+            )
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -1142,8 +1153,17 @@ fn test_cubecl_maximum_minimum_propagate_nan_independent_of_argument_order() {
         for (label, expected, actual) in [
             (
                 "maximum",
-                cpu.maximum(&lhs, &rhs).unwrap(),
-                gpu.maximum(&gpu_lhs, &gpu_rhs).unwrap(),
+                cpu.with_backend_session(|__s| {
+                    __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                })
+                .unwrap(),
+                gpu.with_backend_session(|__s| {
+                    __s.maximum_read(
+                        TensorRead::from_tensor(&gpu_lhs),
+                        TensorRead::from_tensor(&gpu_rhs),
+                    )
+                })
+                .unwrap(),
             ),
             (
                 "minimum",
@@ -1615,8 +1635,19 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu.maximum(lhs, rhs).unwrap();
-    let gpu_out = gpu.maximum(&gpu_lhs, &gpu_rhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.maximum_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+            )
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 

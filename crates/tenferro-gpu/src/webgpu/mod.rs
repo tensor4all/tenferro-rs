@@ -797,10 +797,6 @@ impl TensorElementwise for WebGpuBackend {
         unsupported!("webgpu_sign")
     }
 
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_maximum")
-    }
-
     fn compare(
         &mut self,
         _lhs: &Tensor,

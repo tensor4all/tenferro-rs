@@ -4795,7 +4795,16 @@ impl TensorElementwise for CudaBackend {
     fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         let lhs = self.read_input(lhs)?;
         let rhs = self.read_input(rhs)?;
-        self.maximum(lhs.as_tensor(), rhs.as_tensor())
+        let lhs = lhs.as_tensor();
+        let rhs = rhs.as_tensor();
+        dispatch::dispatch_binary_float_int!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Maximum,
+            maximum_float,
+            maximum_int
+        )
     }
 
     fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5434,17 +5443,6 @@ impl TensorElementwise for CudaBackend {
             sign_float,
             sign_int,
             sign_complex
-        )
-    }
-
-    fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_int!(
-            self,
-            lhs,
-            rhs,
-            PrimitiveOpKind::Maximum,
-            maximum_float,
-            maximum_int
         )
     }
 

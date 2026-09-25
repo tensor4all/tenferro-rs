@@ -325,7 +325,6 @@ impl TensorElementwise for RecordingBackend {
         fn div(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn abs(input: &Tensor) -> TensorResult<Tensor>;
         fn sign(input: &Tensor) -> TensorResult<Tensor>;
-        fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
     }
@@ -383,10 +382,10 @@ impl TensorElementwise for RecordingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor> {
-        self.maximum(
-            tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?,
-        )
+        let lhs = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
+        let rhs = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
+        self.inner
+            .maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -753,7 +752,6 @@ impl TensorElementwise for EagerBackend {
         fn abs_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn sign(input: &Tensor) -> TensorResult<Tensor>;
         fn sign_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;

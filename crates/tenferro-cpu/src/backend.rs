@@ -3085,12 +3085,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::maximum_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
     fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool_context(|context, buffers| {
             elementwise::maximum_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)

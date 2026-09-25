@@ -480,7 +480,6 @@ delegate!(TensorElementwise {
     fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn abs(input: &Tensor) -> crate::Result<Tensor>;
     fn sign(input: &Tensor) -> crate::Result<Tensor>;
-    fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
     fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
 });

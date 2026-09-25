@@ -1235,7 +1235,11 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&sign, &[1]), -1.0);
     assert_eq!(get_f64(&sign, &[2]), 1.0);
 
-    let maximum = backend.maximum(&lhs, &rhs).unwrap();
+    let maximum = backend
+        .with_backend_session(|__s| {
+            __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
     assert_eq!(get_f64(&maximum, &[0]), 8.0);
     assert_eq!(get_f64(&maximum, &[1]), 5.0);
     assert_eq!(get_f64(&maximum, &[2]), 9.0);
@@ -1328,7 +1332,7 @@ fn test_tier2_elementwise_ops_complex() {
     assert_c64_close(get_c64(&sign, &[1]), Complex64::new(0.0, 0.0));
 
     assert!(matches!(
-        backend.maximum(&lhs, &rhs),
+        backend.with_backend_session(|__s| __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))),
         Err(crate::Error::Unsupported {
             op: "maximum",
             message,

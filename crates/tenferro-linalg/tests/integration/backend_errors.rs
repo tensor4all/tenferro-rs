@@ -149,7 +149,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             div(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
             abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             sign(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
-            maximum(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
             compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
             clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
         }
@@ -236,10 +235,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             lhs: TensorRead<'_>,
             rhs: TensorRead<'_>,
         ) -> tenferro_tensor::Result<Tensor> {
-            self.maximum(
-                tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
+            let _ = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
+            panic!("maximum should not be called by this test")
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

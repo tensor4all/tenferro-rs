@@ -241,7 +241,11 @@ fn run_supported_case(
         PrimitiveOpKind::Abs => assert_unary_matches(cpu, gpu, entry, |b, x| b.abs(x)),
         PrimitiveOpKind::Sign => assert_unary_matches(cpu, gpu, entry, |b, x| b.sign(x)),
         PrimitiveOpKind::Maximum => {
-            assert_binary_matches(cpu, gpu, entry, |b, l, r| b.maximum(l, r));
+            assert_binary_matches(cpu, gpu, entry, |b, l, r| {
+                b.with_backend_session(|__s| {
+                    __s.maximum_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
+                })
+            });
         }
         PrimitiveOpKind::Minimum => {
             assert_binary_matches(cpu, gpu, entry, |b, l, r| {
@@ -496,7 +500,9 @@ fn run_cpu_binary(
         PrimitiveOpKind::Mul => cpu.mul(lhs, rhs),
         PrimitiveOpKind::Div => cpu.div(lhs, rhs),
         PrimitiveOpKind::Rem => cpu.rem(lhs, rhs),
-        PrimitiveOpKind::Maximum => cpu.maximum(lhs, rhs),
+        PrimitiveOpKind::Maximum => cpu.with_backend_session(|__s| {
+            __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+        }),
         PrimitiveOpKind::Minimum => cpu.with_backend_session(|__s| {
             __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
         }),

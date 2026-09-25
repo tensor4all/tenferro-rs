@@ -1492,7 +1492,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         abs(input: &Tensor) -> crate::Result<Tensor>;
         sign(input: &Tensor) -> crate::Result<Tensor>;
-        maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
@@ -1572,10 +1571,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             lhs: TensorRead<'_>,
             rhs: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
-            self.maximum(
-                tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1976,7 +1977,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         abs(input: &Tensor) -> crate::Result<Tensor>;
         sign(input: &Tensor) -> crate::Result<Tensor>;
-        maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
@@ -2056,10 +2056,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             lhs: TensorRead<'_>,
             rhs: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
-            self.maximum(
-                tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
