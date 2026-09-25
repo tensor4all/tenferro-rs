@@ -514,3 +514,36 @@ Consequences for the B1/B5 fixture sets:
 - A local `compile_fail` failure therefore has to be checked against the
   pristine tree before it is attributed to a change. This was done once here:
   `git stash` + rerun reproduced the same mismatch.
+
+### Step-1 mechanical aids and their limits
+
+For the wider families the reproduction sites are numerous — 86 read halves
+across nine impls for the ten `TensorAnalytic` operations — so a throwaway
+generator was driven from `cargo check` E0046 output plus the `help: implement
+the missing item` lines. Four limits were hit; knowing them matters before the
+`TensorElementwise` family is attempted:
+
+- Method-generating macros hide methods from a `^    fn ` scan. The
+  implementation inventory must expand `delegate_with_pool_context!`,
+  `delegate_with_pool!`, `panic_backend_methods!` and
+  `unreachable_backend_methods!`, or the estimate is wrong.
+- Some E0046 sites are reported inside a `macro_rules!` definition: the GPU
+  `delegate!` shim and the per-crate `panic_*!` factories. Generating a method
+  body inside a macro definition corrupts the macro. Those sites must be edited
+  by hand — add entries to the delegation macro invocation, or bodies inside the
+  factory macro.
+- The trait declaration's receiver must be dropped when deriving parameters, or
+  the generated signature contains `&mut self: `.
+- Locating an impl's end by the first line equal to the impl's indentation plus
+  `}` is not reliable in files with nested modules; in the tenferro-cpu test
+  module it placed bodies outside the impl. Anchoring on the tail of the
+  family's `panic_*!` or delegation block is reliable, and is how the earlier
+  families were patched.
+
+Every generated site uses the delegating form
+(`self.op(read_owned_tensor("<op>", input)?)`), so Step 2 must inline the
+one-shot bodies into these read halves. That second visit is expected and
+mechanical: the one-shot bodies at these sites are panics, markers, or
+unsupported errors. WebGPU is the deliberate exception and was written directly
+in its final shape (`unsupported!` after evaluating the read input) across all
+four families it implements, so it never needs a second visit.

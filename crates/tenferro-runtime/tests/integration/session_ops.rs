@@ -1156,6 +1156,69 @@ macro_rules! panic_analytic {
                 expm1(input: &Tensor) -> TensorResult;
                 log1p(input: &Tensor) -> TensorResult;
             }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn exp_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn log_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.log(tenferro_tensor::backend::read_owned_tensor("log", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn sin_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.sin(tenferro_tensor::backend::read_owned_tensor("sin", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn cos_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.cos(tenferro_tensor::backend::read_owned_tensor("cos", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn tanh_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.tanh(tenferro_tensor::backend::read_owned_tensor("tanh", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn sqrt_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.sqrt(tenferro_tensor::backend::read_owned_tensor("sqrt", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn rsqrt_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.rsqrt(tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn expm1_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.expm1(tenferro_tensor::backend::read_owned_tensor("expm1", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn log1p_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                self.log1p(tenferro_tensor::backend::read_owned_tensor("log1p", input)?)
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+                self.pow(
+                    tenferro_tensor::backend::read_owned_tensor("pow", lhs)?,
+                    tenferro_tensor::backend::read_owned_tensor("pow", rhs)?,
+                )
+            }
         }
     };
 }
@@ -1305,24 +1368,24 @@ impl TensorDot for WrongDTypeSessionBackend {
     ) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
-// The previous read-half default delegated an owned pair to the one-shot
-// method and materialized borrowed views through to_contiguous_read before
-// contracting. Reproduce that exactly rather than forwarding a view.
-fn dot_general_read(
-    &mut self,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
-    config: &DotGeneralConfig,
-) -> TensorResult {
-    match (lhs.as_tensor(), rhs.as_tensor()) {
-        (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
-        _ => {
-            let lhs = self.to_contiguous_read(lhs)?;
-            let rhs = self.to_contiguous_read(rhs)?;
-            self.dot_general(&lhs, &rhs, config)
+    // The previous read-half default delegated an owned pair to the one-shot
+    // method and materialized borrowed views through to_contiguous_read before
+    // contracting. Reproduce that exactly rather than forwarding a view.
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> TensorResult {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+            _ => {
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
+                self.dot_general(&lhs, &rhs, config)
+            }
         }
     }
-}
 }
 
 impl TensorFusion for WrongDTypeSessionBackend {}
@@ -1509,6 +1572,41 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
 
     fn pow_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> TensorResult {
         Ok(wrong_dtype_tensor())
+    }
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        self.sin(tenferro_tensor::backend::read_owned_tensor("sin", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        self.cos(tenferro_tensor::backend::read_owned_tensor("cos", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        self.tanh(tenferro_tensor::backend::read_owned_tensor("tanh", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        self.rsqrt(tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        self.expm1(tenferro_tensor::backend::read_owned_tensor("expm1", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        self.log1p(tenferro_tensor::backend::read_owned_tensor("log1p", input)?)
     }
 }
 

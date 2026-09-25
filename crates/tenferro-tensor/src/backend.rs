@@ -51,10 +51,7 @@ fn read_tensor<'a>(op: &'static str, input: TensorRead<'a>) -> crate::Result<&'a
 /// }
 /// ```
 #[doc(hidden)]
-pub fn read_owned_tensor<'a>(
-    op: &'static str,
-    input: TensorRead<'a>,
-) -> crate::Result<&'a Tensor> {
+pub fn read_owned_tensor<'a>(op: &'static str, input: TensorRead<'a>) -> crate::Result<&'a Tensor> {
     read_tensor(op, input)
 }
 
@@ -2436,9 +2433,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.exp(read_tensor("exp", input)?)
-    }
+    fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2453,9 +2448,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.log(read_tensor("log", input)?)
-    }
+    fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2470,9 +2463,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.sin(read_tensor("sin", input)?)
-    }
+    fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2487,9 +2478,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.cos(read_tensor("cos", input)?)
-    }
+    fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2504,9 +2493,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.tanh(read_tensor("tanh", input)?)
-    }
+    fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2521,9 +2508,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.sqrt(read_tensor("sqrt", input)?)
-    }
+    fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2538,9 +2523,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.rsqrt(read_tensor("rsqrt", input)?)
-    }
+    fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2555,9 +2538,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.pow(read_tensor("pow", lhs)?, read_tensor("pow", rhs)?)
-    }
+    fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2572,9 +2553,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.expm1(read_tensor("expm1", input)?)
-    }
+    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2589,9 +2568,7 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.log1p(read_tensor("log1p", input)?)
-    }
+    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 }
 
 /// Shape, layout, and dtype transformation operations.

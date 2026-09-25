@@ -319,6 +319,68 @@ impl TensorAnalytic for DefaultReadBackend {
         self.calls.push("log1p");
         Ok(marker())
     }
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.exp(crate::backend::read_owned_tensor("exp", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.log(crate::backend::read_owned_tensor("log", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.sin(crate::backend::read_owned_tensor("sin", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.cos(crate::backend::read_owned_tensor("cos", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.tanh(crate::backend::read_owned_tensor("tanh", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.sqrt(crate::backend::read_owned_tensor("sqrt", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.rsqrt(crate::backend::read_owned_tensor("rsqrt", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.pow(
+            crate::backend::read_owned_tensor("pow", lhs)?,
+            crate::backend::read_owned_tensor("pow", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.expm1(crate::backend::read_owned_tensor("expm1", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.log1p(crate::backend::read_owned_tensor("log1p", input)?)
+    }
 }
 
 impl TensorStructural for DefaultReadBackend {
@@ -441,19 +503,11 @@ impl TensorStructural for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn transpose_read(
-        &mut self,
-        input: TensorRead<'_>,
-        perm: &[usize],
-    ) -> crate::Result<Tensor> {
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         self.transpose(crate::backend::read_owned_tensor("transpose", input)?, perm)
     }
 
-    fn reshape_read(
-        &mut self,
-        input: TensorRead<'_>,
-        shape: &[usize],
-    ) -> crate::Result<Tensor> {
+    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
         self.reshape(crate::backend::read_owned_tensor("reshape", input)?, shape)
     }
 
@@ -513,7 +567,10 @@ impl TensorReduction for DefaultReadBackend {
     }
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.reduce_sum(crate::backend::read_owned_tensor("reduce_sum", input)?, axes)
+        self.reduce_sum(
+            crate::backend::read_owned_tensor("reduce_sum", input)?,
+            axes,
+        )
     }
 
     fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
@@ -522,7 +579,10 @@ impl TensorReduction for DefaultReadBackend {
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.reduce_prod(crate::backend::read_owned_tensor("reduce_prod", input)?, axes)
+        self.reduce_prod(
+            crate::backend::read_owned_tensor("reduce_prod", input)?,
+            axes,
+        )
     }
 
     fn reduce_max(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
@@ -531,7 +591,10 @@ impl TensorReduction for DefaultReadBackend {
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.reduce_max(crate::backend::read_owned_tensor("reduce_max", input)?, axes)
+        self.reduce_max(
+            crate::backend::read_owned_tensor("reduce_max", input)?,
+            axes,
+        )
     }
 
     fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
@@ -540,7 +603,10 @@ impl TensorReduction for DefaultReadBackend {
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.reduce_min(crate::backend::read_owned_tensor("reduce_min", input)?, axes)
+        self.reduce_min(
+            crate::backend::read_owned_tensor("reduce_min", input)?,
+            axes,
+        )
     }
 }
 

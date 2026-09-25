@@ -303,6 +303,72 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
     fn log1p(&mut self, _input: &Tensor) -> Result<Tensor> {
         Err(unexpected("log1p"))
     }
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.log(tenferro_tensor::backend::read_owned_tensor("log", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.sin(tenferro_tensor::backend::read_owned_tensor("sin", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.cos(tenferro_tensor::backend::read_owned_tensor("cos", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.tanh(tenferro_tensor::backend::read_owned_tensor("tanh", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.sqrt(tenferro_tensor::backend::read_owned_tensor("sqrt", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.rsqrt(tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn pow_read(
+        &mut self,
+        lhs: tenferro_tensor::TensorRead<'_>,
+        rhs: tenferro_tensor::TensorRead<'_>,
+    ) -> Result<Tensor> {
+        self.pow(
+            tenferro_tensor::backend::read_owned_tensor("pow", lhs)?,
+            tenferro_tensor::backend::read_owned_tensor("pow", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.expm1(tenferro_tensor::backend::read_owned_tensor("expm1", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        self.log1p(tenferro_tensor::backend::read_owned_tensor("log1p", input)?)
+    }
 }
 
 impl TensorStructural for NoBroadcastMaterializationBackend {
@@ -360,21 +426,36 @@ impl TensorStructural for NoBroadcastMaterializationBackend {
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> Result<Tensor> {
-        self.transpose(tenferro_tensor::backend::read_owned_tensor("transpose", input)?, perm)
+        self.transpose(
+            tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
+            perm,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> Result<Tensor> {
-        self.reshape(tenferro_tensor::backend::read_owned_tensor("reshape", input)?, shape)
+        self.reshape(
+            tenferro_tensor::backend::read_owned_tensor("reshape", input)?,
+            shape,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
-    fn broadcast_in_dim_read(&mut self, input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> Result<Tensor> {
-        self.broadcast_in_dim(tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?, shape, dims)
+    fn broadcast_in_dim_read(
+        &mut self,
+        input: TensorRead<'_>,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> Result<Tensor> {
+        self.broadcast_in_dim(
+            tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?,
+            shape,
+            dims,
+        )
     }
 }
 
@@ -398,25 +479,37 @@ impl TensorReduction for NoBroadcastMaterializationBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
-        self.reduce_sum(tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?, axes)
+        self.reduce_sum(
+            tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
+            axes,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
-        self.reduce_prod(tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?, axes)
+        self.reduce_prod(
+            tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
+            axes,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
-        self.reduce_max(tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?, axes)
+        self.reduce_max(
+            tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
+            axes,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
-        self.reduce_min(tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?, axes)
+        self.reduce_min(
+            tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
+            axes,
+        )
     }
 }
 
@@ -484,24 +577,24 @@ impl TensorDot for NoBroadcastMaterializationBackend {
     ) -> Result<Tensor> {
         Err(unexpected("dot_general"))
     }
-// The previous read-half default delegated an owned pair to the one-shot
-// method and materialized borrowed views through to_contiguous_read before
-// contracting. Reproduce that exactly rather than forwarding a view.
-fn dot_general_read(
-    &mut self,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
-    config: &DotGeneralConfig,
-) -> Result<Tensor> {
-    match (lhs.as_tensor(), rhs.as_tensor()) {
-        (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
-        _ => {
-            let lhs = self.to_contiguous_read(lhs)?;
-            let rhs = self.to_contiguous_read(rhs)?;
-            self.dot_general(&lhs, &rhs, config)
+    // The previous read-half default delegated an owned pair to the one-shot
+    // method and materialized borrowed views through to_contiguous_read before
+    // contracting. Reproduce that exactly rather than forwarding a view.
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> Result<Tensor> {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+            _ => {
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
+                self.dot_general(&lhs, &rhs, config)
+            }
         }
     }
-}
 }
 
 impl TensorFusion for NoBroadcastMaterializationBackend {}

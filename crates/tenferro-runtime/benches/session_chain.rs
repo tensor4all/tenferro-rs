@@ -11,9 +11,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::{
-    BackendSessionHost, TensorAnalytic, TensorElementwise, TensorReduction,
-};
+use tenferro_tensor::{BackendSessionHost, TensorAnalytic, TensorElementwise, TensorReduction};
 
 /// `a` is a 1x8 constant row in the no-broadcast arm and a 1x1 row (the
 /// singleton broadcast source) in the broadcast arm.
@@ -116,8 +114,14 @@ fn bench_session_chain(c: &mut Criterion) {
         let one_session = run_chain_one_session(&a, &b, &mut backend);
         let scope = run_chain_execution_scope(&a, &b, &backend, &mut ops);
         for (name, out) in [("one_session", &one_session), ("scope", &scope)] {
-            assert!(out.shape().is_empty(), "{name}: chain must reduce to a scalar");
-            assert!(out.as_slice::<f64>().unwrap()[0].is_finite(), "{name}: finite");
+            assert!(
+                out.shape().is_empty(),
+                "{name}: chain must reduce to a scalar"
+            );
+            assert!(
+                out.as_slice::<f64>().unwrap()[0].is_finite(),
+                "{name}: finite"
+            );
         }
         assert_eq!(
             one_session.as_slice::<f64>().unwrap()[0],
@@ -127,7 +131,10 @@ fn bench_session_chain(c: &mut Criterion) {
         if !broadcast {
             let one_shot = run_chain_one_shot(&a, &b, &mut ops);
             assert!(one_shot.shape().is_empty(), "one_shot: scalar");
-            assert!(one_shot.as_slice::<f64>().unwrap()[0].is_finite(), "one_shot: finite");
+            assert!(
+                one_shot.as_slice::<f64>().unwrap()[0].is_finite(),
+                "one_shot: finite"
+            );
             assert_eq!(
                 one_session.as_slice::<f64>().unwrap()[0],
                 one_shot.as_slice::<f64>().unwrap()[0],

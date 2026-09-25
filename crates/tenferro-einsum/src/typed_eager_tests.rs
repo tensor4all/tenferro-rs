@@ -88,6 +88,99 @@ impl TensorAnalytic for WrongDTypeBackend {
         expm1(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         log1p(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
     }
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn exp_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.exp(tenferro_tensor::backend::read_owned_tensor("exp", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.log(tenferro_tensor::backend::read_owned_tensor("log", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sin_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.sin(tenferro_tensor::backend::read_owned_tensor("sin", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn cos_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.cos(tenferro_tensor::backend::read_owned_tensor("cos", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn tanh_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.tanh(tenferro_tensor::backend::read_owned_tensor("tanh", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sqrt_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.sqrt(tenferro_tensor::backend::read_owned_tensor("sqrt", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn rsqrt_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.rsqrt(tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn pow_read(
+        &mut self,
+        lhs: tenferro_tensor::TensorRead<'_>,
+        rhs: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.pow(
+            tenferro_tensor::backend::read_owned_tensor("pow", lhs)?,
+            tenferro_tensor::backend::read_owned_tensor("pow", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn expm1_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.expm1(tenferro_tensor::backend::read_owned_tensor("expm1", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log1p_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.log1p(tenferro_tensor::backend::read_owned_tensor("log1p", input)?)
+    }
 }
 
 impl TensorStructural for WrongDTypeBackend {
@@ -117,22 +210,45 @@ impl TensorStructural for WrongDTypeBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
-    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> tenferro_tensor::Result<Tensor> {
-        self.transpose(tenferro_tensor::backend::read_owned_tensor("transpose", input)?, perm)
+    fn transpose_read(
+        &mut self,
+        input: TensorRead<'_>,
+        perm: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.transpose(
+            tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
+            perm,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
-    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
-        self.reshape(tenferro_tensor::backend::read_owned_tensor("reshape", input)?, shape)
+    fn reshape_read(
+        &mut self,
+        input: TensorRead<'_>,
+        shape: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.reshape(
+            tenferro_tensor::backend::read_owned_tensor("reshape", input)?,
+            shape,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
-    fn broadcast_in_dim_read(&mut self, input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor> {
-        self.broadcast_in_dim(tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?, shape, dims)
+    fn broadcast_in_dim_read(
+        &mut self,
+        input: TensorRead<'_>,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.broadcast_in_dim(
+            tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?,
+            shape,
+            dims,
+        )
     }
 }
 
@@ -146,26 +262,54 @@ impl TensorReduction for WrongDTypeBackend {
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
-    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
-        self.reduce_sum(tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?, axes)
+    fn reduce_sum_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axes: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.reduce_sum(
+            tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
+            axes,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
-    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
-        self.reduce_prod(tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?, axes)
+    fn reduce_prod_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axes: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.reduce_prod(
+            tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
+            axes,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
-    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
-        self.reduce_max(tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?, axes)
+    fn reduce_max_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axes: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.reduce_max(
+            tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
+            axes,
+        )
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
-    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
-        self.reduce_min(tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?, axes)
+    fn reduce_min_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axes: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.reduce_min(
+            tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
+            axes,
+        )
     }
 }
 
@@ -193,24 +337,24 @@ impl TensorDot for WrongDTypeBackend {
             TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
         ))
     }
-// The previous read-half default delegated an owned pair to the one-shot
-// method and materialized borrowed views through to_contiguous_read before
-// contracting. Reproduce that exactly rather than forwarding a view.
-fn dot_general_read(
-    &mut self,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
-    config: &DotGeneralConfig,
-) -> tenferro_tensor::Result<Tensor> {
-    match (lhs.as_tensor(), rhs.as_tensor()) {
-        (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
-        _ => {
-            let lhs = self.to_contiguous_read(lhs)?;
-            let rhs = self.to_contiguous_read(rhs)?;
-            self.dot_general(&lhs, &rhs, config)
+    // The previous read-half default delegated an owned pair to the one-shot
+    // method and materialized borrowed views through to_contiguous_read before
+    // contracting. Reproduce that exactly rather than forwarding a view.
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> tenferro_tensor::Result<Tensor> {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+            _ => {
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
+                self.dot_general(&lhs, &rhs, config)
+            }
         }
     }
-}
 }
 
 impl BackendCachedDot for WrongDTypeBackend {}

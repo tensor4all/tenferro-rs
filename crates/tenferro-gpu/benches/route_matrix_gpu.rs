@@ -101,18 +101,26 @@ where
     backend.runtime().synchronize().expect("validation sync");
 
     let mut group = c.benchmark_group(format!("route_matrix_gpu/dot_general_{label}"));
-    group.bench_with_input(BenchmarkId::new("oneshot/round_trip", size), &size, |bench, _| {
-        bench.iter(|| {
-            oneshot(&mut backend, black_box(&lhs), black_box(&rhs), &config);
-            backend.runtime().synchronize().expect("sync");
-        });
-    });
-    group.bench_with_input(BenchmarkId::new("session/round_trip", size), &size, |bench, _| {
-        bench.iter(|| {
-            session(&mut backend, black_box(&lhs), black_box(&rhs), &config);
-            backend.runtime().synchronize().expect("sync");
-        });
-    });
+    group.bench_with_input(
+        BenchmarkId::new("oneshot/round_trip", size),
+        &size,
+        |bench, _| {
+            bench.iter(|| {
+                oneshot(&mut backend, black_box(&lhs), black_box(&rhs), &config);
+                backend.runtime().synchronize().expect("sync");
+            });
+        },
+    );
+    group.bench_with_input(
+        BenchmarkId::new("session/round_trip", size),
+        &size,
+        |bench, _| {
+            bench.iter(|| {
+                session(&mut backend, black_box(&lhs), black_box(&rhs), &config);
+                backend.runtime().synchronize().expect("sync");
+            });
+        },
+    );
     group.bench_with_input(
         BenchmarkId::new("oneshot/enqueue_batch16", size),
         &size,

@@ -91,6 +91,16 @@ delegate!(TensorElementwise {
 });
 
 delegate!(TensorAnalytic {
+    fn exp_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn log_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn sin_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn cos_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn tanh_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn sqrt_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn rsqrt_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn expm1_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn log1p_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn exp(input: &Tensor) -> crate::Result<Tensor>;
     fn log(input: &Tensor) -> crate::Result<Tensor>;
     fn sin(input: &Tensor) -> crate::Result<Tensor>;

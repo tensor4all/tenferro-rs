@@ -134,7 +134,8 @@ fn dot_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -
 }
 
 fn reduce_oneshot(ops: &mut CpuBackend, a: &Tensor) -> Tensor {
-    ops.reduce_sum(a, &[0]).expect("oneshot reduce_sum should succeed")
+    ops.reduce_sum(a, &[0])
+        .expect("oneshot reduce_sum should succeed")
 }
 
 fn reduce_session(owner: &mut CpuBackend, a: &Tensor) -> Tensor {
@@ -285,13 +286,28 @@ fn bench_elementwise(c: &mut Criterion) {
             &len,
             |bench, _| {
                 bench.iter(|| {
-                    black_box(add_marginal_session(&mut owner, black_box(&a), black_box(&b)))
+                    black_box(add_marginal_session(
+                        &mut owner,
+                        black_box(&a),
+                        black_box(&b),
+                    ))
                 });
             },
         );
-        group.bench_with_input(BenchmarkId::new("scope/marginal16", len), &len, |bench, _| {
-            bench.iter(|| black_box(add_marginal_scope(&owner, &mut ops, black_box(&a), black_box(&b))));
-        });
+        group.bench_with_input(
+            BenchmarkId::new("scope/marginal16", len),
+            &len,
+            |bench, _| {
+                bench.iter(|| {
+                    black_box(add_marginal_scope(
+                        &owner,
+                        &mut ops,
+                        black_box(&a),
+                        black_box(&b),
+                    ))
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -312,15 +328,27 @@ fn bench_dot(c: &mut Criterion) {
             ("scope", dot_scope(&owner, &mut ops, &a, &b)),
         ] {
             assert_eq!(value.shape(), &[size, size], "{name} shape");
-            assert_eq!(value.as_slice::<f64>().unwrap()[0], expected, "{name} value");
+            assert_eq!(
+                value.as_slice::<f64>().unwrap()[0],
+                expected,
+                "{name} value"
+            );
         }
 
-        group.bench_with_input(BenchmarkId::new("oneshot/single", size), &size, |bench, _| {
-            bench.iter(|| black_box(dot_oneshot(&mut ops, black_box(&a), black_box(&b))));
-        });
-        group.bench_with_input(BenchmarkId::new("session/single", size), &size, |bench, _| {
-            bench.iter(|| black_box(dot_session(&mut owner, black_box(&a), black_box(&b))));
-        });
+        group.bench_with_input(
+            BenchmarkId::new("oneshot/single", size),
+            &size,
+            |bench, _| {
+                bench.iter(|| black_box(dot_oneshot(&mut ops, black_box(&a), black_box(&b))));
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("session/single", size),
+            &size,
+            |bench, _| {
+                bench.iter(|| black_box(dot_session(&mut owner, black_box(&a), black_box(&b))));
+            },
+        );
         group.bench_with_input(BenchmarkId::new("scope/single", size), &size, |bench, _| {
             bench.iter(|| black_box(dot_scope(&owner, &mut ops, black_box(&a), black_box(&b))));
         });
@@ -343,7 +371,11 @@ fn bench_reduce(c: &mut Criterion) {
             ("scope", reduce_scope(&owner, &mut ops, &a)),
         ] {
             assert!(value.shape().is_empty(), "{name} shape");
-            assert_eq!(value.as_slice::<f64>().unwrap()[0], expected, "{name} value");
+            assert_eq!(
+                value.as_slice::<f64>().unwrap()[0],
+                expected,
+                "{name} value"
+            );
         }
 
         group.bench_with_input(BenchmarkId::new("oneshot/single", len), &len, |bench, _| {
@@ -385,7 +417,12 @@ fn bench_indexing(c: &mut Criterion) {
         });
         group.bench_with_input(BenchmarkId::new("scope/single", len), &len, |bench, _| {
             bench.iter(|| {
-                black_box(slice_scope(&owner, &mut ops, black_box(&a), black_box(&config)))
+                black_box(slice_scope(
+                    &owner,
+                    &mut ops,
+                    black_box(&a),
+                    black_box(&config),
+                ))
             });
         });
     }
