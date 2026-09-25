@@ -704,11 +704,11 @@ jobs:
   gpu-execution:
     name: Paid GPU lifecycle
     needs: [authorize, runpod-contract, pre-runpod-gate, cuda-archive]
-    # Skip every paid step when a maintainer recorded a local GPU run for this
-    # PR: an outage upstream must not turn into repeated pod spend.
-    if: >-
-      needs.authorize.outputs.gpu_required == 'true' &&
-      needs.authorize.outputs.local_gpu_validation != 'true'
+    # Deliberately no `if` here. A skipped caller job never passes its `with:`
+    # block, and the called workflow's jobs are scheduled regardless, so the
+    # label decision has to travel as inputs and be applied inside
+    # runpod-gpu-execute.yml (measured: a labelled PR began provisioning pods
+    # while this job was skipped).
     uses: ./.github/workflows/runpod-gpu-execute.yml
     with:
       tenferro_ref: ${{ needs.authorize.outputs.tenferro_ref }}
@@ -718,6 +718,7 @@ jobs:
       archive_cache_key: ${{ needs.cuda-archive.outputs.archive_cache_key }}
       archive_artifact_name: ${{ needs.cuda-archive.outputs.archive_artifact_name }}
       keep_failed_pods: ${{ inputs.keep_failed_pods || false }}
+      gpu_required: ${{ needs.authorize.outputs.gpu_required == 'true' }}
       local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation == 'true' }}
     secrets:
       RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}

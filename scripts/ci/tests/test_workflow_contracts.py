@@ -370,25 +370,38 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(f'--pod-env "{pod_env}', create)
         self.assertNotIn('--pod-env "RUNPOD_API_KEY', create)
 
-    def test_the_paid_workflow_refuses_every_job_itself(self) -> None:
-        """The caller's `if` is not enough: a skipped caller still must not pay.
+    def test_the_paid_workflow_decides_from_its_own_inputs(self) -> None:
+        """The decision must travel as inputs, not as a caller `if`.
 
-        A live dispatch showed the reusable workflow starting
-        `Start RunPod org runner` while the parent had decided to skip it, so the
-        paid jobs carry the same condition themselves.
+        Measured behaviour: a skipped caller job does not pass its `with:` block
+        and the called workflow's jobs are scheduled anyway, so a labelled PR
+        began provisioning pods. Every paid job therefore applies the inputs
+        itself, and the caller only forwards them.
         """
 
         execute = read(".github/workflows/runpod-gpu-execute.yml")
-        self.assertIn("local_gpu_validation:", execute)
-        self.assertIn("Skip every paid step", execute)
+        for input_name in ("gpu_required:", "local_gpu_validation:"):
+            self.assertIn(input_name, execute)
+        expected = "if: inputs.gpu_required == true && inputs.local_gpu_validation != true"
         for job in ("  start-runpod:", "  run-gpu-tests:"):
-            block = execute[execute.index(job) : execute.index(job) + 400]
-            self.assertIn("if: inputs.local_gpu_validation != true", block, job)
+            block = execute[execute.index(job) : execute.index(job) + 500]
+            self.assertIn(expected, block, job)
         text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn(
+            "gpu_required: ${{ needs.authorize.outputs.gpu_required == 'true' }}",
+            text,
+        )
         self.assertIn(
             "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation == 'true' }}",
             text,
         )
+        # The caller must not gate itself: that is what dropped the inputs.
+        # The spliced view inserts the callee's jobs next, so bound the slice
+        # at the first callee job.
+        caller = text[
+            text.index("  gpu-execution:") : text.index("  start-runpod:", text.index("  gpu-execution:"))
+        ]
+        self.assertNotIn("if:", caller, "the caller job must not gate the call")
         # Evidence is verified whenever the label is present.
         self.assertIn("if [ \"${LOCAL_GPU_VALIDATION}\" = true ]; then", text)
 
@@ -411,8 +424,10 @@ class WorkflowContractTests(unittest.TestCase):
         # paid path, so an outage cannot be paid for repeatedly.
         self.assertIn('grep -Fxq "gpu-validated-locally"', text)
         self.assertIn("local_gpu_validation: ${{ steps.resolve_ref.outputs.local_gpu_validation }}", text)
+        # The decision reaches the paid workflow as an input, which its own jobs
+        # apply (see test_the_paid_workflow_decides_from_its_own_inputs).
         self.assertIn(
-            "needs.authorize.outputs.local_gpu_validation != 'true'",
+            "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation == 'true' }}",
             text,
         )
         # The label alone must not waive the gate: the evidence comment and its
