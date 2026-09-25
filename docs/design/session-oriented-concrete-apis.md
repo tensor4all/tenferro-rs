@@ -289,7 +289,7 @@ public plan type is **`ConcreteEinsumPlan`**) already do
 &self.tree))`; the eager core functions
 (`crates/tenferro-einsum/src/eager.rs::eager_einsum_exec*`) all take
 `&mut dyn BackendSession` already. `execute_*_in_session` is a thin
-addition: plan validation (pure — `validate_inputs`/`input_specs` need no
+addition: plan validation (pure — `validate_input_metadata`/`input_specs` need no
 backend) + the same core call on the caller's borrowed session — **no new
 session entry**. One-shot methods delegate to the `_in_session` variants.
 
