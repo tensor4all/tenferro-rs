@@ -553,13 +553,7 @@ define_unary_analytic_dispatch!(tanh, tanh_with_pool, tanh_read_with_pool, Tanh,
 define_unary_analytic_dispatch!(sqrt, sqrt_with_pool, sqrt_read_with_pool, Sqrt, sqrt_elem);
 define_unary_analytic_dispatch!(read_only: rsqrt, rsqrt_read_with_pool, Rsqrt, rsqrt_elem);
 define_unary_analytic_dispatch!(read_only: expm1, expm1_read_with_pool, Expm1, expm1_elem);
-define_unary_analytic_dispatch!(
-    log1p,
-    log1p_with_pool,
-    log1p_read_with_pool,
-    Log1p,
-    log1p_elem
-);
+define_unary_analytic_dispatch!(read_only: log1p, log1p_read_with_pool, Log1p, log1p_elem);
 
 #[cfg(test)]
 pub(crate) fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {

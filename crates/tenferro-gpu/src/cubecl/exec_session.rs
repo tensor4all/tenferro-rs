@@ -504,7 +504,6 @@ delegate!(TensorAnalytic {
     fn tanh(input: &Tensor) -> crate::Result<Tensor>;
     fn sqrt(input: &Tensor) -> crate::Result<Tensor>;
     fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn log1p(input: &Tensor) -> crate::Result<Tensor>;
 });
 
 delegate!(TensorStructural {

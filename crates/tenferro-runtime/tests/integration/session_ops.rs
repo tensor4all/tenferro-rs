@@ -1273,7 +1273,6 @@ macro_rules! panic_analytic {
                 tanh(input: &Tensor) -> TensorResult;
                 sqrt(input: &Tensor) -> TensorResult;
                 pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                log1p(input: &Tensor) -> TensorResult;
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1329,7 +1328,8 @@ macro_rules! panic_analytic {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn log1p_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.log1p(tenferro_tensor::backend::read_owned_tensor("log1p", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
+                panic!("log1p should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1691,7 +1691,6 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
         sin(input: &Tensor) -> TensorResult;
         cos(input: &Tensor) -> TensorResult;
         tanh(input: &Tensor) -> TensorResult;
-        log1p(input: &Tensor) -> TensorResult;
     }
 
     fn exp(&mut self, _input: &Tensor) -> TensorResult {
@@ -1760,7 +1759,8 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
-        self.log1p(tenferro_tensor::backend::read_owned_tensor("log1p", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
+        panic!("log1p should not be called in this test")
     }
 }
 

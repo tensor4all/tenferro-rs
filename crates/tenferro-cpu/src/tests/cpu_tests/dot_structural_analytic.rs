@@ -967,7 +967,9 @@ fn test_cpu_backend_analytic_ops_real() {
             __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&exp_input))
         })
         .unwrap();
-    let log1p_out = backend.log1p(&log_input).unwrap();
+    let log1p_out = backend
+        .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&log_input)))
+        .unwrap();
     assert_f64_close(get_f64(&expm1_out, &[0]), 0.0);
     assert_f64_close(get_f64(&expm1_out, &[1]), 1.0_f64.exp_m1());
     assert_f64_close(get_f64(&log1p_out, &[0]), 2.0_f64.ln());
@@ -1056,7 +1058,9 @@ fn test_cpu_backend_analytic_ops_complex() {
             __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&exp_input))
         })
         .unwrap();
-    let log1p_out = backend.log1p(&log_input).unwrap();
+    let log1p_out = backend
+        .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&log_input)))
+        .unwrap();
     assert_c64_close(
         get_c64(&expm1_out, &[0]),
         Complex64::new(0.0, 0.0).exp() - Complex64::new(1.0, 0.0),

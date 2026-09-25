@@ -310,7 +310,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             tanh(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             sqrt(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             pow(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
-            log1p(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         }
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
@@ -405,7 +404,8 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             &mut self,
             input: tenferro_tensor::TensorRead<'_>,
         ) -> tenferro_tensor::Result<Tensor> {
-            self.log1p(tenferro_tensor::backend::read_owned_tensor("log1p", input)?)
+            let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
+            panic!("log1p should not be called by this test")
         }
     }
 

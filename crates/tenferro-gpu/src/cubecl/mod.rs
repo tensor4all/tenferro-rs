@@ -5680,7 +5680,12 @@ impl TensorAnalytic for CudaBackend {
             return result;
         }
         let input = self.read_input(input)?;
-        self.log1p(input.as_tensor())
+        dispatch::dispatch_unary_float_only!(
+            self,
+            input.as_tensor(),
+            PrimitiveOpKind::Log1p,
+            log1p_float
+        )
     }
 
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
@@ -5845,10 +5850,6 @@ impl TensorAnalytic for CudaBackend {
                 Err(dtype_mismatch(op, lhs, rhs))
             }
         }
-    }
-
-    fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Log1p, log1p_float)
     }
 }
 

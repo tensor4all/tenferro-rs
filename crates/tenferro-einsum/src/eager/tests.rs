@@ -400,9 +400,6 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
         Err(unexpected("pow"))
     }
 
-    fn log1p(&mut self, _input: &Tensor) -> Result<Tensor> {
-        Err(unexpected("log1p"))
-    }
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
@@ -469,7 +466,8 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
-        self.log1p(tenferro_tensor::backend::read_owned_tensor("log1p", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
+        Err(unexpected("log1p"))
     }
 }
 

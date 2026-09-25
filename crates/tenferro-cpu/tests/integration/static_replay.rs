@@ -32,23 +32,24 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
                 _ => unreachable!(),
             })
             .collect();
-        let output = match op {
-            0 => backend.exp(&owned),
-            1 => backend.log(&owned),
-            2 => backend.sin(&owned),
-            3 => backend.cos(&owned),
-            4 => backend.tanh(&owned),
-            5 => backend.sqrt(&owned),
-            6 => {
-                backend.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&owned)))
+        let output =
+            match op {
+                0 => backend.exp(&owned),
+                1 => backend.log(&owned),
+                2 => backend.sin(&owned),
+                3 => backend.cos(&owned),
+                4 => backend.tanh(&owned),
+                5 => backend.sqrt(&owned),
+                6 => backend
+                    .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&owned))),
+                7 => backend.with_backend_session(|__s| {
+                    __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&owned))
+                }),
+                8 => backend
+                    .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&owned))),
+                _ => unreachable!(),
             }
-            7 => backend.with_backend_session(|__s| {
-                __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&owned))
-            }),
-            8 => backend.log1p(&owned),
-            _ => unreachable!(),
-        }
-        .unwrap();
+            .unwrap();
         assert_eq!(output.as_slice::<f64>().unwrap(), expected);
         backend.reclaim_buffer(output);
         let read = TensorRead::from_view(TensorView::F64(reversed.clone()));
