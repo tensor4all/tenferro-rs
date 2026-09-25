@@ -411,8 +411,15 @@ behaviours for a backend that implements only the one-shot methods:
 1. `TensorRead::Tensor` inputs delegate to the one-shot method (the test
    asserts `calls` contains `"add"` and `"dot_general"`);
 2. `TensorRead::View` inputs are **rejected** with an error whose message
-   contains `"borrowed tensor views"` (the elementwise/analytic/structural and
-   `TensorDot` defaults instead materialize through `read_tensor`).
+   contains `"borrowed tensor views"`.
+
+The rejection is uniform, not per family: the defaults for all 31 read halves
+return the owned tensor through `read_tensor(op, input)` and raise
+`read_boundary_error(op)` for a view. `read_tensor` is
+`input.as_tensor().ok_or_else(|| read_boundary_error(op))`, so the default is
+"delegate owned, reject views" everywhere. Materialization appears only where a
+method overrides the default with `to_contiguous_read`: `dot_general_read`, the
+`_read_into` outputs, and the cached dot paths.
 
 Deleting a default therefore deletes a tested contract, and the view policy
 (accept-and-materialize versus reject-with-`Unsupported`) becomes the
@@ -426,16 +433,41 @@ must migrate with it.
 
 ### Staging
 
-**Step 1 — require `_read`, keep every caller working.** Delete the 31 provided
-defaults and make the read halves required. CPU and CUDA need no new code. For
-WebGPU, add 31 implementations that reproduce the old default exactly:
-`unsupported!` where the old chain ended in the one-shot's `unsupported!`, and
-the old default body (materialize, then call the operation) where the operation
-is real, which is `dot_general_read`. Migrate the default-contract tests to
-assert the explicit implementations instead.
-This step is mechanical, leaves the tree compiling, changes no caller, and is
-the precondition for deletion. It must cover all 31 at once because the
-default-contract test file is organized around the defaults as a set.
+**Step 1 — require `_read`, keep every caller working.** Delete the provided
+defaults and make the read halves required, family by family. CPU and CUDA need
+no new code. Every other implementor, including the test backends, reproduces
+the old default in one line per operation, because the old default body *is*
+`self.op(read_tensor(name, input)?, ..)`. That makes the two libraries below
+the read-half migration mechanical:
+
+- expose `read_tensor` as a `#[doc(hidden)] pub` bridge in `tenferro-tensor`,
+  alongside the bridges this crate already uses for cross-crate internals
+  (`with_cpu_exec_session`, `session_type_id`, `with_backend_session_cached`),
+  so an external implementor writes
+  `self.reduce_sum(read_tensor("reduce_sum", input)?, axes)` instead of a
+  six-line match;
+- for WebGPU, reproduce **both** branches of the old chain: `unsupported!` with
+  the same op literal where the owned branch ended in the one-shot's
+  `unsupported!`, and `read_boundary_error` for the view branch. Where the
+  operation is real (`dot_general`), the old default body moves into
+  `dot_general_read` unchanged.
+
+Measured churn. Making only the four `TensorReduction` read halves required in a
+throwaway probe broke nine `impl TensorReduction` sites in four files
+(`tenferro-ad/src/eager_backend.rs` twice,
+`tenferro-cpu/src/tests/cpu_tests/backend_misc.rs` twice,
+`tenferro-runtime/tests/integration/session_ops.rs`, and
+`tenferro-tensor/src/tests/backend_default_read_tests.rs`) while the
+`--workspace --all-targets` check ran with default features. That is
+approximately linear, so the full 31 read halves imply on the order of seventy
+sites, each needing one line per operation. WebGPU's 31 implementations are
+additionally required but are hidden from a default-feature check.
+
+Per-family staging is viable and preferred for revertibility: the contract test
+file asserts each family separately, so a family slice updates only its own
+assertions. The ordering constraint is unchanged — a read half must become
+required before its one-shot sibling is deleted, or the still-provided default
+would recurse into itself.
 
 **Step 2 — delete the one-shot methods per family and migrate callers.**
 Compile errors are the work list. Per family, the deletion also forces the
