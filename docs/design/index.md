@@ -39,6 +39,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [testing.md](./testing.md) | Testing and performance verification strategy |
 | [nested-cargo-debug-profile.md](./nested-cargo-debug-profile.md) | Repository-owned Cargo environment defaults for debug-free guide and trybuild fixture workspaces |
 | [execution-engine-provider-architecture.md](./execution-engine-provider-architecture.md) | Authoritative runtime-owned execution-engine, provider registration, preparation, and scheduled execution architecture |
+| [explicit-session-boundary.md](./explicit-session-boundary.md) | Which functions may create backend execution state: target session contract, the audited session-entry inventory (#1926), migration slices, audit-gate design, and the measurement protocol for session-entry claims |
 | [review-decision-records.md](./review-decision-records.md) | Relationship between historical plans, reviewer-facing work logs, and durable design records |
 | [change-aware-ci.md](./change-aware-ci.md) | Conservative pull-request classification, shared command profiles, stable required checks, and trusted RunPod recovery |
 | [ci-cache-trust.md](./ci-cache-trust.md) | CI cache namespace trust model, the single trusted default-branch cache writer, material-input cache keys, and immutable GPU archive artifact reuse across allocation retries |
