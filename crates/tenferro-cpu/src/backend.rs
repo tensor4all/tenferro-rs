@@ -2995,12 +2995,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::mul_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool_context(|context, buffers| {
             elementwise::mul_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)

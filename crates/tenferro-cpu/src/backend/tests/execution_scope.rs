@@ -1,4 +1,5 @@
 use super::*;
+use tenferro_tensor::BackendSessionHost;
 
 fn input() -> Tensor {
     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap()
@@ -40,7 +41,9 @@ fn shared_scope_installs_once_and_reuses_resources_across_operations() {
                         assert_eq!(y.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
                         backend.reclaim_buffer(y);
                         let run = |session: &mut dyn BackendSession| {
-                            let y = session.mul(&x, &x).unwrap();
+                            let y = session
+                                .mul_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+                                .unwrap();
                             assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 4.0, 9.0, 16.0]);
                             let product = session.dot_general(&x, &x, &config).unwrap();
                             assert_eq!(

@@ -142,7 +142,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
         panic_backend_methods! {
             add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
-            mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
             neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             conj(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
@@ -182,10 +181,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             lhs: TensorRead<'_>,
             rhs: TensorRead<'_>,
         ) -> tenferro_tensor::Result<Tensor> {
-            self.mul(
-                tenferro_tensor::backend::read_owned_tensor("mul", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("mul", rhs)?,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
+            let _ = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
+            panic!("mul should not be called by this test")
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

@@ -748,7 +748,10 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::Mul => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.mul(a.tensor(), b.tensor())?]
+                vec![exec.mul_read(
+                    TensorRead::from_tensor(a.tensor()),
+                    TensorRead::from_tensor(b.tensor()),
+                )?]
             }
             StdTensorOp::Neg => vec![exec.neg(inputs[0])?],
             StdTensorOp::Div => {

@@ -593,7 +593,10 @@ fn outer_product<'a>(
                 let rhs_input = rhs.tensor_owned(exec)?;
                 let lhs_tensor = exec.broadcast_in_dim(&lhs_input, &combined_shape, &lhs_dims)?;
                 let rhs_tensor = exec.broadcast_in_dim(&rhs_input, &combined_shape, &rhs_dims)?;
-                let tensor = exec.mul(&lhs_tensor, &rhs_tensor)?;
+                let tensor = exec.mul_read(
+                    TensorRead::from_tensor(&lhs_tensor),
+                    TensorRead::from_tensor(&rhs_tensor),
+                )?;
                 exec.reclaim_buffer(lhs_tensor);
                 exec.reclaim_buffer(rhs_tensor);
                 tensor

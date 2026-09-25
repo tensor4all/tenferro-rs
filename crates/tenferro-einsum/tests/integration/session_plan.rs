@@ -179,7 +179,6 @@ macro_rules! panic_elementwise {
 
             panic_backend_methods! {
                 add(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 neg(input: &Tensor) -> TensorResult;
                 abs(input: &Tensor) -> TensorResult;
                 sign(input: &Tensor) -> TensorResult;
@@ -207,10 +206,9 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-                self.mul(
-                    tenferro_tensor::backend::read_owned_tensor("mul", lhs)?,
-                    tenferro_tensor::backend::read_owned_tensor("mul", rhs)?,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
+                panic!("mul should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -487,10 +485,6 @@ impl TensorElementwise for SessionCountingBackend {
         self.inner.add(lhs, rhs)
     }
 
-    fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> TensorResult {
-        self.inner.mul(lhs, rhs)
-    }
-
     fn neg(&mut self, input: &Tensor) -> TensorResult {
         self.inner.neg(input)
     }
@@ -534,10 +528,9 @@ impl TensorElementwise for SessionCountingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-        self.mul(
-            tenferro_tensor::backend::read_owned_tensor("mul", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("mul", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
+        panic!("mul should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

@@ -662,7 +662,11 @@ fn test_backend_mul_neg_conj_dispatch() {
     );
     let mut backend = CpuBackend::new();
 
-    let prod = TensorElementwise::mul(&mut backend, &a, &b).unwrap();
+    let prod = backend
+        .with_backend_session(|__s| {
+            __s.mul_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        })
+        .unwrap();
     assert_eq!(get_f64(&prod, &[0]), 3.0);
     assert_eq!(get_f64(&prod, &[1]), -8.0);
 

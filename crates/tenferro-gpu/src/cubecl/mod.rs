@@ -4764,7 +4764,22 @@ impl TensorElementwise for CudaBackend {
         }
         let lhs = self.read_input(lhs)?;
         let rhs = self.read_input(rhs)?;
-        self.mul(lhs.as_tensor(), rhs.as_tensor())
+        let lhs = lhs.as_tensor();
+        let rhs = rhs.as_tensor();
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, "mul", elementwise::MIXED_MUL)
+        {
+            return result;
+        }
+        dispatch::dispatch_binary_float_complex_int!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Mul,
+            mul_float,
+            mul_int,
+            mul_complex
+        )
     }
 
     fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5149,23 +5164,6 @@ impl TensorElementwise for CudaBackend {
             add_float,
             add_int,
             add_complex
-        )
-    }
-
-    fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        if let Some(result) =
-            promoted_real_complex_scalar_binary(self, lhs, rhs, "mul", elementwise::MIXED_MUL)
-        {
-            return result;
-        }
-        dispatch::dispatch_binary_float_complex_int!(
-            self,
-            lhs,
-            rhs,
-            PrimitiveOpKind::Mul,
-            mul_float,
-            mul_int,
-            mul_complex
         )
     }
 
@@ -6745,7 +6743,10 @@ impl TensorReduction for CudaBackend {
         // Dispatch on the tag and recover the typed tensor, which is what `as_typed` exists for.
         if axes.is_empty() {
             return match input.dtype() {
-                DType::F32 | DType::F64 => self.mul(input, input),
+                DType::F32 | DType::F64 => self.mul_read(
+                    TensorRead::from_tensor(input),
+                    TensorRead::from_tensor(input),
+                ),
                 DType::I32 | DType::I64 | DType::Bool | DType::C32 | DType::C64 => {
                     Err(unsupported_dtype(op, input.dtype()))
                 }

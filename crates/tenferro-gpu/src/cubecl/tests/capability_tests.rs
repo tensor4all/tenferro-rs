@@ -237,7 +237,11 @@ fn run_supported_case(
                 __s.sub_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
             })
         }),
-        PrimitiveOpKind::Mul => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.mul(l, r)),
+        PrimitiveOpKind::Mul => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
+            b.with_backend_session(|__s| {
+                __s.mul_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
+            })
+        }),
         PrimitiveOpKind::Neg => assert_unary_matches(cpu, gpu, entry, |b, x| b.neg(x)),
         PrimitiveOpKind::Conj => assert_unary_matches(cpu, gpu, entry, |b, x| b.conj(x)),
         PrimitiveOpKind::Div => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
@@ -507,7 +511,9 @@ fn run_cpu_binary(
         PrimitiveOpKind::Sub => cpu.with_backend_session(|__s| {
             __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
         }),
-        PrimitiveOpKind::Mul => cpu.mul(lhs, rhs),
+        PrimitiveOpKind::Mul => cpu.with_backend_session(|__s| {
+            __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+        }),
         PrimitiveOpKind::Div => cpu.with_backend_session(|__s| {
             __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
         }),

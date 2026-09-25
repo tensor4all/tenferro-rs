@@ -257,7 +257,11 @@ fn test_fused_add_mul_matches_cpu() {
 
     let mut cpu = cpu_backend();
     let sum = cpu.add(&a, &b).unwrap();
-    let expected = cpu.mul(&sum, &a).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.mul_read(TensorRead::from_tensor(&sum), TensorRead::from_tensor(&a))
+        })
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let gpu_a = upload(&gpu, &a);
@@ -309,7 +313,11 @@ fn test_fused_complex_c64_add_conj_mul_matches_cpu() {
     let mut cpu = cpu_backend();
     let sum = cpu.add(&a, &b).unwrap();
     let conj = cpu.conj(&sum).unwrap();
-    let expected = cpu.mul(&conj, &a).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.mul_read(TensorRead::from_tensor(&conj), TensorRead::from_tensor(&a))
+        })
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let gpu_a = upload(&gpu, &a);

@@ -2,7 +2,7 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use tenferro_cpu::{available_parallelism, CpuBackend, CpuBackendKind, CpuPlacement};
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor};
+use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead};
 
 const MATRIX_SIZES: [usize; 3] = [64, 256, 512];
 
@@ -16,7 +16,10 @@ fn matrix(size: usize) -> Tensor {
 fn run_session_workload(backend: &mut CpuBackend, input: &Tensor) -> Tensor {
     backend
         .with_backend_session(|exec| {
-            let squared = exec.mul(input, input)?;
+            let squared = exec.mul_read(
+                TensorRead::from_tensor(input),
+                TensorRead::from_tensor(input),
+            )?;
             exec.dot_general(
                 &squared,
                 input,

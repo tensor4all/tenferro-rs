@@ -1486,7 +1486,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         }
 
         panic_backend_methods! {
-        mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         neg(input: &Tensor) -> crate::Result<Tensor>;
         abs(input: &Tensor) -> crate::Result<Tensor>;
         sign(input: &Tensor) -> crate::Result<Tensor>;
@@ -1525,10 +1524,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            self.mul(
-                tenferro_tensor::backend::read_owned_tensor("mul", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("mul", rhs)?,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1973,7 +1974,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         }
 
         panic_backend_methods! {
-        mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         neg(input: &Tensor) -> crate::Result<Tensor>;
         abs(input: &Tensor) -> crate::Result<Tensor>;
         sign(input: &Tensor) -> crate::Result<Tensor>;
@@ -2012,10 +2012,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            self.mul(
-                tenferro_tensor::backend::read_owned_tensor("mul", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("mul", rhs)?,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

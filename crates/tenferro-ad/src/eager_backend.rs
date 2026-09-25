@@ -317,7 +317,6 @@ impl TensorElementwise for RecordingBackend {
 
     delegate_recording_backend_methods! {
         fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn neg(input: &Tensor) -> TensorResult<Tensor>;
         fn conj(input: &Tensor) -> TensorResult<Tensor>;
@@ -735,7 +734,6 @@ impl TensorElementwise for EagerBackend {
         fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn neg(input: &Tensor) -> TensorResult<Tensor>;
         fn neg_read(input: TensorRead<'_>) -> TensorResult<Tensor>;

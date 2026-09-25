@@ -193,11 +193,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("mul");
-        Ok(marker())
-    }
-
     fn neg(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("neg");
         Ok(marker())
@@ -259,10 +254,10 @@ impl TensorElementwise for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.mul(
-            crate::backend::read_owned_tensor("mul", lhs)?,
-            crate::backend::read_owned_tensor("mul", rhs)?,
-        )
+        let _ = crate::backend::read_owned_tensor("mul", lhs)?;
+        let _ = crate::backend::read_owned_tensor("mul", rhs)?;
+        self.calls.push("mul");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

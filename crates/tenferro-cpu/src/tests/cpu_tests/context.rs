@@ -1,5 +1,6 @@
 use super::*;
 
+use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{ErrorKind, ValidationKind};
 
 #[test]
@@ -149,7 +150,9 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
     backend.with_backend_session(|session| {
         session.add(&lhs, &rhs).unwrap();
         session.neg(&lhs).unwrap();
-        session.mul(&lhs, &rhs).unwrap();
+        session
+            .mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            .unwrap();
         session
             .dot_general(
                 &lhs,

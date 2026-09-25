@@ -198,10 +198,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("add"))
     }
 
-    fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
-        Err(unexpected("mul"))
-    }
-
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor> {
         match (&lhs, &rhs) {
             (
