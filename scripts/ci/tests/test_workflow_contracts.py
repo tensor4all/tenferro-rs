@@ -296,10 +296,19 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("SMOKE_SOURCE_URL", whole)
         # Debug retention must also gate the workflow-side deletion paths,
         # or the cleanup steps would delete the pod being inspected.
-        self.assertIn(
-            "if: failure() && steps.create_pod.outputs.pod_id != '' && inputs.keep_failed_pods != true",
-            whole,
-        )
+        delete_on_failure = whole[
+            whole.index("      - name: Delete pod if runner startup failed") : whole.index(
+                "      - name: Delete pod if runner startup failed"
+            )
+            + 400
+        ]
+        for condition in (
+            "failure()",
+            "steps.paid_path.outputs.run_paid_path != 'false'",
+            "steps.create_pod.outputs.pod_id != ''",
+            "inputs.keep_failed_pods != true",
+        ):
+            self.assertIn(condition, delete_on_failure)
         self.assertIn(
             "if: inputs.keep_failed_pods != true || needs.start-runpod.result == 'success'",
             whole,
@@ -400,6 +409,16 @@ class WorkflowContractTests(unittest.TestCase):
         # Merged or closed PRs must not spend either (that raced with the merge
         # in a live run).
         self.assertIn('if [ "${pr_state}" != "open" ]; then', execute)
+        # A skipped decision must not leave a failing job behind: the PR
+        # revalidation (which refuses merged PRs by design), the runner label,
+        # and the App token only matter when we are actually spending.
+        for step in (
+            "      - name: Revalidate queued PR before provisioning",
+            "      - name: Define runner label",
+            "      - name: Create GitHub App token",
+        ):
+            block = execute[execute.index(step) : execute.index(step) + 400]
+            self.assertIn("steps.paid_path.outputs.run_paid_path != 'false'", block, step)
 
     def test_merged_or_closed_pulls_do_not_provision_pods(self) -> None:
         """A gate run that completes after the merge must not pay for a pod."""
