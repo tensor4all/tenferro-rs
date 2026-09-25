@@ -598,3 +598,50 @@ inlines the one-shot bodies into the read halves that currently delegate to
 them, redirects the trait-internal defaults listed above, and migrates callers.
 The trait-internal redirect belongs to the same slice as the deletion, because
 a default that still calls a deleted method cannot compile.
+
+### Step 2 pilot: attempted, measured, reverted
+
+The `TensorDot` deletion was attempted and reverted. The tree at
+`5e9c7519a` (Step 1 complete) is the last verified state. Recording what the
+attempt established, because it changes how Step 2 should be run.
+
+**Identification is the first hard part, not the edit.** Of the 35 non-test
+`\.dot_general\(` matches, only five are the deleted trait method: two
+read halves that had to absorb the removed body, and three session read calls
+(`tenferro-runtime/src/tensor.rs`, `tenferro-einsum/src/concrete.rs`,
+`tenferro-ad/src/eager_exec.rs`). Every other match is a different API that must
+not be touched — `EagerTensor::dot_general`, `TracedTensor::dot_general`,
+`capabilities.dot_general()`, `CpuGeneralContractionProvider::dot_general`
+(`&self`, provider request), and `gemm::dot_general` free functions. A raw
+`\.dot_general\(` grep is therefore mostly false positives, and the same will
+hold for `add`, `reshape`, and the rest.
+
+**The test-side sites are three shapes.** Session-receiver calls already inside a
+`with_backend_session` closure (rewrite to `_read` plus `TensorRead::from_tensor`
+wrapping); owner-receiver calls (`backend.dot_general(..)`, including a
+multi-line `backend\n .dot_general(` form) that need a boundary; and read halves
+that still delegate to the removed method and must absorb its body.
+
+**Six concrete codemod failure modes, all hit:**
+
+1. Diagnostics that point *inside* a `macro_rules!` definition — the GPU
+   `delegate!` shims and the per-crate `panic_backend_methods!` /
+   `unreachable_backend_methods!` factories. Editing there corrupts the macro.
+2. Factory *invocation* lines (`dot_general(...) -> Ret;` entries) that must be
+   deleted individually.
+3. Receivers that are not simple identifiers: `&mut B` generic session
+   parameters, multi-line `receiver\n .method(` forms, `&mut dyn BackendSession`.
+4. Argument lists with nested calls, macros and struct literals
+   (`black_box(..)`, `DotGeneralConfig { .. }`), which need real paren matching —
+   the indent/brace heuristics failed here repeatedly.
+5. `E0407` stays hidden while a crate's earlier caller errors exist, so the work
+   list arrives in stages rather than once.
+6. String, raw-string and char literals break naive sanitizers.
+
+**Recommendation for Step 2.** Migrate per *operation* rather than per family,
+so each slice is one trait item and its call sites; migrate the library sites
+first, then tests crate by crate; and keep the deletion in the same slice as its
+migrations so the tree compiles after every slice. If a codemod is used again, it
+should take an explicit file allowlist, refuse any site whose diagnostic points
+into a `macro_rules!` definition, and require `cargo check --workspace
+--all-targets` to pass after each file rather than once per family.
