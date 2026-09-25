@@ -38,6 +38,7 @@ EXPECTED_CASES: dict[str, int] = {
     "tenferro-ad|eager_dispatch_baseline": 28,
     "tenferro-ad|eager_backward_shape_churn": 1,
     "tenferro-linalg|linalg_vjp_gate": 4,
+    "tenferro-gpu|route_matrix_gpu": 25,
 }
 
 # Cases that exist only because the one-shot operation spelling still exists.

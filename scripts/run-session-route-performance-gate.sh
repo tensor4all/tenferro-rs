@@ -91,7 +91,13 @@ BENCHMARKS=(
   "tenferro-ad|eager_dispatch_baseline||crates/tenferro-ad/benches/eager_dispatch_baseline.rs|eager small-op dispatch, including indexed slice"
   "tenferro-ad|eager_backward_shape_churn||crates/tenferro-ad/benches/eager_backward_shape_churn.rs|eager backward under shape churn"
   "tenferro-linalg|linalg_vjp_gate|autodiff|crates/tenferro-linalg/benches/linalg_vjp_gate.rs|extension-bearing linalg VJP through the CPU session downcast path"
+  "tenferro-gpu|route_matrix_gpu|cuda|crates/tenferro-gpu/benches/route_matrix_gpu.rs|coexisting CUDA entry routes on one contraction, with enqueue and synchronized completion reported separately"
 )
+
+# CUDA runtime for the GPU targets. CUBECL_DEBUG_LOG=0 is required: without it
+# CubeCL prints the generated CUDA source for every JIT-compiled kernel.
+CUDA_ROOT="${TENFERRO_CUDA_ROOT:-/usr/local/cuda-12.6}"
+CUTENSOR_LIB_DIR="${TENFERRO_CUTENSOR_LIB_DIR:-/usr/lib/x86_64-linux-gnu/libcutensor/12}"
 
 criterion_args=(
   --warm-up-time "$WARM_UP_TIME"
@@ -172,17 +178,30 @@ for entry in "${BENCHMARKS[@]}"; do
   build_cmd+=(--bench "$bench" --no-run)
   run_cmd+=(--bench "$bench" -- "${criterion_args[@]}")
 
+  run_env=()
+  if [[ ",$bench_features," == *",cuda,"* ]]; then
+    printf 'cuda_root:   %s\n' "$CUDA_ROOT"
+    printf 'cutensor:    %s\n' "$CUTENSOR_LIB_DIR"
+    printf 'gpu_target=%s cuda_root=%s cutensor=%s\n' \
+      "$bench" "$CUDA_ROOT" "$CUTENSOR_LIB_DIR" >>"$manifest"
+    run_env=(
+      CUBECL_DEBUG_LOG=0
+      "CUDA_PATH=$CUDA_ROOT"
+      "LD_LIBRARY_PATH=$CUDA_ROOT/lib64:$CUTENSOR_LIB_DIR:${LD_LIBRARY_PATH:-}"
+    )
+  fi
+
   printf 'build:       %s\n' "${build_cmd[*]}"
-  printf 'run:         %s\n' "${run_cmd[*]}"
+  printf 'run:         %s\n' "${run_env[*]:-} ${run_cmd[*]}"
 
   if [[ "$MODE" == "run" ]]; then
     (
       cd "$ROOT_DIR"
-      "${build_cmd[@]}"
+      env "${run_env[@]}" "${build_cmd[@]}"
     ) 2>&1 | tee "$OUTPUT_DIR/${LABEL}-${package}-${bench}-build.log"
     (
       cd "$ROOT_DIR"
-      "${run_cmd[@]}"
+      env "${run_env[@]}" "${run_cmd[@]}"
     ) 2>&1 | tee "$OUTPUT_DIR/${LABEL}-${package}-${bench}-run.log"
   fi
 done

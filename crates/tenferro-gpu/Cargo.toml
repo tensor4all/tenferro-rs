@@ -114,6 +114,12 @@ name = "storage_provider_webgpu_progress"
 path = "tests/storage_provider_webgpu_progress.rs"
 
 [[bench]]
+name = "route_matrix_gpu"
+path = "benches/route_matrix_gpu.rs"
+harness = false
+required-features = ["cuda"]
+
+[[bench]]
 name = "cutensor_plan_cache"
 path = "benches/cutensor_plan_cache.rs"
 harness = false
