@@ -441,6 +441,35 @@ impl TensorStructural for DefaultReadBackend {
         Ok(marker())
     }
 
+    fn transpose_read(
+        &mut self,
+        input: TensorRead<'_>,
+        perm: &[usize],
+    ) -> crate::Result<Tensor> {
+        self.transpose(crate::backend::read_owned_tensor("transpose", input)?, perm)
+    }
+
+    fn reshape_read(
+        &mut self,
+        input: TensorRead<'_>,
+        shape: &[usize],
+    ) -> crate::Result<Tensor> {
+        self.reshape(crate::backend::read_owned_tensor("reshape", input)?, shape)
+    }
+
+    fn broadcast_in_dim_read(
+        &mut self,
+        input: TensorRead<'_>,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> crate::Result<Tensor> {
+        self.broadcast_in_dim(
+            crate::backend::read_owned_tensor("broadcast_in_dim", input)?,
+            shape,
+            dims,
+        )
+    }
+
     fn cast(&mut self, _input: &Tensor, _to: DType) -> crate::Result<Tensor> {
         self.calls.push("cast");
         Ok(marker())

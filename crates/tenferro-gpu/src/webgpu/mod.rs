@@ -930,6 +930,36 @@ impl TensorStructural for WebGpuBackend {
     fn triu(&mut self, _input: &Tensor, _k: i64) -> crate::Result<Tensor> {
         unsupported!("webgpu_triu")
     }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn transpose_read(&mut self, input: TensorRead<'_>, _perm: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+        unsupported!("webgpu_transpose")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reshape_read(&mut self, input: TensorRead<'_>, _shape: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+        unsupported!("webgpu_reshape")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn broadcast_in_dim_read(&mut self, input: TensorRead<'_>, _shape: &[usize], _dims: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
+        unsupported!("webgpu_broadcast_in_dim")
+    }
 }
 
 impl TensorViewCanonicalization<f32, tenferro_tensor::DynRank> for WebGpuBackend {

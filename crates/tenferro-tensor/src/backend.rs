@@ -2627,6 +2627,9 @@ pub trait TensorStructural {
     ///     fn transpose(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn reshape(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn broadcast_in_dim(&mut self, _: &Tensor, _: &[usize], _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn transpose_read(&mut self, _: TensorRead<'_>, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn reshape_read(&mut self, _: TensorRead<'_>, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn broadcast_in_dim_read(&mut self, _: TensorRead<'_>, _: &[usize], _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn cast(&mut self, _: &Tensor, _: DType) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn extract_diagonal(&mut self, _: &Tensor, _: usize, _: usize) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn embed_diagonal(&mut self, _: &Tensor, _: usize, _: usize) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
@@ -2706,6 +2709,9 @@ pub trait TensorStructural {
     ///     fn transpose(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn reshape(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn broadcast_in_dim(&mut self, _: &Tensor, _: &[usize], _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn transpose_read(&mut self, _: TensorRead<'_>, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn reshape_read(&mut self, _: TensorRead<'_>, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn broadcast_in_dim_read(&mut self, _: TensorRead<'_>, _: &[usize], _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn cast(&mut self, _: &Tensor, _: DType) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn extract_diagonal(&mut self, _: &Tensor, _: usize, _: usize) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn embed_diagonal(&mut self, _: &Tensor, _: usize, _: usize) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
@@ -2751,9 +2757,7 @@ pub trait TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        self.transpose(read_tensor("transpose", input)?, perm)
-    }
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2768,9 +2772,7 @@ pub trait TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.reshape(read_tensor("reshape", input)?, shape)
-    }
+    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2795,9 +2797,7 @@ pub trait TensorStructural {
         input: TensorRead<'_>,
         shape: &[usize],
         dims: &[usize],
-    ) -> crate::Result<Tensor> {
-        self.broadcast_in_dim(read_tensor("broadcast_in_dim", input)?, shape, dims)
-    }
+    ) -> crate::Result<Tensor>;
 
     /// Cast a tensor to another dtype using explicit dtype projection.
     ///

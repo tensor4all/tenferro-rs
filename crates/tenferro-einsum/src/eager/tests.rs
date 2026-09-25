@@ -355,6 +355,27 @@ impl TensorStructural for NoBroadcastMaterializationBackend {
     fn triu(&mut self, _input: &Tensor, _k: i64) -> Result<Tensor> {
         Err(unexpected("triu"))
     }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly rather than
+    // forwarding a view, which would widen the accepted input surface.
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> Result<Tensor> {
+        self.transpose(tenferro_tensor::backend::read_owned_tensor("transpose", input)?, perm)
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly rather than
+    // forwarding a view, which would widen the accepted input surface.
+    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> Result<Tensor> {
+        self.reshape(tenferro_tensor::backend::read_owned_tensor("reshape", input)?, shape)
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly rather than
+    // forwarding a view, which would widen the accepted input surface.
+    fn broadcast_in_dim_read(&mut self, input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> Result<Tensor> {
+        self.broadcast_in_dim(tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?, shape, dims)
+    }
 }
 
 impl TensorReduction for NoBroadcastMaterializationBackend {

@@ -104,6 +104,9 @@ delegate!(TensorAnalytic {
 });
 
 delegate!(TensorStructural {
+    fn transpose_read(input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor>;
+    fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor>;
+    fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
     fn to_contiguous_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()>;
     fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
