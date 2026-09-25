@@ -741,7 +741,10 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::Sub => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.sub(a.tensor(), b.tensor())?]
+                vec![exec.sub_read(
+                    TensorRead::from_tensor(a.tensor()),
+                    TensorRead::from_tensor(b.tensor()),
+                )?]
             }
             StdTensorOp::Mul => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;

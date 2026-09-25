@@ -550,12 +550,18 @@ fn bcgs2_append<B: BenchSession>(
     let first = matmul(session, &qh, block)?;
     let first_reconstruction = matmul(session, q, &first)?;
     let first_residual = session
-        .sub(block, &first_reconstruction)
+        .sub_read(
+            TensorRead::from_tensor(block),
+            TensorRead::from_tensor(&first_reconstruction),
+        )
         .map_err(|error| error.to_string())?;
     let correction = matmul(session, &qh, &first_residual)?;
     let correction_reconstruction = matmul(session, q, &correction)?;
     let residual = session
-        .sub(&first_residual, &correction_reconstruction)
+        .sub_read(
+            TensorRead::from_tensor(&first_residual),
+            TensorRead::from_tensor(&correction_reconstruction),
+        )
         .map_err(|error| error.to_string())?;
     let projection = session
         .add(&first, &correction)
@@ -568,7 +574,10 @@ fn bcgs2_append<B: BenchSession>(
         .reduce_sum(&projection, &[0, 1])
         .map_err(|error| error.to_string())?;
     let zero = session
-        .sub(&scalar, &scalar)
+        .sub_read(
+            TensorRead::from_tensor(&scalar),
+            TensorRead::from_tensor(&scalar),
+        )
         .map_err(|error| error.to_string())?;
     let bottom_left = session
         .broadcast_in_dim(&zero, &[appended_r.shape()[0], r.shape()[1]], &[])

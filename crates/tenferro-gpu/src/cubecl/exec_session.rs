@@ -472,7 +472,6 @@ delegate!(TensorElementwise {
     fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> crate::Result<Tensor>;
     fn elementwise_read_into(op: ElementwiseReadOp, inputs: &[TensorRead<'_>], out: TensorWrite<'_>) -> crate::Result<()>;
     fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn neg(input: &Tensor) -> crate::Result<Tensor>;
     fn conj(input: &Tensor) -> crate::Result<Tensor>;

@@ -57,7 +57,6 @@ impl TensorElementwise for WrongDTypeBackend {
 
     panic_backend_methods! {
         add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
-        sub(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
@@ -90,10 +89,9 @@ impl TensorElementwise for WrongDTypeBackend {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.sub(
-            tenferro_tensor::backend::read_owned_tensor("sub", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("sub", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("sub", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("sub", rhs)?;
+        panic!("sub should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

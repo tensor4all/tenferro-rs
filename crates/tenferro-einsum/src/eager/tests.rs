@@ -198,10 +198,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("add"))
     }
 
-    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
-        Err(unexpected("sub"))
-    }
-
     fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
         Err(unexpected("mul"))
     }
@@ -261,10 +257,9 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor> {
-        self.sub(
-            tenferro_tensor::backend::read_owned_tensor("sub", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("sub", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("sub", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("sub", rhs)?;
+        Err(unexpected("sub"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

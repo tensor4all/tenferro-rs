@@ -4738,7 +4738,22 @@ impl TensorElementwise for CudaBackend {
         }
         let lhs = self.read_input(lhs)?;
         let rhs = self.read_input(rhs)?;
-        self.sub(lhs.as_tensor(), rhs.as_tensor())
+        let lhs = lhs.as_tensor();
+        let rhs = rhs.as_tensor();
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, "sub", elementwise::MIXED_SUB)
+        {
+            return result;
+        }
+        dispatch::dispatch_binary_float_complex_int!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Sub,
+            sub_float,
+            sub_int,
+            sub_complex
+        )
     }
 
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -4979,23 +4994,6 @@ impl TensorElementwise for CudaBackend {
             add_float,
             add_int,
             add_complex
-        )
-    }
-
-    fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        if let Some(result) =
-            promoted_real_complex_scalar_binary(self, lhs, rhs, "sub", elementwise::MIXED_SUB)
-        {
-            return result;
-        }
-        dispatch::dispatch_binary_float_complex_int!(
-            self,
-            lhs,
-            rhs,
-            PrimitiveOpKind::Sub,
-            sub_float,
-            sub_int,
-            sub_complex
         )
     }
 
