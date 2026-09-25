@@ -59,7 +59,6 @@ impl TensorElementwise for WrongDTypeBackend {
         add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
-        div(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         sign(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
@@ -126,10 +125,9 @@ impl TensorElementwise for WrongDTypeBackend {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.div(
-            tenferro_tensor::backend::read_owned_tensor("div", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("div", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
+        panic!("div should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

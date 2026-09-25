@@ -4788,7 +4788,162 @@ impl TensorElementwise for CudaBackend {
         }
         let lhs = self.read_input(lhs)?;
         let rhs = self.read_input(rhs)?;
-        self.div(lhs.as_tensor(), rhs.as_tensor())
+        let lhs = lhs.as_tensor();
+        let rhs = rhs.as_tensor();
+        let op = op_name(
+            PrimitiveOpKind::Div,
+            op_descriptor::GpuLaunchKind::BinaryFloatComplexInt,
+        )?;
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, op, elementwise::MIXED_DIV)
+        {
+            return result;
+        }
+        match (lhs.dtype(), rhs.dtype()) {
+            (DType::F32, DType::F32) if lhs.shape() != rhs.shape() => launch_scalar_binary(
+                self,
+                typed_or_unsupported::<f32>(lhs, op)?,
+                typed_or_unsupported::<f32>(rhs, op)?,
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                    elementwise::scalar_div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<f32>),
+            (DType::F32, DType::F32) => launch_binary(
+                self.runtime(),
+                typed_or_unsupported::<f32>(lhs, op)?,
+                typed_or_unsupported::<f32>(rhs, op)?,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<f32>),
+            (DType::F64, DType::F64) if lhs.shape() != rhs.shape() => launch_scalar_binary(
+                self,
+                typed_or_unsupported::<f64>(lhs, op)?,
+                typed_or_unsupported::<f64>(rhs, op)?,
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                    elementwise::scalar_div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<f64>),
+            (DType::F64, DType::F64) => launch_binary(
+                self.runtime(),
+                typed_or_unsupported::<f64>(lhs, op)?,
+                typed_or_unsupported::<f64>(rhs, op)?,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<f64>),
+            (DType::I32, DType::I32) if lhs.shape() != rhs.shape() => {
+                launch_checked_integer_scalar_binary(
+                    self,
+                    typed_or_unsupported::<i32>(lhs, op)?,
+                    typed_or_unsupported::<i32>(rhs, op)?,
+                    op,
+                    crate::DType::I32,
+                    CheckedIntegerDomain::DivisionByZero,
+                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_div_int_checked::launch_unchecked::<
+                            i32,
+                            CubeclCudaRuntime,
+                        >(
+                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<i32>)
+            }
+            (DType::I32, DType::I32) => launch_checked_integer_binary(
+                self,
+                typed_or_unsupported::<i32>(lhs, op)?,
+                typed_or_unsupported::<i32>(rhs, op)?,
+                op,
+                crate::DType::I32,
+                CheckedIntegerDomain::DivisionByZero,
+                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
+                    elementwise::div_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<i32>),
+            (DType::I64, DType::I64) if lhs.shape() != rhs.shape() => {
+                launch_checked_integer_scalar_binary(
+                    self,
+                    typed_or_unsupported::<i64>(lhs, op)?,
+                    typed_or_unsupported::<i64>(rhs, op)?,
+                    op,
+                    crate::DType::I64,
+                    CheckedIntegerDomain::DivisionByZero,
+                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_div_int_checked::launch_unchecked::<
+                            i64,
+                            CubeclCudaRuntime,
+                        >(
+                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<i64>)
+            }
+            (DType::I64, DType::I64) => launch_checked_integer_binary(
+                self,
+                typed_or_unsupported::<i64>(lhs, op)?,
+                typed_or_unsupported::<i64>(rhs, op)?,
+                op,
+                crate::DType::I64,
+                CheckedIntegerDomain::DivisionByZero,
+                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
+                    elementwise::div_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<i64>),
+            (DType::C32, DType::C32) => launch_binary(
+                self.runtime(),
+                typed_or_unsupported::<Complex32>(lhs, op)?,
+                typed_or_unsupported::<Complex32>(rhs, op)?,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<num_complex::Complex32>),
+            (DType::C64, DType::C64) => launch_binary(
+                self.runtime(),
+                typed_or_unsupported::<Complex64>(lhs, op)?,
+                typed_or_unsupported::<Complex64>(rhs, op)?,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<num_complex::Complex64>),
+            _ => Err(dtype_mismatch(op, lhs, rhs)),
+        }
     }
 
     fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5080,163 +5235,6 @@ impl TensorElementwise for CudaBackend {
                 "conj",
                 "an externally defined payload is not supported by this GPU operation",
             )),
-        }
-    }
-
-    fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        let op = op_name(
-            PrimitiveOpKind::Div,
-            op_descriptor::GpuLaunchKind::BinaryFloatComplexInt,
-        )?;
-        if let Some(result) =
-            promoted_real_complex_scalar_binary(self, lhs, rhs, op, elementwise::MIXED_DIV)
-        {
-            return result;
-        }
-        match (lhs.dtype(), rhs.dtype()) {
-            (DType::F32, DType::F32) if lhs.shape() != rhs.shape() => launch_scalar_binary(
-                self,
-                typed_or_unsupported::<f32>(lhs, op)?,
-                typed_or_unsupported::<f32>(rhs, op)?,
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                    elementwise::scalar_div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<f32>),
-            (DType::F32, DType::F32) => launch_binary(
-                self.runtime(),
-                typed_or_unsupported::<f32>(lhs, op)?,
-                typed_or_unsupported::<f32>(rhs, op)?,
-                lhs.shape(),
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<f32>),
-            (DType::F64, DType::F64) if lhs.shape() != rhs.shape() => launch_scalar_binary(
-                self,
-                typed_or_unsupported::<f64>(lhs, op)?,
-                typed_or_unsupported::<f64>(rhs, op)?,
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                    elementwise::scalar_div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<f64>),
-            (DType::F64, DType::F64) => launch_binary(
-                self.runtime(),
-                typed_or_unsupported::<f64>(lhs, op)?,
-                typed_or_unsupported::<f64>(rhs, op)?,
-                lhs.shape(),
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<f64>),
-            (DType::I32, DType::I32) if lhs.shape() != rhs.shape() => {
-                launch_checked_integer_scalar_binary(
-                    self,
-                    typed_or_unsupported::<i32>(lhs, op)?,
-                    typed_or_unsupported::<i32>(rhs, op)?,
-                    op,
-                    crate::DType::I32,
-                    CheckedIntegerDomain::DivisionByZero,
-                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
-                        elementwise::scalar_div_int_checked::launch_unchecked::<
-                            i32,
-                            CubeclCudaRuntime,
-                        >(
-                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<i32>)
-            }
-            (DType::I32, DType::I32) => launch_checked_integer_binary(
-                self,
-                typed_or_unsupported::<i32>(lhs, op)?,
-                typed_or_unsupported::<i32>(rhs, op)?,
-                op,
-                crate::DType::I32,
-                CheckedIntegerDomain::DivisionByZero,
-                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
-                    elementwise::div_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<i32>),
-            (DType::I64, DType::I64) if lhs.shape() != rhs.shape() => {
-                launch_checked_integer_scalar_binary(
-                    self,
-                    typed_or_unsupported::<i64>(lhs, op)?,
-                    typed_or_unsupported::<i64>(rhs, op)?,
-                    op,
-                    crate::DType::I64,
-                    CheckedIntegerDomain::DivisionByZero,
-                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
-                        elementwise::scalar_div_int_checked::launch_unchecked::<
-                            i64,
-                            CubeclCudaRuntime,
-                        >(
-                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<i64>)
-            }
-            (DType::I64, DType::I64) => launch_checked_integer_binary(
-                self,
-                typed_or_unsupported::<i64>(lhs, op)?,
-                typed_or_unsupported::<i64>(rhs, op)?,
-                op,
-                crate::DType::I64,
-                CheckedIntegerDomain::DivisionByZero,
-                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
-                    elementwise::div_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<i64>),
-            (DType::C32, DType::C32) => launch_binary(
-                self.runtime(),
-                typed_or_unsupported::<Complex32>(lhs, op)?,
-                typed_or_unsupported::<Complex32>(rhs, op)?,
-                lhs.shape(),
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::div_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<num_complex::Complex32>),
-            (DType::C64, DType::C64) => launch_binary(
-                self.runtime(),
-                typed_or_unsupported::<Complex64>(lhs, op)?,
-                typed_or_unsupported::<Complex64>(rhs, op)?,
-                lhs.shape(),
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::div_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<num_complex::Complex64>),
-            _ => Err(dtype_mismatch(op, lhs, rhs)),
         }
     }
 

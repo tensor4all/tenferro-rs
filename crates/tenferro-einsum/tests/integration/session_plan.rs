@@ -181,7 +181,6 @@ macro_rules! panic_elementwise {
                 add(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 neg(input: &Tensor) -> TensorResult;
-                div(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 abs(input: &Tensor) -> TensorResult;
                 sign(input: &Tensor) -> TensorResult;
                 compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
@@ -229,10 +228,9 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-                self.div(
-                    tenferro_tensor::backend::read_owned_tensor("div", lhs)?,
-                    tenferro_tensor::backend::read_owned_tensor("div", rhs)?,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
+                panic!("div should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -497,10 +495,6 @@ impl TensorElementwise for SessionCountingBackend {
         self.inner.neg(input)
     }
 
-    fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> TensorResult {
-        self.inner.div(lhs, rhs)
-    }
-
     fn abs(&mut self, input: &Tensor) -> TensorResult {
         self.inner.abs(input)
     }
@@ -561,10 +555,9 @@ impl TensorElementwise for SessionCountingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-        self.div(
-            tenferro_tensor::backend::read_owned_tensor("div", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("div", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
+        panic!("div should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

@@ -781,10 +781,6 @@ impl TensorElementwise for WebGpuBackend {
         unsupported!("webgpu_conj")
     }
 
-    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_div")
-    }
-
     fn abs(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         unsupported!("webgpu_abs")
     }

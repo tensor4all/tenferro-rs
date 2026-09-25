@@ -1220,7 +1220,11 @@ fn test_tier2_elementwise_ops_real() {
     );
     let mut backend = CpuBackend::new();
 
-    let div = backend.div(&lhs, &rhs).unwrap();
+    let div = backend
+        .with_backend_session(|__s| {
+            __s.div_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
     assert_eq!(get_f64(&div, &[0]), 4.0);
     assert_eq!(get_f64(&div, &[1]), -0.4);
     assert_eq!(get_f64(&div, &[2]), 3.0);

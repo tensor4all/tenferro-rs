@@ -753,7 +753,10 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Neg => vec![exec.neg(inputs[0])?],
             StdTensorOp::Div => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.div(a.tensor(), b.tensor())?]
+                vec![exec.div_read(
+                    TensorRead::from_tensor(a.tensor()),
+                    TensorRead::from_tensor(b.tensor()),
+                )?]
             }
             StdTensorOp::Rem => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;

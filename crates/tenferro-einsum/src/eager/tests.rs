@@ -226,10 +226,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("conj"))
     }
 
-    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
-        Err(unexpected("div"))
-    }
-
     fn abs(&mut self, _input: &Tensor) -> Result<Tensor> {
         Err(unexpected("abs"))
     }
@@ -277,10 +273,9 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor> {
-        self.div(
-            tenferro_tensor::backend::read_owned_tensor("div", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("div", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
+        Err(unexpected("div"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

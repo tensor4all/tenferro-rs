@@ -1123,7 +1123,6 @@ macro_rules! panic_elementwise {
                 add(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 neg(input: &Tensor) -> TensorResult;
-                div(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 abs(input: &Tensor) -> TensorResult;
                 sign(input: &Tensor) -> TensorResult;
                 compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
@@ -1171,10 +1170,9 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-                self.div(
-                    tenferro_tensor::backend::read_owned_tensor("div", lhs)?,
-                    tenferro_tensor::backend::read_owned_tensor("div", rhs)?,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
+                panic!("div should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1563,10 +1561,6 @@ impl TensorElementwise for WrongDTypeSessionBackend {
     }
 
     fn mul_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 

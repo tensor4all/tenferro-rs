@@ -475,7 +475,6 @@ delegate!(TensorElementwise {
     fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn neg(input: &Tensor) -> crate::Result<Tensor>;
     fn conj(input: &Tensor) -> crate::Result<Tensor>;
-    fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn abs(input: &Tensor) -> crate::Result<Tensor>;
     fn sign(input: &Tensor) -> crate::Result<Tensor>;

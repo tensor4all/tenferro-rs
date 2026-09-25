@@ -145,7 +145,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
             neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             conj(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
-            div(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
             abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             sign(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
@@ -208,10 +207,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             lhs: TensorRead<'_>,
             rhs: TensorRead<'_>,
         ) -> tenferro_tensor::Result<Tensor> {
-            self.div(
-                tenferro_tensor::backend::read_owned_tensor("div", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("div", rhs)?,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
+            let _ = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
+            panic!("div should not be called by this test")
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
