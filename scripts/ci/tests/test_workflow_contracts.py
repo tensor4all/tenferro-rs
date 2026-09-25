@@ -315,10 +315,36 @@ class WorkflowContractTests(unittest.TestCase):
             text_full,
         )
         self.assertIn("PROVISION_RUNNER_GROUP_ID:", create)
-        # zstd on the pod keeps the actions/cache version hash compatible
-        # with the zstd-equipped hosted publisher; without it every pod
-        # restore misses exact-match keys.
-        self.assertIn("zstd \\", create)
+        # The build toolchain, git, jq, and zstd are installed by the test
+        # job's own first step: registration and the smoke proof must not wait
+        # for them, because every pre-registration second is billed at the GPU
+        # rate and a rejected candidate pays it too. zstd still lands before
+        # the actions/cache restore step, which is what keeps the cache version
+        # hash compatible with the zstd-equipped hosted publisher.
+        self.assertIn("RUNNER_CACHE_DIR=\"/workspace/runpod-ci-cache\"", create)
+        self.assertIn('echo "${RUNNER_SHA256}  ${RUNNER_TARBALL}" | sha256sum -c', create)
+        self.assertLess(
+            create.index('echo "${RUNNER_SHA256}  ${RUNNER_CACHED_TARBALL}"'),
+            create.index("curl -fsSL -o \"${RUNNER_TARBALL}\""),
+            "a cached runner tarball must be considered before downloading",
+        )
+        # A missing, unwritable, or stale cache must fall back to the download
+        # instead of failing the startup script under `set -e`.
+        self.assertIn("2>/dev/null || true", create)
+        self.assertIn('echo "warning: could not populate the runner tarball cache"', create)
+        whole_job = read(".github/workflows/runpod-gpu-test.yml")
+        install = whole_job.index("      - name: Install pod-side build dependencies")
+        job_install = whole_job[
+            install : whole_job.index("      - name: Checkout tenferro-rs", install)
+        ]
+        for package in ("zstd \\", "git \\", "jq \\", "build-essential \\"):
+            self.assertIn(package, job_install)
+            self.assertNotIn(package, create)
+        self.assertLess(
+            install,
+            whole_job.index("      - name: Restore CUDA/PJRT test archives"),
+            "zstd must land before the cache restore step",
+        )
         # The smoke's NVRTC-only install leaves a partial /usr/local tree;
         # the test job's runtime discovery must reject trees missing the
         # full library set instead of skipping the real runtime install.
@@ -344,6 +370,107 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(f'--pod-env "{pod_env}', create)
         self.assertNotIn('--pod-env "RUNPOD_API_KEY', create)
 
+    def test_the_paid_workflow_applies_the_label_decision_in_a_step(self) -> None:
+        """Job-level `if`s in the called workflow did not see the inputs.
+
+        A live labelled dispatch showed `Revalidate queued PR before
+        provisioning` running (so `inputs` reaches steps) while `start-runpod`
+        was still scheduled from its job `if`. The decision is therefore applied
+        inside a step that also skips provisioning.
+        """
+
+        execute = read(".github/workflows/runpod-gpu-execute.yml")
+        self.assertIn("id: local_gpu_validation", execute)
+        self.assertIn("paid_path_skipped: ${{ steps.local_gpu_validation.outputs.skip }}", execute)
+        # The label read is the same text the parent authorizes on.
+        self.assertIn('grep -Fxq "gpu-validated-locally"', execute)
+        # Provisioning and the runner wait both depend on the step output.
+        provision = execute[
+            execute.index("      - name: Provision cheapest compatible RunPod pod") : execute.index(
+                "      - name: Provision cheapest compatible RunPod pod"
+            )
+            + 300
+        ]
+        self.assertIn("if: steps.local_gpu_validation.outputs.skip != 'true'", provision)
+        tests_job = execute[
+            execute.index("  run-gpu-tests:") : execute.index("  run-gpu-tests:") + 400
+        ]
+        self.assertIn("needs.start-runpod.outputs.paid_path_skipped != 'true'", tests_job)
+
+    def test_the_paid_workflow_decides_from_its_own_inputs(self) -> None:
+        """The decision must travel as inputs, not as a caller `if`.
+
+        Measured behaviour: a skipped caller job does not pass its `with:` block
+        and the called workflow's jobs are scheduled anyway, so a labelled PR
+        began provisioning pods. Every paid job therefore applies the inputs
+        itself, and the caller only forwards them.
+        """
+
+        execute = read(".github/workflows/runpod-gpu-execute.yml")
+        for input_name in ("gpu_required:", "local_gpu_validation:"):
+            self.assertIn(input_name, execute)
+        expected = "inputs.gpu_required == 'true' &&\n      inputs.local_gpu_validation != 'true'"
+        for job in ("  start-runpod:", "  run-gpu-tests:"):
+            block = execute[execute.index(job) : execute.index(job) + 500]
+            self.assertIn(expected, block, job)
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn("gpu_required: ${{ needs.authorize.outputs.gpu_required }}", text)
+        self.assertIn(
+            "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation }}",
+            text,
+        )
+        # The caller must not gate itself: that is what dropped the inputs.
+        # The spliced view inserts the callee's jobs next, so bound the slice
+        # at the first callee job.
+        caller = text[
+            text.index("  gpu-execution:") : text.index("  start-runpod:", text.index("  gpu-execution:"))
+        ]
+        self.assertNotIn("if:", caller, "the caller job must not gate the call")
+        # Evidence is verified whenever the label is present.
+        self.assertIn("if [ \"${LOCAL_GPU_VALIDATION}\" = true ]; then", text)
+
+    def test_merged_or_closed_pulls_do_not_provision_pods(self) -> None:
+        """A gate run that completes after the merge must not pay for a pod."""
+
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn('pr_state="$(jq -r \'.state\' <<<"${pr_json}")"', text)
+        self.assertIn('if [ "${pr_state}" != "open" ]; then', text)
+        self.assertIn("reason=pull request is ${pr_state}", text)
+        # The state check has to come before the pull merge ref, which stops
+        # existing once the PR is merged or closed.
+        self.assertLess(
+            text.index('pr_state="$(jq -r'), text.index("git/ref/pull/${pr_number}/merge")
+        )
+
+    def test_local_gpu_validation_label_substitutes_for_the_paid_gate(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        # The label decision comes from the PR's labels and skips the whole
+        # paid path, so an outage cannot be paid for repeatedly.
+        self.assertIn('grep -Fxq "gpu-validated-locally"', text)
+        self.assertIn("local_gpu_validation: ${{ steps.resolve_ref.outputs.local_gpu_validation }}", text)
+        # The decision reaches the paid workflow as an input, which its own jobs
+        # apply (see test_the_paid_workflow_decides_from_its_own_inputs).
+        self.assertIn(
+            "local_gpu_validation: ${{ needs.authorize.outputs.local_gpu_validation }}",
+            text,
+        )
+        # The label alone must not waive the gate: the evidence comment and its
+        # author's repository role are both verified before success is published.
+        self.assertIn("Local GPU validation:", text)
+        self.assertIn("verify_local_gpu_evidence", text)
+        self.assertIn(
+            'collaborators/${evidence_login}/permission', text
+        )
+        # Passing requires an accepted evidence note, not just the label.
+        self.assertIn("local_gpu_note", text)
+        self.assertIn("RunPod CI GPU gate passed (local GPU validation)", text)
+        # The rule and the evidence format are documented where contributors and
+        # reviewers look for them.
+        for path in ("REPOSITORY_RULES.md", "CONTRIBUTING.md", "docs/design/runpod-gpu-provisioning.md"):
+            doc = read(path)
+            self.assertIn("gpu-validated-locally", doc, path)
+            self.assertIn("Local GPU validation:", doc, path)
+
     def test_runpod_provision_is_bounded_and_price_ordered(self) -> None:
         config = json.loads(read("scripts/ci/runpod_config.json"))
         for key in (
@@ -351,6 +478,7 @@ class WorkflowContractTests(unittest.TestCase):
             "min_vram_gb",
             "max_price_candidates",
             "max_provision_attempts",
+            "max_consecutive_startup_failures",
             "startup_timeout_seconds",
             "startup_poll_seconds",
         ):

@@ -140,15 +140,20 @@ For downstream PTX, CUBIN, NVRTC, or device-library kernels, see
 destination. Both operands may be arbitrary-stride region views at a nonzero
 offset inside a larger allocation: each side is described by its own extents,
 strides, and offset, so a block region is read and written in place instead of
-being canonicalized into scratch first. Every numeric dtype uses the cuTENSOR
-permutation path, which is the bandwidth-bound optimum for a multi-axis
-permutation destination. A complex operand is planned through its real view
-with a real `alpha = 1`, so the scaling multiply is exact and cannot turn
-`(inf, finite)` into `(inf, NaN)` (issue #1891). A `NaN` payload may still be
-canonicalized. Reversed and broadcast sources, which cuTENSOR descriptors cannot
-represent, use the native copy, and a compact 2D/3D transpose into a row-major
-compact destination uses the tiled transpose kernel there. The source and
-destination must be distinct allocations.
+being canonicalized into scratch first. A permutation whose axis fusion reduces
+to a single 2D transpose (a rotation of a square leading pair at any rank, and
+the plain 2D transposes) runs on the native tiled transpose kernel, which is
+coalesced on both operands and keeps the live page set bounded; when a fused
+extent needs more blocks than a grid dimension allows, the kernel widens its
+tile instead of falling back to a flat pass (issue #1891). Every other numeric
+dtype layout uses the cuTENSOR permutation path, which is the bandwidth-bound
+optimum there. A complex operand is planned through its real view with a real
+`alpha = 1`, so the scaling multiply is exact and cannot turn `(inf, finite)`
+into `(inf, NaN)` (issue #1891). A `NaN` payload may still be canonicalized.
+Reversed and broadcast sources, which cuTENSOR descriptors cannot represent, use
+the native copy, and a compact 2D/3D transpose into a row-major compact
+destination uses the tiled transpose kernel there. The source and destination
+must be distinct allocations.
 
 `BackendSession::axpby_read_into_accum` keeps the documented compact
 destination contract, and consumes an arbitrary-stride or offset `x` through
