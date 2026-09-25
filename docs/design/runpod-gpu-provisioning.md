@@ -120,14 +120,21 @@ only what registration and the smoke proof need:
 ## Local GPU validation instead of provisioning
 
 When the provider cannot deliver a runner, the paid path otherwise fails after
-spending pods, and every retry spends more. The `authorize` job therefore reads
-the PR's labels: with `gpu-validated-locally`, `gpu-execution` is skipped, so no
-pod is created, and `ci-gpu-gate` publishes success only after verifying that a
-PR comment containing a line that starts with `Local GPU validation:` exists and
-was authored by a repository admin or maintainer. The label alone never waives
-the gate, and the evidence has to name the GPU, the commit, the commands, and the
-observed result. It is a maintainer decision recorded on the PR rather than a
-default path: the paid gate stays required whenever a runner is available.
+spending pods, and every retry spends more. The intended substitute is a
+maintainer decision recorded on the PR: the `gpu-validated-locally` label plus a
+PR comment containing a line that starts with `Local GPU validation:`, naming the
+GPU, the commit, the commands, and the observed result.
+
+**Status: the workflow-side skip is not effective.** `authorize` reads the label
+and publishes `local_gpu_validation`, and the paid workflow takes
+`gpu_required`/`local_gpu_validation` as inputs, but a live labelled dispatch
+still scheduled `start-runpod`, both with the boolean and with the textual input
+comparison, so the decision does not reach the called workflow's job conditions.
+Until that is solved, the waiver is implemented by the maintainer admin override
+merge, and the recorded evidence is what makes it reviewable. The paid gate
+remains the required path whenever a runner is available, and #1907's early stop
+(2 consecutive pods that never registered a runner) bounds the spend when the
+provider is down.
 
 ## Security invariants (unchanged)
 

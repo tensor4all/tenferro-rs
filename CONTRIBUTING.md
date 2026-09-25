@@ -173,11 +173,13 @@ Local GPU validation: NVIDIA A100 80GB PCIe, CUDA 12.6, commit <sha>
   cargo test -j 16 -p tenferro-gpu --features cuda --lib <new_test>     # passed
 ```
 
-The workflow then skips the paid path entirely for that PR (no pods are created)
-and publishes the gate as passing only after it verifies that the comment exists
-and that its author is an admin or maintainer. Use the label when the local run
-covers the changed GPU behavior; it is not a way to skip GPU validation for code
-that never ran on a GPU.
+The label and the evidence comment are what make the decision reviewable, and
+the merge itself uses the maintainer admin override, because the workflow-side
+automatic skip is not wired up yet (the decision does not reach the called
+workflow's job conditions, so a labelled PR still provisions pods today). Use
+this only when the local run covers the changed GPU behavior; it is not a way to
+skip GPU validation for code that never ran on a GPU. When RunPod delivers
+runners again, the paid gate is the required path.
 
 ## Prototype code and provenance
 

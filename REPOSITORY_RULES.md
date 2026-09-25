@@ -260,16 +260,16 @@ diff-scoped review bot.
   hosted archive build overlaps those independent required checks. Those
   checks remain merge-blocking; this is a deliberate latency trade-off, not a
   reduction in validation.
-- A PR whose GPU-affecting change was validated on a local GPU may carry the
-  `gpu-validated-locally` label instead of the paid RunPod gate, so a provider
-  outage cannot turn into repeated pod spend and cannot block a change that was
-  already proven on a GPU. The label only takes effect with a PR comment
-  beginning a line with `Local GPU validation:` that records the GPU model, the
-  exact commit, the commands, and the observed result, authored by a repository
-  admin or maintainer; the gate publishes success only after verifying both, so
-  the label alone cannot waive GPU validation. This is a maintainer decision
-  recorded on the PR, never a default: the paid gate remains the required path
-  whenever RunPod can deliver a runner.
+- A GPU-affecting change that was validated on a local GPU may be merged with
+  the paid `CI GPU gate` red while RunPod cannot deliver a runner. That is a
+  maintainer decision recorded on the PR: apply the `gpu-validated-locally`
+  label, post a PR comment containing a line that starts with
+  `Local GPU validation:` naming the GPU model, the exact commit, the commands,
+  and the observed result, and merge with the admin override. The workflow-side
+  automatic skip for that label is **not wired up yet**: the decision does not
+  reach the called workflow's job conditions, so the override is what actually
+  waives the gate. The paid gate stays the required path whenever a runner is
+  available, and the recorded evidence is what makes the override reviewable.
 - The macOS lane compiles and runs Apple-specific targets with Accelerate and
   default features disabled, not a duplicate faer workspace/doctest suite.
   Keep numerical Accelerate and Apple/Metal shared-storage checks, and never
