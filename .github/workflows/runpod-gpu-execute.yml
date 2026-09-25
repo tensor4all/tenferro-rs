@@ -26,6 +26,10 @@ on:
       keep_failed_pods:
         type: boolean
         default: false
+      local_gpu_validation:
+        description: Skip every paid step; a recorded local GPU run owns the gate.
+        type: boolean
+        default: false
     secrets:
       RUNPOD_API_KEY:
         required: true
@@ -69,6 +73,9 @@ env:
 jobs:
   start-runpod:
     name: Start RunPod org runner
+    # Belt and braces with the caller's `if`: the paid steps must not run when a
+    # maintainer recorded a local GPU run, whatever the caller decides.
+    if: inputs.local_gpu_validation != true
     runs-on: ubuntu-latest
     # Bounded provision attempts may create, smoke-test, and delete several
     # candidate pods before one is accepted. Must exceed the worst case of
@@ -311,6 +318,7 @@ jobs:
 
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
+    if: inputs.local_gpu_validation != true
     needs: start-runpod
 
     env:
