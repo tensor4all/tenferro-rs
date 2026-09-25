@@ -965,6 +965,43 @@ impl TensorReduction for WebGpuBackend {
     fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
         unsupported!("webgpu_reduce_min")
     }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the reduction
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, _axes: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+        unsupported!("webgpu_reduce_sum")
+    }
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the reduction
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, _axes: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+        unsupported!("webgpu_reduce_prod")
+    }
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the reduction
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, _axes: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+        unsupported!("webgpu_reduce_max")
+    }
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the reduction
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, _axes: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+        unsupported!("webgpu_reduce_min")
+    }
 }
 
 impl TensorDot for WebGpuBackend {

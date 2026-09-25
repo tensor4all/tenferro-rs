@@ -483,9 +483,17 @@ impl TensorReduction for DefaultReadBackend {
         Ok(marker())
     }
 
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.reduce_sum(crate::backend::read_owned_tensor("reduce_sum", input)?, axes)
+    }
+
     fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
         self.calls.push("reduce_prod");
         Ok(marker())
+    }
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.reduce_prod(crate::backend::read_owned_tensor("reduce_prod", input)?, axes)
     }
 
     fn reduce_max(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
@@ -493,9 +501,17 @@ impl TensorReduction for DefaultReadBackend {
         Ok(marker())
     }
 
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.reduce_max(crate::backend::read_owned_tensor("reduce_max", input)?, axes)
+    }
+
     fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
         self.calls.push("reduce_min");
         Ok(marker())
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.reduce_min(crate::backend::read_owned_tensor("reduce_min", input)?, axes)
     }
 }
 

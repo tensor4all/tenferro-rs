@@ -381,6 +381,37 @@ impl TensorReduction for RecordingBackend {
         fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
     }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected views, which is not the same as forwarding a view to
+    // the inner backend. Reproduce the old default explicitly.
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
+        self.reduce_sum(
+            tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
+            axes,
+        )
+    }
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
+        self.reduce_prod(
+            tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
+            axes,
+        )
+    }
+
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
+        self.reduce_max(
+            tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
+            axes,
+        )
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
+        self.reduce_min(
+            tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
+            axes,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -553,6 +584,37 @@ impl TensorReduction for EagerBackend {
         fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected views. Dispatching a view to the concrete backend
+    // would widen the accepted input surface, so reproduce the old default.
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
+        self.reduce_sum(
+            tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
+            axes,
+        )
+    }
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
+        self.reduce_prod(
+            tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
+            axes,
+        )
+    }
+
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
+        self.reduce_max(
+            tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
+            axes,
+        )
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
+        self.reduce_min(
+            tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
+            axes,
+        )
     }
 }
 

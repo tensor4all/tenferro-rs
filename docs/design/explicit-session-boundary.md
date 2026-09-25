@@ -482,3 +482,35 @@ reference it.
 **Ordering constraint.** Deletion cannot be staged per family before Step 1
 lands: while a read half is still provided, deleting its one-shot sibling makes
 the default recurse into itself.
+
+## Local gate limitation for `compile_fail` fixtures
+
+`trybuild` `compile_fail` contracts compare rendered diagnostics against a
+committed `.stderr`, and two local conditions break that comparison
+independently of any source change:
+
+- **kache path remapping.** The local build wrapper passes
+  `--remap-path-prefix`, so diagnostics render absolute `/kache/...` paths while
+  the committed `.stderr` files carry crate-relative paths. Every `compile_fail`
+  fixture in the affected crate then reports a mismatch. Running with
+  `RUSTC_WRAPPER=""` restores the crate-relative form.
+- **rustc version rendering.** At least `tenferro-ad`'s
+  `tests/ui/eager_backend_owner_private.rs` still mismatches with the wrapper
+  disabled: the committed `.stderr` expects a two-part span
+  (`^^^^^^^^^^^^^------------` with the label on its own line) and rustc 1.97.1
+  renders a single span. This reproduces with the working tree reverted, so it is
+  pre-existing, not a consequence of any change here.
+
+Consequences for the B1/B5 fixture sets:
+
+- `pass` fixtures are unaffected — `trybuild` does not compare their output, so
+  the session-surface contract in `tenferro-runtime` runs normally.
+- The `fail` fixtures that must prove the one-shot spellings are gone are
+  `compile_fail`, so their `.stderr` files are version-sensitive. They must be
+  blessed in the same rustc that CI uses, and a local mismatch is not evidence
+  that the expected error changed. Prefer fixtures whose diagnostic is
+  structurally stable across versions (a missing-method or missing-trait-item
+  error) over ones relying on span geometry.
+- A local `compile_fail` failure therefore has to be checked against the
+  pristine tree before it is attributed to a change. This was done once here:
+  `git stash` + rerun reproduced the same mismatch.

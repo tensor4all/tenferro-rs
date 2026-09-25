@@ -1130,6 +1130,36 @@ macro_rules! panic_reduction {
                 reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
             }
+
+            // The previous read-half default delegated owned tensors to the
+            // one-shot method and rejected views. Reproduce it explicitly.
+            fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+                self.reduce_sum(
+                    tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
+                    axes,
+                )
+            }
+
+            fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+                self.reduce_prod(
+                    tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
+                    axes,
+                )
+            }
+
+            fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+                self.reduce_max(
+                    tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
+                    axes,
+                )
+            }
+
+            fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+                self.reduce_min(
+                    tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
+                    axes,
+                )
+            }
         }
     };
 }
@@ -1438,6 +1468,29 @@ impl TensorReduction for WrongDTypeSessionBackend {
 
     fn reduce_sum_read(&mut self, _input: TensorRead<'_>, _axes: &[usize]) -> TensorResult {
         Ok(wrong_dtype_tensor())
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected views. Reproduce it explicitly.
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+        self.reduce_prod(
+            tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
+            axes,
+        )
+    }
+
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+        self.reduce_max(
+            tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
+            axes,
+        )
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+        self.reduce_min(
+            tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
+            axes,
+        )
     }
 }
 

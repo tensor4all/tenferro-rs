@@ -210,6 +210,30 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             reduce_max(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
             reduce_min(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
         }
+
+        // The previous read-half default delegated owned tensors to the one-shot
+        // method and rejected borrowed views. Reproduce it explicitly.
+        fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
+            self.reduce_sum(tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?, axes)
+        }
+
+        // The previous read-half default delegated owned tensors to the one-shot
+        // method and rejected borrowed views. Reproduce it explicitly.
+        fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
+            self.reduce_prod(tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?, axes)
+        }
+
+        // The previous read-half default delegated owned tensors to the one-shot
+        // method and rejected borrowed views. Reproduce it explicitly.
+        fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
+            self.reduce_max(tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?, axes)
+        }
+
+        // The previous read-half default delegated owned tensors to the one-shot
+        // method and rejected borrowed views. Reproduce it explicitly.
+        fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
+            self.reduce_min(tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?, axes)
+        }
     }
 
     impl TensorIndexing for DefaultOnlyLinalgBackend {

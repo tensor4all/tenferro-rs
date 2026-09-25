@@ -35,6 +35,29 @@ fn read_tensor<'a>(op: &'static str, input: TensorRead<'a>) -> crate::Result<&'a
     input.as_tensor().ok_or_else(|| read_boundary_error(op))
 }
 
+/// Return the owned tensor behind `input`, or the read-boundary error for a borrowed view.
+///
+/// This is the read-half default a backend receives when it implements only the
+/// one-shot form of an operation: an owned tensor is delegated to the one-shot
+/// method, and a borrowed view is rejected with [`Error::Unsupported`] instead
+/// of being silently materialized.
+///
+/// Issue #1926 makes the `_read` halves required, so an implementor that relied
+/// on the previous default reproduces it by calling this function:
+///
+/// ```text
+/// fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
+///     self.reduce_sum(read_owned_tensor("reduce_sum", input)?, axes)
+/// }
+/// ```
+#[doc(hidden)]
+pub fn read_owned_tensor<'a>(
+    op: &'static str,
+    input: TensorRead<'a>,
+) -> crate::Result<&'a Tensor> {
+    read_tensor(op, input)
+}
+
 fn validate_axis_list(
     op: &'static str,
     role: &'static str,
@@ -2912,15 +2935,7 @@ pub trait TensorReduction {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        match input.as_tensor() {
-            Some(input) => self.reduce_sum(input, axes),
-            None => Err(crate::Error::unsupported(
-                "reduce_sum",
-                "backend does not accept borrowed tensor views at this execution boundary",
-            )),
-        }
-    }
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
 
     /// Sum elementwise squares across axes.
     ///
@@ -2972,15 +2987,7 @@ pub trait TensorReduction {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        match input.as_tensor() {
-            Some(input) => self.reduce_prod(input, axes),
-            None => Err(crate::Error::unsupported(
-                "reduce_prod",
-                "backend does not accept borrowed tensor views at this execution boundary",
-            )),
-        }
-    }
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -3010,15 +3017,7 @@ pub trait TensorReduction {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        match input.as_tensor() {
-            Some(input) => self.reduce_max(input, axes),
-            None => Err(crate::Error::unsupported(
-                "reduce_max",
-                "backend does not accept borrowed tensor views at this execution boundary",
-            )),
-        }
-    }
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -3048,15 +3047,7 @@ pub trait TensorReduction {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        match input.as_tensor() {
-            Some(input) => self.reduce_min(input, axes),
-            None => Err(crate::Error::unsupported(
-                "reduce_min",
-                "backend does not accept borrowed tensor views at this execution boundary",
-            )),
-        }
-    }
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
 }
 
 /// Dot-general operations.

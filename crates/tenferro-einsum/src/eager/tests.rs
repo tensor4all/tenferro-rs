@@ -373,6 +373,30 @@ impl TensorReduction for NoBroadcastMaterializationBackend {
     fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> Result<Tensor> {
         Err(unexpected("reduce_min"))
     }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly.
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
+        self.reduce_sum(tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?, axes)
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly.
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
+        self.reduce_prod(tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?, axes)
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly.
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
+        self.reduce_max(tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?, axes)
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly.
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
+        self.reduce_min(tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?, axes)
+    }
 }
 
 impl TensorIndexing for NoBroadcastMaterializationBackend {
