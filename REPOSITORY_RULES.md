@@ -265,11 +265,12 @@ diff-scoped review bot.
   maintainer decision recorded on the PR: apply the `gpu-validated-locally`
   label, post a PR comment containing a line that starts with
   `Local GPU validation:` naming the GPU model, the exact commit, the commands,
-  and the observed result, and merge with the admin override. The workflow-side
-  automatic skip for that label is **not wired up yet**: the decision does not
-  reach the called workflow's job conditions, so the override is what actually
-  waives the gate. The paid gate stays the required path whenever a runner is
-  available, and the recorded evidence is what makes the override reviewable.
+  and the observed result. The workflow then skips every paid step for that PR
+  (no pod is created) and publishes `CI GPU gate` as passed only after verifying
+  that the comment exists and that its author is an admin or maintainer, so the
+  label alone never waives GPU validation. It is a maintainer decision recorded
+  on the PR, never a default: the paid gate stays the required path whenever a
+  runner is available.
 - The macOS lane compiles and runs Apple-specific targets with Accelerate and
   default features disabled, not a duplicate faer workspace/doctest suite.
   Keep numerical Accelerate and Apple/Metal shared-storage checks, and never
