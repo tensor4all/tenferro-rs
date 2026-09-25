@@ -376,10 +376,6 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
         Err(unexpected("exp"))
     }
 
-    fn cos(&mut self, _input: &Tensor) -> Result<Tensor> {
-        Err(unexpected("cos"))
-    }
-
     fn tanh(&mut self, _input: &Tensor) -> Result<Tensor> {
         Err(unexpected("tanh"))
     }
@@ -415,7 +411,8 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
-        self.cos(tenferro_tensor::backend::read_owned_tensor("cos", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("cos", input)?;
+        Err(unexpected("cos"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

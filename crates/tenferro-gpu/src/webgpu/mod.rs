@@ -984,10 +984,6 @@ impl TensorAnalytic for WebGpuBackend {
         unsupported!("webgpu_exp")
     }
 
-    fn cos(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_cos")
-    }
-
     fn tanh(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         unsupported!("webgpu_tanh")
     }

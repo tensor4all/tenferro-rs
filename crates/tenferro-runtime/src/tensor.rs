@@ -103,7 +103,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn cos(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.cos(self)
+        session.cos_read(TensorRead::from_tensor(self))
     }
 
     fn tanh(&self, session: &mut dyn BackendSession) -> Result<Tensor> {

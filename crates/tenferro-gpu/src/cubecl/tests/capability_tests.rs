@@ -257,7 +257,9 @@ fn run_supported_case(
         PrimitiveOpKind::Sin => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(x)))
         }),
-        PrimitiveOpKind::Cos => assert_unary_matches(cpu, gpu, entry, |b, x| b.cos(x)),
+        PrimitiveOpKind::Cos => assert_unary_matches(cpu, gpu, entry, |b, x| {
+            b.with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(x)))
+        }),
         PrimitiveOpKind::Tanh => assert_unary_matches(cpu, gpu, entry, |b, x| b.tanh(x)),
         PrimitiveOpKind::Sqrt => assert_unary_matches(cpu, gpu, entry, |b, x| b.sqrt(x)),
         PrimitiveOpKind::Rsqrt => assert_unary_matches(cpu, gpu, entry, |b, x| {
@@ -444,7 +446,9 @@ fn run_cpu_unary(
         PrimitiveOpKind::Sin => {
             cpu.with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(input)))
         }
-        PrimitiveOpKind::Cos => cpu.cos(input),
+        PrimitiveOpKind::Cos => {
+            cpu.with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(input)))
+        }
         PrimitiveOpKind::Tanh => cpu.tanh(input),
         PrimitiveOpKind::Sqrt => cpu.sqrt(input),
         PrimitiveOpKind::Rsqrt => {

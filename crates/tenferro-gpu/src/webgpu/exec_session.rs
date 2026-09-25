@@ -114,7 +114,6 @@ delegate!(TensorAnalytic {
     fn expm1_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn log1p_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn exp(input: &Tensor) -> crate::Result<Tensor>;
-    fn cos(input: &Tensor) -> crate::Result<Tensor>;
     fn tanh(input: &Tensor) -> crate::Result<Tensor>;
     fn sqrt(input: &Tensor) -> crate::Result<Tensor>;
     fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;

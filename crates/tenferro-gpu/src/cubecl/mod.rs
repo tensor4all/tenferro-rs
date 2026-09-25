@@ -5634,7 +5634,12 @@ impl TensorAnalytic for CudaBackend {
             return result;
         }
         let input = self.read_input(input)?;
-        self.cos(input.as_tensor())
+        dispatch::dispatch_unary_float_only!(
+            self,
+            input.as_tensor(),
+            PrimitiveOpKind::Cos,
+            cos_float
+        )
     }
 
     fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5700,10 +5705,6 @@ impl TensorAnalytic for CudaBackend {
 
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Exp, exp_float)
-    }
-
-    fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Cos, cos_float)
     }
 
     fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor> {
