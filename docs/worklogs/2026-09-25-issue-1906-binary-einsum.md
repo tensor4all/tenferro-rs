@@ -110,3 +110,13 @@ The candidate harness source SHA-256 is
 only its preconstructed dot config literal changed for type compatibility;
 measurement loops, direct faer reference and frozen baseline binary are unchanged.
 The same explicit 1T/provider assertions and original validity rules apply.
+
+## Publication decision
+
+The maintainer accepted the achieved improvement as sufficient and requested
+publication and issue closure despite the unmet 1 µs aspiration. Latest main
+`5ee322c7a` was merged without conflicts; its changes do not alter the measured
+CPU/einsum/tensor/runtime implementation. The local fast gate now passes against
+`origin/main`, resolving the earlier freshness limitation. Required hosted checks
+and ordinary auto-merge remain in force; this acceptance does not waive CI or
+claim GPU/Apple runtime validation.
