@@ -140,13 +140,47 @@ batch axis that keeps both operands inside a window) rather than a tile-shape
 change, since every `TENFERRO_NATIVE_TRANSPOSE_TILE` configuration measured the
 same, as did the generic strided-materialization kernel.
 
-**Next step for a native kernel:** keep the batch axis in the plan (do not let
-axis fusion merge it away), and order the block sweep so that a window of the
-source's fast axis is consumed while writing a bounded destination window, then
-verify against the `C64` `[1024, 1024, 512]` `[1, 2, 0]` case and the `[rows,
-512]` sweep above. Until then the vendor path is what makes multi-axis
-permutations bandwidth-bound, and the real-view plan above is what makes it
-exact.
+## Follow-up: the exact complex permutation reaches the native ceiling
+
+The fused plan for `C64 [1024, 1024, 512]` permuted `[1, 2, 0]` is
+`dims = [1048576, 512]` with a unit-stride source axis and a unit-stride
+destination axis, so it is exactly one 2D transpose. Two things kept it off the
+tiled kernel:
+
+- routing: every numeric dtype went to the vendor permutation, and for a complex
+  operand that plan describes the buffer through its real view, whose unit-stride
+  run is the 16-byte real/imaginary pair. Measured on the A100, that costs 2.8x:
+  the same copy runs at 5.51 ms in `f64` (1.56 TB/s) but 30.96 ms in `C64`
+  (0.555 TB/s), and keeping the complex unit-stride axis inside the plan instead
+  of moving it measures the same 31.37 ms, so no descriptor reordering recovers
+  it.
+- the grid limit: the source-fast extent needs 65536 blocks at the default
+  16-wide tile, one past the per-dimension launch limit, so the launch fell back
+  to the flat pass instead of the tiled kernel (84.9 ms, which is the earlier
+  "native is slower than the vendor" measurement).
+
+The fix routes a copy whose fused plan is one row-major-source/column-major-
+destination matrix to the tiled kernel (complex operands prefer it over the
+real-view vendor plan), widens the tile to 32 when the grid limit needs it (and
+falls back when the shared-memory budget does not allow it), and takes the grid
+extents from the kernel's own destination-fast/source-fast roles rather than
+from the plan's axis order, which the mirrored orientation reverses.
+
+Measured on the same A100, `C64 [1024, 1024, 512]`, 17.18 GB of traffic:
+
+| permutation | before | after | bandwidth |
+|---|---:|---:|---:|
+| `[1, 2, 0]` | 31.37 ms | **10.61 ms** | 1.62 TB/s |
+| `[2, 0, 1]` (mirrored) | — | **10.59 ms** | 1.62 TB/s |
+| `[1, 0, 2]` (three-axis plan, vendor) | 30.95 ms | 30.98 ms | 0.555 TB/s |
+| `[8192, 8192]` transpose | 1.34 ms | 1.43 ms | 1.64 TB/s |
+| `F64 [8192, 8192]` (vendor, control) | 0.73 ms | 0.77 ms | 1.60 TB/s |
+
+10.61 ms is the HBM ceiling at this traffic, so the exact path now matches the
+value-corrupting complex descriptor's speed. Permutations whose fusion keeps
+three or more axes (`[0, 2, 1]`, `[1, 0, 2]`, `[1, 0, 3, 2]`) still take the
+vendor real-view plan; a genuinely multi-axis shuffle would need the windowed
+multi-axis schedule sketched below.
 
 ## Verification
 

@@ -267,9 +267,13 @@ fn launch_native_materialization<E: CubePrimitive>(
                     "tiled transpose requires a non-negative source offset",
                 )
             })?;
-            if let Some((cubes_x, cubes_y, cubes_z)) =
-                config.dispatch_grid(op, &plan.dims, 65_535)?
-            {
+            if let Some((cubes_x, cubes_y, cubes_z)) = config.dispatch_grid(
+                op,
+                plan.dims[0],
+                plan.dims[1],
+                plan.dims.get(2).copied().unwrap_or(1),
+                65_535,
+            )? {
                 let batch_stride = plan.tiled_matrix_len(op)?;
                 unsafe {
                     // SAFETY: The tiled classification proves a compact 2D
@@ -1531,6 +1535,30 @@ impl CudaBackend {
             let src_arg = typed_view_array_arg(src, op)?;
             return launch_native_materialization::<T>(self, dst_arg, src_arg, &plan, op);
         }
+        // Both operands keep their own strides and offsets: a region inside a
+        // larger allocation is read and written in place instead of being
+        // canonicalized into scratch first. Axis fusion collapses the affine
+        // runs, so a compact sub-block still costs one flat pass.
+        let plan = NativeStridedCopyPlan::new(
+            op,
+            src.shape(),
+            src.strides(),
+            src.offset(),
+            source_allocation_len,
+            dst.strides(),
+            dst.offset(),
+            destination_allocation_len,
+            false,
+        )?;
+        // A fused plan that reduces to one matrix transpose is exactly what the
+        // tiled transpose kernel implements, and that kernel is coalesced on
+        // both operands, so take it before the flat kernels. A flat pass over a
+        // multi-axis permutation reads one contiguous run per source coordinate
+        // and scatters one element run per destination coordinate, which is why
+        // the 1 GiB class of copies stays on the generic kernel (issue #1891).
+        if dst.offset() == 0 && self.launch_tiled_transpose(&plan, src, dst, op)? {
+            return Ok(());
+        }
         if src.offset() == 0 && src.is_col_major_contiguous()? {
             let strides = view_strides_i64(dst.strides(), op)?;
             let base_offset = view_offset_i64(dst.offset(), op)?;
@@ -1557,21 +1585,6 @@ impl CudaBackend {
             }
             return Ok(());
         }
-        // Both operands keep their own strides and offsets: a region inside a
-        // larger allocation is read and written in place instead of being
-        // canonicalized into scratch first. Axis fusion collapses the affine
-        // runs, so a compact sub-block still costs one flat pass.
-        let plan = NativeStridedCopyPlan::new(
-            op,
-            src.shape(),
-            src.strides(),
-            src.offset(),
-            source_allocation_len,
-            dst.strides(),
-            dst.offset(),
-            destination_allocation_len,
-            false,
-        )?;
         let src_strides = view_strides_i64(&plan.src_strides, op)?;
         let dst_strides = view_strides_i64(&plan.dst_strides, op)?;
         let src_offset = view_offset_i64(plan.src_offset, op)?;
@@ -1602,6 +1615,101 @@ impl CudaBackend {
             );
         }
         Ok(())
+    }
+
+    /// Launch the tiled transpose kernel for a fused plan that it implements.
+    ///
+    /// Returns `Ok(false)` when the layout is outside that kernel's contract or
+    /// the tiled configuration is disabled, so every other copy keeps its
+    /// current kernel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] when the metadata exceeds the
+    /// kernel's launch limits.
+    fn launch_tiled_transpose<T, R>(
+        &self,
+        plan: &NativeStridedCopyPlan,
+        src: &TypedTensorView<'_, T, R>,
+        dst: &mut TypedTensorViewMut<'_, T, R>,
+        op: &'static str,
+    ) -> crate::Result<bool>
+    where
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+        R: TensorRank,
+    {
+        let Some((dst_fast_extent, src_fast_extent)) = plan.tiled_transpose_matrix() else {
+            return Ok(false);
+        };
+        let Some(config) = NativeTransposeTile::selected(op)? else {
+            return Ok(false);
+        };
+        // A wide matrix needs a wider tile to stay inside the per-dimension
+        // launch limit: an 1048576-element axis is 65536 blocks at the default
+        // 16-wide tile, one past the limit. Widening the tile keeps the tiled
+        // kernel available instead of falling back to a flat pass, and the
+        // shared-memory budget bounds how far it can grow.
+        const MAX_SHARED_BYTES: usize = 48 * 1024;
+        let element_bytes = std::mem::size_of::<T>();
+        let mut launched = None;
+        for tile in [config.tile, 32] {
+            let candidate = config.with_tile(tile);
+            if candidate.shared_bytes(element_bytes) > MAX_SHARED_BYTES {
+                continue;
+            }
+            if let Some(grid) =
+                candidate.dispatch_grid(op, dst_fast_extent, src_fast_extent, 1, 65_535)?
+            {
+                launched = Some((candidate, grid));
+                break;
+            }
+        }
+        let Some((config, (cubes_x, cubes_y, cubes_z))) = launched else {
+            return Ok(false);
+        };
+        let batch_stride = dst_fast_extent
+            .checked_mul(src_fast_extent)
+            .ok_or_else(|| {
+                crate::Error::invalid_argument(
+                    op,
+                    "shape",
+                    "tiled transpose matrix extent overflows usize",
+                )
+            })?;
+        let src_offset = usize::try_from(plan.src_offset).map_err(|_| {
+            crate::Error::invalid_argument(
+                op,
+                "offset",
+                "tiled transpose requires a non-negative source offset",
+            )
+        })?;
+        let dst_arg = typed_view_mut_array_arg(dst, op)?;
+        let src_arg = typed_view_array_arg(src, op)?;
+        unsafe {
+            // SAFETY: `NativeStridedCopyPlan` proved every logical coordinate
+            // maps inside both allocation spans, that the destination is
+            // injective, and that the two allocations are distinct. The
+            // orientation check proves the source is row-major and the
+            // destination column-major over the same matrix, which is the
+            // kernel's indexing contract; its bounds guards cover edge tiles
+            // and every unit reaches the shared-memory barrier.
+            structural::tiled_transpose_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                self.runtime().client(),
+                CubeCount::Static(cubes_x, cubes_y, cubes_z),
+                CubeDim::new_2d(config.tile / config.vector_width, config.block_rows),
+                dst_arg,
+                src_arg,
+                src_offset,
+                batch_stride,
+                dst_fast_extent,
+                src_fast_extent,
+                config.tile as usize,
+                config.block_rows as usize,
+                config.padding as usize,
+                config.vector_width as usize,
+            );
+        }
+        Ok(true)
     }
 
     /// Build a tiled-transpose plan for a copy whose destination is a
@@ -1711,6 +1819,30 @@ impl CudaBackend {
         // missing-library fallback.
         if dst.strides().iter().any(|&stride| stride < 0)
             || src.strides().iter().any(|&stride| stride < 1)
+        {
+            return self.copy_view_to_view_typed(src, dst, op);
+        }
+        // Complex operands are exact through cuTENSOR only via the real view,
+        // whose unit-stride run is the 16-byte real/imaginary pair; that caps
+        // an exact multi-axis permutation at a third of the achievable
+        // bandwidth (issue #1891). When the copy is one tiled 2D transpose the
+        // native kernel is exact as well and coalesced on both sides, so prefer
+        // it and keep the vendor plan for every other layout.
+        if T::REAL_VIEW
+            && dst.offset() == 0
+            && NativeStridedCopyPlan::new(
+                op,
+                src.shape(),
+                src.strides(),
+                src.offset(),
+                src.backend_buffer().map_or(0, |buffer| buffer.len()),
+                dst.strides(),
+                dst.offset(),
+                dst.backend_buffer().map_or(0, |buffer| buffer.len()),
+                false,
+            )?
+            .tiled_transpose_matrix()
+            .is_some()
         {
             return self.copy_view_to_view_typed(src, dst, op);
         }

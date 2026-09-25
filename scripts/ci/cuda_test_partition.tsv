@@ -677,6 +677,7 @@ gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_upload_download_i64
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_zero_stride_view_materializes_without_cutensor_descriptor
 host	tenferro-gpu	cubecl::tests::scatter_launch_meta_rejects_mismatched_update_batch_extents
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_bool_structural_ops_match_cpu
+gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_complex_permutation_views_match_the_explicit_index_map
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_copy_into_consumes_arbitrary_stride_source
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_copy_into_host_destination_returns_upload_hint
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_copy_into_host_source_returns_upload_hint
@@ -750,6 +751,9 @@ host	tenferro-gpu	native_permutation::tests::rank_24_identity_collapses_to_linea
 host	tenferro-gpu	native_permutation::tests::three_dimensional_swap_preserves_output_axis_order
 host	tenferro-gpu	native_permutation::tests::tile_grid_falls_back_when_a_dispatch_dimension_exceeds_the_runtime_limit
 host	tenferro-gpu	native_permutation::tests::tile_selection_is_bounded_and_can_force_generic_fallback
+host	tenferro-gpu	native_permutation::tests::tiled_grid_puts_the_destination_fast_tiles_on_x
+host	tenferro-gpu	native_permutation::tests::tiled_transpose_covers_single_matrix_permutations_at_any_rank
+host	tenferro-gpu	native_permutation::tests::tiled_transpose_matrix_covers_both_orientations
 host	tenferro-gpu	native_permutation::tests::transpose_and_equivalent_view_share_one_plan
 host	tenferro-gpu	native_permutation::tests::zero_sized_plan_is_linear_without_allocations
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_a_non_contiguous_read

@@ -119,9 +119,13 @@ where
                     "tiled transpose requires a non-negative source offset",
                 )
             })?;
-            if let Some((cubes_x, cubes_y, cubes_z)) =
-                config.dispatch_grid(op, &plan.dims, 65_535)?
-            {
+            if let Some((cubes_x, cubes_y, cubes_z)) = config.dispatch_grid(
+                op,
+                plan.dims[0],
+                plan.dims[1],
+                plan.dims.get(2).copied().unwrap_or(1),
+                65_535,
+            )? {
                 let batch_stride = plan.tiled_matrix_len(op)?;
                 let cube_dim =
                     CubeDim::new_2d(config.tile / config.vector_width, config.block_rows);
