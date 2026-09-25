@@ -145,7 +145,12 @@ jobs:
           echo "Change classification requires GPU validation: ${run_gpu}."
 
       - name: Revalidate queued PR before provisioning
-        if: inputs.pr_number != '0'
+        # Skipping every paid step must not leave a failing job behind: this
+        # step refuses a merged or closed PR by design, which is right when we
+        # were about to spend and pointless once the decision already skipped.
+        if: >-
+          steps.paid_path.outputs.run_paid_path != 'false' &&
+          inputs.pr_number != '0'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -164,12 +169,14 @@ jobs:
 
       - name: Define runner label
         id: vars
+        if: steps.paid_path.outputs.run_paid_path != 'false'
         run: |
           set -euo pipefail
           echo "runner_label=runpod-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub App token
         id: app-token
+        if: steps.paid_path.outputs.run_paid_path != 'false'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.GH_APP_CLIENT_ID }}
@@ -329,7 +336,11 @@ jobs:
       - name: Delete pod if runner startup failed
         # keep_failed_pods debug dispatches preserve the last failed pod so
         # its console logs stay readable in the RunPod dashboard.
-        if: failure() && steps.create_pod.outputs.pod_id != '' && inputs.keep_failed_pods != true
+        if: >-
+          failure() &&
+          steps.paid_path.outputs.run_paid_path != 'false' &&
+          steps.create_pod.outputs.pod_id != '' &&
+          inputs.keep_failed_pods != true
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ steps.create_pod.outputs.pod_id }}
