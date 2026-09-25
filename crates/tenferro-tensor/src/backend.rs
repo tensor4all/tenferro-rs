@@ -2453,7 +2453,6 @@ pub trait TensorAnalytic {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor>;
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source

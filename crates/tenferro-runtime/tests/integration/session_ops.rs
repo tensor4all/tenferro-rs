@@ -1267,7 +1267,6 @@ macro_rules! panic_analytic {
         impl TensorAnalytic for $ty {
             panic_backend_methods! {
                 exp(input: &Tensor) -> TensorResult;
-                sqrt(input: &Tensor) -> TensorResult;
                 pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
             }
 
@@ -1308,7 +1307,8 @@ macro_rules! panic_analytic {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn sqrt_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.sqrt(tenferro_tensor::backend::read_owned_tensor("sqrt", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
+                panic!("sqrt should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1696,10 +1696,6 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
     }
 
     fn log_read(&mut self, _input: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn sqrt(&mut self, _input: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 

@@ -984,10 +984,6 @@ impl TensorAnalytic for WebGpuBackend {
         unsupported!("webgpu_exp")
     }
 
-    fn sqrt(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_sqrt")
-    }
-
     fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
         unsupported!("webgpu_pow")
     }

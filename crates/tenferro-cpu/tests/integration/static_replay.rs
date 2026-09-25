@@ -38,7 +38,7 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
             2 => backend.with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&owned))),
             3 => backend.with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&owned))),
             4 => backend.with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&owned))),
-            5 => backend.sqrt(&owned),
+            5 => backend.with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&owned))),
             6 => {
                 backend.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&owned)))
             }

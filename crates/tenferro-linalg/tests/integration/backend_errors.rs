@@ -304,7 +304,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     impl TensorAnalytic for DefaultOnlyLinalgBackend {
         panic_backend_methods! {
             exp(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
-            sqrt(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             pow(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         }
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -362,7 +361,8 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             &mut self,
             input: tenferro_tensor::TensorRead<'_>,
         ) -> tenferro_tensor::Result<Tensor> {
-            self.sqrt(tenferro_tensor::backend::read_owned_tensor("sqrt", input)?)
+            let _ = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
+            panic!("sqrt should not be called by this test")
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

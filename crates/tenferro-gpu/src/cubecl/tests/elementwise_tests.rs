@@ -1327,8 +1327,12 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.sqrt(&positive).unwrap();
-    let gpu_out = gpu.sqrt(&gpu_positive).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&positive)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&gpu_positive)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 

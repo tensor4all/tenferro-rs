@@ -325,7 +325,6 @@ macro_rules! panic_analytic {
         impl TensorAnalytic for $ty {
             panic_backend_methods! {
                 exp(input: &Tensor) -> TensorResult;
-                sqrt(input: &Tensor) -> TensorResult;
                 pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
             }
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -365,7 +364,8 @@ macro_rules! panic_analytic {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn sqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
-                self.sqrt(tenferro_tensor::backend::read_owned_tensor("sqrt", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
+                panic!("sqrt should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -670,10 +670,6 @@ impl TensorAnalytic for SessionCountingBackend {
         self.inner.exp(input)
     }
 
-    fn sqrt(&mut self, input: &Tensor) -> TensorResult {
-        self.inner.sqrt(input)
-    }
-
     fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> TensorResult {
         self.inner.pow(lhs, rhs)
     }
@@ -715,7 +711,8 @@ impl TensorAnalytic for SessionCountingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
-        self.sqrt(tenferro_tensor::backend::read_owned_tensor("sqrt", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
+        panic!("sqrt should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
