@@ -376,10 +376,6 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
         Err(unexpected("exp"))
     }
 
-    fn sin(&mut self, _input: &Tensor) -> Result<Tensor> {
-        Err(unexpected("sin"))
-    }
-
     fn cos(&mut self, _input: &Tensor) -> Result<Tensor> {
         Err(unexpected("cos"))
     }
@@ -412,7 +408,8 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
-        self.sin(tenferro_tensor::backend::read_owned_tensor("sin", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
+        Err(unexpected("sin"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

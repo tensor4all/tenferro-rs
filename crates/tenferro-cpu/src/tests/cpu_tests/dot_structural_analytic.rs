@@ -938,7 +938,9 @@ fn test_cpu_backend_analytic_ops_real() {
     let trig_input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![0.0, std::f64::consts::FRAC_PI_2]).unwrap(),
     );
-    let sin_out = backend.sin(&trig_input).unwrap();
+    let sin_out = backend
+        .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&trig_input)))
+        .unwrap();
     let cos_out = backend.cos(&trig_input).unwrap();
     assert_f64_close(get_f64(&sin_out, &[0]), 0.0);
     assert_f64_close(get_f64(&sin_out, &[1]), 1.0);
@@ -1023,7 +1025,9 @@ fn test_cpu_backend_analytic_ops_complex() {
         )
         .unwrap(),
     );
-    let sin_out = backend.sin(&trig_input).unwrap();
+    let sin_out = backend
+        .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&trig_input)))
+        .unwrap();
     let cos_out = backend.cos(&trig_input).unwrap();
     let tanh_out = backend.tanh(&trig_input).unwrap();
     assert_c64_close(get_c64(&sin_out, &[0]), Complex64::new(0.0, 0.0).sin());

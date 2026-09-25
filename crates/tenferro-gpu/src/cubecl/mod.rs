@@ -5621,7 +5621,12 @@ impl TensorAnalytic for CudaBackend {
             return result;
         }
         let input = self.read_input(input)?;
-        self.sin(input.as_tensor())
+        dispatch::dispatch_unary_float_only!(
+            self,
+            input.as_tensor(),
+            PrimitiveOpKind::Sin,
+            sin_float
+        )
     }
 
     fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5695,10 +5700,6 @@ impl TensorAnalytic for CudaBackend {
 
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Exp, exp_float)
-    }
-
-    fn sin(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Sin, sin_float)
     }
 
     fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor> {

@@ -984,10 +984,6 @@ impl TensorAnalytic for WebGpuBackend {
         unsupported!("webgpu_exp")
     }
 
-    fn sin(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_sin")
-    }
-
     fn cos(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         unsupported!("webgpu_cos")
     }

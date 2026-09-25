@@ -99,7 +99,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn sin(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.sin(self)
+        session.sin_read(TensorRead::from_tensor(self))
     }
 
     fn cos(&self, session: &mut dyn BackendSession) -> Result<Tensor> {

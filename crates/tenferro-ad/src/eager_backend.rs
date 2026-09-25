@@ -452,7 +452,6 @@ impl TensorElementwise for RecordingBackend {
 impl TensorAnalytic for RecordingBackend {
     delegate_recording_backend_methods! {
         fn exp(input: &Tensor) -> TensorResult<Tensor>;
-        fn sin(input: &Tensor) -> TensorResult<Tensor>;
         fn cos(input: &Tensor) -> TensorResult<Tensor>;
         fn tanh(input: &Tensor) -> TensorResult<Tensor>;
         fn sqrt(input: &Tensor) -> TensorResult<Tensor>;
@@ -474,7 +473,8 @@ impl TensorAnalytic for RecordingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        self.sin(tenferro_tensor::backend::read_owned_tensor("sin", input)?)
+        let input = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
+        self.inner.sin_read(TensorRead::from_tensor(input))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -774,7 +774,6 @@ impl TensorAnalytic for EagerBackend {
         fn exp(input: &Tensor) -> TensorResult<Tensor>;
         fn exp_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn log_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sin(input: &Tensor) -> TensorResult<Tensor>;
         fn sin_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn cos(input: &Tensor) -> TensorResult<Tensor>;
         fn cos_read(input: TensorRead<'_>) -> TensorResult<Tensor>;

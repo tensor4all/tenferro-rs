@@ -388,11 +388,6 @@ impl TensorAnalytic for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn sin(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("sin");
-        Ok(marker())
-    }
-
     fn cos(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("cos");
         Ok(marker())
@@ -430,7 +425,9 @@ impl TensorAnalytic for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.sin(crate::backend::read_owned_tensor("sin", input)?)
+        let _ = crate::backend::read_owned_tensor("sin", input)?;
+        self.calls.push("sin");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

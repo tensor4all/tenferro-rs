@@ -1267,7 +1267,6 @@ macro_rules! panic_analytic {
         impl TensorAnalytic for $ty {
             panic_backend_methods! {
                 exp(input: &Tensor) -> TensorResult;
-                sin(input: &Tensor) -> TensorResult;
                 cos(input: &Tensor) -> TensorResult;
                 tanh(input: &Tensor) -> TensorResult;
                 sqrt(input: &Tensor) -> TensorResult;
@@ -1290,7 +1289,8 @@ macro_rules! panic_analytic {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn sin_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.sin(tenferro_tensor::backend::read_owned_tensor("sin", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
+                panic!("sin should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1688,7 +1688,6 @@ impl TensorElementwise for WrongDTypeSessionBackend {
 
 impl TensorAnalytic for WrongDTypeSessionBackend {
     panic_backend_methods! {
-        sin(input: &Tensor) -> TensorResult;
         cos(input: &Tensor) -> TensorResult;
         tanh(input: &Tensor) -> TensorResult;
     }
@@ -1723,7 +1722,8 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
-        self.sin(tenferro_tensor::backend::read_owned_tensor("sin", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
+        panic!("sin should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
