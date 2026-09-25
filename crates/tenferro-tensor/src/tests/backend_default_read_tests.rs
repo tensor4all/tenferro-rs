@@ -233,11 +233,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("minimum");
-        Ok(marker())
-    }
-
     fn compare(
         &mut self,
         _lhs: &Tensor,
@@ -330,10 +325,10 @@ impl TensorElementwise for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.minimum(
-            crate::backend::read_owned_tensor("minimum", lhs)?,
-            crate::backend::read_owned_tensor("minimum", rhs)?,
-        )
+        let _ = crate::backend::read_owned_tensor("minimum", lhs)?;
+        let _ = crate::backend::read_owned_tensor("minimum", rhs)?;
+        self.calls.push("minimum");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

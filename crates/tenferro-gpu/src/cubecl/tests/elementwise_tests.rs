@@ -1082,8 +1082,19 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.minimum(&lhs, &rhs).unwrap();
-    let gpu_out = gpu.minimum(&gpu_lhs, &gpu_rhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.minimum_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+            )
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -1136,8 +1147,17 @@ fn test_cubecl_maximum_minimum_propagate_nan_independent_of_argument_order() {
             ),
             (
                 "minimum",
-                cpu.minimum(&lhs, &rhs).unwrap(),
-                gpu.minimum(&gpu_lhs, &gpu_rhs).unwrap(),
+                cpu.with_backend_session(|__s| {
+                    __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                })
+                .unwrap(),
+                gpu.with_backend_session(|__s| {
+                    __s.minimum_read(
+                        TensorRead::from_tensor(&gpu_lhs),
+                        TensorRead::from_tensor(&gpu_rhs),
+                    )
+                })
+                .unwrap(),
             ),
         ] {
             assert_float_classes_and_zero_signs_match(label, &download(&gpu, &actual), &expected);
@@ -1600,8 +1620,19 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu.minimum(lhs, rhs).unwrap();
-    let gpu_out = gpu.minimum(&gpu_lhs, &gpu_rhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.minimum_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+            )
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 

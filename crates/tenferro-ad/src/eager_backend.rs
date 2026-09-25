@@ -326,7 +326,6 @@ impl TensorElementwise for RecordingBackend {
         fn abs(input: &Tensor) -> TensorResult<Tensor>;
         fn sign(input: &Tensor) -> TensorResult<Tensor>;
         fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
     }
@@ -393,10 +392,10 @@ impl TensorElementwise for RecordingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor> {
-        self.minimum(
-            tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?,
-        )
+        let lhs = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+        let rhs = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+        self.inner
+            .minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -450,7 +449,6 @@ impl TensorElementwise for RecordingBackend {
 
 #[cfg(test)]
 impl TensorAnalytic for RecordingBackend {
-    delegate_recording_backend_methods! {}
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
@@ -757,7 +755,6 @@ impl TensorElementwise for EagerBackend {
         fn sign_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> TensorResult<Tensor>;

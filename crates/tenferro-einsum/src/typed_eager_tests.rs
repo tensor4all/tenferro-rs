@@ -64,7 +64,6 @@ impl TensorElementwise for WrongDTypeBackend {
         abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         sign(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         maximum(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
-        minimum(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
     }
@@ -168,10 +167,9 @@ impl TensorElementwise for WrongDTypeBackend {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.minimum(
-            tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+        panic!("minimum should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

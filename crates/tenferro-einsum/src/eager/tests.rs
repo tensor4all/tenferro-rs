@@ -246,10 +246,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("maximum"))
     }
 
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
-        Err(unexpected("minimum"))
-    }
-
     fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> Result<Tensor> {
         Err(unexpected("compare"))
     }
@@ -320,10 +316,9 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor> {
-        self.minimum(
-            tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+        Err(unexpected("minimum"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

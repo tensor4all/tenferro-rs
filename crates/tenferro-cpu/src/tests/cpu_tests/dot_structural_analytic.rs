@@ -1240,7 +1240,11 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&maximum, &[1]), 5.0);
     assert_eq!(get_f64(&maximum, &[2]), 9.0);
 
-    let minimum = backend.minimum(&lhs, &rhs).unwrap();
+    let minimum = backend
+        .with_backend_session(|__s| {
+            __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
     assert_eq!(get_f64(&minimum, &[0]), 2.0);
     assert_eq!(get_f64(&minimum, &[1]), -2.0);
     assert_eq!(get_f64(&minimum, &[2]), 3.0);
@@ -1331,7 +1335,7 @@ fn test_tier2_elementwise_ops_complex() {
         }) if message.contains("total order")
     ));
     assert!(matches!(
-        backend.minimum(&lhs, &rhs),
+        backend.with_backend_session(|__s| __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))),
         Err(crate::Error::Unsupported {
             op: "minimum",
             message,

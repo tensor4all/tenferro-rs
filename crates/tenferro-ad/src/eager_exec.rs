@@ -779,7 +779,10 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::Minimum => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.minimum(a.tensor(), b.tensor())?]
+                vec![exec.minimum_read(
+                    TensorRead::from_tensor(a.tensor()),
+                    TensorRead::from_tensor(b.tensor()),
+                )?]
             }
             StdTensorOp::Compare(dir) => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;

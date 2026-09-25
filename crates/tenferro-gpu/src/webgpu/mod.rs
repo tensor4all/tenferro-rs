@@ -801,10 +801,6 @@ impl TensorElementwise for WebGpuBackend {
         unsupported!("webgpu_maximum")
     }
 
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_minimum")
-    }
-
     fn compare(
         &mut self,
         _lhs: &Tensor,

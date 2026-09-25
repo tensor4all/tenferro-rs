@@ -1493,7 +1493,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         abs(input: &Tensor) -> crate::Result<Tensor>;
         sign(input: &Tensor) -> crate::Result<Tensor>;
         maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-        minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
@@ -1586,10 +1585,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             lhs: TensorRead<'_>,
             rhs: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
-            self.minimum(
-                tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1976,7 +1977,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         abs(input: &Tensor) -> crate::Result<Tensor>;
         sign(input: &Tensor) -> crate::Result<Tensor>;
         maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-        minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
@@ -2069,10 +2069,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             lhs: TensorRead<'_>,
             rhs: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
-            self.minimum(
-                tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

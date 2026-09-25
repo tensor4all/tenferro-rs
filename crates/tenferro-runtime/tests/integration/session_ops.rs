@@ -1128,7 +1128,6 @@ macro_rules! panic_elementwise {
                 abs(input: &Tensor) -> TensorResult;
                 sign(input: &Tensor) -> TensorResult;
                 maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
                 clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult;
             }
@@ -1205,10 +1204,9 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-                self.minimum(
-                    tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?,
-                    tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+                panic!("minimum should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1592,10 +1590,6 @@ impl TensorElementwise for WrongDTypeSessionBackend {
         Ok(wrong_dtype_tensor())
     }
 
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn neg(&mut self, _input: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
@@ -1660,10 +1654,9 @@ impl TensorElementwise for WrongDTypeSessionBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-        self.minimum(
-            tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+        panic!("minimum should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

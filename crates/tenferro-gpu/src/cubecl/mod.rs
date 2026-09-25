@@ -4801,7 +4801,16 @@ impl TensorElementwise for CudaBackend {
     fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         let lhs = self.read_input(lhs)?;
         let rhs = self.read_input(rhs)?;
-        self.minimum(lhs.as_tensor(), rhs.as_tensor())
+        let lhs = lhs.as_tensor();
+        let rhs = rhs.as_tensor();
+        dispatch::dispatch_binary_float_int!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Minimum,
+            minimum_float,
+            minimum_int
+        )
     }
 
     fn compare_read(
@@ -5436,17 +5445,6 @@ impl TensorElementwise for CudaBackend {
             PrimitiveOpKind::Maximum,
             maximum_float,
             maximum_int
-        )
-    }
-
-    fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_int!(
-            self,
-            lhs,
-            rhs,
-            PrimitiveOpKind::Minimum,
-            minimum_float,
-            minimum_int
         )
     }
 

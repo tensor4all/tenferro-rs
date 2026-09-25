@@ -165,7 +165,11 @@ fn test_fused_f32_max_min_propagate_nan_in_both_operand_orders() {
 
     let mut cpu = cpu_backend();
     let expected_maximum = cpu.maximum(&lhs, &rhs).unwrap();
-    let expected_minimum = cpu.minimum(&lhs, &rhs).unwrap();
+    let expected_minimum = cpu
+        .with_backend_session(|__s| {
+            __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let gpu_lhs = upload(&gpu, &lhs);
@@ -214,7 +218,11 @@ fn test_fused_f64_max_min_propagate_nan_in_both_operand_orders() {
 
     let mut cpu = cpu_backend();
     let expected_maximum = cpu.maximum(&lhs, &rhs).unwrap();
-    let expected_minimum = cpu.minimum(&lhs, &rhs).unwrap();
+    let expected_minimum = cpu
+        .with_backend_session(|__s| {
+            __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let gpu_lhs = upload(&gpu, &lhs);
