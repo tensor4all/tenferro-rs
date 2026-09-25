@@ -3079,16 +3079,7 @@ pub trait TensorDot: TensorElementwise {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
-            _ => {
-                let lhs = self.to_contiguous_read(lhs)?;
-                let rhs = self.to_contiguous_read(rhs)?;
-                self.dot_general(&lhs, &rhs, config)
-            }
-        }
-    }
+    ) -> crate::Result<Tensor>;
 
     /// Overwrite caller-provided output with dot-general from read inputs.
     ///

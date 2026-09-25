@@ -131,6 +131,7 @@ delegate!(TensorReduction {
 });
 
 delegate!(TensorDot {
+    fn dot_general_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, config: &DotGeneralConfig) -> crate::Result<Tensor>;
     fn dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> crate::Result<Tensor>;
     fn dot_general_with_conj(
         lhs: &Tensor,

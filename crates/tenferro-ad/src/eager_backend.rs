@@ -459,6 +459,24 @@ impl TensorDot for RecordingBackend {
     ) -> TensorResult<Tensor> {
         self.inner.dot_general(lhs, rhs, config)
     }
+// The previous read-half default delegated an owned pair to the one-shot
+// method and materialized borrowed views through to_contiguous_read before
+// contracting. Reproduce that exactly rather than forwarding a view.
+fn dot_general_read(
+    &mut self,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+) -> TensorResult<Tensor> {
+    match (lhs.as_tensor(), rhs.as_tensor()) {
+        (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+        _ => {
+            let lhs = self.to_contiguous_read(lhs)?;
+            let rhs = self.to_contiguous_read(rhs)?;
+            self.dot_general(&lhs, &rhs, config)
+        }
+    }
+}
 }
 
 #[cfg(test)]
