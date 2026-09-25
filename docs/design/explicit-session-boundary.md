@@ -575,3 +575,26 @@ implementor sites.
 Evidence for Step 1: `cargo fmt` clean; `cargo check --workspace
 --all-targets` clean and warning-free; 5111 workspace tests pass with the single
 known pre-existing environmental trybuild mismatch in `tenferro-ad`.
+
+### Step 2 sizing (measured)
+
+Call sites of the one-shot spellings, counted by `\.(op)\(` per family. The
+counts are an upper bound: a match may be a `Tensor`-side call on the session
+extension surface or a `_read`-adjacent helper, and the real work list is
+whatever `cargo check` reports after the methods are deleted.
+
+| Family | non-test lib | tests/benches/examples | doctests | total |
+|---|---:|---:|---:|---:|
+| `TensorDot` (`dot_general`) | 35 | 133 | 2 | 170 |
+| `TensorStructural` (`transpose`, `reshape`, `broadcast_in_dim`) | 78 | 157 | 12 | 247 |
+| `TensorReduction` (`reduce_sum`, `reduce_prod`, `reduce_max`, `reduce_min`) | 87 | 300 | 23 | 410 |
+| `TensorAnalytic` (10 operations) | 131 | 484 | 48 | 663 |
+| `TensorElementwise` (13 operations) | 337 | 1088 | 120 | 1545 |
+
+Step 2 is therefore per-family in the order above: smallest first, so the
+migration pattern is proven before the families that dominate the diff.
+`TensorDot` is the pilot. Each family slice deletes the one-shot trait items,
+inlines the one-shot bodies into the read halves that currently delegate to
+them, redirects the trait-internal defaults listed above, and migrates callers.
+The trait-internal redirect belongs to the same slice as the deletion, because
+a default that still calls a deleted method cannot compile.
