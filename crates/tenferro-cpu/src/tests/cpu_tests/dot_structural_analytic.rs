@@ -962,7 +962,11 @@ fn test_cpu_backend_analytic_ops_real() {
     assert_f64_close(get_f64(&rsqrt_out, &[0]), 1.0);
     assert_f64_close(get_f64(&rsqrt_out, &[1]), 0.5);
 
-    let expm1_out = backend.expm1(&exp_input).unwrap();
+    let expm1_out = backend
+        .with_backend_session(|__s| {
+            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&exp_input))
+        })
+        .unwrap();
     let log1p_out = backend.log1p(&log_input).unwrap();
     assert_f64_close(get_f64(&expm1_out, &[0]), 0.0);
     assert_f64_close(get_f64(&expm1_out, &[1]), 1.0_f64.exp_m1());
@@ -1047,7 +1051,11 @@ fn test_cpu_backend_analytic_ops_complex() {
         1.0e-12,
     );
 
-    let expm1_out = backend.expm1(&exp_input).unwrap();
+    let expm1_out = backend
+        .with_backend_session(|__s| {
+            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&exp_input))
+        })
+        .unwrap();
     let log1p_out = backend.log1p(&log_input).unwrap();
     assert_c64_close(
         get_c64(&expm1_out, &[0]),

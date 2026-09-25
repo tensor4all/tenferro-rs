@@ -260,7 +260,11 @@ fn run_supported_case(
             b.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(x)))
         }),
         PrimitiveOpKind::Pow => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.pow(l, r)),
-        PrimitiveOpKind::Expm1 => assert_unary_matches(cpu, gpu, entry, |b, x| b.expm1(x)),
+        PrimitiveOpKind::Expm1 => assert_unary_matches(cpu, gpu, entry, |b, x| {
+            b.with_backend_session(|__s| {
+                __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(x))
+            })
+        }),
         PrimitiveOpKind::Log1p => assert_unary_matches(cpu, gpu, entry, |b, x| b.log1p(x)),
         PrimitiveOpKind::ReduceSum => {
             assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_sum(x, axes))
@@ -436,7 +440,9 @@ fn run_cpu_unary(
         PrimitiveOpKind::Rsqrt => {
             cpu.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(input)))
         }
-        PrimitiveOpKind::Expm1 => cpu.expm1(input),
+        PrimitiveOpKind::Expm1 => cpu.with_backend_session(|__s| {
+            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(input))
+        }),
         PrimitiveOpKind::Log1p => cpu.log1p(input),
         _ => panic!("not a unary smoke op: {op:?}"),
     }

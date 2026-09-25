@@ -91,7 +91,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn expm1(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.expm1(self)
+        session.expm1_read(TensorRead::from_tensor(self))
     }
 
     fn log1p(&self, session: &mut dyn BackendSession) -> Result<Tensor> {

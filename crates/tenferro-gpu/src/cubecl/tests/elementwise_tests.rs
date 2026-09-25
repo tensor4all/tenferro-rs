@@ -925,7 +925,11 @@ fn test_expm1_small_x_f32_precision() {
     let cpu_input = super::tensor_f32(vec![x_values.len()], x_values.clone());
     let gpu_input = super::upload(&backend, &cpu_input);
 
-    let gpu_out = backend.expm1(&gpu_input).unwrap();
+    let gpu_out = backend
+        .with_backend_session(|__s| {
+            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&gpu_input))
+        })
+        .unwrap();
     let result = super::download(&backend, &gpu_out);
     let result_slice = result
         .as_typed::<f32>()
@@ -1317,8 +1321,16 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.expm1(&positive).unwrap();
-    let gpu_out = gpu.expm1(&gpu_positive).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&positive))
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&gpu_positive))
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 

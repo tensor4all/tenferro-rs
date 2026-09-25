@@ -3240,10 +3240,6 @@ impl TensorAnalytic for CpuBackend {
         self.install_with_pool(|buffers| analytic::pow_read_with_pool(buffers, lhs, rhs))
     }
 
-    fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::expm1_with_pool(buffers, input))
-    }
-
     fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| analytic::expm1_read_with_pool(buffers, input))
     }

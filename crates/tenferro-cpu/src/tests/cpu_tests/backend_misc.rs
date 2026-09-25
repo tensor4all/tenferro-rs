@@ -1653,7 +1653,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         tanh(input: &Tensor) -> crate::Result<Tensor>;
         sqrt(input: &Tensor) -> crate::Result<Tensor>;
         pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-        expm1(input: &Tensor) -> crate::Result<Tensor>;
         log1p(input: &Tensor) -> crate::Result<Tensor>;
         }
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1718,7 +1717,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            self.expm1(tenferro_tensor::backend::read_owned_tensor("expm1", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.expm1_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2113,7 +2116,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         tanh(input: &Tensor) -> crate::Result<Tensor>;
         sqrt(input: &Tensor) -> crate::Result<Tensor>;
         pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-        expm1(input: &Tensor) -> crate::Result<Tensor>;
         log1p(input: &Tensor) -> crate::Result<Tensor>;
         }
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2178,7 +2180,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            self.expm1(tenferro_tensor::backend::read_owned_tensor("expm1", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.expm1_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

@@ -1008,10 +1008,6 @@ impl TensorAnalytic for WebGpuBackend {
         unsupported!("webgpu_pow")
     }
 
-    fn expm1(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_expm1")
-    }
-
     fn log1p(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         unsupported!("webgpu_log1p")
     }

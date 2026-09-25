@@ -458,7 +458,6 @@ impl TensorAnalytic for RecordingBackend {
         fn tanh(input: &Tensor) -> TensorResult<Tensor>;
         fn sqrt(input: &Tensor) -> TensorResult<Tensor>;
         fn pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn expm1(input: &Tensor) -> TensorResult<Tensor>;
         fn log1p(input: &Tensor) -> TensorResult<Tensor>;
     }
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -520,7 +519,8 @@ impl TensorAnalytic for RecordingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        self.expm1(tenferro_tensor::backend::read_owned_tensor("expm1", input)?)
+        let input = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
+        self.inner.expm1_read(TensorRead::from_tensor(input))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -786,7 +786,6 @@ impl TensorAnalytic for EagerBackend {
         fn rsqrt_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn expm1(input: &Tensor) -> TensorResult<Tensor>;
         fn expm1_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn log1p(input: &Tensor) -> TensorResult<Tensor>;
         fn log1p_read(input: TensorRead<'_>) -> TensorResult<Tensor>;

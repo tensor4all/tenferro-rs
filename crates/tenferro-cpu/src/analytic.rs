@@ -552,13 +552,7 @@ define_unary_analytic_dispatch!(cos, cos_with_pool, cos_read_with_pool, Cos, cos
 define_unary_analytic_dispatch!(tanh, tanh_with_pool, tanh_read_with_pool, Tanh, tanh_elem);
 define_unary_analytic_dispatch!(sqrt, sqrt_with_pool, sqrt_read_with_pool, Sqrt, sqrt_elem);
 define_unary_analytic_dispatch!(read_only: rsqrt, rsqrt_read_with_pool, Rsqrt, rsqrt_elem);
-define_unary_analytic_dispatch!(
-    expm1,
-    expm1_with_pool,
-    expm1_read_with_pool,
-    Expm1,
-    expm1_elem
-);
+define_unary_analytic_dispatch!(read_only: expm1, expm1_read_with_pool, Expm1, expm1_elem);
 define_unary_analytic_dispatch!(
     log1p,
     log1p_with_pool,

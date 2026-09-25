@@ -418,11 +418,6 @@ impl TensorAnalytic for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn expm1(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("expm1");
-        Ok(marker())
-    }
-
     fn log1p(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("log1p");
         Ok(marker())
@@ -483,7 +478,9 @@ impl TensorAnalytic for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.expm1(crate::backend::read_owned_tensor("expm1", input)?)
+        let _ = crate::backend::read_owned_tensor("expm1", input)?;
+        self.calls.push("expm1");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

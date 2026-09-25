@@ -150,7 +150,6 @@ macro_rules! impl_minimal_tensor_backend {
                 tanh(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
                 sqrt(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
                 pow(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
-                expm1(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
                 log1p(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             }
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -205,7 +204,8 @@ macro_rules! impl_minimal_tensor_backend {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-                self.expm1(tenferro_tensor::backend::read_owned_tensor("expm1", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
+                panic!("expm1 should not be called by this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and

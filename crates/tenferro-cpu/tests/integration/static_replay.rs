@@ -42,7 +42,9 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
             6 => {
                 backend.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&owned)))
             }
-            7 => backend.expm1(&owned),
+            7 => backend.with_backend_session(|__s| {
+                __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&owned))
+            }),
             8 => backend.log1p(&owned),
             _ => unreachable!(),
         }
