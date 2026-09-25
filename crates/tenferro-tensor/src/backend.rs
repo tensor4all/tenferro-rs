@@ -1896,9 +1896,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.add(read_tensor("add", lhs)?, read_tensor("add", rhs)?)
-    }
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// Overwrite caller-provided output with elementwise addition.
     ///
@@ -1993,9 +1991,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.sub(read_tensor("sub", lhs)?, read_tensor("sub", rhs)?)
-    }
+    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// Overwrite caller-provided output with elementwise subtraction.
     /// # Errors
@@ -2041,9 +2037,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.mul(read_tensor("mul", lhs)?, read_tensor("mul", rhs)?)
-    }
+    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// Overwrite caller-provided output with elementwise multiplication.
     /// # Errors
@@ -2089,9 +2083,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.neg(read_tensor("neg", input)?)
-    }
+    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// Overwrite caller-provided output with elementwise negation.
     /// # Errors
@@ -2128,9 +2120,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.conj(read_tensor("conj", input)?)
-    }
+    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// Overwrite caller-provided output with elementwise conjugation.
     /// # Errors
@@ -2167,9 +2157,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.div(read_tensor("div", lhs)?, read_tensor("div", rhs)?)
-    }
+    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// Overwrite caller-provided output with elementwise division.
     /// # Errors
@@ -2271,9 +2259,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.abs(read_tensor("abs", input)?)
-    }
+    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2288,9 +2274,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.sign(read_tensor("sign", input)?)
-    }
+    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2305,9 +2289,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.maximum(read_tensor("maximum", lhs)?, read_tensor("maximum", rhs)?)
-    }
+    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2322,9 +2304,7 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.minimum(read_tensor("minimum", lhs)?, read_tensor("minimum", rhs)?)
-    }
+    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2344,13 +2324,7 @@ pub trait TensorElementwise: TensorStructural {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         dir: &CompareDir,
-    ) -> crate::Result<Tensor> {
-        self.compare(
-            read_tensor("compare", lhs)?,
-            read_tensor("compare", rhs)?,
-            dir,
-        )
-    }
+    ) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2375,13 +2349,7 @@ pub trait TensorElementwise: TensorStructural {
         pred: TensorRead<'_>,
         on_true: TensorRead<'_>,
         on_false: TensorRead<'_>,
-    ) -> crate::Result<Tensor> {
-        self.select(
-            read_tensor("select", pred)?,
-            read_tensor("select", on_true)?,
-            read_tensor("select", on_false)?,
-        )
-    }
+    ) -> crate::Result<Tensor>;
 
     /// # Errors
     ///
@@ -2401,13 +2369,7 @@ pub trait TensorElementwise: TensorStructural {
         input: TensorRead<'_>,
         lower: TensorRead<'_>,
         upper: TensorRead<'_>,
-    ) -> crate::Result<Tensor> {
-        self.clamp(
-            read_tensor("clamp", input)?,
-            read_tensor("clamp", lower)?,
-            read_tensor("clamp", upper)?,
-        )
-    }
+    ) -> crate::Result<Tensor>;
 }
 
 /// Analytic unary and binary tensor operations.

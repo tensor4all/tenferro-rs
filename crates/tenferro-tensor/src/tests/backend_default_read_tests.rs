@@ -267,6 +267,129 @@ impl TensorElementwise for DefaultReadBackend {
         self.calls.push("clamp");
         Ok(marker())
     }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.add(
+            crate::backend::read_owned_tensor("add", lhs)?,
+            crate::backend::read_owned_tensor("add", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.sub(
+            crate::backend::read_owned_tensor("sub", lhs)?,
+            crate::backend::read_owned_tensor("sub", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.mul(
+            crate::backend::read_owned_tensor("mul", lhs)?,
+            crate::backend::read_owned_tensor("mul", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.neg(crate::backend::read_owned_tensor("neg", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.conj(crate::backend::read_owned_tensor("conj", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.div(
+            crate::backend::read_owned_tensor("div", lhs)?,
+            crate::backend::read_owned_tensor("div", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.abs(crate::backend::read_owned_tensor("abs", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.sign(crate::backend::read_owned_tensor("sign", input)?)
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.maximum(
+            crate::backend::read_owned_tensor("maximum", lhs)?,
+            crate::backend::read_owned_tensor("maximum", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.minimum(
+            crate::backend::read_owned_tensor("minimum", lhs)?,
+            crate::backend::read_owned_tensor("minimum", rhs)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn compare_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        dir: &CompareDir,
+    ) -> crate::Result<Tensor> {
+        self.compare(
+            crate::backend::read_owned_tensor("compare", lhs)?,
+            crate::backend::read_owned_tensor("compare", rhs)?,
+            dir,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn select_read(
+        &mut self,
+        pred: TensorRead<'_>,
+        on_true: TensorRead<'_>,
+        on_false: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        self.select(
+            crate::backend::read_owned_tensor("select", pred)?,
+            crate::backend::read_owned_tensor("select", on_true)?,
+            crate::backend::read_owned_tensor("select", on_false)?,
+        )
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn clamp_read(
+        &mut self,
+        input: TensorRead<'_>,
+        lower: TensorRead<'_>,
+        upper: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        self.clamp(
+            crate::backend::read_owned_tensor("clamp", input)?,
+            crate::backend::read_owned_tensor("clamp", lower)?,
+            crate::backend::read_owned_tensor("clamp", upper)?,
+        )
+    }
 }
 
 impl TensorAnalytic for DefaultReadBackend {

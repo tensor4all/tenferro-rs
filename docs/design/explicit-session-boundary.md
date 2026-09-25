@@ -547,3 +547,31 @@ mechanical: the one-shot bodies at these sites are panics, markers, or
 unsupported errors. WebGPU is the deliberate exception and was written directly
 in its final shape (`unsupported!` after evaluating the read input) across all
 four families it implements, so it never needs a second visit.
+
+### Step 1 complete
+
+All 31 read halves of the invertible pairs are now required, verified by
+scanning the trait declarations: `TensorElementwise` 13, `TensorAnalytic` 10,
+`TensorStructural` 3, `TensorReduction` 4, `TensorDot` 1. The delegation
+direction is inverted: a session implementation is now the primary
+implementation, and no read half is derived from its one-shot sibling.
+
+Four read-shaped methods remain provided and are deliberately outside the pair
+set, because each lacks a required one-shot sibling:
+
+| Method | Provided default | Hidden session entry? |
+|---|---|---|
+| `TensorElementwise::rem_read` | delegates to `rem` | no — `rem` is also provided and terminates in `Unsupported` |
+| `TensorStructural::to_contiguous_read` | materializes compact host tensors, rejects views and device placement | no |
+| `TensorReduction::reduce_sum_squares_read` | `Unsupported`, with a contract test asserting an explicit override is required | no |
+| `TensorDot::dot_general_with_conj_read` | materializes, then calls `dot_general_with_conj` | no, but both reference the one-shot `dot_general` |
+
+Step 2 must therefore also redirect the trait-internal defaults that reference a
+deleted one-shot: `dot_general_with_conj` (which calls `dot_general`),
+`dot_general_with_conj_read`, the `dot_general_read_into*` family, `SessionCachedDot::dot_general_cached` and its cached siblings, and the
+`_read_into` elementwise defaults. Those are trait-internal edits, not new
+implementor sites.
+
+Evidence for Step 1: `cargo fmt` clean; `cargo check --workspace
+--all-targets` clean and warning-free; 5111 workspace tests pass with the single
+known pre-existing environmental trybuild mismatch in `tenferro-ad`.
