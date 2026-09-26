@@ -694,7 +694,11 @@ fn test_backend_structural_ops_dispatch() {
 
     let scalar =
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![5.0]).unwrap());
-    let broadcast = backend.broadcast_in_dim(&scalar, &[2, 2], &[]).unwrap();
+    let broadcast = backend
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(&scalar), &[2, 2], &[])
+        })
+        .unwrap();
     assert_eq!(broadcast.shape(), &[2, 2]);
     assert_eq!(get_f64(&broadcast, &[0, 0]), 5.0);
     assert_eq!(get_f64(&broadcast, &[1, 1]), 5.0);

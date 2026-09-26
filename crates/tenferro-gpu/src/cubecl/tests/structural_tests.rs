@@ -66,8 +66,16 @@ fn cuda_bool_structural_ops_match_cpu() {
         gpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&gm), &[1, 0]))
     );
     parity!(
-        cpu.broadcast_in_dim(&scalar, &[2, 2], &[]),
-        gpu.broadcast_in_dim(&gs, &[2, 2], &[])
+        cpu.with_backend_session(|__s| __s.broadcast_in_dim_read(
+            TensorRead::from_tensor(&scalar),
+            &[2, 2],
+            &[]
+        )),
+        gpu.with_backend_session(|__s| __s.broadcast_in_dim_read(
+            TensorRead::from_tensor(&gs),
+            &[2, 2],
+            &[]
+        ))
     );
     parity!(
         cpu.extract_diagonal(&matrix, 0, 1),
@@ -86,8 +94,16 @@ fn cuda_bool_structural_ops_match_cpu() {
     parity!(cpu.reverse(&matrix, &[0]), gpu.reverse(&gm, &[0]));
     parity!(cpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&empty), &[1, 0])), gpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&ge), &[1, 0])));
     parity!(
-        cpu.broadcast_in_dim(&empty_vector, &[0, 2], &[0]),
-        gpu.broadcast_in_dim(&gev, &[0, 2], &[0])
+        cpu.with_backend_session(|__s| __s.broadcast_in_dim_read(
+            TensorRead::from_tensor(&empty_vector),
+            &[0, 2],
+            &[0]
+        )),
+        gpu.with_backend_session(|__s| __s.broadcast_in_dim_read(
+            TensorRead::from_tensor(&gev),
+            &[0, 2],
+            &[0]
+        ))
     );
     parity!(
         cpu.extract_diagonal(&empty_matrix, 0, 1),
@@ -112,8 +128,16 @@ fn cuda_bool_structural_ops_match_cpu() {
         gpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&gm), &[0, 0]))
     );
     error_parity!(
-        cpu.broadcast_in_dim(&vector, &[2, 2], &[]),
-        gpu.broadcast_in_dim(&gv, &[2, 2], &[])
+        cpu.with_backend_session(|__s| __s.broadcast_in_dim_read(
+            TensorRead::from_tensor(&vector),
+            &[2, 2],
+            &[]
+        )),
+        gpu.with_backend_session(|__s| __s.broadcast_in_dim_read(
+            TensorRead::from_tensor(&gv),
+            &[2, 2],
+            &[]
+        ))
     );
     error_parity!(
         cpu.extract_diagonal(&matrix, 0, 0),
@@ -168,7 +192,11 @@ fn test_cuda_read_entry_points_accept_borrowed_views() {
     let out = gpu.reshape_read(view(), &[3, 2]).unwrap();
     assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
 
-    let expected = cpu.broadcast_in_dim(&scalar, &[2, 3], &[]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(&scalar), &[2, 3], &[])
+        })
+        .unwrap();
     let out = gpu
         .broadcast_in_dim_read(scalar_view(), &[2, 3], &[])
         .unwrap();
@@ -242,8 +270,16 @@ fn test_cubecl_structural_ops_match_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.broadcast_in_dim(&scalar, &[2, 3], &[]).unwrap();
-    let gpu_out = gpu.broadcast_in_dim(&gpu_scalar, &[2, 3], &[]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(&scalar), &[2, 3], &[])
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(&gpu_scalar), &[2, 3], &[])
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -311,8 +347,16 @@ fn test_cubecl_i64_structural_ops_match_cpu() {
         .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.broadcast_in_dim(&scalar, &[2, 3], &[]).unwrap();
-    let gpu_out = gpu.broadcast_in_dim(&gpu_scalar, &[2, 3], &[]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(&scalar), &[2, 3], &[])
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(&gpu_scalar), &[2, 3], &[])
+        })
+        .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
     let expected = cpu.reverse(&input, &[1]).unwrap();
@@ -373,8 +417,16 @@ fn test_cubecl_i32_structural_ops_match_cpu() {
         .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.broadcast_in_dim(&scalar, &[2, 3], &[]).unwrap();
-    let gpu_out = gpu.broadcast_in_dim(&gpu_scalar, &[2, 3], &[]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(&scalar), &[2, 3], &[])
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(&gpu_scalar), &[2, 3], &[])
+        })
+        .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
     let expected = cpu.reverse(&input, &[1]).unwrap();

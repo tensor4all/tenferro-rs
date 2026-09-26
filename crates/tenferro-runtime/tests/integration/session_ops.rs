@@ -1017,11 +1017,12 @@ macro_rules! test_backend_impls {
             // method and rejected borrowed views. Reproduce it explicitly rather than
             // forwarding a view, which would widen the accepted input surface.
             fn broadcast_in_dim_read(&mut self, input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> TensorResult {
-                self.broadcast_in_dim(tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?, shape, dims)
+                                let _ = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
+                    let _ = (shape, dims);
+                    panic!("broadcast_in_dim should not be called in this test")
             }
 
             panic_backend_methods! {
-                broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult;
                 cast(input: &Tensor, to: DType) -> TensorResult;
                 convert(input: &Tensor, to: DType) -> TensorResult;
                 extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult;
@@ -1403,15 +1404,6 @@ impl TensorStructural for WrongDTypeSessionBackend {
     }
 
     fn transpose_read(&mut self, _input: TensorRead<'_>, _perm: &[usize]) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn broadcast_in_dim(
-        &mut self,
-        _input: &Tensor,
-        _shape: &[usize],
-        _dims: &[usize],
-    ) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 

@@ -493,7 +493,6 @@ delegate!(TensorStructural {
     fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
     fn to_contiguous_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()>;
-    fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
     fn cast(input: &Tensor, to: tenferro_tensor::DType) -> crate::Result<Tensor>;
     fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
     fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;

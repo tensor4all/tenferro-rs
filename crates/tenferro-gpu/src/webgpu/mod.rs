@@ -1035,15 +1035,6 @@ impl TensorStructural for WebGpuBackend {
         unsupported!("WebGpuBackend::copy_read_into")
     }
 
-    fn broadcast_in_dim(
-        &mut self,
-        _input: &Tensor,
-        _shape: &[usize],
-        _dims: &[usize],
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_broadcast_in_dim")
-    }
-
     fn cast(&mut self, _input: &Tensor, _to: DType) -> crate::Result<Tensor> {
         unsupported!("webgpu_cast")
     }

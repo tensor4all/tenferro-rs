@@ -323,7 +323,6 @@ impl TensorStructural for WrongDTypeBackend {
     }
 
     panic_backend_methods! {
-        broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
         cast(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
         extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
         embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
@@ -364,11 +363,8 @@ impl TensorStructural for WrongDTypeBackend {
         shape: &[usize],
         dims: &[usize],
     ) -> tenferro_tensor::Result<Tensor> {
-        self.broadcast_in_dim(
-            tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?,
-            shape,
-            dims,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
+        CpuBackend::new().broadcast_in_dim_read(TensorRead::from_tensor(&input), shape, dims)
     }
 }
 

@@ -3176,17 +3176,6 @@ impl TensorStructural for CpuBackend {
         }
     }
 
-    fn broadcast_in_dim(
-        &mut self,
-        input: &Tensor,
-        shape: &[usize],
-        dims: &[usize],
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            structural::broadcast_in_dim_with_pool(buffers, input, shape, dims)
-        })
-    }
-
     fn broadcast_in_dim_read(
         &mut self,
         input: TensorRead<'_>,

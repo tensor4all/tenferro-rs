@@ -399,18 +399,6 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
 }
 
 impl TensorStructural for NoBroadcastMaterializationBackend {
-    fn broadcast_in_dim(
-        &mut self,
-        _input: &Tensor,
-        _shape: &[usize],
-        _dims: &[usize],
-    ) -> Result<Tensor> {
-        Err(Error::backend_failure(
-            "broadcast_in_dim",
-            "outer product should use broadcast views, not materialized broadcast ops",
-        ))
-    }
-
     fn cast(&mut self, _input: &Tensor, _to: tenferro_tensor::DType) -> Result<Tensor> {
         Err(unexpected("cast"))
     }
@@ -468,11 +456,9 @@ impl TensorStructural for NoBroadcastMaterializationBackend {
         shape: &[usize],
         dims: &[usize],
     ) -> Result<Tensor> {
-        self.broadcast_in_dim(
-            tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?,
-            shape,
-            dims,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
+        let _ = (shape, dims);
+        panic!("broadcast_in_dim should not be called in this test")
     }
 }
 

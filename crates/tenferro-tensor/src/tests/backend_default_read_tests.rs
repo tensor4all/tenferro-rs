@@ -502,16 +502,6 @@ impl TensorStructural for DefaultReadBackend {
         Ok(())
     }
 
-    fn broadcast_in_dim(
-        &mut self,
-        _input: &Tensor,
-        _shape: &[usize],
-        _dims: &[usize],
-    ) -> crate::Result<Tensor> {
-        self.calls.push("broadcast_in_dim");
-        Ok(marker())
-    }
-
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         let _ = crate::backend::read_owned_tensor("transpose", input)?;
         let _ = perm;
@@ -533,11 +523,11 @@ impl TensorStructural for DefaultReadBackend {
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor> {
-        self.broadcast_in_dim(
-            crate::backend::read_owned_tensor("broadcast_in_dim", input)?,
-            shape,
-            dims,
-        )
+        let _input = crate::backend::read_owned_tensor("broadcast_in_dim", input)?;
+        let _shape = shape;
+        let _dims = dims;
+        self.calls.push("broadcast_in_dim");
+        Ok(marker())
     }
 
     fn cast(&mut self, _input: &Tensor, _to: DType) -> crate::Result<Tensor> {

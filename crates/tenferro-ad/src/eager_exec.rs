@@ -827,7 +827,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::BroadcastInDim { shape, dims } => {
                 let shape = resolve_tensor_shape_exprs(inputs, shape)?;
-                vec![exec.broadcast_in_dim(inputs[0], &shape, dims)?]
+                vec![exec.broadcast_in_dim_read(
+                    TensorRead::from_tensor(inputs[0]),
+                    &shape,
+                    dims,
+                )?]
             }
             StdTensorOp::ExtractDiag { axis_a, axis_b } => {
                 vec![exec.extract_diagonal(inputs[0], *axis_a, *axis_b)?]

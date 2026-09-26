@@ -456,7 +456,6 @@ impl TensorStructural for CpuExecSession<'_> {
         }
     }
 
-    delegate_with_pool!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim_with_pool);
     fn broadcast_in_dim_read(
         &mut self,
         input: TensorRead<'_>,

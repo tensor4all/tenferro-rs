@@ -5977,7 +5977,49 @@ impl TensorStructural for CudaBackend {
         dims: &[usize],
     ) -> crate::Result<Tensor> {
         let input = self.read_input(input)?;
-        self.broadcast_in_dim(input.as_tensor(), shape, dims)
+        let input = input.as_tensor();
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, "broadcast_in_dim")?;
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<f32>)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, "broadcast_in_dim")?;
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<f64>)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, "broadcast_in_dim")?;
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<i32>)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, "broadcast_in_dim")?;
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<i64>)
+            }
+            DType::Bool => {
+                let t = typed_or_unsupported::<bool>(input, "broadcast_in_dim")?;
+                self.broadcast_bool(t, shape, dims)
+                    .map(Tensor::from_typed::<bool>)
+            }
+            DType::C32 => {
+                let t = typed_or_unsupported::<Complex32>(input, "broadcast_in_dim")?;
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<num_complex::Complex32>)
+            }
+            DType::C64 => {
+                let t = typed_or_unsupported::<Complex64>(input, "broadcast_in_dim")?;
+                self.broadcast_typed(t, shape, dims)
+                    .map(Tensor::from_typed::<num_complex::Complex64>)
+            }
+            // A caller-owned payload has no GPU implementation for this operation.
+            DType::External(_) => Err(crate::Error::unsupported(
+                "broadcast_in_dim",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
+        }
     }
 
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -6151,56 +6193,6 @@ impl TensorStructural for CudaBackend {
             TensorRead::View(TensorView::Bool(_)) => reject_bool_source!(),
             TensorRead::View(TensorView::C32(src)) => copy_source_cutensor!(C32, src),
             TensorRead::View(TensorView::C64(src)) => copy_source_cutensor!(C64, src),
-        }
-    }
-
-    fn broadcast_in_dim(
-        &mut self,
-        input: &Tensor,
-        shape: &[usize],
-        dims: &[usize],
-    ) -> crate::Result<Tensor> {
-        match input.dtype() {
-            DType::F32 => {
-                let t = typed_or_unsupported::<f32>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims)
-                    .map(Tensor::from_typed::<f32>)
-            }
-            DType::F64 => {
-                let t = typed_or_unsupported::<f64>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims)
-                    .map(Tensor::from_typed::<f64>)
-            }
-            DType::I32 => {
-                let t = typed_or_unsupported::<i32>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims)
-                    .map(Tensor::from_typed::<i32>)
-            }
-            DType::I64 => {
-                let t = typed_or_unsupported::<i64>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims)
-                    .map(Tensor::from_typed::<i64>)
-            }
-            DType::Bool => {
-                let t = typed_or_unsupported::<bool>(input, "broadcast_in_dim")?;
-                self.broadcast_bool(t, shape, dims)
-                    .map(Tensor::from_typed::<bool>)
-            }
-            DType::C32 => {
-                let t = typed_or_unsupported::<Complex32>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims)
-                    .map(Tensor::from_typed::<num_complex::Complex32>)
-            }
-            DType::C64 => {
-                let t = typed_or_unsupported::<Complex64>(input, "broadcast_in_dim")?;
-                self.broadcast_typed(t, shape, dims)
-                    .map(Tensor::from_typed::<num_complex::Complex64>)
-            }
-            // A caller-owned payload has no GPU implementation for this operation.
-            DType::External(_) => Err(crate::Error::unsupported(
-                "broadcast_in_dim",
-                "an externally defined payload is not supported by this GPU operation",
-            )),
         }
     }
 

@@ -536,7 +536,6 @@ impl TensorStructural for RecordingBackend {
     }
 
     delegate_recording_backend_methods! {
-        fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
         fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
         fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
@@ -571,11 +570,9 @@ impl TensorStructural for RecordingBackend {
         shape: &[usize],
         dims: &[usize],
     ) -> TensorResult<Tensor> {
-        self.broadcast_in_dim(
-            tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?,
-            shape,
-            dims,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
+        self.inner
+            .broadcast_in_dim_read(TensorRead::from_tensor(&input), shape, dims)
     }
 }
 
@@ -767,7 +764,6 @@ impl TensorStructural for EagerBackend {
         fn to_contiguous_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()>;
         fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor>;
-        fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
         fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;

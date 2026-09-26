@@ -224,7 +224,6 @@ macro_rules! impl_minimal_tensor_backend {
 
         impl TensorStructural for $ty {
             unreachable_backend_methods! {
-                broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
                 cast(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
                 extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
                 embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
@@ -254,7 +253,9 @@ macro_rules! impl_minimal_tensor_backend {
             // method and rejected borrowed views. Reproduce it explicitly rather than
             // forwarding a view, which would widen the accepted input surface.
             fn broadcast_in_dim_read(&mut self, input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor> {
-                self.broadcast_in_dim(tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?, shape, dims)
+                                let _ = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
+                    let _ = (shape, dims);
+                    panic!("broadcast_in_dim should not be called in this test")
             }
         }
 

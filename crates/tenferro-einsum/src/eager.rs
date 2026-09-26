@@ -397,7 +397,8 @@ fn broadcast_to_tree_sizes<'a>(
         }
     }
     let input = operand.tensor_owned(exec)?;
-    let tensor = exec.broadcast_in_dim(&input, &target_shape, &dims)?;
+    let tensor =
+        exec.broadcast_in_dim_read(TensorRead::from_tensor(&input), &target_shape, &dims)?;
     let labels = operand.labels.clone();
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
@@ -591,8 +592,16 @@ fn outer_product<'a>(
             _ => {
                 let lhs_input = lhs.tensor_owned(exec)?;
                 let rhs_input = rhs.tensor_owned(exec)?;
-                let lhs_tensor = exec.broadcast_in_dim(&lhs_input, &combined_shape, &lhs_dims)?;
-                let rhs_tensor = exec.broadcast_in_dim(&rhs_input, &combined_shape, &rhs_dims)?;
+                let lhs_tensor = exec.broadcast_in_dim_read(
+                    TensorRead::from_tensor(&lhs_input),
+                    &combined_shape,
+                    &lhs_dims,
+                )?;
+                let rhs_tensor = exec.broadcast_in_dim_read(
+                    TensorRead::from_tensor(&rhs_input),
+                    &combined_shape,
+                    &rhs_dims,
+                )?;
                 let tensor = exec.mul_read(
                     TensorRead::from_tensor(&lhs_tensor),
                     TensorRead::from_tensor(&rhs_tensor),

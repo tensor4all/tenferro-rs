@@ -583,7 +583,11 @@ fn bcgs2_append<B: BenchSession>(
         )
         .map_err(|error| error.to_string())?;
     let bottom_left = session
-        .broadcast_in_dim(&zero, &[appended_r.shape()[0], r.shape()[1]], &[])
+        .broadcast_in_dim_read(
+            TensorRead::from_tensor(&zero),
+            &[appended_r.shape()[0], r.shape()[1]],
+            &[],
+        )
         .map_err(|error| error.to_string())?;
     let top = session
         .concatenate(&[r, &projection], 1)
