@@ -1,4 +1,6 @@
 use super::*;
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 #[test]
 fn test_gather_1d_indices() {
@@ -670,7 +672,9 @@ fn test_backend_mul_neg_conj_dispatch() {
     assert_eq!(get_f64(&prod, &[0]), 3.0);
     assert_eq!(get_f64(&prod, &[1]), -8.0);
 
-    let negated = backend.neg(&a).unwrap();
+    let negated = backend
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&a)))
+        .unwrap();
     assert_eq!(get_f64(&negated, &[0]), -1.0);
     assert_eq!(get_f64(&negated, &[1]), 2.0);
 

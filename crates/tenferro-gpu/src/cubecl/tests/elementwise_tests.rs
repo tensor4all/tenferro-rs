@@ -1802,8 +1802,12 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let gpu_positive = upload(&gpu, &positive);
     let gpu_signed = upload(&gpu, &signed);
 
-    let expected = cpu.neg(&signed).unwrap();
-    let gpu_out = gpu.neg(&gpu_signed).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&signed)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_signed)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -2103,8 +2107,12 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu.neg(lhs).unwrap();
-    let gpu_out = gpu.neg(&gpu_lhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(lhs)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_lhs)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
@@ -2300,8 +2308,12 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let err = gpu.rem(&gpu_lhs, &gpu_rhs).unwrap_err();
     assert_cuda_unsupported_dtype(&err, "rem", DType::C64);
 
-    let expected = cpu.neg(&lhs).unwrap();
-    let gpu_out = gpu.neg(&gpu_lhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&lhs)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_lhs)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 

@@ -379,7 +379,9 @@ fn test_fused_complex_c32_div_neg_matches_cpu() {
             __s.div_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
         })
         .unwrap();
-    let expected = cpu.neg(&div).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&div)))
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let gpu_a = upload(&gpu, &a);
@@ -420,7 +422,9 @@ fn test_fused_add_neg() {
             __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
         })
         .unwrap();
-    let expected = cpu.neg(&sum).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&sum)))
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let gpu_a = upload(&gpu, &a);
@@ -460,7 +464,9 @@ fn test_fused_multi_output() {
             __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
         })
         .unwrap();
-    let neg_expected = cpu.neg(&sum_expected).unwrap();
+    let neg_expected = cpu
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&sum_expected)))
+        .unwrap();
 
     let mut gpu = gpu_backend();
     let gpu_a = upload(&gpu, &a);

@@ -2,6 +2,7 @@ use super::*;
 
 use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp};
 use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{DType, MemoryKind, Placement};
 
 fn remote_domain(selected: CpuDomainId) -> CpuDomainId {
@@ -30,7 +31,9 @@ fn direct_and_session_fresh_outputs_use_the_selected_domain() {
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2], vec![1.0, 2.0], remote);
 
-    let direct = backend.neg(&input).unwrap();
+    let direct = backend
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&input)))
+        .unwrap();
     let session = backend
         .with_backend_session(|session| session.exp_read(TensorRead::from_tensor(&input)))
         .unwrap();

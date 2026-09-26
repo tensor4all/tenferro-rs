@@ -141,7 +141,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         }
 
         panic_backend_methods! {
-            neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             conj(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
@@ -186,7 +185,8 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn neg_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-            self.neg(tenferro_tensor::backend::read_owned_tensor("neg", input)?)
+            let _ = tenferro_tensor::backend::read_owned_tensor("neg", input)?;
+            panic!("neg should not be called by this test")
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

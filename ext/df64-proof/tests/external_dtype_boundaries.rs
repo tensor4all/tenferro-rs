@@ -7,7 +7,8 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::ad_support::ones_tensor;
-use tenferro_tensor::backend::{TensorElementwise, TensorReduction};
+use tenferro_tensor::backend::TensorReduction;
+use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{DType, Tensor, TensorRead};
 use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
 
@@ -79,7 +80,9 @@ fn a_reduction_refuses_a_caller_owned_payload() {
 fn an_elementwise_operation_refuses_a_caller_owned_payload() {
     let mut backend = CpuBackend::new();
     let values = external(vec![Df64::from_f64(1.0)], vec![1]);
-    assert!(backend.neg(&values).is_err());
+    assert!(backend
+        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&values)))
+        .is_err());
 }
 
 #[test]

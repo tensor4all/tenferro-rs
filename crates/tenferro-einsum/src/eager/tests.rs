@@ -210,10 +210,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         CpuBackend::new().mul_read(lhs, rhs)
     }
 
-    fn neg(&mut self, _input: &Tensor) -> Result<Tensor> {
-        Err(unexpected("neg"))
-    }
-
     fn conj(&mut self, _input: &Tensor) -> Result<Tensor> {
         Err(unexpected("conj"))
     }
@@ -248,7 +244,8 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn neg_read(&mut self, input: TensorRead<'_>) -> Result<Tensor> {
-        self.neg(tenferro_tensor::backend::read_owned_tensor("neg", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("neg", input)?;
+        Err(unexpected("neg"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

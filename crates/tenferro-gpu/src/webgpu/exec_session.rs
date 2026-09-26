@@ -75,7 +75,6 @@ macro_rules! delegate {
 
 delegate!(TensorElementwise {
     fn elementwise_read_into(op: ElementwiseReadOp, inputs: &[TensorRead<'_>], out: TensorWrite<'_>) -> crate::Result<()>;
-    fn neg(input: &Tensor) -> crate::Result<Tensor>;
     fn conj(input: &Tensor) -> crate::Result<Tensor>;
     fn abs(input: &Tensor) -> crate::Result<Tensor>;
     fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;

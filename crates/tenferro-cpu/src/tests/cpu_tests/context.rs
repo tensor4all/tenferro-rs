@@ -152,7 +152,7 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
         session
             .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
             .unwrap();
-        session.neg(&lhs).unwrap();
+        session.neg_read(TensorRead::from_tensor(&lhs)).unwrap();
         session
             .mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
             .unwrap();

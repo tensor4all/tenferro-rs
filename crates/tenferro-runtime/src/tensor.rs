@@ -71,7 +71,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn neg(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.neg(self)
+        session.neg_read(TensorRead::from_tensor(self))
     }
 
     fn abs(&self, session: &mut dyn BackendSession) -> Result<Tensor> {

@@ -2995,12 +2995,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::neg_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
     fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool_context(|context, buffers| {
             elementwise::neg_read_with_pool(buffers, &context.strided_exec_context(), input)

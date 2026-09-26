@@ -4802,7 +4802,15 @@ impl TensorElementwise for CudaBackend {
             return result;
         }
         let input = self.read_input(input)?;
-        self.neg(input.as_tensor())
+        let input = input.as_tensor();
+        dispatch::dispatch_unary_float_complex_int!(
+            self,
+            input,
+            PrimitiveOpKind::Neg,
+            neg_float,
+            neg_int,
+            neg_complex
+        )
     }
 
     fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5171,17 +5179,6 @@ impl TensorElementwise for CudaBackend {
             return result;
         }
         tenferro_tensor::backend::elementwise_read_into_via_allocating_ops(self, op, inputs, out)
-    }
-
-    fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_complex_int!(
-            self,
-            input,
-            PrimitiveOpKind::Neg,
-            neg_float,
-            neg_int,
-            neg_complex
-        )
     }
 
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
