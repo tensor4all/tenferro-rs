@@ -780,6 +780,57 @@ document keeps it as a Phase-C finding rather than a Phase-B correctness issue.
 The three-pair certification is still owed, and it must use one free core
 consistently, since `cpu=0` is unavailable on this host.
 
+#### The compiled-path share of that regression is fixed
+
+The compiled path had its own, separable cause: after the owner route was deleted,
+the terminal-value probe, the host/ffi execution and the last-use reclaim each
+constructed a session per *instruction*, where they had previously run on the
+backend without one. A two-instruction graph therefore paid about +14 µs,
+independent of tensor size.
+
+`execute_slot_instruction` now runs the probe, the execution and the reclaim in one
+session per instruction, `segment.rs`'s terminal tail branches fold the reclaim into
+the probe session, and the session-free predicate
+`instruction_may_be_terminal_value` lets both callers skip the probe's session when
+the probe cannot succeed. Measured on cpu 1 with per-case runs and idle checks:
+`elementwise_fusion`'s `add_mul/prepared_graph/4096` 67.37 → 53.42 µs against a
+53.23 µs baseline, `unprepared_graph/4096` 137.28 → 120.98 µs, and both the 65536 and
+1048576 cases back at baseline. Details, thresholds and the contention lesson are in
+`docs/worklogs/2026-09-27-compiled-path-session-entries.md`.
+
+#### Still open: one session per *operation* in the eager/tape path
+
+What remains regressed is the eager path, and it is a different mechanism: B3
+removed the owner route, so every tape node now constructs its own session. That
+predicts, and the measurements match, a per-operation cost of roughly one session
+floor:
+
+| target | case | baseline | after the compiled-path fix |
+| --- | --- | --- | --- |
+| `linalg_vjp_gate` | `triangular_solve_vjp/{8,16}` | 320.95 / 319.77 µs | 387.47 / 388.06 µs (+21%) |
+| `linalg_vjp_gate` | `svd_values_vjp/{8,16}` | 336.29 / 333.32 µs | 363.88 / 364.52 µs (+8-9%) |
+| `eager_dispatch_baseline` | `materialized/reduce_sum_f64/1` | 13.61 µs | 14.07 µs (+3.5%) |
+
+A triangular-solve VJP is on the order of ten linalg operations, so ten session
+constructions at ~7 µs predict +70 µs, which is the observed +68 µs. The greedy
+probe/reclaim entries tested earlier are *not* the cause: gating them changed the
+linalg numbers by less than the run-to-run spread (a recorded negative result).
+
+The matching fix is to evaluate a whole eager op sequence, or a whole backward
+pass, inside one execution scope so the per-operation entries reuse one permit —
+which is exactly the pattern `session_chain` measures and shows no regression for.
+Two constraints make this a design decision rather than a local edit:
+
+* nesting a session entry inside an open session is prohibited and detected (the
+  scope API is the sanctioned way to reuse a permit, and the `session_scope_nesting`
+  fixture pins `with_execution_scope` wrapping `with_backend_session`);
+* `with_execution_scope` is a CPU-specific API, while the eager evaluator is
+  backend-generic, so the AD layer needs a generic mechanism — a scope hook on the
+  backend contract, or a reusable session — before it can use this.
+
+That is an API decision for the umbrella, not an unattended correctness fix, so it
+is recorded here rather than implemented.
+
 The criterion settings stay at the pinned defaults for certification; cheaper
 settings are acceptable for a diagnostic pass only, because they change the
 confidence intervals the comparator uses to separate `NOISY` from `REGRESSION`.
