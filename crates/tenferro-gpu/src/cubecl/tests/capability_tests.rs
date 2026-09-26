@@ -460,8 +460,24 @@ fn assert_clamp_matches(
     let gpu_input = upload(gpu, &input);
     let gpu_lower = upload(gpu, &lower);
     let gpu_upper = upload(gpu, &upper);
-    let expected = cpu.clamp(&input, &lower, &upper).unwrap();
-    let gpu_output = gpu.clamp(&gpu_input, &gpu_lower, &gpu_upper).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.clamp_read(
+                TensorRead::from_tensor(&input),
+                TensorRead::from_tensor(&lower),
+                TensorRead::from_tensor(&upper),
+            )
+        })
+        .unwrap();
+    let gpu_output = gpu
+        .with_backend_session(|__s| {
+            __s.clamp_read(
+                TensorRead::from_tensor(&gpu_input),
+                TensorRead::from_tensor(&gpu_lower),
+                TensorRead::from_tensor(&gpu_upper),
+            )
+        })
+        .unwrap();
     let actual = download(gpu, &gpu_output);
     assert_tensor_close(&actual, &expected, tolerance(entry.dtype));
 }

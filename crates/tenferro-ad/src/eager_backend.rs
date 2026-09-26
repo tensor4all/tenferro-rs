@@ -317,7 +317,6 @@ impl TensorElementwise for RecordingBackend {
 
     delegate_recording_backend_methods! {
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
     }
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
@@ -435,10 +434,13 @@ impl TensorElementwise for RecordingBackend {
         lower: TensorRead<'_>,
         upper: TensorRead<'_>,
     ) -> TensorResult<Tensor> {
-        self.clamp(
-            tenferro_tensor::backend::read_owned_tensor("clamp", input)?,
-            tenferro_tensor::backend::read_owned_tensor("clamp", lower)?,
-            tenferro_tensor::backend::read_owned_tensor("clamp", upper)?,
+        let input = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
+        let lower = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
+        let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
+        self.inner.clamp_read(
+            TensorRead::from_tensor(&input),
+            TensorRead::from_tensor(&lower),
+            TensorRead::from_tensor(&upper),
         )
     }
 }
@@ -745,7 +747,6 @@ impl TensorElementwise for EagerBackend {
         fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> TensorResult<Tensor>;
         fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
         fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> TensorResult<Tensor>;
     }
 }

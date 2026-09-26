@@ -188,16 +188,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(())
     }
 
-    fn clamp(
-        &mut self,
-        _input: &Tensor,
-        _lower: &Tensor,
-        _upper: &Tensor,
-    ) -> crate::Result<Tensor> {
-        self.calls.push("clamp");
-        Ok(marker())
-    }
-
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -322,11 +312,11 @@ impl TensorElementwise for DefaultReadBackend {
         lower: TensorRead<'_>,
         upper: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
-        self.clamp(
-            crate::backend::read_owned_tensor("clamp", input)?,
-            crate::backend::read_owned_tensor("clamp", lower)?,
-            crate::backend::read_owned_tensor("clamp", upper)?,
-        )
+        let _ = crate::backend::read_owned_tensor("clamp", input)?;
+        let _ = crate::backend::read_owned_tensor("clamp", lower)?;
+        let _ = crate::backend::read_owned_tensor("clamp", upper)?;
+        self.calls.push("clamp");
+        Ok(marker())
     }
 }
 

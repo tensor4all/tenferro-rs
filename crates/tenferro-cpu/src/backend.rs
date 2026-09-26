@@ -3083,18 +3083,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::clamp_with_pool(
-                buffers,
-                &context.strided_exec_context(),
-                input,
-                lower,
-                upper,
-            )
-        })
-    }
-
     fn clamp_read(
         &mut self,
         input: TensorRead<'_>,

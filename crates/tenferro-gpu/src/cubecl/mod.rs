@@ -5359,9 +5359,60 @@ impl TensorElementwise for CudaBackend {
         upper: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
         let input = self.read_input(input)?;
+        let input = input.as_tensor();
         let lower = self.read_input(lower)?;
+        let lower = lower.as_tensor();
         let upper = self.read_input(upper)?;
-        self.clamp(input.as_tensor(), lower.as_tensor(), upper.as_tensor())
+        let upper = upper.as_tensor();
+        let op = op_name(
+            PrimitiveOpKind::Clamp,
+            op_descriptor::GpuLaunchKind::ClampFloat,
+        )?;
+        // Dispatch on the tags and recover the typed tensors, which is what `as_typed` exists for.
+        match (input.dtype(), lower.dtype(), upper.dtype()) {
+            (DType::F32, DType::F32, DType::F32) => {
+                let input = typed_or_unsupported::<f32>(input, op)?;
+                let lower = typed_or_unsupported::<f32>(lower, op)?;
+                let upper = typed_or_unsupported::<f32>(upper, op)?;
+                launch_ternary(
+                    self.runtime(),
+                    input,
+                    lower,
+                    upper,
+                    input.shape(),
+                    op,
+                    |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
+                        elementwise::clamp_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                            client, count, dim, out, input_arg, lower_arg, upper_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<f32>)
+            }
+            (DType::F64, DType::F64, DType::F64) => {
+                let input = typed_or_unsupported::<f64>(input, op)?;
+                let lower = typed_or_unsupported::<f64>(lower, op)?;
+                let upper = typed_or_unsupported::<f64>(upper, op)?;
+                launch_ternary(
+                    self.runtime(),
+                    input,
+                    lower,
+                    upper,
+                    input.shape(),
+                    op,
+                    |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
+                        elementwise::clamp_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                            client, count, dim, out, input_arg, lower_arg, upper_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<f64>)
+            }
+            (DType::C32, DType::C32, DType::C32) | (DType::C64, DType::C64, DType::C64) => {
+                Err(unsupported_dtype(op, input.dtype()))
+            }
+            _ => Err(ternary_dtype_mismatch(op, input, lower, upper)),
+        }
     }
 
     fn elementwise_read_into(
@@ -5510,58 +5561,6 @@ impl TensorElementwise for CudaBackend {
                 Err(unsupported_dtype(op, lhs.dtype()))
             }
             _ => Err(dtype_mismatch(op, lhs, rhs)),
-        }
-    }
-
-    fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
-        let op = op_name(
-            PrimitiveOpKind::Clamp,
-            op_descriptor::GpuLaunchKind::ClampFloat,
-        )?;
-        // Dispatch on the tags and recover the typed tensors, which is what `as_typed` exists for.
-        match (input.dtype(), lower.dtype(), upper.dtype()) {
-            (DType::F32, DType::F32, DType::F32) => {
-                let input = typed_or_unsupported::<f32>(input, op)?;
-                let lower = typed_or_unsupported::<f32>(lower, op)?;
-                let upper = typed_or_unsupported::<f32>(upper, op)?;
-                launch_ternary(
-                    self.runtime(),
-                    input,
-                    lower,
-                    upper,
-                    input.shape(),
-                    op,
-                    |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
-                        elementwise::clamp_float::launch_unchecked::<f32, CubeclCudaRuntime>(
-                            client, count, dim, out, input_arg, lower_arg, upper_arg,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<f32>)
-            }
-            (DType::F64, DType::F64, DType::F64) => {
-                let input = typed_or_unsupported::<f64>(input, op)?;
-                let lower = typed_or_unsupported::<f64>(lower, op)?;
-                let upper = typed_or_unsupported::<f64>(upper, op)?;
-                launch_ternary(
-                    self.runtime(),
-                    input,
-                    lower,
-                    upper,
-                    input.shape(),
-                    op,
-                    |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
-                        elementwise::clamp_float::launch_unchecked::<f64, CubeclCudaRuntime>(
-                            client, count, dim, out, input_arg, lower_arg, upper_arg,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<f64>)
-            }
-            (DType::C32, DType::C32, DType::C32) | (DType::C64, DType::C64, DType::C64) => {
-                Err(unsupported_dtype(op, input.dtype()))
-            }
-            _ => Err(ternary_dtype_mismatch(op, input, lower, upper)),
         }
     }
 }

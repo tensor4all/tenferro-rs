@@ -210,9 +210,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         CpuBackend::new().mul_read(lhs, rhs)
     }
 
-    fn clamp(&mut self, _input: &Tensor, _lower: &Tensor, _upper: &Tensor) -> Result<Tensor> {
-        Err(unexpected("clamp"))
-    }
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor> {
@@ -317,11 +314,10 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         lower: TensorRead<'_>,
         upper: TensorRead<'_>,
     ) -> Result<Tensor> {
-        self.clamp(
-            tenferro_tensor::backend::read_owned_tensor("clamp", input)?,
-            tenferro_tensor::backend::read_owned_tensor("clamp", lower)?,
-            tenferro_tensor::backend::read_owned_tensor("clamp", upper)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
+        panic!("clamp should not be called in this test")
     }
 }
 

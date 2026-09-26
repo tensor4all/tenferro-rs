@@ -862,7 +862,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 let input = promote_to_dtype(exec, inputs[0], target_dtype(0))?;
                 let lower = promote_to_dtype(exec, inputs[1], target_dtype(1))?;
                 let upper = promote_to_dtype(exec, inputs[2], target_dtype(2))?;
-                vec![exec.clamp(input.tensor(), lower.tensor(), upper.tensor())?]
+                vec![exec.clamp_read(
+                    TensorRead::from_tensor(input.tensor()),
+                    TensorRead::from_tensor(lower.tensor()),
+                    TensorRead::from_tensor(upper.tensor()),
+                )?]
             }
             StdTensorOp::Concatenate { axis, .. } => {
                 let mut promoted_inputs = Vec::with_capacity(inputs.len());

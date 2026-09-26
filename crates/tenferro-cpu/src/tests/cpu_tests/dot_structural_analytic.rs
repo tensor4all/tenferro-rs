@@ -1344,7 +1344,15 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&select, &[1]), 20.0);
     assert_eq!(get_f64(&select, &[2]), 30.0);
 
-    let clamp = backend.clamp(&lhs, &lower, &upper).unwrap();
+    let clamp = backend
+        .with_backend_session(|__s| {
+            __s.clamp_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&lower),
+                TensorRead::from_tensor(&upper),
+            )
+        })
+        .unwrap();
     assert_eq!(get_f64(&clamp, &[0]), 1.0);
     assert_eq!(get_f64(&clamp, &[1]), -1.0);
     assert_eq!(get_f64(&clamp, &[2]), 4.0);

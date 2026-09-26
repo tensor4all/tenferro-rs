@@ -133,7 +133,15 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
             "compare: public={actual}, backend={baseline}"
         );
         eprintln!("clamp: raw then public");
-        let (raw, baseline) = allocations(|| session.clamp(&a, &a, &b).unwrap());
+        let (raw, baseline) = allocations(|| {
+            session
+                .clamp_read(
+                    TensorRead::from_tensor(&a),
+                    TensorRead::from_tensor(&a),
+                    TensorRead::from_tensor(&b),
+                )
+                .unwrap()
+        });
         let (public, actual) = allocations(|| a.clamp(&a, &b, session).unwrap());
         assert_eq!(
             public.as_slice::<f64>().unwrap(),

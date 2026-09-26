@@ -765,14 +765,6 @@ impl TensorElementwise for WebGpuBackend {
         unsupported!("webgpu_elementwise_read_into")
     }
 
-    fn clamp(
-        &mut self,
-        _input: &Tensor,
-        _lower: &Tensor,
-        _upper: &Tensor,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_clamp")
-    }
     // The old chain was: owned input -> the one-shot method -> its unsupported
     // error; view input -> the read-boundary error. WebGPU rejects the operation
     // either way, so evaluate the read inputs first and then raise the same

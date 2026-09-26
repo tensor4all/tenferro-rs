@@ -55,10 +55,6 @@ impl TensorElementwise for WrongDTypeBackend {
         panic!("elementwise_read_into should not be called in this test")
     }
 
-    panic_backend_methods! {
-        clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
-    }
-
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn add_read(
@@ -198,10 +194,13 @@ impl TensorElementwise for WrongDTypeBackend {
         lower: TensorRead<'_>,
         upper: TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.clamp(
-            tenferro_tensor::backend::read_owned_tensor("clamp", input)?,
-            tenferro_tensor::backend::read_owned_tensor("clamp", lower)?,
-            tenferro_tensor::backend::read_owned_tensor("clamp", upper)?,
+        let input = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
+        let lower = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
+        let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
+        CpuBackend::new().clamp_read(
+            TensorRead::from_tensor(&input),
+            TensorRead::from_tensor(&lower),
+            TensorRead::from_tensor(&upper),
         )
     }
 }

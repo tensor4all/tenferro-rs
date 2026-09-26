@@ -1979,8 +1979,24 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.clamp(&lhs, &lower, &upper).unwrap();
-    let gpu_out = gpu.clamp(&gpu_lhs, &gpu_lower, &gpu_upper).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.clamp_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&lower),
+                TensorRead::from_tensor(&upper),
+            )
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.clamp_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_lower),
+                TensorRead::from_tensor(&gpu_upper),
+            )
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 }
@@ -2409,7 +2425,15 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "select", DType::C64);
 
-    let err = gpu.clamp(&gpu_lhs, &gpu_lhs, &gpu_rhs).unwrap_err();
+    let err = gpu
+        .with_backend_session(|__s| {
+            __s.clamp_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+            )
+        })
+        .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "clamp", DType::C64);
 
     let converted = gpu.convert(&gpu_lhs, DType::C64).unwrap();

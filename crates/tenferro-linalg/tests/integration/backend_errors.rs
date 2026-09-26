@@ -140,9 +140,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             panic!("elementwise_read_into should not be called by this test")
         }
 
-        panic_backend_methods! {
-            clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
-        }
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn add_read(
@@ -279,11 +276,10 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             lower: TensorRead<'_>,
             upper: TensorRead<'_>,
         ) -> tenferro_tensor::Result<Tensor> {
-            self.clamp(
-                tenferro_tensor::backend::read_owned_tensor("clamp", input)?,
-                tenferro_tensor::backend::read_owned_tensor("clamp", lower)?,
-                tenferro_tensor::backend::read_owned_tensor("clamp", upper)?,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
+            let _ = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
+            let _ = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
+            panic!("clamp should not be called in this test")
         }
     }
 

@@ -1493,10 +1493,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             CpuBackend::new().elementwise_read_into(op, inputs, out)
         }
 
-        panic_backend_methods! {
-        clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
-        }
-
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -1660,11 +1656,17 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             lower: TensorRead<'_>,
             upper: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
-            self.clamp(
-                tenferro_tensor::backend::read_owned_tensor("clamp", input)?,
-                tenferro_tensor::backend::read_owned_tensor("clamp", lower)?,
-                tenferro_tensor::backend::read_owned_tensor("clamp", upper)?,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
+            let lower = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
+            let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.clamp_read(
+                    TensorRead::from_tensor(&input),
+                    TensorRead::from_tensor(&lower),
+                    TensorRead::from_tensor(&upper),
+                )
+            })
         }
     }
 
@@ -1992,10 +1994,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             CpuBackend::new().elementwise_read_into(op, inputs, out)
         }
 
-        panic_backend_methods! {
-        clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
-        }
-
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -2159,11 +2157,17 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             lower: TensorRead<'_>,
             upper: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
-            self.clamp(
-                tenferro_tensor::backend::read_owned_tensor("clamp", input)?,
-                tenferro_tensor::backend::read_owned_tensor("clamp", lower)?,
-                tenferro_tensor::backend::read_owned_tensor("clamp", upper)?,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
+            let lower = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
+            let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.clamp_read(
+                    TensorRead::from_tensor(&input),
+                    TensorRead::from_tensor(&lower),
+                    TensorRead::from_tensor(&upper),
+                )
+            })
         }
     }
 
