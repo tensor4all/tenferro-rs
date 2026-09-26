@@ -440,7 +440,6 @@ impl TensorStructural for CpuExecSession<'_> {
         self.run_native(|_| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
     }
 
-    delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         self.run_native_fresh(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }

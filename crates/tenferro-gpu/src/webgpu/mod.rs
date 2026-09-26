@@ -1035,10 +1035,6 @@ impl TensorStructural for WebGpuBackend {
         unsupported!("WebGpuBackend::copy_read_into")
     }
 
-    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
-        structural::transpose(self, input, perm)
-    }
-
     fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> crate::Result<Tensor> {
         unsupported!("webgpu_reshape")
     }

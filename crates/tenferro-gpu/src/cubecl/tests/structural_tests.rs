@@ -59,7 +59,12 @@ fn cuda_bool_structural_ops_match_cpu() {
             assert_error_parity($cpu.unwrap_err(), $gpu.unwrap_err());
         }};
     }
-    parity!(cpu.transpose(&matrix, &[1, 0]), gpu.transpose(&gm, &[1, 0]));
+    parity!(
+        cpu.with_backend_session(
+            |__s| __s.transpose_read(TensorRead::from_tensor(&matrix), &[1, 0])
+        ),
+        gpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&gm), &[1, 0]))
+    );
     parity!(
         cpu.broadcast_in_dim(&scalar, &[2, 2], &[]),
         gpu.broadcast_in_dim(&gs, &[2, 2], &[])
@@ -79,7 +84,7 @@ fn cuda_bool_structural_ops_match_cpu() {
         gpu.concatenate(&[&gm, &gm], 0)
     );
     parity!(cpu.reverse(&matrix, &[0]), gpu.reverse(&gm, &[0]));
-    parity!(cpu.transpose(&empty, &[1, 0]), gpu.transpose(&ge, &[1, 0]));
+    parity!(cpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&empty), &[1, 0])), gpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&ge), &[1, 0])));
     parity!(
         cpu.broadcast_in_dim(&empty_vector, &[0, 2], &[0]),
         gpu.broadcast_in_dim(&gev, &[0, 2], &[0])
@@ -100,7 +105,12 @@ fn cuda_bool_structural_ops_match_cpu() {
     );
     parity!(cpu.reverse(&empty, &[1]), gpu.reverse(&ge, &[1]));
 
-    error_parity!(cpu.transpose(&matrix, &[0, 0]), gpu.transpose(&gm, &[0, 0]));
+    error_parity!(
+        cpu.with_backend_session(
+            |__s| __s.transpose_read(TensorRead::from_tensor(&matrix), &[0, 0])
+        ),
+        gpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&gm), &[0, 0]))
+    );
     error_parity!(
         cpu.broadcast_in_dim(&vector, &[2, 2], &[]),
         gpu.broadcast_in_dim(&gv, &[2, 2], &[])
@@ -146,7 +156,9 @@ fn test_cuda_read_entry_points_accept_borrowed_views() {
     let view = || TensorRead::from_view(TensorView::F64(device_typed.as_view()));
     let scalar_view = || TensorRead::from_view(TensorView::F64(scalar_typed.as_view()));
 
-    let expected = cpu.transpose(&host, &[1, 0]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&host), &[1, 0]))
+        .unwrap();
     let out = gpu.transpose_read(view(), &[1, 0]).unwrap();
     assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
 
@@ -177,7 +189,9 @@ fn test_cuda_read_entry_points_accept_borrowed_views() {
 
     // The traced runtime reaches these entry points through the erased backend
     // session, so the session must forward the borrowed-view spellings too.
-    let expected = cpu.transpose(&host, &[1, 0]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&host), &[1, 0]))
+        .unwrap();
     let session_out = gpu.with_backend_session(|session| {
         session
             .transpose_read(
@@ -206,8 +220,14 @@ fn test_cubecl_structural_ops_match_cpu() {
     let gpu_scalar = upload(&gpu, &scalar);
     let gpu_vector = upload(&gpu, &vector);
 
-    let expected = cpu.transpose(&input, &[1, 0]).unwrap();
-    let gpu_out = gpu.transpose(&gpu_input, &[1, 0]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.transpose_read(TensorRead::from_tensor(&gpu_input), &[1, 0])
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -267,8 +287,14 @@ fn test_cubecl_i64_structural_ops_match_cpu() {
     let gpu_scalar = upload(&gpu, &scalar);
     let gpu_vector = upload(&gpu, &vector);
 
-    let expected = cpu.transpose(&input, &[1, 0]).unwrap();
-    let gpu_out = gpu.transpose(&gpu_input, &[1, 0]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.transpose_read(TensorRead::from_tensor(&gpu_input), &[1, 0])
+        })
+        .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
     let expected = cpu.reshape(&input, &[3, 2]).unwrap();
@@ -319,8 +345,14 @@ fn test_cubecl_i32_structural_ops_match_cpu() {
     let gpu_scalar = upload(&gpu, &scalar);
     let gpu_vector = upload(&gpu, &vector);
 
-    let expected = cpu.transpose(&input, &[1, 0]).unwrap();
-    let gpu_out = gpu.transpose(&gpu_input, &[1, 0]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.transpose_read(TensorRead::from_tensor(&gpu_input), &[1, 0])
+        })
+        .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
     let expected = cpu.reshape(&input, &[3, 2]).unwrap();
@@ -672,16 +704,28 @@ fn cuda_cutensor_permutation_transpose_and_to_contiguous_match_cpu() {
 
     let input = tensor_f64(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let gpu_input = upload(&gpu, &input);
-    let expected = cpu.transpose(&input, &[1, 0]).unwrap();
-    let actual = gpu.transpose(&gpu_input, &[1, 0]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .unwrap();
+    let actual = gpu
+        .with_backend_session(|__s| {
+            __s.transpose_read(TensorRead::from_tensor(&gpu_input), &[1, 0])
+        })
+        .unwrap();
     assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
 
     let cache_after_first = gpu.cutensor_permutation_plan_cache_stats().unwrap();
     assert_eq!(cache_after_first.entries, 1);
     assert_eq!(cache_after_first.misses, 1);
 
-    let expected = cpu.transpose(&input, &[1, 0]).unwrap();
-    let actual = gpu.transpose(&gpu_input, &[1, 0]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .unwrap();
+    let actual = gpu
+        .with_backend_session(|__s| {
+            __s.transpose_read(TensorRead::from_tensor(&gpu_input), &[1, 0])
+        })
+        .unwrap();
     assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
     let cache_after_second = gpu.cutensor_permutation_plan_cache_stats().unwrap();
     assert_eq!(cache_after_second.entries, 1);
@@ -710,8 +754,14 @@ fn cuda_cutensor_permutation_transpose_and_to_contiguous_match_cpu() {
         ],
     );
     let gpu_complex = upload(&gpu, &complex);
-    let expected = cpu.transpose(&complex, &[1, 0]).unwrap();
-    let actual = gpu.transpose(&gpu_complex, &[1, 0]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&complex), &[1, 0]))
+        .unwrap();
+    let actual = gpu
+        .with_backend_session(|__s| {
+            __s.transpose_read(TensorRead::from_tensor(&gpu_complex), &[1, 0])
+        })
+        .unwrap();
     assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
 
     let view = gpu_tensor
@@ -979,7 +1029,10 @@ fn cuda_runtime_copy_read_into_preserves_non_finite_complex_components() {
         )
         .unwrap();
     }
-    let expected = cpu_backend().transpose(&host, &[1, 0]).unwrap();
+    let mut cpu = cpu_backend();
+    let expected = cpu
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&host), &[1, 0]))
+        .unwrap();
     assert_eq!(bits(&download(&gpu, &transposed)), bits(&expected));
 }
 

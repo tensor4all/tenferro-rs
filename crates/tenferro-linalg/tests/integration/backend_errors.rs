@@ -389,7 +389,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     impl TensorStructural for DefaultOnlyLinalgBackend {
         panic_backend_methods! {
-            transpose(input: &Tensor, perm: &[usize]) -> tenferro_tensor::Result<Tensor>;
             reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;
             broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
             cast(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
@@ -407,10 +406,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             input: TensorRead<'_>,
             perm: &[usize],
         ) -> tenferro_tensor::Result<Tensor> {
-            self.transpose(
-                tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
-                perm,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+            let _ = perm;
+            panic!("transpose should not be called in this test")
         }
 
         // The previous read-half default delegated owned tensors to the one-shot

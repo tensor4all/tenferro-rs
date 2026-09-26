@@ -502,11 +502,6 @@ impl TensorStructural for DefaultReadBackend {
         Ok(())
     }
 
-    fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> crate::Result<Tensor> {
-        self.calls.push("transpose");
-        Ok(marker())
-    }
-
     fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> crate::Result<Tensor> {
         self.calls.push("reshape");
         self.reshape_shapes.push(_shape.to_vec());
@@ -524,7 +519,10 @@ impl TensorStructural for DefaultReadBackend {
     }
 
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        self.transpose(crate::backend::read_owned_tensor("transpose", input)?, perm)
+        let _ = crate::backend::read_owned_tensor("transpose", input)?;
+        let _ = perm;
+        self.calls.push("transpose");
+        Ok(marker())
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {

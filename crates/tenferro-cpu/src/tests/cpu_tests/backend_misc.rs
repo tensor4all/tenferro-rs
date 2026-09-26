@@ -1203,7 +1203,9 @@ fn test_structural_transpose_acquires_output_from_pool() {
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
     );
-    let out = backend.transpose(&input, &[1, 0]).unwrap();
+    let out = backend
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
     assert_eq!(get_f64(&out, &[0, 0]), 1.0);
@@ -1779,7 +1781,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorStructural for DefaultOnlyBackend {
         panic_backend_methods! {
-        transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
         cast(input: &Tensor, to: DType) -> crate::Result<Tensor>;
@@ -1797,10 +1798,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             input: TensorRead<'_>,
             perm: &[usize],
         ) -> crate::Result<Tensor> {
-            self.transpose(
-                tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
-                perm,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.transpose_read(TensorRead::from_tensor(&input), perm)
+            })
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2280,7 +2282,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorStructural for DefaultOnlyExec {
         panic_backend_methods! {
-        transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
         cast(input: &Tensor, to: DType) -> crate::Result<Tensor>;
@@ -2298,10 +2299,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             input: TensorRead<'_>,
             perm: &[usize],
         ) -> crate::Result<Tensor> {
-            self.transpose(
-                tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
-                perm,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.transpose_read(TensorRead::from_tensor(&input), perm)
+            })
         }
 
         // The previous read-half default delegated owned tensors to the one-shot

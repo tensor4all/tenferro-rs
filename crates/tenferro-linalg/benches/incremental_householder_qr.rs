@@ -545,7 +545,7 @@ fn bcgs2_append<B: BenchSession>(
     block: &Tensor,
 ) -> Result<(Tensor, Tensor), String> {
     let qh = session
-        .transpose(q, &[1, 0])
+        .transpose_read(TensorRead::from_tensor(q), &[1, 0])
         .map_err(|error| error.to_string())?;
     let first = matmul(session, &qh, block)?;
     let first_reconstruction = matmul(session, q, &first)?;

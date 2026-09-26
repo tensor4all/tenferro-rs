@@ -999,7 +999,9 @@ macro_rules! test_backend_impls {
             // method and rejected borrowed views. Reproduce it explicitly rather than
             // forwarding a view, which would widen the accepted input surface.
             fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult {
-                self.transpose(tenferro_tensor::backend::read_owned_tensor("transpose", input)?, perm)
+                                let _ = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+                    let _ = perm;
+                    panic!("transpose should not be called in this test")
             }
 
             // The previous read-half default delegated owned tensors to the one-shot
@@ -1017,7 +1019,6 @@ macro_rules! test_backend_impls {
             }
 
             panic_backend_methods! {
-                transpose(input: &Tensor, perm: &[usize]) -> TensorResult;
                 reshape(input: &Tensor, shape: &[usize]) -> TensorResult;
                 broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult;
                 cast(input: &Tensor, to: DType) -> TensorResult;
@@ -1401,10 +1402,6 @@ impl TensorStructural for WrongDTypeSessionBackend {
     }
 
     fn reshape_read(&mut self, _input: TensorRead<'_>, _shape: &[usize]) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 

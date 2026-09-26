@@ -399,10 +399,6 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
 }
 
 impl TensorStructural for NoBroadcastMaterializationBackend {
-    fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> Result<Tensor> {
-        Err(unexpected("transpose"))
-    }
-
     fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> Result<Tensor> {
         Err(unexpected("reshape"))
     }
@@ -453,10 +449,9 @@ impl TensorStructural for NoBroadcastMaterializationBackend {
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> Result<Tensor> {
-        self.transpose(
-            tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
-            perm,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+        let _ = perm;
+        panic!("transpose should not be called in this test")
     }
 
     // The previous read-half default delegated owned tensors to the one-shot

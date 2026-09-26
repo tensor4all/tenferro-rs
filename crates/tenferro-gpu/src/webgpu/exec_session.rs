@@ -109,7 +109,6 @@ delegate!(TensorStructural {
     fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
     fn to_contiguous_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()>;
-    fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
     fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
     fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
     fn cast(input: &Tensor, to: tenferro_tensor::DType) -> crate::Result<Tensor>;

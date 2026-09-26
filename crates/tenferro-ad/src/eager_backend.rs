@@ -536,7 +536,6 @@ impl TensorStructural for RecordingBackend {
     }
 
     delegate_recording_backend_methods! {
-        fn transpose(input: &Tensor, perm: &[usize]) -> TensorResult<Tensor>;
         fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
@@ -550,10 +549,9 @@ impl TensorStructural for RecordingBackend {
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor> {
-        self.transpose(
-            tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
-            perm,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+        self.inner
+            .transpose_read(TensorRead::from_tensor(&input), perm)
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -770,7 +768,6 @@ impl TensorStructural for EagerBackend {
     delegate_tensor_backend_methods! {
         fn to_contiguous_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()>;
-        fn transpose(input: &Tensor, perm: &[usize]) -> TensorResult<Tensor>;
         fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
         fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
@@ -786,10 +783,8 @@ impl TensorStructural for EagerBackend {
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor> {
-        self.transpose(
-            tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
-            perm,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+        dispatch!(self, transpose_read(TensorRead::from_tensor(&input), perm))
     }
 }
 

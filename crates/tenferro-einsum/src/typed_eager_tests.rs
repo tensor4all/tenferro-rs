@@ -323,7 +323,6 @@ impl TensorStructural for WrongDTypeBackend {
     }
 
     panic_backend_methods! {
-        transpose(input: &Tensor, perm: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
         cast(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
@@ -341,10 +340,8 @@ impl TensorStructural for WrongDTypeBackend {
         input: TensorRead<'_>,
         perm: &[usize],
     ) -> tenferro_tensor::Result<Tensor> {
-        self.transpose(
-            tenferro_tensor::backend::read_owned_tensor("transpose", input)?,
-            perm,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+        CpuBackend::new().transpose_read(TensorRead::from_tensor(&input), perm)
     }
 
     // The previous read-half default delegated owned tensors to the one-shot

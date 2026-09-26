@@ -422,7 +422,10 @@ fn transpose_returns_error_instead_of_panicking() {
     let input = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let mut backend = CpuBackend::new();
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.transpose(&input, &[0])));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[0]))
+    }));
 
     assert!(result.is_ok(), "transpose should return Err, not panic");
     let err = result.unwrap().unwrap_err();

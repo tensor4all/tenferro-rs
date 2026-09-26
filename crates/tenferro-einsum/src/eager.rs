@@ -532,7 +532,7 @@ fn transpose_to_labels<'a>(
     }
 
     let operand_tensor = operand.tensor_owned(exec)?;
-    let tensor = exec.transpose(&operand_tensor, &perm)?;
+    let tensor = exec.transpose_read(TensorRead::from_tensor(&operand_tensor), &perm)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
         tensor: TensorValue::Owned(tensor),

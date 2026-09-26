@@ -13,10 +13,9 @@ use tenferro_runtime::{
     StorageClass,
 };
 #[cfg(not(target_family = "wasm"))]
-use tenferro_tensor::TensorStructural;
 use tenferro_tensor::{
     AllocationId, BackendAllocation, BackendSessionHost, BackendStorage, DeviceId, StorageBuffer,
-    Tensor, TypedTensor,
+    Tensor, TensorRead, TypedTensor,
 };
 
 use super::super::WebGpuBuffer;
@@ -337,7 +336,9 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                 first_launches += 1;
                 first_output = Some(
                     backend
-                        .transpose(&input_for_first, &[1, 0])
+                        .with_backend_session(|__s| {
+                            __s.transpose_read(TensorRead::from_tensor(&input_for_first), &[1, 0])
+                        })
                         .map_err(tenferro_runtime::Error::from)?,
                 );
                 Ok(())
@@ -361,7 +362,9 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         second_launches += 1;
         second_output = Some(
             backend
-                .transpose(&first_output, &[1, 0])
+                .with_backend_session(|__s| {
+                    __s.transpose_read(TensorRead::from_tensor(&first_output), &[1, 0])
+                })
                 .map_err(tenferro_runtime::Error::from)?,
         );
         Ok(())
@@ -380,7 +383,9 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         let mut panicking = || -> tenferro_runtime::Result<()> {
             panic_output = Some(
                 backend
-                    .transpose(&input, &[1, 0])
+                    .with_backend_session(|__s| {
+                        __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0])
+                    })
                     .map_err(tenferro_runtime::Error::from)?,
             );
             panic!("injected post-launch panic");

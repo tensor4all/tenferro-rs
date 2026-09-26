@@ -500,8 +500,8 @@ fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
         .split_once("fn to_contiguous_read(")
         .expect("CUDA runtime materialization override must exist")
         .1
-        .split_once("fn transpose(")
-        .expect("CUDA runtime methods must precede transpose")
+        .split_once("fn cast(")
+        .expect("CUDA runtime methods must precede the typed structural entries")
         .0;
 
     for method in ["fn to_contiguous_read(", "fn copy_read_into("] {

@@ -3160,10 +3160,6 @@ impl TensorStructural for CpuBackend {
         self.try_install(|| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
     }
 
-    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::transpose_with_pool(buffers, input, perm))
-    }
-
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }

@@ -167,7 +167,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn transpose(&self, perm: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.transpose(self, perm)
+        session.transpose_read(TensorRead::from_tensor(self), perm)
     }
 }
 

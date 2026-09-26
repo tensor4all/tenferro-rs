@@ -1,9 +1,11 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
 use super::support;
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -59,7 +61,9 @@ fn full_piv_lu_reconstructs_permuted_matrix() {
         support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
     let [p, l, u, q, parity]: [Tensor; 5] = outputs.try_into().unwrap();
     let pa = matmul(&mut backend, &p, &a);
-    let qt = backend.transpose(&q, &[1, 0]).unwrap();
+    let qt = backend
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&q), &[1, 0]))
+        .unwrap();
     let paqt = matmul(&mut backend, &pa, &qt);
     let lu = matmul(&mut backend, &l, &u);
 
