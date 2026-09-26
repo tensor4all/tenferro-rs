@@ -466,11 +466,26 @@ Landed so far:
    (`cuda_launch_contract`, `public_surface_contract`, `session_contract`,
    `backend_read_contract`) that name `cubecl/mod.rs` sections.
 
-Attempted and reverted once at this point: the move alone leaves 1113 errors
-(572 E0425, 302 E0599, 201 E0433, 36 E0277) because the bodies reference the
-module scope of `mod.rs`. This half should be done where a CUDA device is
-available, because the CUDA tests are hardware-gated: here only compilation and
-the source-text contracts can be checked, not the kernels' behaviour.
+Attempted twice and reverted. What the attempts measured, in addition to the
+1113 errors of a move-only pass (572 E0425, 302 E0599, 201 E0433, 36 E0277):
+
+* the receiver rewrite must also handle `self` followed by a *newline* before the
+  dot (about 130 sites per pass; a literal `self.` rewrite misses them), and `self`
+  passed as a bare argument (`structural::transpose(self, ..)`);
+* the moved bodies invoke the `dispatch::launch_*` macros, which expand at the
+  call site, so `cubecl/exec_session.rs` needs the macro bodies' names in scope
+  (`CubeclCudaRuntime`, `ArrayArg`, `ComputeClient`, the promotion helpers, ...),
+  not just the module path;
+* the CUDA-specific `*_typed` helpers (`gather_typed`, `dynamic_slice_typed`,
+  `scatter_float_typed`, ...) are inherent `impl CudaBackend` methods in
+  `cubecl/mod.rs` and stay; only the trait entries move;
+* `delegate_cached!` becomes `impl SessionCachedDot for CudaExecSession<'_> {}`
+  like WebGPU's, since the CUDA owner's cached behaviour was the trait default
+  plus the provider's own caching.
+
+This half should be finished where a CUDA device is available: the CUDA tests are
+hardware-gated, so here only compilation and the source-text contracts can be
+checked, not the kernels' behaviour.
 
 ## Measurement protocol
 
