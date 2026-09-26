@@ -4,8 +4,8 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendSessionHost, BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
     GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
-    Tensor, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
-    TensorStructural, TypedTensor, ValidationError,
+    Tensor, TensorDeviceTransfer, TensorDot, TensorIndexing, TensorRead, TensorStructural,
+    TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -384,7 +384,11 @@ fn add_rejects_shape_mismatch() {
     let rhs = f64_tensor(vec![3], vec![3.0, 4.0, 5.0]);
     let mut backend = CpuBackend::new();
 
-    let err = <CpuBackend as TensorElementwise>::add(&mut backend, &lhs, &rhs).unwrap_err();
+    let err = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap_err();
 
     assert!(matches!(
         err,
@@ -402,7 +406,9 @@ fn cpu_backend_rejects_backend_buffers_without_panicking() {
     let mut backend = CpuBackend::new();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        <CpuBackend as TensorElementwise>::add(&mut backend, &lhs, &rhs)
+        backend.with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
     }));
 
     assert!(result.is_ok(), "CPU backend should return Err, not panic");

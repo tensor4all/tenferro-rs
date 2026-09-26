@@ -16,16 +16,16 @@ fn webgpu_session_type_is_distinct_from_owner() {
 #[test]
 fn webgpu_session_exposes_backend_session_operations() {
     use tenferro_gpu::webgpu::WebGpuExecSession;
-    use tenferro_tensor::{BackendSession, Tensor, TensorElementwise};
+    use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
 
     fn assert_backend_session<S: BackendSession + ?Sized>() {}
 
     assert_backend_session::<WebGpuExecSession<'static>>();
     let _add: fn(
         &mut WebGpuExecSession<'static>,
-        &Tensor,
-        &Tensor,
-    ) -> tenferro_tensor::Result<Tensor> = TensorElementwise::add;
+        TensorRead<'_>,
+        TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> = TensorElementwise::add_read;
 }
 
 #[cfg(feature = "cuda")]
@@ -43,16 +43,16 @@ fn cuda_session_type_is_distinct_from_owner() {
 #[test]
 fn cuda_session_exposes_backend_session_operations() {
     use tenferro_gpu::cuda::CudaExecSession;
-    use tenferro_tensor::{BackendSession, Tensor, TensorElementwise};
+    use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
 
     fn assert_backend_session<S: BackendSession + ?Sized>() {}
 
     assert_backend_session::<CudaExecSession<'static>>();
     let _add: fn(
         &mut CudaExecSession<'static>,
-        &Tensor,
-        &Tensor,
-    ) -> tenferro_tensor::Result<Tensor> = TensorElementwise::add;
+        TensorRead<'_>,
+        TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> = TensorElementwise::add_read;
 }
 
 #[cfg(any(feature = "cuda", feature = "webgpu"))]

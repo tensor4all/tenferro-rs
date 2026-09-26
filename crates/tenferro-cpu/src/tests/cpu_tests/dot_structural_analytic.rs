@@ -1190,7 +1190,11 @@ fn test_cpu_backend_dispatches_tensor_backend_ops() {
         TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
     );
     let mut backend = CpuBackend::new();
-    let out = TensorElementwise::add(&mut backend, &a, &b).unwrap();
+    let out = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        })
+        .unwrap();
     assert_eq!(get_f64(&out, &[0]), 4.0);
     assert_eq!(get_f64(&out, &[1]), 6.0);
 }

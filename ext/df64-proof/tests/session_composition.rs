@@ -6,6 +6,7 @@
 
 use tenferro_cpu::{scalar_binary_into, CpuBackend};
 use tenferro_df64_proof::{Df64, Df64Add};
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, Tensor};
 use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
 
@@ -41,7 +42,9 @@ fn an_external_scalar_composes_with_ordinary_operations_in_one_session() {
         // Ordinary tensor work inside the admitted session.
         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).expect("shape matches");
-        let ordinary = session.add(&a, &b).expect("ordinary addition");
+        let ordinary = session
+            .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .expect("ordinary addition");
         assert_eq!(ordinary.as_slice::<f64>().expect("f64 slice"), &[4.0, 6.0]);
 
         // Extension-owned work in the same session, on the carried payload.

@@ -18,8 +18,8 @@ use tenferro_cpu::{
 };
 use tenferro_tensor::{
     BackendSessionHost, ContractionScalar, CpuDomainId, DType, DotGeneralAccumulation,
-    DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorDot, TensorElementwise,
-    TensorIndexing, TensorRead, TensorReduction, TensorWrite,
+    DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorDot, TensorIndexing, TensorRead,
+    TensorReduction, TensorWrite,
 };
 
 struct CountingAllocator;
@@ -355,7 +355,14 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
     };
 
     for _ in 0..32 {
-        let output = backend.add(&matrix, &rhs).unwrap();
+        let output = backend
+            .with_backend_session(|__s| {
+                __s.add_read(
+                    TensorRead::from_tensor(&matrix),
+                    TensorRead::from_tensor(&rhs),
+                )
+            })
+            .unwrap();
         backend.reclaim_buffer(output);
         let output = backend.reduce_sum(&matrix, &[0]).unwrap();
         backend.reclaim_buffer(output);
@@ -367,7 +374,14 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
 
     let elementwise = count_repeated(
         || {
-            let output = backend.add(&matrix, &rhs).unwrap();
+            let output = backend
+                .with_backend_session(|__s| {
+                    __s.add_read(
+                        TensorRead::from_tensor(&matrix),
+                        TensorRead::from_tensor(&rhs),
+                    )
+                })
+                .unwrap();
             backend.reclaim_buffer(output);
         },
         ITERATIONS,

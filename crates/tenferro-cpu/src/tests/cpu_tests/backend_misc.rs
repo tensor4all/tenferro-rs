@@ -1,7 +1,7 @@
 use super::*;
 use tenferro_tensor::{
-    BackendStorageHandle, ElementwiseReadOp, MemoryKind, Placement, StorageBuffer,
-    TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
+    BackendSessionHost, BackendStorageHandle, ElementwiseReadOp, MemoryKind, Placement,
+    StorageBuffer, TensorRead, TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -362,16 +362,18 @@ fn cpu_copy_into_rejects_host_destination_with_device_placement() {
 fn test_reclaim_buffer_returns_host_buffer_to_pool() {
     let mut backend = CpuBackend::new();
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
-    let t = TensorElementwise::add(
-        &mut backend,
-        &Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-        ),
-        &Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
-        ),
-    )
-    .unwrap();
+    let t = backend
+        .with_backend_session(|__s| {
+            __s.add_read(
+                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                    TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+                )),
+                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                    TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
+                )),
+            )
+        })
+        .unwrap();
     backend.reclaim_buffer(t);
     assert!(backend.buffer_pool_len().unwrap() > 0);
 }
@@ -390,7 +392,11 @@ fn test_elementwise_add_acquires_output_from_pool() {
     let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4], vec![4.0, 3.0, 2.0, 1.0]).unwrap(),
     );
-    let out = backend.add(&lhs, &rhs).unwrap();
+    let out = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
     assert_eq!(get_f64(&out, &[0]), 5.0);
@@ -1330,16 +1336,18 @@ fn test_reclaim_buffer_covers_all_dtypes() {
 #[test]
 fn test_install_with_pool_preserves_buffers() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let t = TensorElementwise::add(
-        &mut backend,
-        &Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-        ),
-        &Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
-        ),
-    )
-    .unwrap();
+    let t = backend
+        .with_backend_session(|__s| {
+            __s.add_read(
+                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                    TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+                )),
+                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                    TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
+                )),
+            )
+        })
+        .unwrap();
     assert_eq!(get_f64(&t, &[0]), 4.0);
     assert_eq!(get_f64(&t, &[1]), 6.0);
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
@@ -1493,10 +1501,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
 
-        fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-            CpuBackend::new().add(lhs, rhs)
-        }
-
         fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
             CpuBackend::new().conj(input)
         }
@@ -1504,10 +1508,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            self.add(
-                tenferro_tensor::backend::read_owned_tensor("add", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("add", rhs)?,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1981,10 +1987,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
 
-        fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-            CpuBackend::new().add(lhs, rhs)
-        }
-
         fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
             CpuBackend::new().conj(input)
         }
@@ -1992,10 +1994,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            self.add(
-                tenferro_tensor::backend::read_owned_tensor("add", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("add", rhs)?,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

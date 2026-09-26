@@ -375,8 +375,6 @@ impl TensorElementwise for CpuExecSession<'_> {
         })
     }
 
-    delegate_with_pool_context!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
-
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.run_native_fresh_with_context(|context, buffers| {
             elementwise::add_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)

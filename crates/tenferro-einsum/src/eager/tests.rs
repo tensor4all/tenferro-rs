@@ -194,10 +194,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("elementwise_read_into"))
     }
 
-    fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
-        Err(unexpected("add"))
-    }
-
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor> {
         match (&lhs, &rhs) {
             (
@@ -240,10 +236,9 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor> {
-        self.add(
-            tenferro_tensor::backend::read_owned_tensor("add", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("add", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+        Err(unexpected("add"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

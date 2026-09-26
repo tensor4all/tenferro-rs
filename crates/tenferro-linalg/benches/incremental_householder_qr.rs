@@ -564,7 +564,10 @@ fn bcgs2_append<B: BenchSession>(
         )
         .map_err(|error| error.to_string())?;
     let projection = session
-        .add(&first, &correction)
+        .add_read(
+            TensorRead::from_tensor(&first),
+            TensorRead::from_tensor(&correction),
+        )
         .map_err(|error| error.to_string())?;
     let (appended_q, appended_r) = pair(session.qr(&residual).map_err(|error| error.to_string())?)?;
     let new_q = session

@@ -9,8 +9,8 @@ use tenferro_runtime::{
     Runtime, StorageClass, TracedTensor,
 };
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendStorage, DeviceId, StorageBuffer, Tensor,
-    TensorElementwise, TypedTensor,
+    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DeviceId, StorageBuffer,
+    Tensor, TensorRead, TypedTensor,
 };
 
 use super::*;
@@ -565,7 +565,12 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                 first_launches += 1;
                 first_output = Some(
                     backend
-                        .add(&input_for_first, &input_for_first)
+                        .with_backend_session(|__s| {
+                            __s.add_read(
+                                TensorRead::from_tensor(&input_for_first),
+                                TensorRead::from_tensor(&input_for_first),
+                            )
+                        })
                         .map_err(tenferro_runtime::Error::from)?,
                 );
                 Ok(())
@@ -589,7 +594,12 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         second_launches += 1;
         second_output = Some(
             backend
-                .add(&first_output, &input)
+                .with_backend_session(|__s| {
+                    __s.add_read(
+                        TensorRead::from_tensor(&first_output),
+                        TensorRead::from_tensor(&input),
+                    )
+                })
                 .map_err(tenferro_runtime::Error::from)?,
         );
         Ok(())
@@ -608,7 +618,12 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         let mut panicking = || -> tenferro_runtime::Result<()> {
             panic_output = Some(
                 backend
-                    .add(&input, &input)
+                    .with_backend_session(|__s| {
+                        __s.add_read(
+                            TensorRead::from_tensor(&input),
+                            TensorRead::from_tensor(&input),
+                        )
+                    })
                     .map_err(tenferro_runtime::Error::from)?,
             );
             panic!("injected post-launch panic");

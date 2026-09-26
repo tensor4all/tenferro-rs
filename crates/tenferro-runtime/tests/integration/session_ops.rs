@@ -1120,7 +1120,6 @@ macro_rules! panic_elementwise {
             }
 
             panic_backend_methods! {
-                add(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
                 neg(input: &Tensor) -> TensorResult;
                 abs(input: &Tensor) -> TensorResult;
                 sign(input: &Tensor) -> TensorResult;
@@ -1131,10 +1130,9 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
-                self.add(
-                    tenferro_tensor::backend::read_owned_tensor("add", lhs)?,
-                    tenferro_tensor::backend::read_owned_tensor("add", rhs)?,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+                panic!("add should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1540,10 +1538,6 @@ impl TensorElementwise for WrongDTypeSessionBackend {
 
     panic_backend_methods! {
         rem(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-    }
-
-    fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
     }
 
     fn add_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> TensorResult {

@@ -123,7 +123,9 @@ fn eager_runtime_execution_session_runs_cpu_operation() {
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
     let output = runtime
-        .with_execution_session(|session| TensorElementwise::add(session, &lhs, &rhs))
+        .with_execution_session(|session| {
+            session.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
         .unwrap()
         .unwrap();
 
@@ -167,7 +169,14 @@ fn eager_materialization_uses_backend() {
     assert!(format!("{backend:?}").contains("Recording"));
     backend.synchronize().unwrap();
     let probe = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    let sum = TensorElementwise::add(&mut backend, &probe, &probe).unwrap();
+    let sum = backend
+        .with_backend_session(|__s| {
+            __s.add_read(
+                TensorRead::from_tensor(&probe),
+                TensorRead::from_tensor(&probe),
+            )
+        })
+        .unwrap();
     assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0]);
     assert_eq!(materializations.load(Ordering::Relaxed), 0);
 

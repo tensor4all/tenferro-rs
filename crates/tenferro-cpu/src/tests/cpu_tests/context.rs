@@ -1,6 +1,7 @@
 use super::*;
 
 use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{ErrorKind, ValidationKind};
 
 #[test]
@@ -101,13 +102,13 @@ fn test_with_backend_session_runs_compiled_ops() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
     let result = backend.with_backend_session(|session| {
         session
-            .add(
-                &Tensor::from_typed::<f64>(
+            .add_read(
+                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
                     TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-                ),
-                &Tensor::from_typed::<f64>(
+                )),
+                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
                     TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
-                ),
+                )),
             )
             .unwrap()
     });
@@ -148,7 +149,9 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
     let before = context.executor_install_calls_for_test();
 
     backend.with_backend_session(|session| {
-        session.add(&lhs, &rhs).unwrap();
+        session
+            .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            .unwrap();
         session.neg(&lhs).unwrap();
         session
             .mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
@@ -171,7 +174,11 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
     assert_eq!(install_delta, 1);
 
     let before_standalone = context.executor_install_calls_for_test();
-    backend.add(&lhs, &rhs).unwrap();
+    backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
     assert_eq!(
         context.executor_install_calls_for_test() - before_standalone,
         1

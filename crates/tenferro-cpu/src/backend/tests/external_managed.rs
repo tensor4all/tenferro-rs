@@ -12,6 +12,8 @@ use crate::{
     CpuInnerParallelism, CpuPlacementGuarantee, CpuSet, ExternalCpuDomain, ScopedCpuJob,
     ScopedCpuJobs,
 };
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 #[derive(Debug)]
 struct CapabilityOnlyGemmProvider {
@@ -992,12 +994,18 @@ fn external_elementwise_and_session_operations_use_the_supplied_no_inner_executo
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
-    let output = backend.add(&lhs, &rhs).unwrap();
+    let output = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
     assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     assert_eq!(installs.load(Ordering::Relaxed), 1);
 
     backend.with_backend_session(|session| {
-        let output = session.add(&lhs, &rhs).unwrap();
+        let output = session
+            .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            .unwrap();
         assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     });
     assert_eq!(installs.load(Ordering::Relaxed), 2);
@@ -1080,12 +1088,18 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
     assert_eq!(installs.load(Ordering::Relaxed), 1);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
-    backend.add(&lhs, &rhs).unwrap();
+    backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
     assert_eq!(installs.load(Ordering::Relaxed), 2);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
     backend.with_backend_session(|session| {
-        session.add(&lhs, &rhs).unwrap();
+        session
+            .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            .unwrap();
     });
     assert_eq!(installs.load(Ordering::Relaxed), 3);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
@@ -1133,7 +1147,11 @@ fn external_executor_error_is_preserved_as_a_typed_tensor_source() {
     let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
-    let error = backend.add(&lhs, &rhs).unwrap_err();
+    let error = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap_err();
     let crate::Error::BackendSource { source, .. } = error else {
         panic!("executor failure must retain a typed source");
     };

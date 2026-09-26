@@ -316,7 +316,6 @@ impl TensorElementwise for RecordingBackend {
     }
 
     delegate_recording_backend_methods! {
-        fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn neg(input: &Tensor) -> TensorResult<Tensor>;
         fn conj(input: &Tensor) -> TensorResult<Tensor>;
@@ -328,10 +327,10 @@ impl TensorElementwise for RecordingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor> {
-        self.add(
-            tenferro_tensor::backend::read_owned_tensor("add", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("add", rhs)?,
-        )
+        let lhs = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+        let rhs = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+        self.inner
+            .add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -731,7 +730,6 @@ impl TensorElementwise for EagerBackend {
     }
 
     delegate_tensor_backend_methods! {
-        fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;

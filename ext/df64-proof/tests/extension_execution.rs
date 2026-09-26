@@ -8,7 +8,7 @@ use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
 use tenferro_df64_proof::extension::{apply_total, Df64Total};
 use tenferro_df64_proof::Df64;
-use tenferro_tensor::{AllocationGroup, BackendSessionHost, GroupError, Tensor};
+use tenferro_tensor::{AllocationGroup, BackendSessionHost, GroupError, Tensor, TensorRead};
 use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
 
 fn external(values: Vec<Df64>) -> Tensor {
@@ -66,7 +66,8 @@ fn ordinary_work_shares_the_session_with_the_extension() {
     backend.with_backend_session(|session| {
         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).expect("shape matches");
-        let sum = tenferro_tensor::backend::TensorElementwise::add(session, &a, &b)
+        let sum = session
+            .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
             .expect("ordinary addition");
         assert_eq!(sum.as_slice::<f64>().expect("f64 slice"), &[4.0, 6.0]);
     });

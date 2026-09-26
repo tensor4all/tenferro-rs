@@ -256,7 +256,11 @@ fn test_fused_add_mul_matches_cpu() {
     let b = tensor_f64(vec![4], vec![0.5, -1.0, 2.0, 0.0]);
 
     let mut cpu = cpu_backend();
-    let sum = cpu.add(&a, &b).unwrap();
+    let sum = cpu
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        })
+        .unwrap();
     let expected = cpu
         .with_backend_session(|__s| {
             __s.mul_read(TensorRead::from_tensor(&sum), TensorRead::from_tensor(&a))
@@ -311,7 +315,11 @@ fn test_fused_complex_c64_add_conj_mul_matches_cpu() {
     );
 
     let mut cpu = cpu_backend();
-    let sum = cpu.add(&a, &b).unwrap();
+    let sum = cpu
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        })
+        .unwrap();
     let conj = cpu.conj(&sum).unwrap();
     let expected = cpu
         .with_backend_session(|__s| {
@@ -407,7 +415,11 @@ fn test_fused_add_neg() {
     let b = tensor_f64(vec![3], vec![4.0, 5.0, -6.0]);
 
     let mut cpu = cpu_backend();
-    let sum = cpu.add(&a, &b).unwrap();
+    let sum = cpu
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        })
+        .unwrap();
     let expected = cpu.neg(&sum).unwrap();
 
     let mut gpu = gpu_backend();
@@ -443,7 +455,11 @@ fn test_fused_multi_output() {
     let b = tensor_f64(vec![3], vec![4.0, 5.0, 6.0]);
 
     let mut cpu = cpu_backend();
-    let sum_expected = cpu.add(&a, &b).unwrap();
+    let sum_expected = cpu
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        })
+        .unwrap();
     let neg_expected = cpu.neg(&sum_expected).unwrap();
 
     let mut gpu = gpu_backend();

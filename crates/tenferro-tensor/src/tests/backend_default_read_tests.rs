@@ -188,11 +188,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(())
     }
 
-    fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("add");
-        Ok(marker())
-    }
-
     fn neg(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("neg");
         Ok(marker())
@@ -236,10 +231,10 @@ impl TensorElementwise for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.add(
-            crate::backend::read_owned_tensor("add", lhs)?,
-            crate::backend::read_owned_tensor("add", rhs)?,
-        )
+        let _ = crate::backend::read_owned_tensor("add", lhs)?;
+        let _ = crate::backend::read_owned_tensor("add", rhs)?;
+        self.calls.push("add");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

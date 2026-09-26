@@ -1,11 +1,14 @@
 use tenferro_ad::{EagerRuntime, Error};
 use tenferro_cpu::{CpuBackend, CpuPlacement};
-use tenferro_tensor::{Tensor, TensorElementwise};
+use tenferro_tensor::Tensor;
+use tenferro_tensor::TensorRead;
 
 fn add_values(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_ad::Result<Tensor> {
     let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    TensorElementwise::add(session, &lhs, &rhs).map_err(Error::from)
+    session
+        .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .map_err(Error::from)
 }
 
 #[test]

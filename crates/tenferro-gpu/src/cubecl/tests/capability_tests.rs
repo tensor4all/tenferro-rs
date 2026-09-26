@@ -231,7 +231,11 @@ fn run_supported_case(
     entry: OperationCapability,
 ) {
     match entry.op {
-        PrimitiveOpKind::Add => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.add(l, r)),
+        PrimitiveOpKind::Add => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
+            b.with_backend_session(|__s| {
+                __s.add_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
+            })
+        }),
         PrimitiveOpKind::Sub => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
             b.with_backend_session(|__s| {
                 __s.sub_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
@@ -507,7 +511,9 @@ fn run_cpu_binary(
     rhs: &Tensor,
 ) -> Tensor {
     match op {
-        PrimitiveOpKind::Add => cpu.add(lhs, rhs),
+        PrimitiveOpKind::Add => cpu.with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+        }),
         PrimitiveOpKind::Sub => cpu.with_backend_session(|__s| {
             __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
         }),

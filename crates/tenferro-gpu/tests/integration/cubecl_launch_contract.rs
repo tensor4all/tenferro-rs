@@ -1042,7 +1042,9 @@ fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
         ],
     );
 
-    for (op, end) in [("fn div(", "fn rem("), ("fn rem(", "fn abs(")] {
+    // `div` launches from its session read half now that the one-shot entry
+    // is deleted; `rem` still launches from its own entry.
+    for (op, end) in [("fn div_read(", "fn rem_read("), ("fn rem(", "fn abs(")] {
         let section = source_section(&mod_source, op, end);
         assert!(
             section.contains("launch_scalar_binary"),
@@ -1053,7 +1055,7 @@ fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
             "{op} must not materialize the scalar"
         );
     }
-    let pow = source_section(&mod_source, "fn pow(", "fn transpose(");
+    let pow = source_section(&mod_source, "fn pow_read(", "fn transpose(");
     assert!(pow.contains("launch_scalar_binary"));
     assert!(pow.contains("launch_checked_integer_scalar_binary"));
     assert!(!pow.contains("broadcast_typed"));

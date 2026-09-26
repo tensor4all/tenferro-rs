@@ -7,9 +7,7 @@ use tenferro_runtime::{
     DType, DotGeneralConfig, Error as RuntimeError, ErrorPhase, GatherConfig, PadConfig,
     SliceConfig, Tensor, TensorRead, TensorView,
 };
-use tenferro_tensor::{
-    Error as TensorError, ErrorKind, TensorElementwise, ValidationError, ValidationKind,
-};
+use tenferro_tensor::{Error as TensorError, ErrorKind, ValidationError, ValidationKind};
 
 #[path = "eager_tensor/context_and_promotion.rs"]
 mod context_and_promotion;
@@ -60,7 +58,9 @@ fn placement_bound_session_reuses_runtime_identity_and_requested_placement() {
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let output = cpu
         .with_eager_session(|session| {
-            TensorElementwise::add(session, &lhs, &rhs).map_err(RuntimeError::from)
+            session
+                .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                .map_err(RuntimeError::from)
         })
         .unwrap();
 

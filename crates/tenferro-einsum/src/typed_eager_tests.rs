@@ -56,7 +56,6 @@ impl TensorElementwise for WrongDTypeBackend {
     }
 
     panic_backend_methods! {
-        add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         sign(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
@@ -74,10 +73,9 @@ impl TensorElementwise for WrongDTypeBackend {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.add(
-            tenferro_tensor::backend::read_owned_tensor("add", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("add", rhs)?,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+        panic!("add should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

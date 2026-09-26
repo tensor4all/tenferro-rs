@@ -28,8 +28,8 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    BackendSessionHost, DType, DotGeneralConfig, Tensor, TensorDot, TensorElementwise,
-    TensorIndexing, TensorRead, TensorReduction, TensorStructural,
+    BackendSessionHost, DType, DotGeneralConfig, Tensor, TensorDot, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural,
 };
 
 /// Operations per entry for the `marginal` arms.
@@ -72,10 +72,6 @@ fn slice_config(len: usize) -> SliceConfig {
 // ---------------------------------------------------------------------------
 // Per-operation entry cost (one operation, one entry).
 // ---------------------------------------------------------------------------
-
-fn add_oneshot(ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    ops.add(a, b).expect("oneshot add should succeed")
-}
 
 fn add_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
     owner
@@ -187,15 +183,6 @@ fn slice_scope(
 // Marginal per-operation cost (CHAIN_LEN operations inside one entry).
 // ---------------------------------------------------------------------------
 
-fn add_marginal_oneshot(ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    // CHAIN_LEN operations: the first produces the owned seed, the rest chain.
-    let mut x = ops.add(a, b).expect("oneshot add should succeed");
-    for _ in 1..CHAIN_LEN {
-        x = ops.add(&x, b).expect("oneshot add should succeed");
-    }
-    x
-}
-
 fn add_marginal_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
     owner.with_backend_session(|session| {
         let mut x = session
@@ -251,7 +238,6 @@ fn bench_elementwise(c: &mut Criterion) {
         // the sum is 2 everywhere.
         let expected = 2.0_f64;
         for (name, value) in [
-            ("oneshot", add_oneshot(&mut ops, &a, &b)),
             ("session", add_session(&mut owner, &a, &b)),
             ("scope", add_scope(&owner, &mut ops, &a, &b)),
         ] {
@@ -263,24 +249,12 @@ fn bench_elementwise(c: &mut Criterion) {
             );
         }
 
-        group.bench_with_input(BenchmarkId::new("oneshot/single", len), &len, |bench, _| {
-            bench.iter(|| black_box(add_oneshot(&mut ops, black_box(&a), black_box(&b))));
-        });
         group.bench_with_input(BenchmarkId::new("session/single", len), &len, |bench, _| {
             bench.iter(|| black_box(add_session(&mut owner, black_box(&a), black_box(&b))));
         });
         group.bench_with_input(BenchmarkId::new("scope/single", len), &len, |bench, _| {
             bench.iter(|| black_box(add_scope(&owner, &mut ops, black_box(&a), black_box(&b))));
         });
-        group.bench_with_input(
-            BenchmarkId::new("oneshot/marginal16", len),
-            &len,
-            |bench, _| {
-                bench.iter(|| {
-                    black_box(add_marginal_oneshot(&mut ops, black_box(&a), black_box(&b)))
-                });
-            },
-        );
         group.bench_with_input(
             BenchmarkId::new("session/marginal16", len),
             &len,

@@ -9,6 +9,7 @@ use crate::cubecl::{
 use crate::{Error, Tensor};
 use tenferro_tensor::backend::BackendSessionHost;
 use tenferro_tensor::TensorElementwise;
+use tenferro_tensor::TensorRead;
 
 #[cube(launch_unchecked)]
 fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {
@@ -184,8 +185,19 @@ gpu_test!(test_backend_add_matches_cpu_reference, {
     let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
     let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
-    let expected = cpu.add(&a, &b).unwrap();
-    let actual_gpu = backend.add(&gpu_a, &gpu_b).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        })
+        .unwrap();
+    let actual_gpu = backend
+        .with_backend_session(|__s| {
+            __s.add_read(
+                TensorRead::from_tensor(&gpu_a),
+                TensorRead::from_tensor(&gpu_b),
+            )
+        })
+        .unwrap();
     let actual = download_tensor(backend.runtime(), &actual_gpu).unwrap();
     assert_eq!(actual.shape(), expected.shape());
     assert_eq!(

@@ -8,9 +8,8 @@
 
 use tenferro_cpu::CpuBackend;
 use tenferro_df64_proof::Df64;
-use tenferro_tensor::backend::TensorElementwise;
 use tenferro_tensor::validate::{can_convert_dtype, promote_dtype};
-use tenferro_tensor::{BackendSessionHost, DType, Tensor, TensorStructural};
+use tenferro_tensor::{BackendSessionHost, DType, Tensor, TensorRead, TensorStructural};
 use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
 
 fn external_df64(values: &[Df64]) -> Tensor {
@@ -88,7 +87,17 @@ fn a_binary_operation_does_not_apply_one_payload_to_the_other() {
     backend.with_backend_session(|session| {
         // A preset-only kernel is never instantiated for an external payload, and
         // nothing here converts one payload into the other's element type.
-        assert!(TensorElementwise::add(session, &external, &other).is_err());
-        assert!(TensorElementwise::add(session, &external, &external).is_err());
+        assert!(session
+            .add_read(
+                TensorRead::from_tensor(&external),
+                TensorRead::from_tensor(&other)
+            )
+            .is_err());
+        assert!(session
+            .add_read(
+                TensorRead::from_tensor(&external),
+                TensorRead::from_tensor(&external)
+            )
+            .is_err());
     });
 }

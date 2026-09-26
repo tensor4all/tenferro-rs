@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 use super::*;
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 mod execution_scope;
 mod external_managed;
@@ -794,7 +796,11 @@ fn nested_clone_tensor_operation_is_rejected_in_a_managed_scope() {
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_backend_session(|_| nested.add(&lhs, &rhs))
+        backend.with_backend_session(|_| {
+            nested.with_backend_session(|__s| {
+                __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            })
+        })
     }));
 
     let message = outcome

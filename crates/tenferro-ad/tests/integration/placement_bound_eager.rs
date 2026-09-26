@@ -19,7 +19,8 @@ use tenferro_cpu::{
     ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::{CpuDomainId, Error as TensorError, ErrorKind, Tensor, TensorElementwise};
+use tenferro_tensor::TensorRead;
+use tenferro_tensor::{CpuDomainId, Error as TensorError, ErrorKind, Tensor};
 
 #[derive(Debug, Default)]
 struct ExecutorCounters {
@@ -152,7 +153,9 @@ fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
 fn add_one(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_ad::Result<Tensor> {
     let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    TensorElementwise::add(session, &lhs, &rhs).map_err(RuntimeError::from)
+    session
+        .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .map_err(RuntimeError::from)
 }
 
 fn source_chain_contains<E: StdError + 'static>(error: &(dyn StdError + 'static)) -> bool {
