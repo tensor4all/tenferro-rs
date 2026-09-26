@@ -2809,10 +2809,10 @@ fn scale_matrix_columns<B: LinalgBackend + ?Sized>(
     binary_mul(matrix, &expanded, backend)
 }
 
-fn matmul_preserve_trailing_batch<B: LinalgBackend + ?Sized>(
+fn matmul_preserve_trailing_batch<B: BackendSession + ?Sized>(
     lhs: &Tensor,
     rhs: &Tensor,
-    backend: &mut B,
+    session: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     let batch: Vec<usize> = (2..lhs.shape().len()).collect();
     let config = DotGeneralConfig {
@@ -2821,18 +2821,18 @@ fn matmul_preserve_trailing_batch<B: LinalgBackend + ?Sized>(
         lhs_batch_dims: batch.clone().into(),
         rhs_batch_dims: batch.into(),
     };
-    backend.dot_general_read(
+    session.dot_general_read(
         TensorRead::from_tensor(lhs),
         TensorRead::from_tensor(rhs),
         &config,
     )
 }
 
-fn linalg_matmul_read<B: LinalgBackend + ?Sized>(
+fn linalg_matmul_read<B: BackendSession + ?Sized>(
     lhs: &Tensor,
     rhs: TensorRead<'_>,
     rhs_is_vector: bool,
-    backend: &mut B,
+    session: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     let lhs_batch_dims: Vec<usize> = (2..lhs.shape().len()).collect();
     let rhs_batch_start = if rhs_is_vector { 1 } else { 2 };
@@ -2843,7 +2843,7 @@ fn linalg_matmul_read<B: LinalgBackend + ?Sized>(
         lhs_batch_dims: lhs_batch_dims.into(),
         rhs_batch_dims: rhs_batch_dims.into(),
     };
-    backend.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
+    session.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
 }
 
 fn frobenius_norm<B: LinalgBackend + ?Sized>(
