@@ -532,6 +532,25 @@ trybuild `.stderr` comparisons, which is also why the pre-existing
 `tenferro-ad::eager_backend_capability_contract` fixture mismatches here while the
 `tenferro-gpu` session contracts pass.
 
+### Phase-C pre-flight (tooling verified, measurement pending)
+
+`scripts/compare-session-route-baseline.py` was run against the recorded baseline
+and the Phase-A candidate logs to validate the comparison path before the real
+measurement. Result: 98 `PAIRED_OK`, 1 `NOISY`, 0 `REGRESSION`, 0 `DELETED`, and
+two expected failures that prove the fail-closed behaviour:
+
+* `tenferro-gpu|route_matrix_gpu` has no candidate log — the CUDA target cannot run
+  on this host;
+* `session_chain/broadcast/execution_scope` is absent from those older candidate
+  logs, and the comparator reports a missing non-deleted baseline case instead of
+  skipping it.
+
+So the harness, the capture/comparison pair and the thresholds work; what remains
+for Phase C is the measurement itself, which needs the documented quiet window
+(load below the recorded threshold with no live `cargo`/`rustc`), plus a CUDA host
+for the GPU target. On this host the load has been 18-27 with compiler processes
+running throughout the session, so the run was not attempted.
+
 ## Measurement protocol
 
 Removing syntax does not by itself save time; #1926 requires measurement
