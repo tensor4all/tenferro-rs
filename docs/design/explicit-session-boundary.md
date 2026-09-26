@@ -297,6 +297,35 @@ made concrete here:
 The gate cannot land before slice 5, because at `a45833d4f` it would fail on
 the inventory in sections B–E.
 
+### Audit gate: implemented
+
+`scripts/audit-session-entry.py` implements the gate described above, earlier
+than slice 5 because it is useful as a *freeze* rather than as a cleanup: it
+records today's legitimate entry functions in
+`scripts/session-entry-allowlist.json` and fails on any new one.
+
+- Mechanisms tracked: `default_backend_session`, `with_session_entry_guard`,
+  `install_with_pool_context[_fresh]`,
+  `install_with_indexed_pool_context[_unmarked]`, `run_backend_session_cached`,
+  and `CpuExecSession` / `CudaExecSession` / `WebGpuExecSession` construction.
+- The allowlist is keyed by mechanism and holds `path::function` entries, so a
+  reviewed edit is required to add one, and a removal is recorded with
+  `--bless`.
+- Aliases are resolved (`use ...::{Type as Alias}`, `use ... as alias`), so a
+  renamed import is still reported; `--check` runs the negative tests (aliased
+  import, unrelated struct literal, allowlisted boundary, method call) on every
+  invocation, so the checker cannot silently degrade into a text grep.
+- Library scope only: `tests/`, `benches/` and `examples/` are excluded as the
+  boundary's users, and the exclusion is path-based rather than symbol-based.
+- `scripts/check-pr-fast.sh` runs the audit for code changes, and
+  `REPOSITORY_RULES.md` names it as the single owner of the rule (routed by
+  `scripts/repository-rules-review.py` for backend/session paths).
+
+The frozen inventory is 76 `path::function` entries, dominated by the CPU owner
+entries that B3 removes (`install_with_pool_context` in 27 functions,
+`run_backend_session_cached` in 14). B3's commits must shrink this file, and any
+entry that reappears outside the allowlist fails the local gate.
+
 ## Measurement protocol
 
 Removing syntax does not by itself save time; #1926 requires measurement

@@ -234,6 +234,15 @@ else
   log "docs snippets: skipped"
 fi
 
+# Session entry mechanisms are audited on every code change: the inherited
+# baseline is frozen in scripts/session-entry-allowlist.json and any new entry
+# (including a renamed import) fails the check.
+if [[ "${change_class}" == "code" ]]; then
+  run run_python scripts/audit-session-entry.py --check
+else
+  log "session entry audit: skipped for ${change_class} changes"
+fi
+
 if [[ "${change_class}" != "docs-only" && "$focused_test_count" -eq 0 && "$ci_profile_count" -eq 0 ]]; then
   die "focused verification command required for ${change_class} changes; pass --test COMMAND or --ci-profile NAME"
 fi

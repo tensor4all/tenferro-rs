@@ -214,6 +214,12 @@ HUMAN_ONLY_SECTIONS = frozenset(
 
 SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     (
+        re.compile(
+            r"backend|session|exec_session|dispatch|tenferro-cpu|tenferro-gpu|tenferro-runtime"
+        ),
+        frozenset({"Backend Session Entry"}),
+    ),
+    (
         re.compile(r"(^|/)ad/|tenferro-ad/|linearize|transpose_rule|autodiff"),
         frozenset(
             {

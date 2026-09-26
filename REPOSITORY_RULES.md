@@ -155,6 +155,29 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
   indexing before config validation, and allocation helpers bypassing shared
   checked shape-product functions.
 
+## Backend Session Entry
+
+Session entry — creating backend execution state — is owned by backend entry
+mechanisms, not by exported names. The audited set lives in
+[`scripts/audit-session-entry.py`](scripts/audit-session-entry.py):
+`default_backend_session`, `with_session_entry_guard`,
+`install_with_pool_context[_fresh]`, `install_with_indexed_pool_context[_unmarked]`,
+`run_backend_session_cached`, and `CpuExecSession` / `CudaExecSession` /
+`WebGpuExecSession` construction.
+
+- Every occurrence in library code must sit inside a function listed in
+  [`scripts/session-entry-allowlist.json`](scripts/session-entry-allowlist.json),
+  which is keyed by mechanism and holds function-level source locations. The
+  allowlist may only shrink; `--bless` is for recording a removal.
+- Operation implementations reach a session through `with_backend_session` and
+  must not create execution state themselves.
+- A renamed import is not an exemption: the audit resolves `use ... as alias`
+  and fails on an aliased entry, and its own negative tests run on every check.
+- Test, benchmark and example code is out of scope; moving that code into the
+  library brings it back into scope.
+- `python3 scripts/audit-session-entry.py --check` runs as part of
+  `scripts/check-pr-fast.sh`.
+
 ## Invariant Markers
 
 The false-positive marker/test requirements below intentionally retain a

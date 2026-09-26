@@ -1,0 +1,81 @@
+{
+  "CpuExecSession construction": [
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached",
+    "crates/tenferro-cpu/src/exec_session/tests.rs::native_operation_enters_the_selected_rayon_executor"
+  ],
+  "CudaExecSession construction": [
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session"
+  ],
+  "WebGpuExecSession construction": [
+    "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session"
+  ],
+  "default_backend_session": [
+    "crates/tenferro-tensor/src/backend.rs::<module>",
+    "crates/tenferro-tensor/src/backend.rs::default_backend_session",
+    "crates/tenferro-tensor/src/backend/tests.rs::default_backend_session_clears_the_in_session_flag_after_panic",
+    "crates/tenferro-tensor/src/backend/tests.rs::default_backend_session_runs_and_clears_the_in_session_flag",
+    "crates/tenferro-tensor/src/backend/tests.rs::nested_default_backend_session_is_rejected_in_debug_builds"
+  ],
+  "install_with_indexed_pool_context": [
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_indexed_pool_context",
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_indexed_pool_context_unmarked",
+    "crates/tenferro-cpu/src/backend.rs::TensorIndexing::dynamic_slice",
+    "crates/tenferro-cpu/src/backend.rs::TensorIndexing::dynamic_update_slice",
+    "crates/tenferro-cpu/src/backend.rs::TensorIndexing::gather",
+    "crates/tenferro-cpu/src/backend.rs::TensorIndexing::scatter"
+  ],
+  "install_with_pool_context": [
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool_context",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::abs_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::add_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::clamp_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::compare_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::conj_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::div_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::maximum_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::minimum_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::mul_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::neg_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::rem",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::rem_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::select_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::sign_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorElementwise::sub_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_broadcast_multiply",
+    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_elementwise_fusion",
+    "crates/tenferro-cpu/src/backend.rs::TensorIndexing::concatenate",
+    "crates/tenferro-cpu/src/backend.rs::TensorIndexing::pad",
+    "crates/tenferro-cpu/src/backend.rs::TensorIndexing::reverse",
+    "crates/tenferro-cpu/src/backend.rs::TensorIndexing::slice",
+    "crates/tenferro-cpu/src/backend.rs::TensorReduction::reduce_max_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorReduction::reduce_min_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorReduction::reduce_prod_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorReduction::reduce_sum_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorReduction::reduce_sum_squares_read"
+  ],
+  "install_with_pool_context_fresh": [],
+  "run_backend_session_cached": [
+    "crates/tenferro-cpu/src/backend.rs::BackendCachedDot::dot_general_cached",
+    "crates/tenferro-cpu/src/backend.rs::BackendCachedDot::dot_general_read_into_accum_cached",
+    "crates/tenferro-cpu/src/backend.rs::BackendCachedDot::dot_general_with_conj_cached",
+    "crates/tenferro-cpu/src/backend.rs::BackendCachedDot::grouped_gemm_cached",
+    "crates/tenferro-cpu/src/backend.rs::BackendSession::axpby_read_into_accum",
+    "crates/tenferro-cpu/src/backend.rs::BackendSession::norm_squared_read",
+    "crates/tenferro-cpu/src/backend.rs::BackendSession::vdot_read",
+    "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session",
+    "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session_cached",
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached",
+    "crates/tenferro-cpu/src/backend.rs::TensorDot::dot_general_read",
+    "crates/tenferro-cpu/src/backend.rs::TensorDot::dot_general_read_into",
+    "crates/tenferro-cpu/src/backend.rs::TensorDot::dot_general_read_into_accum",
+    "crates/tenferro-cpu/src/backend.rs::TensorDot::dot_general_with_conj"
+  ],
+  "with_session_entry_guard": [
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session",
+    "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session",
+    "crates/tenferro-tensor/src/backend.rs::default_backend_session",
+    "crates/tenferro-tensor/src/backend.rs::with_session_entry_guard",
+    "crates/tenferro-tensor/src/backend/tests.rs::with_session_entry_guard_rejects_nested_entry_in_debug_builds",
+    "crates/tenferro-tensor/src/backend/tests.rs::with_session_entry_guard_sets_and_restores_the_flag"
+  ]
+}
