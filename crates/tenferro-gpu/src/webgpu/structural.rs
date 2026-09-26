@@ -1,5 +1,6 @@
 use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
 use cubecl_wgpu::WgpuRuntime;
+use tenferro_tensor::validate::validate_permutation_axes;
 use tenferro_tensor::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 use crate::native_permutation::{
@@ -10,6 +11,7 @@ use super::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d,
     ensure_placement_resident_on_runtime, prepared_webgpu_view, unsupported_dtype, WebGpuBackend,
 };
+use crate::native_permutation::compact_col_major_strides;
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {
@@ -35,6 +37,7 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
+const TRANSPOSE_OP: &str = "webgpu_transpose";
 const MATERIALIZE_OP: &str = "WebGpuBackend::to_contiguous_read";
 
 fn view_allocation_len<T, R>(
@@ -228,6 +231,33 @@ where
     })
 }
 
+fn transpose_typed<T>(
+    backend: &WebGpuBackend,
+    input: &TypedTensor<T>,
+    perm: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
+{
+    validate_permutation_axes(TRANSPOSE_OP, input.shape().len(), perm)?;
+    let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
+    let input_strides = compact_col_major_strides(TRANSPOSE_OP, input.shape())?;
+    let plan = NativePermutationPlan::for_transpose(
+        TRANSPOSE_OP,
+        input.shape(),
+        &input_strides,
+        perm,
+        0,
+        input.n_elements(),
+        input.n_elements(),
+        false,
+    )?;
+    let output = alloc_output::<T>(backend.runtime(), &output_shape, TRANSPOSE_OP)?;
+    let input_arg = view_array_arg(backend, &input.as_view(), TRANSPOSE_OP)?;
+    launch_materialization(backend, &output, input_arg, &plan, TRANSPOSE_OP)?;
+    Ok(output)
+}
+
 fn materialize_typed<T, R>(
     backend: &WebGpuBackend,
     view: &TypedTensorView<'_, T, R>,
@@ -269,7 +299,40 @@ pub(super) fn to_contiguous_f32(
     materialize_typed(backend, view)
 }
 
+pub(super) fn transpose(
+    backend: &WebGpuBackend,
+    input: &Tensor,
+    perm: &[usize],
+) -> crate::Result<Tensor> {
+    match input.dtype() {
+        crate::DType::F32 => transpose_typed(
+            backend,
+            webgpu_transpose_operand::<f32>(input, TRANSPOSE_OP)?,
+            perm,
+        )
+        .map(Tensor::from_typed::<f32>),
+        crate::DType::I32 => transpose_typed(
+            backend,
+            webgpu_transpose_operand::<i32>(input, TRANSPOSE_OP)?,
+            perm,
+        )
+        .map(Tensor::from_typed::<i32>),
+        // CubeK has a dedicated complex WebGPU representation, but CubeCL's
+        // generic WGSL compiler cannot lower CubePrimitive Complex32.
+        other => Err(unsupported_dtype(TRANSPOSE_OP, other)),
+    }
+}
+
 /// The typed tensor behind a transpose operand, or this module's refusal for one.
+fn webgpu_transpose_operand<'a, T: crate::TensorScalar>(
+    input: &'a Tensor,
+    op: &'static str,
+) -> crate::Result<&'a TypedTensor<T>> {
+    input
+        .as_typed::<T>()
+        .ok_or_else(|| unsupported_dtype(op, input.dtype()))
+}
+
 pub(super) fn to_contiguous_read(
     backend: &WebGpuBackend,
     input: TensorRead<'_>,

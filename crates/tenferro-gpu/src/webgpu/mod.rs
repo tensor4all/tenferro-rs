@@ -1070,9 +1070,12 @@ impl TensorStructural for WebGpuBackend {
     // either way, so evaluate the read input first and then raise the same
     // unsupported error. Written against the read input directly so the later
     // removal of the one-shot methods does not need to revisit this.
-    fn transpose_read(&mut self, input: TensorRead<'_>, _perm: &[usize]) -> crate::Result<Tensor> {
-        let _ = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
-        unsupported!("webgpu_transpose")
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
+        // The one-shot entry used to run the device transpose; the read half is
+        // now that entry, so it must keep the operation rather than report it
+        // unsupported.
+        let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+        structural::transpose(self, input, perm)
     }
 
     // The old chain was: owned input -> the one-shot method -> its unsupported
