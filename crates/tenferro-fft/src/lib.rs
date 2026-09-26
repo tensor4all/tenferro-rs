@@ -1459,17 +1459,6 @@ pub fn semantic_ad_rules(
         .with_primal_vjp(Arc::new(FftAdRule))
 }
 
-pub(crate) fn execute_fft_extension_reads_owner<B: TensorBackend + 'static>(
-    op: &FftOp,
-    inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let (backend, caches) = ctx.parts_mut();
-    backend.with_backend_session(|session| {
-        execute_fft_extension_reads_on_session(op, inputs, session, caches)
-    })
-}
-
 pub(crate) fn execute_fft_extension_reads_session(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
@@ -1544,8 +1533,6 @@ define_extension_runtime! {
     runtime = FftRuntime,
     family_id = FFT_EXTENSION_FAMILY_ID,
     op_type = FftOp,
-    execute = execute_fft_extension_reads_owner,
-    execute_reads = execute_fft_extension_reads_owner,
     execute_in_session = execute_fft_extension_reads_in_session,
     session_supported = fft_session_supported,
     backend_bound = TensorBackend,

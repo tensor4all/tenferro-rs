@@ -29,7 +29,7 @@ struct RuntimeArgs {
     family_id: Path,
     op_type: Path,
     execute: Option<Path>,
-    execute_reads: Path,
+    execute_reads: Option<Path>,
     execute_in_session: Option<Path>,
     session_supported: Option<Path>,
     backend_bound: Path,
@@ -103,7 +103,7 @@ impl Parse for RuntimeArgs {
             family_id: required(family_id, "family_id")?,
             op_type: required(op_type, "op_type")?,
             execute,
-            execute_reads: required(execute_reads, "execute_reads")?,
+            execute_reads,
             execute_in_session,
             session_supported,
             backend_bound: backend_bound
@@ -130,14 +130,21 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 /// Generate a standard extension module, preparation engine, and prepared
 /// operation.
 ///
-/// `execute_reads` is required. It must have this signature:
-/// `fn<B: BackendBound + 'static>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
+/// Exactly one execution route must be supplied.
+///
+/// * `execute_reads` runs the operation inside the runtime-formed context and
+///   has this signature:
+///   `fn<B: BackendBound + 'static>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
+///   It is for extensions that genuinely need the owner.
+/// * the session route (`execute_in_session` + `session_supported`) is the
+///   preferred one: `session_supported` has signature
+///   `fn<B: BackendBound + 'static>(&OpType) -> bool` and `execute_in_session`
+///   has signature
+///   `fn(&OpType, &mut dyn BackendSession, &mut ExtensionCacheStore, &[TensorRead<'_>])`.
+///   With it, the generated owner entry forms the session itself and hands the
+///   extension only a session, so no operation ever runs on the owner.
 ///
 /// The legacy `execute` argument is accepted but unused and may be omitted.
-/// `session_supported` and `execute_in_session` are optional, but must be
-/// supplied together. The former has signature
-/// `fn<B: BackendBound + 'static>(&OpType) -> bool`; the latter has signature
-/// `fn(&OpType, &mut dyn BackendSession, &mut ExtensionCacheStore, &[TensorRead<'_>])`.
 #[proc_macro]
 pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(input as RuntimeArgs);
@@ -195,6 +202,64 @@ fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::Token
     let module = format_ident!("{}Module", runtime);
     let planning_config = format_ident!("{}PlanningConfig", runtime);
     let prepared_operation = format_ident!("{}PreparedOperation", runtime);
+    let owner_execute = match (&execute_reads, &execute_in_session) {
+        (None, Some(execute_in_session)) => quote! {
+            fn execute(
+                &self,
+                context: &mut tenferro_runtime::ErasedExecutionContext<'_>,
+                extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
+                inputs: &[tenferro_tensor::TensorRead<'_>],
+            ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+                // The runtime owns the region: the owner entry forms the session
+                // and the extension only ever runs through it.
+                let backend = context
+                    .downcast_mut::<B>(self.binding.context_identity())
+                    .map_err(|source| tenferro_runtime::Error::runtime_state_source(
+                        "extension",
+                        tenferro_runtime::ErrorPhase::Execution,
+                        source,
+                    ))?;
+                backend.with_backend_session(
+                    |session| -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+                        Ok(#execute_in_session(&self.op, session, extension_caches, inputs)?)
+                    },
+                )
+            }
+        },
+        (Some(execute_reads), None) => quote! {
+            fn execute(
+                &self,
+                context: &mut tenferro_runtime::ErasedExecutionContext<'_>,
+                extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
+                inputs: &[tenferro_tensor::TensorRead<'_>],
+            ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+                let backend = context
+                    .downcast_mut::<B>(self.binding.context_identity())
+                    .map_err(|source| tenferro_runtime::Error::runtime_state_source(
+                        "extension",
+                        tenferro_runtime::ErrorPhase::Execution,
+                        source,
+                    ))?;
+                let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(
+                    backend,
+                    extension_caches,
+                );
+                Ok(#execute_reads(&self.op, inputs, &mut ctx)?)
+            }
+        },
+        (Some(execute_reads), Some(_)) => {
+            return Err(syn::Error::new_spanned(
+                execute_reads,
+                "supply either execute_reads or execute_in_session, not both",
+            ))
+        }
+        (None, None) => {
+            return Err(syn::Error::new_spanned(
+                &op_type,
+                "either execute_reads or execute_in_session must be supplied",
+            ))
+        }
+    };
     let session_methods = match (execute_in_session, session_supported) {
         (Some(execute_in_session), Some(session_supported)) => quote! {
             fn supports_session(&self) -> bool {
@@ -361,25 +426,7 @@ fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::Token
         where
             #op_type: Clone + Send + Sync + 'static,
         {
-            fn execute(
-                &self,
-                context: &mut tenferro_runtime::ErasedExecutionContext<'_>,
-                extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
-                inputs: &[tenferro_tensor::TensorRead<'_>],
-            ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
-                let backend = context
-                    .downcast_mut::<B>(self.binding.context_identity())
-                    .map_err(|source| tenferro_runtime::Error::runtime_state_source(
-                        "extension",
-                        tenferro_runtime::ErrorPhase::Execution,
-                        source,
-                    ))?;
-                let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(
-                    backend,
-                    extension_caches,
-                );
-                Ok(#execute_reads(&self.op, inputs, &mut ctx)?)
-            }
+            #owner_execute
 
             #session_methods
         }

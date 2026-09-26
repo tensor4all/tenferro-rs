@@ -29,7 +29,7 @@ use tenferro_runtime::program::{
     CoreSemanticOp, ProgramValue, ProgramValueMetadata, SemanticProgramBuilder,
 };
 use tenferro_tensor::{
-    BackendSession, DType, Error as TensorError, Tensor, TensorBackend, TensorRead,
+    BackendSession, DType, Error as TensorError, Tensor, TensorRead,
 };
 
 use crate::builder::build_einsum_graph;
@@ -1012,78 +1012,8 @@ define_extension_runtime! {
     runtime = EinsumRuntime,
     family_id = EINSUM_EXTENSION_FAMILY_ID,
     op_type = EinsumExtensionOp,
-    execute = execute_einsum_extension,
-    execute_reads = execute_einsum_extension_reads,
     execute_in_session = execute_einsum_extension_reads_in_session,
     session_supported = einsum_session_supported,
-}
-
-fn execute_einsum_extension<B: TensorBackend + 'static>(
-    op: &EinsumExtensionOp,
-    inputs: &[&Tensor],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    if inputs.is_empty() {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            "einsum_extension",
-            "inputs",
-            "einsum requires at least one input tensor",
-        ));
-    }
-
-    let shapes: Vec<Vec<usize>> = inputs
-        .iter()
-        .map(|tensor| tensor.shape().to_vec())
-        .collect();
-    let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
-    let subs = Subscripts::from(op.subscripts());
-    let tree = cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
-        resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
-    })?;
-
-    let output = ctx
-        .backend_mut()
-        .with_backend_session(|exec| crate::eager::eager_einsum_exec(exec, inputs, &tree))?;
-    Ok(vec![output])
-}
-
-pub(crate) fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
-    op: &EinsumExtensionOp,
-    inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    if inputs
-        .iter()
-        .all(|input| matches!(input, TensorRead::Tensor(_)))
-    {
-        let input_refs: Vec<&Tensor> = inputs
-            .iter()
-            .map(|input| match input {
-                TensorRead::Tensor(tensor) => *tensor,
-                TensorRead::View(_) => unreachable!("view input filtered above"),
-            })
-            .collect();
-        return execute_einsum_extension(op, &input_refs, ctx);
-    }
-
-    if inputs.is_empty() {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            "einsum_extension",
-            "inputs",
-            "einsum requires at least one input tensor",
-        ));
-    }
-
-    let shapes: Vec<Vec<usize>> = inputs.iter().map(|input| input.shape().to_vec()).collect();
-    let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
-    let subs = Subscripts::from(op.subscripts());
-    let tree = cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
-        resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
-    })?;
-    let output = ctx
-        .backend_mut()
-        .with_backend_session(|exec| crate::eager::eager_einsum_exec_read(exec, inputs, &tree))?;
-    Ok(vec![output])
 }
 
 pub(crate) fn execute_einsum_extension_session_reads(
