@@ -399,6 +399,32 @@ CpuBackend` blocks, the now-dead `CpuBackendSessionMarker` and
 `install_with_indexed_pool_context*`, the source-text contract retargets to
 `exec_session.rs`, and the allowlist re-bless.
 
+### B3(iii): the exact consumer that needs the decision
+
+A fourth attempt reached the same point with the CPU-side work complete (the eight
+owner impls, the dead marker and the indexed pool helpers deleted; the
+session-entry allowlist down to 17 entries; the three source-text contracts
+retargeted to `exec_session.rs`; the CPU suite green) and stopped in
+`tenferro-ad` again. The failing path is now pinned:
+
+* `EagerTensor::reduce_sum` builds `StdTensorOp::ReduceSum` and runs it through
+  the untracked eager path, which reached the CPU owner; the owner's
+  `reduce_sum_read` materialized a borrowed view before delegating, while the CPU
+  session's `reduce_sum_read` rejects one (`crates/tenferro-ad/src/eager_ops.rs`
+  `unary_op` → the untracked n-ary execution → the backend entry). The traced
+  path is unaffected because the runtime materializes slots before
+  `eager_exec.rs` calls `exec.reduce_sum_read` (`:524`).
+* `eager_backend_session_identity_projects_to_owner` compares session identities
+  and assumes the owner is its own session.
+
+So the consumer-side fix is not a single mechanical edit; it is a policy choice
+about *where* the ad layer materializes: always, on the untracked path only, or
+per operation (only for the read halves whose session contract rejects views,
+which is the reductions and the same family the trait's provided defaults
+reject). Each option has a different cost profile for the untracked path, which is
+exactly what the Phase-C baseline measures, so it should be decided with the
+issue rather than picked inside a migration slice.
+
 ## Measurement protocol
 
 Removing syntax does not by itself save time; #1926 requires measurement
