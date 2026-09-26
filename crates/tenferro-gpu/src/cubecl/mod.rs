@@ -6720,7 +6720,39 @@ impl TensorReduction for CudaBackend {
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         let input = self.read_input(input)?;
-        self.reduce_min(input.as_tensor(), axes)
+        let input = input.as_tensor();
+        let op = op_name(
+            PrimitiveOpKind::ReduceMin,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        match input.dtype() {
+            DType::F32 => {
+                let t = typed_or_unsupported::<f32>(input, op)?;
+                self.reduce_min_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f32>)
+            }
+            DType::F64 => {
+                let t = typed_or_unsupported::<f64>(input, op)?;
+                self.reduce_min_float_typed(t, axes)
+                    .map(Tensor::from_typed::<f64>)
+            }
+            DType::I32 => {
+                let t = typed_or_unsupported::<i32>(input, op)?;
+                self.reduce_min_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i32>)
+            }
+            DType::I64 => {
+                let t = typed_or_unsupported::<i64>(input, op)?;
+                self.reduce_min_int_typed(t, axes)
+                    .map(Tensor::from_typed::<i64>)
+            }
+            DType::Bool | DType::C32 | DType::C64 => Err(unsupported_dtype(op, input.dtype())),
+            // A caller-owned payload has no GPU implementation for this operation.
+            DType::External(_) => Err(crate::Error::unsupported(
+                "reduce_min",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
+        }
     }
 
     fn reduce_sum_squares_read(
@@ -6815,41 +6847,6 @@ impl TensorReduction for CudaBackend {
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
                 "reduce_prod",
-                "an externally defined payload is not supported by this GPU operation",
-            )),
-        }
-    }
-
-    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        let op = op_name(
-            PrimitiveOpKind::ReduceMin,
-            op_descriptor::GpuLaunchKind::Reduction,
-        )?;
-        match input.dtype() {
-            DType::F32 => {
-                let t = typed_or_unsupported::<f32>(input, op)?;
-                self.reduce_min_float_typed(t, axes)
-                    .map(Tensor::from_typed::<f32>)
-            }
-            DType::F64 => {
-                let t = typed_or_unsupported::<f64>(input, op)?;
-                self.reduce_min_float_typed(t, axes)
-                    .map(Tensor::from_typed::<f64>)
-            }
-            DType::I32 => {
-                let t = typed_or_unsupported::<i32>(input, op)?;
-                self.reduce_min_int_typed(t, axes)
-                    .map(Tensor::from_typed::<i32>)
-            }
-            DType::I64 => {
-                let t = typed_or_unsupported::<i64>(input, op)?;
-                self.reduce_min_int_typed(t, axes)
-                    .map(Tensor::from_typed::<i64>)
-            }
-            DType::Bool | DType::C32 | DType::C64 => Err(unsupported_dtype(op, input.dtype())),
-            // A caller-owned payload has no GPU implementation for this operation.
-            DType::External(_) => Err(crate::Error::unsupported(
-                "reduce_min",
                 "an externally defined payload is not supported by this GPU operation",
             )),
         }

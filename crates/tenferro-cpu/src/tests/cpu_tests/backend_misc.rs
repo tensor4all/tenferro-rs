@@ -1840,10 +1840,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             CpuBackend::new().reduce_prod(input, axes)
         }
 
-        fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-            CpuBackend::new().reduce_min(input, axes)
-        }
-
         // The previous read-half default delegated owned tensors to the one-shot
         // method and rejected views. Reproduce it explicitly.
         fn reduce_sum_read(
@@ -1892,10 +1888,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             input: TensorRead<'_>,
             axes: &[usize],
         ) -> crate::Result<Tensor> {
-            CpuBackend::new().reduce_min(
-                tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-                axes,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.reduce_min_read(TensorRead::from_tensor(&input), axes)
+            })
         }
     }
 
@@ -2334,10 +2331,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             CpuBackend::new().reduce_prod(input, axes)
         }
 
-        fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-            CpuBackend::new().reduce_min(input, axes)
-        }
-
         // The previous read-half default delegated owned tensors to the one-shot
         // method and rejected views. Reproduce it explicitly.
         fn reduce_sum_read(
@@ -2386,10 +2379,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             input: TensorRead<'_>,
             axes: &[usize],
         ) -> crate::Result<Tensor> {
-            CpuBackend::new().reduce_min(
-                tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-                axes,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.reduce_min_read(TensorRead::from_tensor(&input), axes)
+            })
         }
     }
 

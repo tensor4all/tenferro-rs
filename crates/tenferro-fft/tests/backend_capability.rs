@@ -262,7 +262,6 @@ macro_rules! impl_minimal_tensor_backend {
         impl TensorReduction for $ty {
             unreachable_backend_methods! {
                 reduce_prod(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
-                reduce_min(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
             }
 
             // The previous read-half default delegated owned tensors to the
@@ -309,10 +308,9 @@ macro_rules! impl_minimal_tensor_backend {
                 input: tenferro_tensor::TensorRead<'_>,
                 axes: &[usize],
             ) -> tenferro_tensor::Result<Tensor> {
-                self.reduce_min(
-                    tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-                    axes,
-                )
+                                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+                    let _ = axes;
+                    panic!("reduce_min should not be called in this test")
             }
         }
 

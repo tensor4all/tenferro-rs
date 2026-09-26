@@ -907,7 +907,9 @@ fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
     assert_eq!(get_f64(&max, &[0]), 5.0);
     assert_eq!(get_f64(&max, &[1]), 6.0);
 
-    let min = backend.reduce_min(&t, &[0, 1]).unwrap();
+    let min = backend
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&t), &[0, 1]))
+        .unwrap();
     assert!(min.shape().is_empty());
     assert_eq!(get_f64(&min, &[]), 1.0);
 }

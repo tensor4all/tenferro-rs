@@ -593,16 +593,11 @@ impl TensorReduction for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("reduce_min", input)?;
+        let _axes = axes;
         self.calls.push("reduce_min");
         Ok(marker())
-    }
-
-    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.reduce_min(
-            crate::backend::read_owned_tensor("reduce_min", input)?,
-            axes,
-        )
     }
 }
 

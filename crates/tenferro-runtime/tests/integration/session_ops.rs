@@ -1325,7 +1325,6 @@ macro_rules! panic_reduction {
         impl TensorReduction for $ty {
             panic_backend_methods! {
                 reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-                reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
             }
 
             // The previous read-half default delegated owned tensors to the
@@ -1350,10 +1349,9 @@ macro_rules! panic_reduction {
             }
 
             fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-                self.reduce_min(
-                    tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-                    axes,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+                let _ = axes;
+                panic!("reduce_min should not be called in this test")
             }
         }
     };
@@ -1657,7 +1655,6 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
 impl TensorReduction for WrongDTypeSessionBackend {
     panic_backend_methods! {
         reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-        reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
     }
 
     fn reduce_sum_read(&mut self, _input: TensorRead<'_>, _axes: &[usize]) -> TensorResult {
@@ -1680,10 +1677,9 @@ impl TensorReduction for WrongDTypeSessionBackend {
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-        self.reduce_min(
-            tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-            axes,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+        let _ = axes;
+        panic!("reduce_min should not be called in this test")
     }
 }
 

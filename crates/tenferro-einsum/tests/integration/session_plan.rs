@@ -387,7 +387,6 @@ macro_rules! panic_reduction {
         impl TensorReduction for $ty {
             panic_backend_methods! {
                 reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-                reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
             }
 
             // The previous read-half default delegated owned tensors to the one-shot
@@ -418,10 +417,9 @@ macro_rules! panic_reduction {
             // The previous read-half default delegated owned tensors to the one-shot
             // method and rejected borrowed views. Reproduce it explicitly.
             fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-                self.reduce_min(
-                    tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-                    axes,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+                let _ = axes;
+                panic!("reduce_min should not be called in this test")
             }
         }
     };
@@ -669,10 +667,6 @@ impl TensorReduction for SessionCountingBackend {
         self.inner.reduce_prod(input, axes)
     }
 
-    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> TensorResult {
-        self.inner.reduce_min(input, axes)
-    }
-
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
@@ -701,10 +695,9 @@ impl TensorReduction for SessionCountingBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-        self.reduce_min(
-            tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-            axes,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+        let _ = axes;
+        panic!("reduce_min should not be called in this test")
     }
 }
 

@@ -458,7 +458,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     impl TensorReduction for DefaultOnlyLinalgBackend {
         panic_backend_methods! {
             reduce_prod(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
-            reduce_min(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -505,10 +504,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             input: TensorRead<'_>,
             axes: &[usize],
         ) -> tenferro_tensor::Result<Tensor> {
-            self.reduce_min(
-                tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-                axes,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+            let _ = axes;
+            panic!("reduce_min should not be called in this test")
         }
     }
 

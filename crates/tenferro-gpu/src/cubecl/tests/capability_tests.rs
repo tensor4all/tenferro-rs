@@ -329,9 +329,9 @@ fn run_supported_case(
         PrimitiveOpKind::ReduceMax => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
             b.with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(x), axes))
         }),
-        PrimitiveOpKind::ReduceMin => {
-            assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_min(x, axes))
-        }
+        PrimitiveOpKind::ReduceMin => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
+            b.with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(x), axes))
+        }),
         PrimitiveOpKind::DotGeneral => assert_dot_matches(cpu, gpu, entry),
         _ => panic!(
             "unsupported first-scope descriptor smoke op {:?}; descriptor={:?}",
@@ -601,7 +601,8 @@ fn run_cpu_reduction(
         PrimitiveOpKind::ReduceProd => cpu.reduce_prod(input, axes),
         PrimitiveOpKind::ReduceMax => cpu
             .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes)),
-        PrimitiveOpKind::ReduceMin => cpu.reduce_min(input, axes),
+        PrimitiveOpKind::ReduceMin => cpu
+            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), axes)),
         _ => panic!("not a reduction smoke op: {op:?}"),
     }
     .unwrap()

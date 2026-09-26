@@ -1123,10 +1123,6 @@ impl TensorReduction for WebGpuBackend {
         unsupported!("webgpu_reduce_prod")
     }
 
-    fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reduce_min")
-    }
-
     // The old chain was: owned input -> the one-shot method -> its unsupported
     // error; view input -> the read-boundary error. WebGPU rejects the reduction
     // either way, so evaluate the read input first and then raise the same

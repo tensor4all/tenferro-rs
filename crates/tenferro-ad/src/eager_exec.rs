@@ -850,7 +850,9 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::ReduceMax { axes, .. } => {
                 vec![exec.reduce_max_read(TensorRead::from_tensor(inputs[0]), axes)?]
             }
-            StdTensorOp::ReduceMin { axes, .. } => vec![exec.reduce_min(inputs[0], axes)?],
+            StdTensorOp::ReduceMin { axes, .. } => {
+                vec![exec.reduce_min_read(TensorRead::from_tensor(inputs[0]), axes)?]
+            }
             StdTensorOp::Expm1 => vec![exec.expm1_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Log1p => vec![exec.log1p_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Convert { to, .. } => vec![exec.cast(inputs[0], *to)?],

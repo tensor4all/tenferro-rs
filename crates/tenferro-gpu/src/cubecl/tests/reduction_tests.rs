@@ -64,8 +64,14 @@ fn test_cubecl_full_axis_reductions_preserve_scalar_shape_and_values() {
         if !matches!(input.dtype(), crate::DType::C32 | crate::DType::C64) {
             for (expected, gpu_out) in [
                 (
-                    cpu.reduce_min(input, &[0, 1]).unwrap(),
-                    gpu.reduce_min(&gpu_input, &[0, 1]).unwrap(),
+                    cpu.with_backend_session(|__s| {
+                        __s.reduce_min_read(TensorRead::from_tensor(input), &[0, 1])
+                    })
+                    .unwrap(),
+                    gpu.with_backend_session(|__s| {
+                        __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[0, 1])
+                    })
+                    .unwrap(),
                 ),
                 (
                     cpu.with_backend_session(|__s| {
@@ -119,8 +125,12 @@ fn test_cubecl_float_reductions_match_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.reduce_min(&input, &[1]).unwrap();
-    let gpu_out = gpu.reduce_min(&gpu_input, &[1]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 }
@@ -242,8 +252,14 @@ fn test_cubecl_float_max_min_reductions_propagate_nan_for_unit_and_plane() {
                 .unwrap(),
             ),
             (
-                cpu.reduce_min(&input, &[0]).unwrap(),
-                gpu.reduce_min(&gpu_input, &[0]).unwrap(),
+                cpu.with_backend_session(|__s| {
+                    __s.reduce_min_read(TensorRead::from_tensor(&input), &[0])
+                })
+                .unwrap(),
+                gpu.with_backend_session(|__s| {
+                    __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[0])
+                })
+                .unwrap(),
             ),
         ] {
             assert_all_nan(&expected);
@@ -288,7 +304,9 @@ fn test_cubecl_complex_sum_and_prod_match_cpu() {
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "reduce_max", DType::C64);
 
-    let err = gpu.reduce_min(&gpu_input, &[0]).unwrap_err();
+    let err = gpu
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "reduce_min", DType::C64);
 }
 
@@ -391,8 +409,12 @@ fn test_cubecl_integer_reductions_wrap_on_overflow() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu.reduce_min(&input, &[1]).unwrap();
-    let gpu_out = gpu.reduce_min(&gpu_input, &[1]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
@@ -407,8 +429,12 @@ fn test_cubecl_integer_reductions_wrap_on_overflow() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu.reduce_min(&input, &[1]).unwrap();
-    let gpu_out = gpu.reduce_min(&gpu_input, &[1]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
@@ -495,8 +521,14 @@ fn test_cubecl_reductions_column_major_3d_axes_match_cpu() {
         assert_eq!(actual.shape(), expected.shape());
         assert_tensor_close(&actual, &expected, 1e-12);
 
-        let expected = cpu.reduce_min(&input, axes).unwrap();
-        let gpu_out = gpu.reduce_min(&gpu_input, axes).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), axes))
+            .unwrap();
+        let gpu_out = gpu
+            .with_backend_session(|__s| {
+                __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), axes)
+            })
+            .unwrap();
         let actual = download(&gpu, &gpu_out);
         assert_eq!(actual.shape(), expected.shape());
         assert_tensor_close(&actual, &expected, 1e-12);

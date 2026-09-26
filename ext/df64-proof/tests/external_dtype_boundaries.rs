@@ -57,7 +57,9 @@ fn a_reduction_refuses_a_caller_owned_payload() {
     assert!(backend
         .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&values), &[0]))
         .is_err());
-    assert!(backend.reduce_min(&values, &[0]).is_err());
+    assert!(backend
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&values), &[0]))
+        .is_err());
 
     // The same refusals are reached through the borrowed-read entry points, which is
     // where a session hands a value to a kernel.
@@ -127,7 +129,9 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
             );
             assert_eq!(
                 backend
-                    .reduce_min(&tensor, &[0])
+                    .with_backend_session(
+                        |__s| __s.reduce_min_read(TensorRead::from_tensor(&tensor), &[0])
+                    )
                     .expect("minimum")
                     .as_slice::<$ty>()
                     .expect("slice"),
@@ -162,5 +166,7 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
     assert!(backend
         .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&boolean), &[0]))
         .is_err());
-    assert!(backend.reduce_min(&boolean, &[0]).is_err());
+    assert!(backend
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&boolean), &[0]))
+        .is_err());
 }

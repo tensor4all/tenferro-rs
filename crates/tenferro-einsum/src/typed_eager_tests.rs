@@ -371,7 +371,6 @@ impl TensorStructural for WrongDTypeBackend {
 impl TensorReduction for WrongDTypeBackend {
     panic_backend_methods! {
         reduce_prod(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
-        reduce_min(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -416,10 +415,8 @@ impl TensorReduction for WrongDTypeBackend {
         input: TensorRead<'_>,
         axes: &[usize],
     ) -> tenferro_tensor::Result<Tensor> {
-        self.reduce_min(
-            tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?,
-            axes,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+        CpuBackend::new().reduce_min_read(TensorRead::from_tensor(&input), axes)
     }
 }
 

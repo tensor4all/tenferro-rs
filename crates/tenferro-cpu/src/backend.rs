@@ -3262,13 +3262,6 @@ impl TensorReduction for CpuBackend {
         })
     }
 
-    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh_with_context(|context| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_min(input, axes, &exec_context)
-        })
-    }
-
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         self.install_with_pool_context(|context, buffers| {
             let exec_context = context.strided_exec_context();

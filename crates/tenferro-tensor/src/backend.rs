@@ -2920,7 +2920,6 @@ pub trait TensorReduction {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
     /// Take minimum values across axes from an owned tensor or borrowed view.
     ///
