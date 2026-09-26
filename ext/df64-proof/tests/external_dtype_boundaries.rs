@@ -7,7 +7,6 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::ad_support::ones_tensor;
-use tenferro_tensor::backend::TensorReduction;
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{DType, Tensor, TensorRead};
 use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
@@ -66,19 +65,21 @@ fn a_reduction_refuses_a_caller_owned_payload() {
     // The same refusals are reached through the borrowed-read entry points, which is
     // where a session hands a value to a kernel.
     assert!(backend
-        .reduce_sum_read(TensorRead::from_tensor(&values), &[0])
+        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&values), &[0]))
         .is_err());
     assert!(backend
-        .reduce_sum_squares_read(TensorRead::from_tensor(&values), &[0])
+        .with_backend_session(
+            |__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&values), &[0])
+        )
         .is_err());
     assert!(backend
-        .reduce_prod_read(TensorRead::from_tensor(&values), &[0])
+        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&values), &[0]))
         .is_err());
     assert!(backend
-        .reduce_max_read(TensorRead::from_tensor(&values), &[0])
+        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&values), &[0]))
         .is_err());
     assert!(backend
-        .reduce_min_read(TensorRead::from_tensor(&values), &[0])
+        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&values), &[0]))
         .is_err());
 }
 
@@ -153,12 +154,16 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
     // integer input is refused rather than widened silently.
     let integers = Tensor::from_vec_col_major(vec![2], vec![2_i32, 3]).expect("shape");
     assert!(backend
-        .reduce_sum_squares_read(TensorRead::from_tensor(&integers), &[0])
+        .with_backend_session(
+            |__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&integers), &[0])
+        )
         .is_err());
     let floats = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).expect("shape");
     assert_eq!(
         backend
-            .reduce_sum_squares_read(TensorRead::from_tensor(&floats), &[0])
+            .with_backend_session(
+                |__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&floats), &[0])
+            )
             .expect("squares")
             .as_slice::<f64>()
             .expect("slice"),

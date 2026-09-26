@@ -4,7 +4,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendSessionHost, BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
     GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
-    Tensor, TensorDeviceTransfer, TensorIndexing, TensorRead, TypedTensor, ValidationError,
+    Tensor, TensorDeviceTransfer, TensorRead, TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -489,7 +489,9 @@ fn slice_returns_error_instead_of_panicking() {
         strides: vec![1],
     };
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.slice(&input, &config)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| __s.slice(&input, &config))
+    }));
 
     assert!(result.is_ok(), "slice should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -509,7 +511,9 @@ fn pad_returns_error_instead_of_panicking() {
         interior_padding: vec![0, 0],
     };
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.pad(&input, &config)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| __s.pad(&input, &config))
+    }));
 
     assert!(result.is_ok(), "pad should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -524,7 +528,9 @@ fn concatenate_returns_error_on_empty_inputs() {
     let mut backend = CpuBackend::new();
     let inputs: Vec<&Tensor> = vec![];
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&inputs, 0)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| __s.concatenate(&inputs, 0))
+    }));
 
     assert!(result.is_ok(), "concatenate should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -543,7 +549,9 @@ fn concatenate_returns_error_on_dtype_mismatch() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f32_tensor(vec![2, 2], vec![5.0f32, 6.0, 7.0, 8.0]);
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
+    }));
 
     assert!(
         result.is_ok(),
@@ -565,7 +573,9 @@ fn concatenate_returns_error_on_rank_mismatch() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2], vec![5.0, 6.0]);
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
+    }));
 
     assert!(
         result.is_ok(),
@@ -587,7 +597,9 @@ fn concatenate_returns_error_on_axis_out_of_bounds() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 5)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| __s.concatenate(&[&a, &b], 5))
+    }));
 
     assert!(
         result.is_ok(),
@@ -612,7 +624,9 @@ fn concatenate_returns_error_on_shape_mismatch() {
         vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
     );
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
+    }));
 
     assert!(
         result.is_ok(),
@@ -634,7 +648,7 @@ fn concatenate_accepts_valid_inputs() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
-    let result = backend.concatenate(&[&a, &b], 0);
+    let result = backend.with_backend_session(|__s| __s.concatenate(&[&a, &b], 0));
 
     assert!(result.is_ok());
     let out = result.unwrap();
@@ -655,7 +669,7 @@ fn scatter_negative_start_indices_clamp_like_dynamic_slice() {
     };
 
     let out = backend
-        .scatter(&operand, &scatter_indices, &updates, &config)
+        .with_backend_session(|__s| __s.scatter(&operand, &scatter_indices, &updates, &config))
         .unwrap();
 
     assert_eq!(

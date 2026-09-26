@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendRuntimeCache, BackendSession, BackendSessionHost, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 
@@ -266,19 +266,9 @@ fn contains_include_macro(tokens: &[String]) -> bool {
         .any(|window| window[0] == "include" && window[1] == "!")
 }
 
-fn accepts_backend_capabilities<B>()
+fn accepts_owner_capabilities<B>()
 where
-    B: TensorElementwise
-        + TensorAnalytic
-        + TensorStructural
-        + TensorReduction
-        + TensorIndexing
-        + TensorDot
-        + TensorFusion
-        + TensorBuffer
-        + TensorDeviceTransfer
-        + BackendSessionHost
-        + TensorBackend,
+    B: BackendRuntimeCache + TensorDeviceTransfer + BackendSessionHost + TensorBackend,
 {
 }
 
@@ -298,8 +288,10 @@ where
 }
 
 #[test]
-fn cpu_backend_exposes_narrow_capability_bounds() {
-    accepts_backend_capabilities::<CpuBackend>();
+fn cpu_backend_exposes_only_owner_capabilities() {
+    // The operation capabilities live on the execution session; the owner keeps
+    // the runtime cache, device transfer and session-host capabilities.
+    accepts_owner_capabilities::<CpuBackend>();
 }
 
 #[test]
@@ -333,14 +325,11 @@ fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
 }
 
 #[test]
-fn cpu_surfaces_override_elementwise_read_into_with_pooled_context() {
-    let backend_source = include_str!("../../src/backend.rs");
+fn cpu_session_overrides_elementwise_read_into_with_pooled_context() {
+    // The operation implementations live on the execution session only.
     let session_source = include_str!("../../src/exec_session.rs");
 
-    for (surface, source) in [
-        ("CpuBackend", backend_source),
-        ("CpuExecSession", session_source),
-    ] {
+    for (surface, source) in [("CpuExecSession", session_source)] {
         let elementwise_impl = source
             .split_once(&format!("impl TensorElementwise for {surface}"))
             .expect("TensorElementwise implementation must exist")
@@ -356,14 +345,10 @@ fn cpu_surfaces_override_elementwise_read_into_with_pooled_context() {
 
 #[test]
 fn structural_read_paths_dispatch_directly_to_typed_view_helpers() {
-    let backend_source = include_str!("../../src/backend.rs");
     let session_source = include_str!("../../src/exec_session.rs");
     let structural_source = include_str!("../../src/structural.rs");
 
-    for (surface, source) in [
-        ("CpuBackend", backend_source),
-        ("CpuExecSession", session_source),
-    ] {
+    for (surface, source) in [("CpuExecSession", session_source)] {
         let structural_impl = source
             .split_once(&format!("impl TensorStructural for {surface}"))
             .expect("TensorStructural implementation must exist")
@@ -729,20 +714,11 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
         assert_direct_dispatch(&format!("exec_session::{function}"), body);
     }
 
-    // backend.rs also owns opt-in profiling state, so scanning the entire file
-    // would reject a HashMap that is not part of contraction dispatch. Scan all
-    // session-entry and contraction bodies instead.
+    // The contraction bodies live on the execution session (scanned above);
+    // backend.rs keeps the session-entry plumbing, which also owns opt-in
+    // profiling state.
     let backend = include_str!("../../src/backend.rs");
     for function in [
-        "with_linalg_pool",
-        "dot_general_read",
-        "dot_general_read_into",
-        "dot_general_read_into_accum",
-        "dot_general_with_conj",
-        "dot_general_cached",
-        "dot_general_with_conj_cached",
-        "dot_general_read_into_accum_cached",
-        "grouped_gemm_cached",
         "run_backend_session_cached",
         "with_backend_session",
         "with_backend_session_cached",

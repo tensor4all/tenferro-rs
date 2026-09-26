@@ -78,20 +78,29 @@ fn cuda_bool_structural_ops_match_cpu() {
         ))
     );
     parity!(
-        cpu.extract_diagonal(&matrix, 0, 1),
+        cpu.with_backend_session(|__s| __s.extract_diagonal(&matrix, 0, 1)),
         gpu.extract_diagonal(&gm, 0, 1)
     );
     parity!(
-        cpu.embed_diagonal(&vector, 0, 1),
+        cpu.with_backend_session(|__s| __s.embed_diagonal(&vector, 0, 1)),
         gpu.embed_diagonal(&gv, 0, 1)
     );
-    parity!(cpu.tril(&matrix, 0), gpu.tril(&gm, 0));
-    parity!(cpu.triu(&matrix, 0), gpu.triu(&gm, 0));
     parity!(
-        cpu.concatenate(&[&matrix, &matrix], 0),
+        cpu.with_backend_session(|__s| __s.tril(&matrix, 0)),
+        gpu.tril(&gm, 0)
+    );
+    parity!(
+        cpu.with_backend_session(|__s| __s.triu(&matrix, 0)),
+        gpu.triu(&gm, 0)
+    );
+    parity!(
+        cpu.with_backend_session(|__s| __s.concatenate(&[&matrix, &matrix], 0)),
         gpu.concatenate(&[&gm, &gm], 0)
     );
-    parity!(cpu.reverse(&matrix, &[0]), gpu.reverse(&gm, &[0]));
+    parity!(
+        cpu.with_backend_session(|__s| __s.reverse(&matrix, &[0])),
+        gpu.reverse(&gm, &[0])
+    );
     parity!(cpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&empty), &[1, 0])), gpu.with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&ge), &[1, 0])));
     parity!(
         cpu.with_backend_session(|__s| __s.broadcast_in_dim_read(
@@ -106,20 +115,29 @@ fn cuda_bool_structural_ops_match_cpu() {
         ))
     );
     parity!(
-        cpu.extract_diagonal(&empty_matrix, 0, 1),
+        cpu.with_backend_session(|__s| __s.extract_diagonal(&empty_matrix, 0, 1)),
         gpu.extract_diagonal(&gem, 0, 1)
     );
     parity!(
-        cpu.embed_diagonal(&empty_vector, 0, 1),
+        cpu.with_backend_session(|__s| __s.embed_diagonal(&empty_vector, 0, 1)),
         gpu.embed_diagonal(&gev, 0, 1)
     );
-    parity!(cpu.tril(&empty_matrix, 0), gpu.tril(&gem, 0));
-    parity!(cpu.triu(&empty_matrix, 0), gpu.triu(&gem, 0));
     parity!(
-        cpu.concatenate(&[&empty, &empty], 0),
+        cpu.with_backend_session(|__s| __s.tril(&empty_matrix, 0)),
+        gpu.tril(&gem, 0)
+    );
+    parity!(
+        cpu.with_backend_session(|__s| __s.triu(&empty_matrix, 0)),
+        gpu.triu(&gem, 0)
+    );
+    parity!(
+        cpu.with_backend_session(|__s| __s.concatenate(&[&empty, &empty], 0)),
         gpu.concatenate(&[&ge, &ge], 0)
     );
-    parity!(cpu.reverse(&empty, &[1]), gpu.reverse(&ge, &[1]));
+    parity!(
+        cpu.with_backend_session(|__s| __s.reverse(&empty, &[1])),
+        gpu.reverse(&ge, &[1])
+    );
 
     error_parity!(
         cpu.with_backend_session(
@@ -140,20 +158,29 @@ fn cuda_bool_structural_ops_match_cpu() {
         ))
     );
     error_parity!(
-        cpu.extract_diagonal(&matrix, 0, 0),
+        cpu.with_backend_session(|__s| __s.extract_diagonal(&matrix, 0, 0)),
         gpu.extract_diagonal(&gm, 0, 0)
     );
     error_parity!(
-        cpu.embed_diagonal(&vector, 0, 3),
+        cpu.with_backend_session(|__s| __s.embed_diagonal(&vector, 0, 3)),
         gpu.embed_diagonal(&gv, 0, 3)
     );
-    error_parity!(cpu.tril(&vector, 0), gpu.tril(&gv, 0));
-    error_parity!(cpu.triu(&vector, 0), gpu.triu(&gv, 0));
     error_parity!(
-        cpu.concatenate(&[&matrix, &matrix], 2),
+        cpu.with_backend_session(|__s| __s.tril(&vector, 0)),
+        gpu.tril(&gv, 0)
+    );
+    error_parity!(
+        cpu.with_backend_session(|__s| __s.triu(&vector, 0)),
+        gpu.triu(&gv, 0)
+    );
+    error_parity!(
+        cpu.with_backend_session(|__s| __s.concatenate(&[&matrix, &matrix], 2)),
         gpu.concatenate(&[&gm, &gm], 2)
     );
-    error_parity!(cpu.reverse(&matrix, &[2]), gpu.reverse(&gm, &[2]));
+    error_parity!(
+        cpu.with_backend_session(|__s| __s.reverse(&matrix, &[2])),
+        gpu.reverse(&gm, &[2])
+    );
 }
 
 /// The traced runtime prepares operation operands as [`TensorRead`], which is
@@ -285,33 +312,45 @@ fn test_cubecl_structural_ops_match_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.reverse(&input, &[1]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reverse(&input, &[1]))
+        .unwrap();
     let gpu_out = gpu.reverse(&gpu_input, &[1]).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.concatenate(&[&input, &input], 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.concatenate(&[&input, &input], 1))
+        .unwrap();
     let gpu_concat = gpu.concatenate(&[&gpu_input, &gpu_input], 1).unwrap();
     let actual = download(&gpu, &gpu_concat);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.extract_diagonal(&matrix, 0, 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.extract_diagonal(&matrix, 0, 1))
+        .unwrap();
     let gpu_matrix = upload(&gpu, &matrix);
     let gpu_out = gpu.extract_diagonal(&gpu_matrix, 0, 1).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.embed_diagonal(&vector, 0, 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.embed_diagonal(&vector, 0, 1))
+        .unwrap();
     let gpu_out = gpu.embed_diagonal(&gpu_vector, 0, 1).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.tril(&matrix, 0).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.tril(&matrix, 0))
+        .unwrap();
     let gpu_out = gpu.tril(&gpu_matrix, 0).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.triu(&matrix, -1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.triu(&matrix, -1))
+        .unwrap();
     let gpu_out = gpu.triu(&gpu_matrix, -1).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
@@ -361,28 +400,40 @@ fn test_cubecl_i64_structural_ops_match_cpu() {
         .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.reverse(&input, &[1]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reverse(&input, &[1]))
+        .unwrap();
     let gpu_out = gpu.reverse(&gpu_input, &[1]).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.concatenate(&[&input, &input], 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.concatenate(&[&input, &input], 1))
+        .unwrap();
     let gpu_out = gpu.concatenate(&[&gpu_input, &gpu_input], 1).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
     let gpu_matrix = upload(&gpu, &matrix);
-    let expected = cpu.extract_diagonal(&matrix, 0, 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.extract_diagonal(&matrix, 0, 1))
+        .unwrap();
     let gpu_out = gpu.extract_diagonal(&gpu_matrix, 0, 1).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.embed_diagonal(&vector, 0, 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.embed_diagonal(&vector, 0, 1))
+        .unwrap();
     let gpu_out = gpu.embed_diagonal(&gpu_vector, 0, 1).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.tril(&matrix, 0).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.tril(&matrix, 0))
+        .unwrap();
     let gpu_out = gpu.tril(&gpu_matrix, 0).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.triu(&matrix, -1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.triu(&matrix, -1))
+        .unwrap();
     let gpu_out = gpu.triu(&gpu_matrix, -1).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 }
@@ -431,28 +482,40 @@ fn test_cubecl_i32_structural_ops_match_cpu() {
         .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.reverse(&input, &[1]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reverse(&input, &[1]))
+        .unwrap();
     let gpu_out = gpu.reverse(&gpu_input, &[1]).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.concatenate(&[&input, &input], 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.concatenate(&[&input, &input], 1))
+        .unwrap();
     let gpu_out = gpu.concatenate(&[&gpu_input, &gpu_input], 1).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
     let gpu_matrix = upload(&gpu, &matrix);
-    let expected = cpu.extract_diagonal(&matrix, 0, 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.extract_diagonal(&matrix, 0, 1))
+        .unwrap();
     let gpu_out = gpu.extract_diagonal(&gpu_matrix, 0, 1).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.embed_diagonal(&vector, 0, 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.embed_diagonal(&vector, 0, 1))
+        .unwrap();
     let gpu_out = gpu.embed_diagonal(&gpu_vector, 0, 1).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.tril(&matrix, 0).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.tril(&matrix, 0))
+        .unwrap();
     let gpu_out = gpu.tril(&gpu_matrix, 0).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.triu(&matrix, -1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.triu(&matrix, -1))
+        .unwrap();
     let gpu_out = gpu.triu(&gpu_matrix, -1).unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 }
@@ -492,17 +555,23 @@ fn test_cubecl_convert_matches_cpu() {
     let gpu_real = upload(&gpu, &real);
     let gpu_complex = upload(&gpu, &complex);
 
-    let expected = cpu.cast(&real, DType::F32).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.cast(&real, DType::F32))
+        .unwrap();
     let gpu_out = gpu.cast(&gpu_real, DType::F32).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-6);
 
-    let expected = cpu.convert(&real, DType::C64).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.convert(&real, DType::C64))
+        .unwrap();
     let gpu_out = gpu.convert(&gpu_real, DType::C64).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.cast(&complex, DType::F64).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.cast(&complex, DType::F64))
+        .unwrap();
     let gpu_out = gpu.cast(&gpu_complex, DType::F64).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
@@ -551,7 +620,7 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
     for source in &sources {
         let gpu_source = upload(&gpu, source);
         for &target in &targets {
-            let expected = cpu.cast(source, target);
+            let expected = cpu.with_backend_session(|__s| __s.cast(source, target));
             let actual = gpu.cast(&gpu_source, target);
             match (expected, actual) {
                 (Err(expected), Err(actual)) => assert_error_parity(expected, actual),
@@ -579,7 +648,9 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
     for source in &empty_sources {
         let gpu_source = upload(&gpu, source);
         for &target in &targets {
-            let expected = cpu.cast(source, target).unwrap();
+            let expected = cpu
+                .with_backend_session(|__s| __s.cast(source, target))
+                .unwrap();
             let gpu_actual = gpu.cast(&gpu_source, target).unwrap();
             let actual = download(&gpu, &gpu_actual);
             assert_cast_tensor_equal(&actual, &expected);
@@ -608,7 +679,9 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
     ] {
         let gpu_source = upload(&gpu, &source);
         for target in [DType::I32, DType::I64] {
-            let expected = cpu.cast(&source, target).unwrap();
+            let expected = cpu
+                .with_backend_session(|__s| __s.cast(&source, target))
+                .unwrap();
             let gpu_actual = gpu.cast(&gpu_source, target).unwrap();
             assert_cast_tensor_equal(&download(&gpu, &gpu_actual), &expected);
         }
@@ -629,7 +702,8 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
     ] {
         let gpu_source = upload(&gpu, &source);
         assert_error_parity(
-            cpu.cast(&source, target).unwrap_err(),
+            cpu.with_backend_session(|__s| __s.cast(&source, target))
+                .unwrap_err(),
             gpu.cast(&gpu_source, target).unwrap_err(),
         );
     }
@@ -645,7 +719,9 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
         ),
     ] {
         let gpu_source = upload(&gpu, &source);
-        let expected = cpu.cast(&source, DType::I32).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.cast(&source, DType::I32))
+            .unwrap();
         let actual = gpu.cast(&gpu_source, DType::I32).unwrap();
         assert_cast_tensor_equal(&download(&gpu, &actual), &expected);
     }
@@ -664,7 +740,8 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
     ] {
         let gpu_source = upload(&gpu, &source);
         assert_error_parity(
-            cpu.cast(&source, DType::I32).unwrap_err(),
+            cpu.with_backend_session(|__s| __s.cast(&source, DType::I32))
+                .unwrap_err(),
             gpu.cast(&gpu_source, DType::I32).unwrap_err(),
         );
     }
@@ -684,7 +761,9 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
         ),
     ] {
         let gpu_source = upload(&gpu, &source);
-        let expected = cpu.cast(&source, DType::I64).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.cast(&source, DType::I64))
+            .unwrap();
         let actual = gpu.cast(&gpu_source, DType::I64).unwrap();
         assert_cast_tensor_equal(&download(&gpu, &actual), &expected);
     }
@@ -696,7 +775,8 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
     ] {
         let gpu_source = upload(&gpu, &source);
         assert_error_parity(
-            cpu.cast(&source, DType::I64).unwrap_err(),
+            cpu.with_backend_session(|__s| __s.cast(&source, DType::I64))
+                .unwrap_err(),
             gpu.cast(&gpu_source, DType::I64).unwrap_err(),
         );
     }
@@ -1038,7 +1118,9 @@ fn cuda_to_contiguous_read_materializes_a_strided_complex_view() {
         .transpose_view([1, 0])
         .unwrap();
     let expected = cpu
-        .to_contiguous_read(TensorRead::from_view(TensorView::C64(cpu_view)))
+        .with_backend_session(|__s| {
+            __s.to_contiguous_read(TensorRead::from_view(TensorView::C64(cpu_view)))
+        })
         .unwrap();
 
     assert_eq!(bits(&download(&gpu, &got)), bits(&expected));
@@ -1829,10 +1911,14 @@ fn cuda_triangular_ops_match_cpu_for_complex_dtypes() {
             .collect(),
     );
     let gpu_c64 = upload(&gpu, &matrix_c64);
-    let expected = cpu.tril(&matrix_c64, 0).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.tril(&matrix_c64, 0))
+        .unwrap();
     let actual = gpu.tril(&gpu_c64, 0).unwrap();
     assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
-    let expected = cpu.triu(&matrix_c64, -1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.triu(&matrix_c64, -1))
+        .unwrap();
     let actual = gpu.triu(&gpu_c64, -1).unwrap();
     assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
 
@@ -1843,10 +1929,14 @@ fn cuda_triangular_ops_match_cpu_for_complex_dtypes() {
             .collect(),
     );
     let gpu_c32 = upload(&gpu, &matrix_c32);
-    let expected = cpu.tril(&matrix_c32, 0).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.tril(&matrix_c32, 0))
+        .unwrap();
     let actual = gpu.tril(&gpu_c32, 0).unwrap();
     assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
-    let expected = cpu.triu(&matrix_c32, 1).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.triu(&matrix_c32, 1))
+        .unwrap();
     let actual = gpu.triu(&gpu_c32, 1).unwrap();
     assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
 }

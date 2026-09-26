@@ -142,22 +142,28 @@ fn test_integer_add_mul_read_views_wrap_on_overflow() {
     let mut backend = CpuBackend::new();
 
     let sum = backend
-        .add_read(
-            TensorRead::from_view(TensorView::I32(lhs.as_view())),
-            TensorRead::from_view(TensorView::I32(rhs.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.add_read(
+                TensorRead::from_view(TensorView::I32(lhs.as_view())),
+                TensorRead::from_view(TensorView::I32(rhs.as_view())),
+            )
+        })
         .unwrap();
     let diff = backend
-        .sub_read(
-            TensorRead::from_view(TensorView::I32(lhs.as_view())),
-            TensorRead::from_view(TensorView::I32(rhs.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.sub_read(
+                TensorRead::from_view(TensorView::I32(lhs.as_view())),
+                TensorRead::from_view(TensorView::I32(rhs.as_view())),
+            )
+        })
         .unwrap();
     let prod = backend
-        .mul_read(
-            TensorRead::from_view(TensorView::I32(lhs.as_view())),
-            TensorRead::from_view(TensorView::I32(rhs.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.mul_read(
+                TensorRead::from_view(TensorView::I32(lhs.as_view())),
+                TensorRead::from_view(TensorView::I32(rhs.as_view())),
+            )
+        })
         .unwrap();
 
     assert_eq!(
@@ -196,9 +202,15 @@ fn test_integer_unary_read_views_use_wrapping_semantics() {
     let read = || TensorRead::from_view(TensorView::I32(input.as_view()));
     let mut backend = CpuBackend::new();
 
-    let neg_out = backend.neg_read(read()).unwrap();
-    let abs_out = backend.abs_read(read()).unwrap();
-    let sign_out = backend.sign_read(read()).unwrap();
+    let neg_out = backend
+        .with_backend_session(|__s| __s.neg_read(read()))
+        .unwrap();
+    let abs_out = backend
+        .with_backend_session(|__s| __s.abs_read(read()))
+        .unwrap();
+    let sign_out = backend
+        .with_backend_session(|__s| __s.sign_read(read()))
+        .unwrap();
 
     assert_eq!(neg_out.as_slice::<i32>().unwrap(), &[i32::MIN, 3, 0, -5]);
     assert_eq!(abs_out.as_slice::<i32>().unwrap(), &[i32::MIN, 3, 0, 5]);
@@ -238,16 +250,20 @@ fn test_integer_maximum_minimum_and_reduction_read_views() {
     let mut backend = CpuBackend::new();
 
     let max_out = backend
-        .maximum_read(
-            TensorRead::from_view(TensorView::I32(lhs.as_view())),
-            TensorRead::from_view(TensorView::I32(rhs.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.maximum_read(
+                TensorRead::from_view(TensorView::I32(lhs.as_view())),
+                TensorRead::from_view(TensorView::I32(rhs.as_view())),
+            )
+        })
         .unwrap();
     let min_out = backend
-        .minimum_read(
-            TensorRead::from_view(TensorView::I32(lhs.as_view())),
-            TensorRead::from_view(TensorView::I32(rhs.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.minimum_read(
+                TensorRead::from_view(TensorView::I32(lhs.as_view())),
+                TensorRead::from_view(TensorView::I32(rhs.as_view())),
+            )
+        })
         .unwrap();
     assert_eq!(max_out.as_slice::<i32>().unwrap(), &[0, -1, 8, i32::MAX]);
     assert_eq!(
@@ -258,16 +274,20 @@ fn test_integer_maximum_minimum_and_reduction_read_views() {
     let input = TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![i32::MIN, 1, i32::MAX, -5])
         .unwrap();
     let max_cols = backend
-        .reduce_max_read(
-            TensorRead::from_view(TensorView::I32(input.as_view())),
-            &[0],
-        )
+        .with_backend_session(|__s| {
+            __s.reduce_max_read(
+                TensorRead::from_view(TensorView::I32(input.as_view())),
+                &[0],
+            )
+        })
         .unwrap();
     let min_cols = backend
-        .reduce_min_read(
-            TensorRead::from_view(TensorView::I32(input.as_view())),
-            &[0],
-        )
+        .with_backend_session(|__s| {
+            __s.reduce_min_read(
+                TensorRead::from_view(TensorView::I32(input.as_view())),
+                &[0],
+            )
+        })
         .unwrap();
     assert_eq!(max_cols.as_slice::<i32>().unwrap(), &[1, i32::MAX]);
     assert_eq!(min_cols.as_slice::<i32>().unwrap(), &[i32::MIN, -5]);
@@ -349,19 +369,23 @@ fn test_pow_rank_zero_read_views_and_domain_contracts() {
     let mut backend = CpuBackend::new();
 
     let tensor_base = backend
-        .pow_read(
-            TensorRead::from_view(TensorView::F32(tensor.as_view())),
-            TensorRead::from_view(TensorView::F32(exponent.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.pow_read(
+                TensorRead::from_view(TensorView::F32(tensor.as_view())),
+                TensorRead::from_view(TensorView::F32(exponent.as_view())),
+            )
+        })
         .unwrap();
     assert_eq!(tensor_base.shape(), &[3]);
     assert_eq!(tensor_base.as_slice::<f32>().unwrap(), &[4.0, 9.0, 16.0]);
 
     let scalar_base = backend
-        .pow_read(
-            TensorRead::from_view(TensorView::F32(base.as_view())),
-            TensorRead::from_view(TensorView::F32(tensor.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.pow_read(
+                TensorRead::from_view(TensorView::F32(base.as_view())),
+                TensorRead::from_view(TensorView::F32(tensor.as_view())),
+            )
+        })
         .unwrap();
     assert_eq!(scalar_base.shape(), &[3]);
     assert_eq!(scalar_base.as_slice::<f32>().unwrap(), &[4.0, 8.0, 16.0]);
@@ -404,16 +428,20 @@ fn test_integer_div_rem_pow_read_views_contract() {
     let mut backend = CpuBackend::new();
 
     let quotient = backend
-        .div_read(
-            TensorRead::from_view(TensorView::I32(lhs.as_view())),
-            TensorRead::from_view(TensorView::I32(rhs.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.div_read(
+                TensorRead::from_view(TensorView::I32(lhs.as_view())),
+                TensorRead::from_view(TensorView::I32(rhs.as_view())),
+            )
+        })
         .unwrap();
     let remainder = backend
-        .rem_read(
-            TensorRead::from_view(TensorView::I32(lhs.as_view())),
-            TensorRead::from_view(TensorView::I32(rhs.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.rem_read(
+                TensorRead::from_view(TensorView::I32(lhs.as_view())),
+                TensorRead::from_view(TensorView::I32(rhs.as_view())),
+            )
+        })
         .unwrap();
     assert_eq!(
         quotient.as_slice::<i32>().unwrap(),
@@ -428,10 +456,12 @@ fn test_integer_div_rem_pow_read_views_contract() {
         .unwrap();
     let exp = TypedTensor::<i32>::from_vec_col_major(vec![4], vec![3_i32, 3, 2, 1]).unwrap();
     let out = backend
-        .pow_read(
-            TensorRead::from_view(TensorView::I32(base.as_view())),
-            TensorRead::from_view(TensorView::I32(exp.as_view())),
-        )
+        .with_backend_session(|__s| {
+            __s.pow_read(
+                TensorRead::from_view(TensorView::I32(base.as_view())),
+                TensorRead::from_view(TensorView::I32(exp.as_view())),
+            )
+        })
         .unwrap();
     assert_eq!(
         out.as_slice::<i32>().unwrap(),
@@ -722,7 +752,9 @@ fn test_reduce_sum_squares_f32_and_f64() {
 
     let mut backend = CpuBackend::new();
     let f32_squared = backend
-        .reduce_sum_squares_read(TensorRead::from_tensor(&f32s), &[])
+        .with_backend_session(|__s| {
+            __s.reduce_sum_squares_read(TensorRead::from_tensor(&f32s), &[])
+        })
         .unwrap();
     assert_eq!(
         f32_squared.as_slice::<f32>().unwrap(),
@@ -769,7 +801,7 @@ fn unsupported_reduction_dtype_messages_prescribe_known_recovery() {
     );
     let mut backend = CpuBackend::new();
     let error = backend
-        .reduce_max_read(TensorRead::from_tensor(&complex), &[0])
+        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&complex), &[0]))
         .unwrap_err();
     assert!(matches!(
         error,
@@ -789,7 +821,9 @@ fn test_reduce_sum_squares_read_accepts_noncompact_view() {
     let mut backend = CpuBackend::new();
 
     let output = backend
-        .reduce_sum_squares_read(TensorRead::from_view(TensorView::F64(transposed)), &[0])
+        .with_backend_session(|__s| {
+            __s.reduce_sum_squares_read(TensorRead::from_view(TensorView::F64(transposed)), &[0])
+        })
         .unwrap();
 
     assert_eq!(output.shape(), &[2]);
@@ -840,10 +874,12 @@ fn test_integer_reduce_read_views_wrap_on_overflow() {
     let mut backend = CpuBackend::new();
 
     let sum = backend
-        .reduce_sum_read(
-            TensorRead::from_view(TensorView::I32(input.as_view())),
-            &[0],
-        )
+        .with_backend_session(|__s| {
+            __s.reduce_sum_read(
+                TensorRead::from_view(TensorView::I32(input.as_view())),
+                &[0],
+            )
+        })
         .unwrap();
     assert_eq!(
         sum.as_slice::<i32>().unwrap(),
@@ -853,10 +889,12 @@ fn test_integer_reduce_read_views_wrap_on_overflow() {
     let input = TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![i32::MIN, -1, i32::MAX, 2])
         .unwrap();
     let prod = backend
-        .reduce_prod_read(
-            TensorRead::from_view(TensorView::I32(input.as_view())),
-            &[0],
-        )
+        .with_backend_session(|__s| {
+            __s.reduce_prod_read(
+                TensorRead::from_view(TensorView::I32(input.as_view())),
+                &[0],
+            )
+        })
         .unwrap();
     assert_eq!(prod.as_slice::<i32>().unwrap(), &[i32::MIN, -2]);
 }
@@ -924,14 +962,16 @@ fn test_slice() {
     );
     let mut backend = CpuBackend::new();
     let out = backend
-        .slice(
-            &input,
-            &SliceConfig {
-                starts: vec![1, 1],
-                limits: vec![3, 3],
-                strides: vec![1, 1],
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![1, 1],
+                    limits: vec![3, 3],
+                    strides: vec![1, 1],
+                },
+            )
+        })
         .unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
@@ -947,7 +987,9 @@ fn test_reverse_axis_zero() {
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
     let mut backend = CpuBackend::new();
-    let out = backend.reverse(&input, &[0]).unwrap();
+    let out = backend
+        .with_backend_session(|__s| __s.reverse(&input, &[0]))
+        .unwrap();
 
     assert_eq!(out.shape(), &[2, 3]);
     assert_eq!(get_f64(&out, &[0, 0]), 2.0);
@@ -963,7 +1005,9 @@ fn test_reverse_accepts_i64_data_tensor() {
     let input = Tensor::from_vec_col_major(vec![3], vec![1_i64, 2, 3]).unwrap();
     let mut backend = CpuBackend::new();
 
-    let out = backend.reverse(&input, &[0]).unwrap();
+    let out = backend
+        .with_backend_session(|__s| __s.reverse(&input, &[0]))
+        .unwrap();
 
     assert_eq!(out.dtype(), DType::I64);
     assert_eq!(out.shape(), &[3]);
@@ -1081,7 +1125,9 @@ fn test_reverse_axis_out_of_bounds_returns_error() {
     );
     let mut backend = CpuBackend::new();
 
-    let err = backend.reverse(&input, &[1]).unwrap_err();
+    let err = backend
+        .with_backend_session(|__s| __s.reverse(&input, &[1]))
+        .unwrap_err();
 
     assert!(matches!(
         err,
@@ -1102,7 +1148,7 @@ fn test_gather_rejects_fractional_float_indices() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .gather(&operand, &start_indices, &simple_gather_config())
+        .with_backend_session(|__s| __s.gather(&operand, &start_indices, &simple_gather_config()))
         .unwrap_err();
 
     assert!(matches!(
@@ -1125,7 +1171,7 @@ fn test_gather_rejects_complex_indices() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .gather(&operand, &start_indices, &simple_gather_config())
+        .with_backend_session(|__s| __s.gather(&operand, &start_indices, &simple_gather_config()))
         .unwrap_err();
 
     assert!(matches!(
@@ -1145,7 +1191,9 @@ fn test_dynamic_slice_rejects_oversized_window() {
     let starts = Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap();
     let mut backend = CpuBackend::new();
 
-    let err = backend.dynamic_slice(&input, &starts, &[3]).unwrap_err();
+    let err = backend
+        .with_backend_session(|__s| __s.dynamic_slice(&input, &starts, &[3]))
+        .unwrap_err();
 
     assert!(matches!(
         err,
@@ -1167,7 +1215,7 @@ fn test_large_float_index_outside_exact_integer_range_returns_error() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .gather(&operand, &start_indices, &simple_gather_config())
+        .with_backend_session(|__s| __s.gather(&operand, &start_indices, &simple_gather_config()))
         .unwrap_err();
 
     assert!(matches!(
@@ -1187,14 +1235,16 @@ fn test_invalid_slice_config_returns_error() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .slice(
-            &input,
-            &SliceConfig {
-                starts: vec![0, 0, 0],
-                limits: vec![2, 2],
-                strides: vec![1, 1],
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![0, 0, 0],
+                    limits: vec![2, 2],
+                    strides: vec![1, 1],
+                },
+            )
+        })
         .unwrap_err();
     assert!(matches!(err, crate::Error::Validation { op: "slice", .. }));
 }
@@ -1207,14 +1257,16 @@ fn test_invalid_pad_config_returns_error() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .pad(
-            &input,
-            &PadConfig {
-                edge_padding_low: vec![0],
-                edge_padding_high: vec![0, 0],
-                interior_padding: vec![0],
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.pad(
+                &input,
+                &PadConfig {
+                    edge_padding_low: vec![0],
+                    edge_padding_high: vec![0, 0],
+                    interior_padding: vec![0],
+                },
+            )
+        })
         .unwrap_err();
     assert!(matches!(err, crate::Error::Validation { op: "pad", .. }));
 }
@@ -1235,7 +1287,7 @@ fn test_gather_rejects_malformed_offset_dims() {
     };
 
     let err = backend
-        .gather(&operand, &start_indices, &config)
+        .with_backend_session(|__s| __s.gather(&operand, &start_indices, &config))
         .unwrap_err();
     assert!(matches!(err, crate::Error::Validation { op: "gather", .. }));
 }
@@ -1257,7 +1309,7 @@ fn test_scatter_rejects_update_window_dim_out_of_bounds() {
     };
 
     let err = backend
-        .scatter(&operand, &scatter_indices, &updates, &config)
+        .with_backend_session(|__s| __s.scatter(&operand, &scatter_indices, &updates, &config))
         .unwrap_err();
     assert!(matches!(
         err,
@@ -1284,7 +1336,7 @@ fn test_scatter_rejects_too_many_update_window_dims() {
     };
 
     let err = backend
-        .scatter(&operand, &scatter_indices, &updates, &config)
+        .with_backend_session(|__s| __s.scatter(&operand, &scatter_indices, &updates, &config))
         .unwrap_err();
     assert!(matches!(
         err,
@@ -1302,7 +1354,9 @@ fn test_concatenate_axis_zero() {
         TypedTensor::from_vec_col_major(vec![2, 3], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap(),
     );
     let mut backend = CpuBackend::new();
-    let out = backend.concatenate(&[&lhs, &rhs], 0).unwrap();
+    let out = backend
+        .with_backend_session(|__s| __s.concatenate(&[&lhs, &rhs], 0))
+        .unwrap();
 
     assert_eq!(out.shape(), &[4, 3]);
     assert_eq!(get_f64(&out, &[0, 0]), 1.0);

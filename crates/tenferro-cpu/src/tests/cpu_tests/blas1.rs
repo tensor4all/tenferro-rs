@@ -485,10 +485,12 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
 
     for _ in 0..2 {
         backend
-            .copy_read_into(
-                TensorRead::from_tensor(&p),
-                TensorWrite::from_tensor(&mut ap),
-            )
+            .with_backend_session(|__s| {
+                __s.copy_read_into(
+                    TensorRead::from_tensor(&p),
+                    TensorWrite::from_tensor(&mut ap),
+                )
+            })
             .unwrap();
         let computed_ap = backend
             .with_backend_session(|__s| {
@@ -505,10 +507,12 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
             })
             .unwrap();
         backend
-            .copy_read_into(
-                TensorRead::from_tensor(&computed_ap),
-                TensorWrite::from_tensor(&mut ap),
-            )
+            .with_backend_session(|__s| {
+                __s.copy_read_into(
+                    TensorRead::from_tensor(&computed_ap),
+                    TensorWrite::from_tensor(&mut ap),
+                )
+            })
             .unwrap();
         let rs_value = rs.as_slice::<f64>().unwrap()[0];
         let pap = vdot(&mut backend, &p, &ap).as_slice::<f64>().unwrap()[0];

@@ -3,7 +3,8 @@ use std::env;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendCachedDot, BackendRuntimeCache, DotGeneralConfig, Tensor, TensorDot};
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::{BackendRuntimeCache, DotGeneralConfig, Tensor};
 
 const PHYS_DIM: usize = 2;
 const CHIS: &[usize] = &[1, 2, 4, 8, 16, 32];
@@ -106,44 +107,60 @@ fn run_case_normal(
 ) -> Tensor {
     match case {
         PairwiseCase::FirstSite => backend
-            .dot_general_with_conj(
-                &fixtures.bra_first,
-                &fixtures.ket_first,
-                &configs.first_site,
-                true,
-                false,
-            )
+            .with_backend_session(|__s| {
+                __s.dot_general_with_conj(
+                    &fixtures.bra_first,
+                    &fixtures.ket_first,
+                    &configs.first_site,
+                    true,
+                    false,
+                )
+            })
             .expect("first-site contraction should succeed"),
         PairwiseCase::EnvBra => backend
-            .dot_general_with_conj(
-                &fixtures.env,
-                &fixtures.bra_bulk,
-                &configs.env_bra,
-                false,
-                true,
-            )
-            .expect("environment-bra contraction should succeed"),
-        PairwiseCase::TmpKet => backend
-            .dot_general_with_conj(
-                &fixtures.tmp,
-                &fixtures.ket_bulk,
-                &configs.tmp_ket,
-                false,
-                false,
-            )
-            .expect("temporary-ket contraction should succeed"),
-        PairwiseCase::SiteUpdate => {
-            let tmp = backend
-                .dot_general_with_conj(
+            .with_backend_session(|__s| {
+                __s.dot_general_with_conj(
                     &fixtures.env,
                     &fixtures.bra_bulk,
                     &configs.env_bra,
                     false,
                     true,
                 )
+            })
+            .expect("environment-bra contraction should succeed"),
+        PairwiseCase::TmpKet => backend
+            .with_backend_session(|__s| {
+                __s.dot_general_with_conj(
+                    &fixtures.tmp,
+                    &fixtures.ket_bulk,
+                    &configs.tmp_ket,
+                    false,
+                    false,
+                )
+            })
+            .expect("temporary-ket contraction should succeed"),
+        PairwiseCase::SiteUpdate => {
+            let tmp = backend
+                .with_backend_session(|__s| {
+                    __s.dot_general_with_conj(
+                        &fixtures.env,
+                        &fixtures.bra_bulk,
+                        &configs.env_bra,
+                        false,
+                        true,
+                    )
+                })
                 .expect("environment-bra contraction should succeed");
             backend
-                .dot_general_with_conj(&tmp, &fixtures.ket_bulk, &configs.tmp_ket, false, false)
+                .with_backend_session(|__s| {
+                    __s.dot_general_with_conj(
+                        &tmp,
+                        &fixtures.ket_bulk,
+                        &configs.tmp_ket,
+                        false,
+                        false,
+                    )
+                })
                 .expect("temporary-ket contraction should succeed")
         }
     }
@@ -158,42 +175,20 @@ fn run_case_cached(
 ) -> Tensor {
     match case {
         PairwiseCase::FirstSite => backend
-            .dot_general_with_conj_cached(
-                cache,
-                Some(0),
-                &fixtures.bra_first,
-                &fixtures.ket_first,
-                &configs.first_site,
-                true,
-                false,
-            )
+            .with_backend_session_cached(cache, |__s| {
+                __s.dot_general_with_conj_cached(
+                    Some(0),
+                    &fixtures.bra_first,
+                    &fixtures.ket_first,
+                    &configs.first_site,
+                    true,
+                    false,
+                )
+            })
             .expect("first-site contraction should succeed"),
         PairwiseCase::EnvBra => backend
-            .dot_general_with_conj_cached(
-                cache,
-                Some(0),
-                &fixtures.env,
-                &fixtures.bra_bulk,
-                &configs.env_bra,
-                false,
-                true,
-            )
-            .expect("environment-bra contraction should succeed"),
-        PairwiseCase::TmpKet => backend
-            .dot_general_with_conj_cached(
-                cache,
-                Some(0),
-                &fixtures.tmp,
-                &fixtures.ket_bulk,
-                &configs.tmp_ket,
-                false,
-                false,
-            )
-            .expect("temporary-ket contraction should succeed"),
-        PairwiseCase::SiteUpdate => {
-            let tmp = backend
-                .dot_general_with_conj_cached(
-                    cache,
+            .with_backend_session_cached(cache, |__s| {
+                __s.dot_general_with_conj_cached(
                     Some(0),
                     &fixtures.env,
                     &fixtures.bra_bulk,
@@ -201,17 +196,44 @@ fn run_case_cached(
                     false,
                     true,
                 )
-                .expect("environment-bra contraction should succeed");
-            backend
-                .dot_general_with_conj_cached(
-                    cache,
-                    Some(1),
-                    &tmp,
+            })
+            .expect("environment-bra contraction should succeed"),
+        PairwiseCase::TmpKet => backend
+            .with_backend_session_cached(cache, |__s| {
+                __s.dot_general_with_conj_cached(
+                    Some(0),
+                    &fixtures.tmp,
                     &fixtures.ket_bulk,
                     &configs.tmp_ket,
                     false,
                     false,
                 )
+            })
+            .expect("temporary-ket contraction should succeed"),
+        PairwiseCase::SiteUpdate => {
+            let tmp = backend
+                .with_backend_session_cached(cache, |__s| {
+                    __s.dot_general_with_conj_cached(
+                        Some(0),
+                        &fixtures.env,
+                        &fixtures.bra_bulk,
+                        &configs.env_bra,
+                        false,
+                        true,
+                    )
+                })
+                .expect("environment-bra contraction should succeed");
+            backend
+                .with_backend_session_cached(cache, |__s| {
+                    __s.dot_general_with_conj_cached(
+                        Some(1),
+                        &tmp,
+                        &fixtures.ket_bulk,
+                        &configs.tmp_ket,
+                        false,
+                        false,
+                    )
+                })
                 .expect("temporary-ket contraction should succeed")
         }
     }

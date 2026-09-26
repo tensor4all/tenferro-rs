@@ -47,7 +47,9 @@ fn cpu_runtime_materialization_dispatches_all_dtypes_with_backend_session_parity
             let read = TensorRead::from_view(view);
             let mut backend = CpuBackend::with_threads(2).unwrap();
 
-            let direct = backend.to_contiguous_read(read.clone()).unwrap();
+            let direct = backend
+                .with_backend_session(|__s| __s.to_contiguous_read(read.clone()))
+                .unwrap();
             let session = backend
                 .with_backend_session(|exec| exec.to_contiguous_read(read))
                 .unwrap();
@@ -83,7 +85,7 @@ fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement()
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .to_contiguous_read(TensorRead::from_tensor(&input))
+        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&input)))
         .unwrap_err();
 
     assert!(matches!(
@@ -102,7 +104,9 @@ fn cpu_runtime_materialization_rejects_host_view_with_device_placement() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .to_contiguous_read(TensorRead::from_view(TensorView::F64(input.as_view())))
+        .with_backend_session(|__s| {
+            __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(input.as_view())))
+        })
         .unwrap_err();
 
     assert!(matches!(
@@ -131,10 +135,12 @@ fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
             let mut backend = CpuBackend::with_threads(2).unwrap();
 
             backend
-                .copy_read_into(
-                    TensorRead::from_tensor(&src),
-                    TensorWrite::from_tensor(&mut direct_dst),
-                )
+                .with_backend_session(|__s| {
+                    __s.copy_read_into(
+                        TensorRead::from_tensor(&src),
+                        TensorWrite::from_tensor(&mut direct_dst),
+                    )
+                })
                 .unwrap();
             backend
                 .with_backend_session(|exec| {
@@ -182,10 +188,12 @@ fn cpu_runtime_copy_handles_strided_source_and_destination_without_allocation() 
     let dst = TypedTensorViewMut::from_slice(vec![2, 2], vec![3, 1], 1, &mut dst_data).unwrap();
 
     backend
-        .copy_read_into(
-            TensorRead::from_view(TensorView::I32(src)),
-            TensorWrite::from_view(TensorViewMut::I32(dst)),
-        )
+        .with_backend_session(|__s| {
+            __s.copy_read_into(
+                TensorRead::from_view(TensorView::I32(src)),
+                TensorWrite::from_view(TensorViewMut::I32(dst)),
+            )
+        })
         .unwrap();
 
     assert_eq!(dst_data, [-1, 1, 5, -1, 3, 7, -1, -1]);
@@ -199,10 +207,10 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
     let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
     let mut wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap();
     assert!(matches!(
-        backend.copy_read_into(
+        backend.with_backend_session(|__s| __s.copy_read_into(
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut wrong_dtype),
-        ),
+        )),
         Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
@@ -211,10 +219,10 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
 
     let mut wrong_shape = Tensor::from_vec_col_major(vec![3], vec![0_i32; 3]).unwrap();
     assert!(matches!(
-        backend.copy_read_into(
+        backend.with_backend_session(|__s| __s.copy_read_into(
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut wrong_shape),
-        ),
+        )),
         Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
@@ -227,10 +235,10 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
         .expect("an i32 tensor")
         .set_placement(opaque_backend_placement());
     assert!(matches!(
-        backend.copy_read_into(
+        backend.with_backend_session(|__s| __s.copy_read_into(
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut misplaced),
-        ),
+        )),
         Err(Error::RuntimeState {
             op: "CpuBackend::copy_read_into",
             ref message,
@@ -685,7 +693,9 @@ fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
         .transpose_view([1, 0])
         .unwrap();
     let transposed = backend
-        .reshape_read(TensorRead::from_view(TensorView::F64(transposed)), &[3, 2])
+        .with_backend_session(|__s| {
+            __s.reshape_read(TensorRead::from_view(TensorView::F64(transposed)), &[3, 2])
+        })
         .unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_eq!(
@@ -708,7 +718,9 @@ fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
     )
     .unwrap();
     let scattered = backend
-        .reshape_read(TensorRead::from_view(TensorView::F64(scattered)), &[4])
+        .with_backend_session(|__s| {
+            __s.reshape_read(TensorRead::from_view(TensorView::F64(scattered)), &[4])
+        })
         .unwrap();
     assert_eq!(scattered.shape(), &[4]);
     assert_eq!(
@@ -724,7 +736,9 @@ fn cpu_structural_read_transpose_explicit_stride_exact_output() {
     let view = tenferro_tensor::TypedTensorView::from_slice([2, 3], [2, 5], 1, &storage).unwrap();
 
     let output = backend
-        .transpose_read(TensorRead::from_view(TensorView::F64(view)), &[1, 0])
+        .with_backend_session(|__s| {
+            __s.transpose_read(TensorRead::from_view(TensorView::F64(view)), &[1, 0])
+        })
         .unwrap();
 
     assert_eq!(output.shape(), &[3, 2]);
@@ -741,7 +755,9 @@ fn cpu_structural_read_reshape_explicit_stride_exact_output() {
     let view = tenferro_tensor::TypedTensorView::from_slice([2, 2], [3, -1], 5, &storage).unwrap();
 
     let output = backend
-        .reshape_read(TensorRead::from_view(TensorView::I32(view)), &[4])
+        .with_backend_session(|__s| {
+            __s.reshape_read(TensorRead::from_view(TensorView::I32(view)), &[4])
+        })
         .unwrap();
 
     assert_eq!(output.shape(), &[4]);
@@ -755,11 +771,13 @@ fn cpu_structural_read_broadcast_in_dim_explicit_stride_exact_output() {
     let view = tenferro_tensor::TypedTensorView::from_slice([2, 1], [-2, 7], 4, &storage).unwrap();
 
     let output = backend
-        .broadcast_in_dim_read(
-            TensorRead::from_view(TensorView::I64(view)),
-            &[2, 3],
-            &[0, 1],
-        )
+        .with_backend_session(|__s| {
+            __s.broadcast_in_dim_read(
+                TensorRead::from_view(TensorView::I64(view)),
+                &[2, 3],
+                &[0, 1],
+            )
+        })
         .unwrap();
 
     assert_eq!(output.shape(), &[2, 3]);
@@ -1004,20 +1022,26 @@ fn cpu_structural_read_backend_and_exec_session_outputs_match() {
             tenferro_tensor::TypedTensorView::from_slice([2, 1], [2, 0], 1, &storage).unwrap();
         [
             backend
-                .transpose_read(
-                    TensorRead::from_view(TensorView::F64(transpose_view)),
-                    &[1, 0],
-                )
+                .with_backend_session(|__s| {
+                    __s.transpose_read(
+                        TensorRead::from_view(TensorView::F64(transpose_view)),
+                        &[1, 0],
+                    )
+                })
                 .unwrap(),
             backend
-                .reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
+                .with_backend_session(|__s| {
+                    __s.reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
+                })
                 .unwrap(),
             backend
-                .broadcast_in_dim_read(
-                    TensorRead::from_view(TensorView::F64(broadcast_view)),
-                    &[2, 3],
-                    &[0, 1],
-                )
+                .with_backend_session(|__s| {
+                    __s.broadcast_in_dim_read(
+                        TensorRead::from_view(TensorView::F64(broadcast_view)),
+                        &[2, 3],
+                        &[0, 1],
+                    )
+                })
                 .unwrap(),
         ]
     };
@@ -1227,7 +1251,9 @@ fn test_cast_acquires_output_from_dtype_pool() {
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4], vec![1.25, 2.5, 3.75, 4.0]).unwrap(),
     );
-    let out = backend.cast(&input, DType::F32).unwrap();
+    let out = backend
+        .with_backend_session(|__s| __s.cast(&input, DType::F32))
+        .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
     assert_eq!(get_f32(&out, &[0]), 1.25);
@@ -1252,7 +1278,9 @@ fn test_slice_acquires_output_from_pool() {
         limits: vec![3],
         strides: vec![1],
     };
-    let out = backend.slice(&input, &config).unwrap();
+    let out = backend
+        .with_backend_session(|__s| __s.slice(&input, &config))
+        .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
     assert_eq!(get_f64(&out, &[0]), 2.0);
@@ -1277,7 +1305,9 @@ fn test_pad_acquires_and_zeroes_output_from_pool() {
         edge_padding_high: vec![1],
         interior_padding: vec![0],
     };
-    let out = backend.pad(&input, &config).unwrap();
+    let out = backend
+        .with_backend_session(|__s| __s.pad(&input, &config))
+        .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
     assert_eq!(get_f64(&out, &[0]), 0.0);
@@ -1305,7 +1335,7 @@ fn test_dynamic_update_slice_acquires_clone_from_pool() {
     let starts =
         Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![1], vec![1]).unwrap());
     let out = backend
-        .dynamic_update_slice(&operand, &update, &starts)
+        .with_backend_session(|__s| __s.dynamic_update_slice(&operand, &update, &starts))
         .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
@@ -1492,7 +1522,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             inputs: &[TensorRead<'_>],
             out: TensorWrite<'_>,
         ) -> crate::Result<()> {
-            CpuBackend::new().elementwise_read_into(op, inputs, out)
+            CpuBackend::new().with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2000,7 +2030,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             inputs: &[TensorRead<'_>],
             out: TensorWrite<'_>,
         ) -> crate::Result<()> {
-            CpuBackend::new().elementwise_read_into(op, inputs, out)
+            CpuBackend::new().with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2596,15 +2626,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         ));
     }
 
-    let direct = BackendCachedDot::dot_general_cached(
-        &mut backend,
-        &mut cache,
-        Some(0),
-        &lhs,
-        &rhs,
-        &config,
-    )
-    .unwrap();
+    let direct = backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
+        })
+        .unwrap();
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[6.0]);
 
     let lhs_folded =
@@ -2624,17 +2650,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     .unwrap();
     assert_eq!(read_views.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let rhs_folded = BackendCachedDot::dot_general_with_conj_cached(
-        &mut backend,
-        &mut cache,
-        Some(1),
-        &lhs,
-        &rhs,
-        &config,
-        false,
-        true,
-    )
-    .unwrap();
+    let rhs_folded = backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, false, true)
+        })
+        .unwrap();
     assert_eq!(rhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
     let upload_error = backend
@@ -2960,13 +2980,21 @@ fn test_pool_backed_structural_public_paths_cover_dispatch_and_helpers() {
 
     let mut backend = CpuBackend::new();
     let i64_matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
-    let as_c64 = backend.cast(&i64_matrix, DType::C64).unwrap();
+    let as_c64 = backend
+        .with_backend_session(|__s| __s.cast(&i64_matrix, DType::C64))
+        .unwrap();
     assert_eq!(as_c64.dtype(), DType::C64);
-    let as_f32 = backend.cast(&as_c64, DType::F32).unwrap();
+    let as_f32 = backend
+        .with_backend_session(|__s| __s.cast(&as_c64, DType::F32))
+        .unwrap();
     assert_eq!(as_f32.dtype(), DType::F32);
-    let as_c32 = backend.cast(&matrix, DType::C32).unwrap();
+    let as_c32 = backend
+        .with_backend_session(|__s| __s.cast(&matrix, DType::C32))
+        .unwrap();
     assert_eq!(as_c32.dtype(), DType::C32);
-    let as_i64 = backend.cast(&as_c32, DType::I64).unwrap();
+    let as_i64 = backend
+        .with_backend_session(|__s| __s.cast(&as_c32, DType::I64))
+        .unwrap();
     assert_eq!(as_i64.as_slice::<i64>().unwrap(), &[1, 2, 3, 4]);
 
     let diag = extract_diagonal(&matrix, 0, 1).unwrap();
@@ -3221,8 +3249,7 @@ where
 }
 
 #[test]
-fn test_backend_and_session_read_delegates_cover_non_add_ops() {
+fn session_read_delegates_cover_non_add_ops() {
     let mut backend = CpuBackend::new();
-    exercise_read_delegate_ops(&mut backend);
     backend.with_backend_session(|exec| exercise_read_delegate_ops(exec));
 }

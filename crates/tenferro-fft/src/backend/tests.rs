@@ -25,23 +25,6 @@ fn execution_cache_debug_identifies_both_owners_and_exposes_the_store() {
     );
 }
 
-// Exercise the trait defaults with the existing backend's real structural
-// operations; only the final FFT execution delegates to its CPU session.
-impl FftBackend for tenferro_cpu::CpuBackend {
-    fn execute_fft(
-        &mut self,
-        input: &Tensor,
-        spec: &FftPlanSpec,
-        cache: FftExecutionCache<'_>,
-    ) -> tenferro_tensor::Result<Tensor> {
-        use tenferro_tensor::BackendSessionHost;
-        self.with_backend_session(|session| {
-            tenferro_cpu::with_cpu_exec_session(session, |cpu| cpu.execute_fft(input, spec, cache))
-                .unwrap()
-        })
-    }
-}
-
 #[test]
 fn default_read_execution_preserves_owned_input_and_canonicalizes_a_view() {
     use crate::{FftNorm, FftOperation};
@@ -65,15 +48,21 @@ fn default_read_execution_preserves_owned_input_and_canonicalizes_a_view() {
         FftNorm::Backward,
     )
     .unwrap();
+    use tenferro_tensor::BackendSessionHost;
     let mut backend = tenferro_cpu::CpuBackend::with_threads(1).unwrap();
     let mut cache = FftPlanCache::default();
     for (read, expected) in [
         (TensorRead::from_tensor(&input), [3., -1., 7., -1.]),
         (view, [4., -2., 6., -2.]),
     ] {
-        backend.validate_fft_read_input("fft", &read).unwrap();
         let output = backend
-            .execute_fft_read(read, &spec, FftExecutionCache::caller_owned(&mut cache))
+            .with_backend_session(|session| {
+                tenferro_cpu::with_cpu_exec_session(session, |cpu| {
+                    cpu.validate_fft_read_input("fft", &read).unwrap();
+                    cpu.execute_fft_read(read, &spec, FftExecutionCache::caller_owned(&mut cache))
+                })
+                .expect("the CPU session exposes the FFT capability")
+            })
             .unwrap();
         assert_eq!(
             output.as_slice::<Complex64>().unwrap(),

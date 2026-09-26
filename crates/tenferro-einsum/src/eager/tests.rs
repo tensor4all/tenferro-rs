@@ -207,7 +207,7 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
             }
             _ => panic!("outer product should pass f64 broadcast views to mul_read"),
         }
-        CpuBackend::new().mul_read(lhs, rhs)
+        CpuBackend::new().with_backend_session(|__s| __s.mul_read(lhs, rhs))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

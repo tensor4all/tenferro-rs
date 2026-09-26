@@ -1,8 +1,8 @@
 use num_complex::{Complex32, Complex64};
 
 use crate::{dynamic_slice, gather, pad, scatter, CpuBackend};
+use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::TensorRead;
-use tenferro_tensor::{BackendSessionHost, TensorIndexing};
 use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
 
@@ -236,23 +236,38 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         strides: vec![1],
     };
     assert_eq!(
-        backend.slice(&f32_operand, &slice_cfg).unwrap().shape(),
+        backend
+            .with_backend_session(|__s| __s.slice(&f32_operand, &slice_cfg))
+            .unwrap()
+            .shape(),
         &[2]
     );
     assert_eq!(
-        backend.slice(&i64_operand, &slice_cfg).unwrap().shape(),
+        backend
+            .with_backend_session(|__s| __s.slice(&i64_operand, &slice_cfg))
+            .unwrap()
+            .shape(),
         &[2]
     );
     assert_eq!(
-        backend.slice(&bool_operand, &slice_cfg).unwrap().shape(),
+        backend
+            .with_backend_session(|__s| __s.slice(&bool_operand, &slice_cfg))
+            .unwrap()
+            .shape(),
         &[2]
     );
     assert_eq!(
-        backend.slice(&c32_operand, &slice_cfg).unwrap().shape(),
+        backend
+            .with_backend_session(|__s| __s.slice(&c32_operand, &slice_cfg))
+            .unwrap()
+            .shape(),
         &[2]
     );
     assert_eq!(
-        backend.slice(&c64_operand, &slice_cfg).unwrap().shape(),
+        backend
+            .with_backend_session(|__s| __s.slice(&c64_operand, &slice_cfg))
+            .unwrap()
+            .shape(),
         &[2]
     );
 
@@ -292,38 +307,68 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
     let mut backend = CpuBackend::new();
     assert_eq!(
         backend
-            .concatenate(&[&f32_operand, &f32_operand], 0)
+            .with_backend_session(|__s| __s.concatenate(&[&f32_operand, &f32_operand], 0))
             .unwrap()
             .shape(),
         &[6]
     );
     assert_eq!(
         backend
-            .concatenate(&[&i64_operand, &i64_operand], 0)
+            .with_backend_session(|__s| __s.concatenate(&[&i64_operand, &i64_operand], 0))
             .unwrap()
             .shape(),
         &[6]
     );
     assert_eq!(
         backend
-            .concatenate(&[&c32_operand, &c32_operand], 0)
+            .with_backend_session(|__s| __s.concatenate(&[&c32_operand, &c32_operand], 0))
             .unwrap()
             .shape(),
         &[6]
     );
     assert_eq!(
         backend
-            .concatenate(&[&c64_operand, &c64_operand], 0)
+            .with_backend_session(|__s| __s.concatenate(&[&c64_operand, &c64_operand], 0))
             .unwrap()
             .shape(),
         &[6]
     );
 
-    assert_eq!(backend.reverse(&f32_operand, &[0]).unwrap().shape(), &[3]);
-    assert_eq!(backend.reverse(&i64_operand, &[0]).unwrap().shape(), &[3]);
-    assert_eq!(backend.reverse(&bool_operand, &[0]).unwrap().shape(), &[3]);
-    assert_eq!(backend.reverse(&c32_operand, &[0]).unwrap().shape(), &[3]);
-    assert_eq!(backend.reverse(&c64_operand, &[0]).unwrap().shape(), &[3]);
+    assert_eq!(
+        backend
+            .with_backend_session(|__s| __s.reverse(&f32_operand, &[0]))
+            .unwrap()
+            .shape(),
+        &[3]
+    );
+    assert_eq!(
+        backend
+            .with_backend_session(|__s| __s.reverse(&i64_operand, &[0]))
+            .unwrap()
+            .shape(),
+        &[3]
+    );
+    assert_eq!(
+        backend
+            .with_backend_session(|__s| __s.reverse(&bool_operand, &[0]))
+            .unwrap()
+            .shape(),
+        &[3]
+    );
+    assert_eq!(
+        backend
+            .with_backend_session(|__s| __s.reverse(&c32_operand, &[0]))
+            .unwrap()
+            .shape(),
+        &[3]
+    );
+    assert_eq!(
+        backend
+            .with_backend_session(|__s| __s.reverse(&c64_operand, &[0]))
+            .unwrap()
+            .shape(),
+        &[3]
+    );
 }
 
 #[test]
@@ -331,23 +376,29 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
     let mut input = Tensor::from_vec_col_major(vec![4], vec![true, false, true, false]).unwrap();
     let sliced = backend
-        .slice(
-            &input,
-            &SliceConfig {
-                starts: vec![1],
-                limits: vec![4],
-                strides: vec![2],
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![1],
+                    limits: vec![4],
+                    strides: vec![2],
+                },
+            )
+        })
         .unwrap();
     assert_eq!(sliced.as_slice::<bool>().unwrap(), &[false, false]);
 
-    let reversed = backend.reverse(&input, &[0]).unwrap();
+    let reversed = backend
+        .with_backend_session(|__s| __s.reverse(&input, &[0]))
+        .unwrap();
     assert_eq!(
         reversed.as_slice::<bool>().unwrap(),
         &[false, true, false, true]
     );
-    let concatenated = backend.concatenate(&[&sliced, &reversed], 0).unwrap();
+    let concatenated = backend
+        .with_backend_session(|__s| __s.concatenate(&[&sliced, &reversed], 0))
+        .unwrap();
     assert_eq!(
         concatenated.as_slice::<bool>().unwrap(),
         &[false, false, false, true, false, true]
@@ -369,38 +420,42 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
 
     let empty = Tensor::from_vec_col_major(vec![0], Vec::<bool>::new()).unwrap();
     let empty_slice = backend
-        .slice(
-            &empty,
-            &SliceConfig {
-                starts: vec![0],
-                limits: vec![0],
-                strides: vec![1],
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.slice(
+                &empty,
+                &SliceConfig {
+                    starts: vec![0],
+                    limits: vec![0],
+                    strides: vec![1],
+                },
+            )
+        })
         .unwrap();
     assert!(empty_slice.as_slice::<bool>().unwrap().is_empty());
     assert!(backend
-        .reverse(&empty, &[0])
+        .with_backend_session(|__s| __s.reverse(&empty, &[0]))
         .unwrap()
         .as_slice::<bool>()
         .unwrap()
         .is_empty());
     assert!(backend
-        .concatenate(&[&empty, &empty], 0)
+        .with_backend_session(|__s| __s.concatenate(&[&empty, &empty], 0))
         .unwrap()
         .as_slice::<bool>()
         .unwrap()
         .is_empty());
 
     let padded = backend
-        .pad(
-            &empty,
-            &PadConfig {
-                edge_padding_low: vec![1],
-                edge_padding_high: vec![2],
-                interior_padding: vec![0],
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.pad(
+                &empty,
+                &PadConfig {
+                    edge_padding_low: vec![1],
+                    edge_padding_high: vec![2],
+                    interior_padding: vec![0],
+                },
+            )
+        })
         .unwrap();
     assert_eq!(padded.as_slice::<bool>().unwrap(), &[false; 3]);
 }
@@ -412,14 +467,16 @@ fn cpu_slice_limit_over_dimension_is_invalid_configuration() {
         TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
     );
     let error = backend
-        .slice(
-            &input,
-            &SliceConfig {
-                starts: vec![0],
-                limits: vec![3],
-                strides: vec![1],
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![0],
+                    limits: vec![3],
+                    strides: vec![1],
+                },
+            )
+        })
         .unwrap_err();
 
     assert!(matches!(
@@ -442,58 +499,68 @@ fn cpu_indexing_validation_covers_error_branches() {
     );
 
     expect_rank_mismatch(
-        backend.slice(
-            &input,
-            &SliceConfig {
-                starts: vec![0],
-                limits: vec![2, 2],
-                strides: vec![1],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![0],
+                    limits: vec![2, 2],
+                    strides: vec![1],
+                },
+            )
+        }),
         "slice",
     );
     expect_rank_mismatch(
-        backend.slice(
-            &input,
-            &SliceConfig {
-                starts: vec![0],
-                limits: vec![2],
-                strides: vec![1, 1],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![0],
+                    limits: vec![2],
+                    strides: vec![1, 1],
+                },
+            )
+        }),
         "slice",
     );
     expect_invalid_config(
-        backend.slice(
-            &input,
-            &SliceConfig {
-                starts: vec![2],
-                limits: vec![1],
-                strides: vec![1],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![2],
+                    limits: vec![1],
+                    strides: vec![1],
+                },
+            )
+        }),
         "slice",
     );
     expect_invalid_config(
-        backend.slice(
-            &input,
-            &SliceConfig {
-                starts: vec![0],
-                limits: vec![3],
-                strides: vec![1],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![0],
+                    limits: vec![3],
+                    strides: vec![1],
+                },
+            )
+        }),
         "slice",
     );
     expect_invalid_config(
-        backend.slice(
-            &input,
-            &SliceConfig {
-                starts: vec![0],
-                limits: vec![2],
-                strides: vec![0],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.slice(
+                &input,
+                &SliceConfig {
+                    starts: vec![0],
+                    limits: vec![2],
+                    strides: vec![0],
+                },
+            )
+        }),
         "slice",
     );
 
@@ -501,94 +568,112 @@ fn cpu_indexing_validation_covers_error_branches() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
     );
     expect_rank_mismatch(
-        backend.dynamic_slice(
-            &matrix,
-            &Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap(),
-            &[1],
-        ),
+        backend.with_backend_session(|__s| {
+            __s.dynamic_slice(
+                &matrix,
+                &Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap(),
+                &[1],
+            )
+        }),
         "dynamic_slice",
     );
     expect_invalid_config(
-        backend.dynamic_slice(
-            &matrix,
-            &Tensor::from_vec_col_major(vec![1, 1], vec![0_i64]).unwrap(),
-            &[1, 1],
-        ),
+        backend.with_backend_session(|__s| {
+            __s.dynamic_slice(
+                &matrix,
+                &Tensor::from_vec_col_major(vec![1, 1], vec![0_i64]).unwrap(),
+                &[1, 1],
+            )
+        }),
         "dynamic_slice",
     );
     expect_invalid_config(
-        backend.dynamic_slice(
-            &matrix,
-            &Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
-            &[1, 1],
-        ),
+        backend.with_backend_session(|__s| {
+            __s.dynamic_slice(
+                &matrix,
+                &Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+                &[1, 1],
+            )
+        }),
         "dynamic_slice",
     );
 
     expect_rank_mismatch(
-        backend.pad(
-            &input,
-            &PadConfig {
-                edge_padding_low: vec![0, 0],
-                edge_padding_high: vec![0],
-                interior_padding: vec![0],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.pad(
+                &input,
+                &PadConfig {
+                    edge_padding_low: vec![0, 0],
+                    edge_padding_high: vec![0],
+                    interior_padding: vec![0],
+                },
+            )
+        }),
         "pad",
     );
     expect_rank_mismatch(
-        backend.pad(
-            &input,
-            &PadConfig {
-                edge_padding_low: vec![0],
-                edge_padding_high: vec![0],
-                interior_padding: vec![0, 0],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.pad(
+                &input,
+                &PadConfig {
+                    edge_padding_low: vec![0],
+                    edge_padding_high: vec![0],
+                    interior_padding: vec![0, 0],
+                },
+            )
+        }),
         "pad",
     );
     expect_invalid_config(
-        backend.pad(
-            &input,
-            &PadConfig {
-                edge_padding_low: vec![0],
-                edge_padding_high: vec![0],
-                interior_padding: vec![-1],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.pad(
+                &input,
+                &PadConfig {
+                    edge_padding_low: vec![0],
+                    edge_padding_high: vec![0],
+                    interior_padding: vec![-1],
+                },
+            )
+        }),
         "pad",
     );
     expect_invalid_config(
-        backend.pad(
-            &input,
-            &PadConfig {
-                edge_padding_low: vec![0],
-                edge_padding_high: vec![0],
-                interior_padding: vec![i64::MAX],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.pad(
+                &input,
+                &PadConfig {
+                    edge_padding_low: vec![0],
+                    edge_padding_high: vec![0],
+                    interior_padding: vec![i64::MAX],
+                },
+            )
+        }),
         "pad",
     );
     expect_invalid_config(
-        backend.pad(
-            &input,
-            &PadConfig {
-                edge_padding_low: vec![i64::MAX],
-                edge_padding_high: vec![1],
-                interior_padding: vec![0],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.pad(
+                &input,
+                &PadConfig {
+                    edge_padding_low: vec![i64::MAX],
+                    edge_padding_high: vec![1],
+                    interior_padding: vec![0],
+                },
+            )
+        }),
         "pad",
     );
     expect_invalid_config(
-        backend.pad(
-            &input,
-            &PadConfig {
-                edge_padding_low: vec![-3],
-                edge_padding_high: vec![0],
-                interior_padding: vec![0],
-            },
-        ),
+        backend.with_backend_session(|__s| {
+            __s.pad(
+                &input,
+                &PadConfig {
+                    edge_padding_low: vec![-3],
+                    edge_padding_high: vec![0],
+                    interior_padding: vec![0],
+                },
+            )
+        }),
         "pad",
     );
 

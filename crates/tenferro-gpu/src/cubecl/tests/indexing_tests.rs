@@ -2,8 +2,8 @@
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
 use num_complex::Complex64;
 use tenferro_tensor::{
-    DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
-    TensorIndexing, TypedTensor,
+    BackendSessionHost, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement,
+    StorageBuffer, TensorIndexing, TypedTensor,
 };
 
 use super::{
@@ -59,7 +59,9 @@ fn cuda_slice_limit_over_dimension_matches_cpu_invalid_argument() {
         strides: vec![1],
     };
     let input = tensor_f64(vec![2], vec![1.0, 2.0]);
-    let expected = cpu_backend().slice(&input, &config).unwrap_err();
+    let expected = cpu_backend()
+        .with_backend_session(|__s| __s.slice(&input, &config))
+        .unwrap_err();
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
     let actual = gpu.slice(&gpu_input, &config).unwrap_err();
@@ -118,17 +120,21 @@ fn cuda_float_index_validation_matches_cpu() {
         let cases = [
             (
                 "dynamic_slice",
-                cpu.dynamic_slice(&operand, &index, &[1]),
+                cpu.with_backend_session(|__s| __s.dynamic_slice(&operand, &index, &[1])),
                 gpu.dynamic_slice(&gpu_operand, &gpu_index, &[1]),
             ),
             (
                 "gather",
-                cpu.gather(&operand, &gather_indices, &simple_gather_config()),
+                cpu.with_backend_session(|__s| {
+                    __s.gather(&operand, &gather_indices, &simple_gather_config())
+                }),
                 gpu.gather(&gpu_operand, &gpu_gather_indices, &simple_gather_config()),
             ),
             (
                 "scatter",
-                cpu.scatter(&operand, &gather_indices, &updates, &scatter_config),
+                cpu.with_backend_session(|__s| {
+                    __s.scatter(&operand, &gather_indices, &updates, &scatter_config)
+                }),
                 gpu.scatter(
                     &gpu_operand,
                     &gpu_gather_indices,
@@ -236,7 +242,9 @@ fn cuda_bool_dynamic_slice_float_starts_match_cpu() {
             tensor_f64(vec![1], vec![-9_007_199_254_740_992.0]),
         ),
     ] {
-        let expected = cpu.dynamic_slice(&input, &starts, &[2]).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.dynamic_slice(&input, &starts, &[2]))
+            .unwrap();
         let actual_gpu = gpu
             .dynamic_slice(&gpu_input, &upload(&gpu, &starts), &[2])
             .unwrap_or_else(|err| panic!("{label}: {err:?}"));
@@ -284,7 +292,9 @@ fn cuda_bool_dynamic_slice_float_starts_match_cpu() {
         let actual = gpu
             .dynamic_slice(&gpu_input, &upload(&gpu, &starts), &[2])
             .unwrap_err();
-        let expected = cpu.dynamic_slice(&input, &starts, &[2]).unwrap_err();
+        let expected = cpu
+            .with_backend_session(|__s| __s.dynamic_slice(&input, &starts, &[2]))
+            .unwrap_err();
         assert_eq!(actual.kind(), expected.kind(), "{label}");
         assert_error_parity(expected, actual);
     }
@@ -307,12 +317,16 @@ fn cuda_bool_dynamic_slice_float_starts_match_cpu() {
         tensor_f32(vec![1], vec![0.0]),
         tensor_f64(vec![1], vec![0.0]),
     ] {
-        let expected = cpu.dynamic_slice(&empty, &starts, &[0]).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.dynamic_slice(&empty, &starts, &[0]))
+            .unwrap();
         let actual_gpu = gpu
             .dynamic_slice(&upload(&gpu, &empty), &upload(&gpu, &starts), &[0])
             .unwrap();
         assert_tensor_close(&download(&gpu, &actual_gpu), &expected, 0.0);
-        let expected = cpu.dynamic_slice(&input, &starts, &[0]).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.dynamic_slice(&input, &starts, &[0]))
+            .unwrap();
         let actual_gpu = gpu
             .dynamic_slice(&gpu_input, &upload(&gpu, &starts), &[0])
             .unwrap();
@@ -347,7 +361,9 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
             starts_f32,
         ),
     ] {
-        assert!(cpu.dynamic_slice(&operand, &valid_starts, &[3]).is_err());
+        assert!(cpu
+            .with_backend_session(|__s| __s.dynamic_slice(&operand, &valid_starts, &[3]))
+            .is_err());
         let err = gpu
             .dynamic_slice(
                 &upload(&gpu, &operand),
@@ -357,7 +373,7 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
             .unwrap_err();
         assert_validation_kind(&err, "dynamic_slice", ValidationKind::InvalidArgument);
         assert_result_error_parity(
-            cpu.dynamic_slice(&operand, &invalid_starts, &[1]),
+            cpu.with_backend_session(|__s| __s.dynamic_slice(&operand, &invalid_starts, &[1])),
             gpu.dynamic_slice(
                 &upload(&gpu, &operand),
                 &upload(&gpu, &invalid_starts),
@@ -369,7 +385,7 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
     let operand_bool = tensor_bool(vec![2], vec![true, false]);
     let starts_i32 = tensor_i32(vec![2], vec![0, 1]);
     assert_result_error_parity(
-        cpu.dynamic_slice(&operand_bool, &starts_i32, &[1]),
+        cpu.with_backend_session(|__s| __s.dynamic_slice(&operand_bool, &starts_i32, &[1])),
         gpu.dynamic_slice(
             &upload(&gpu, &operand_bool),
             &upload(&gpu, &starts_i32),
@@ -392,7 +408,7 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
         operand_bool.duplicate().expect("host operand duplication"),
     ] {
         let expected = cpu
-            .gather(&operand, &valid_gather_indices, &bad_gather)
+            .with_backend_session(|__s| __s.gather(&operand, &valid_gather_indices, &bad_gather))
             .unwrap_err();
         let actual = gpu
             .gather(
@@ -403,7 +419,9 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
             .unwrap_err();
         assert_error_parity(expected, actual);
         assert_result_error_parity(
-            cpu.gather(&operand, &gather_indices, &simple_gather_config()),
+            cpu.with_backend_session(|__s| {
+                __s.gather(&operand, &gather_indices, &simple_gather_config())
+            }),
             gpu.gather(
                 &upload(&gpu, &operand),
                 &upload(&gpu, &gather_indices),
@@ -427,12 +445,14 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
     };
     let updates_f64 = tensor_f64(vec![1], vec![3.0]);
     let expected = cpu
-        .scatter(
-            &operand_f64,
-            &valid_scatter_indices,
-            &updates_f64,
-            &bad_scatter,
-        )
+        .with_backend_session(|__s| {
+            __s.scatter(
+                &operand_f64,
+                &valid_scatter_indices,
+                &updates_f64,
+                &bad_scatter,
+            )
+        })
         .unwrap_err();
     let actual = gpu
         .scatter(
@@ -444,7 +464,9 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
         .unwrap_err();
     assert_error_parity(expected, actual);
     assert_result_error_parity(
-        cpu.scatter(&operand_f64, &gather_indices, &updates_f64, &valid_scatter),
+        cpu.with_backend_session(|__s| {
+            __s.scatter(&operand_f64, &gather_indices, &updates_f64, &valid_scatter)
+        }),
         gpu.scatter(
             &upload(&gpu, &operand_f64),
             &upload(&gpu, &gather_indices),
@@ -455,12 +477,14 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
     let operand_c64 = tensor_c64(vec![2], vec![Complex64::new(1.0, 2.0); 2]);
     let updates_c64 = tensor_c64(vec![1], vec![Complex64::new(3.0, 4.0)]);
     let expected = cpu
-        .scatter(
-            &operand_c64,
-            &valid_scatter_indices,
-            &updates_c64,
-            &bad_scatter,
-        )
+        .with_backend_session(|__s| {
+            __s.scatter(
+                &operand_c64,
+                &valid_scatter_indices,
+                &updates_c64,
+                &bad_scatter,
+            )
+        })
         .unwrap_err();
     let actual = gpu
         .scatter(
@@ -472,7 +496,9 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
         .unwrap_err();
     assert_error_parity(expected, actual);
     assert_result_error_parity(
-        cpu.scatter(&operand_c64, &gather_indices, &updates_c64, &valid_scatter),
+        cpu.with_backend_session(|__s| {
+            __s.scatter(&operand_c64, &gather_indices, &updates_c64, &valid_scatter)
+        }),
         gpu.scatter(
             &upload(&gpu, &operand_c64),
             &upload(&gpu, &gather_indices),
@@ -664,17 +690,21 @@ fn cuda_float_index_validation_reports_first_invalid_value() {
         for (op, expected, actual) in [
             (
                 "dynamic_slice",
-                cpu.dynamic_slice(&operand, &starts, &[1, 1]),
+                cpu.with_backend_session(|__s| __s.dynamic_slice(&operand, &starts, &[1, 1])),
                 gpu.dynamic_slice(&gpu_operand, &gpu_starts, &[1, 1]),
             ),
             (
                 "gather",
-                cpu.gather(&operand, &gather_indices, &gather_config),
+                cpu.with_backend_session(|__s| {
+                    __s.gather(&operand, &gather_indices, &gather_config)
+                }),
                 gpu.gather(&gpu_operand, &gpu_indices, &gather_config),
             ),
             (
                 "scatter",
-                cpu.scatter(&operand, &gather_indices, &updates, &scatter_config),
+                cpu.with_backend_session(|__s| {
+                    __s.scatter(&operand, &gather_indices, &updates, &scatter_config)
+                }),
                 gpu.scatter(&gpu_operand, &gpu_indices, &gpu_updates, &scatter_config),
             ),
         ] {
@@ -749,18 +779,24 @@ fn cuda_bool_indexing_ops_match_cpu() {
             super::assert_error_parity($cpu.unwrap_err(), $gpu.unwrap_err());
         }};
     }
-    parity!(cpu.slice(&input, &slice), gpu.slice(&gi, &slice));
     parity!(
-        cpu.dynamic_slice(&input, &starts, &[2]),
+        cpu.with_backend_session(|__s| __s.slice(&input, &slice)),
+        gpu.slice(&gi, &slice)
+    );
+    parity!(
+        cpu.with_backend_session(|__s| __s.dynamic_slice(&input, &starts, &[2])),
         gpu.dynamic_slice(&gi, &gs, &[2])
     );
     parity!(
-        cpu.dynamic_slice(&input, &starts_i32, &[2]),
+        cpu.with_backend_session(|__s| __s.dynamic_slice(&input, &starts_i32, &[2])),
         gpu.dynamic_slice(&gi, &gs_i32, &[2])
     );
-    parity!(cpu.pad(&input, &pad), gpu.pad(&gi, &pad));
     parity!(
-        cpu.gather(&input, &indices, &simple_gather_config()),
+        cpu.with_backend_session(|__s| __s.pad(&input, &pad)),
+        gpu.pad(&gi, &pad)
+    );
+    parity!(
+        cpu.with_backend_session(|__s| __s.gather(&input, &indices, &simple_gather_config())),
         gpu.gather(&gi, &gx, &simple_gather_config())
     );
     let invalid = SliceConfig {
@@ -779,24 +815,30 @@ fn cuda_bool_indexing_ops_match_cpu() {
         interior_padding: vec![0],
     };
     parity!(
-        cpu.slice(&empty, &empty_slice),
+        cpu.with_backend_session(|__s| __s.slice(&empty, &empty_slice)),
         gpu.slice(&ge, &empty_slice)
     );
     parity!(
-        cpu.dynamic_slice(&empty, &empty_starts, &[0]),
+        cpu.with_backend_session(|__s| __s.dynamic_slice(&empty, &empty_starts, &[0])),
         gpu.dynamic_slice(&ge, &ges, &[0])
     );
-    parity!(cpu.pad(&empty, &empty_pad), gpu.pad(&ge, &empty_pad));
     parity!(
-        cpu.gather(&input, &empty_indices, &simple_gather_config()),
+        cpu.with_backend_session(|__s| __s.pad(&empty, &empty_pad)),
+        gpu.pad(&ge, &empty_pad)
+    );
+    parity!(
+        cpu.with_backend_session(|__s| __s.gather(&input, &empty_indices, &simple_gather_config())),
         gpu.gather(&gi, &gex, &simple_gather_config())
     );
 
-    error_parity!(cpu.slice(&input, &invalid), gpu.slice(&gi, &invalid));
+    error_parity!(
+        cpu.with_backend_session(|__s| __s.slice(&input, &invalid)),
+        gpu.slice(&gi, &invalid)
+    );
     let bad_starts = tensor_i64(vec![2], vec![0, 1]);
     let gpu_bad_starts = upload(&gpu, &bad_starts);
     error_parity!(
-        cpu.dynamic_slice(&input, &bad_starts, &[2]),
+        cpu.with_backend_session(|__s| __s.dynamic_slice(&input, &bad_starts, &[2])),
         gpu.dynamic_slice(&gi, &gpu_bad_starts, &[2])
     );
     let bad_pad = PadConfig {
@@ -804,13 +846,16 @@ fn cuda_bool_indexing_ops_match_cpu() {
         edge_padding_high: vec![],
         interior_padding: vec![],
     };
-    error_parity!(cpu.pad(&input, &bad_pad), gpu.pad(&gi, &bad_pad));
+    error_parity!(
+        cpu.with_backend_session(|__s| __s.pad(&input, &bad_pad)),
+        gpu.pad(&gi, &bad_pad)
+    );
     let bad_gather = crate::config::GatherConfig {
         start_index_map: vec![1],
         ..simple_gather_config()
     };
     error_parity!(
-        cpu.gather(&input, &indices, &bad_gather),
+        cpu.with_backend_session(|__s| __s.gather(&input, &indices, &bad_gather)),
         gpu.gather(&gi, &gx, &bad_gather)
     );
 
@@ -823,7 +868,7 @@ fn cuda_bool_indexing_ops_match_cpu() {
         index_vector_dim: 1,
     };
     let expected_scatter_error = cpu
-        .scatter(&input, &scatter_indices, &updates, &config)
+        .with_backend_session(|__s| __s.scatter(&input, &scatter_indices, &updates, &config))
         .unwrap_err();
     assert_unsupported(
         &expected_scatter_error,
@@ -868,17 +913,23 @@ fn test_cubecl_slice_dynamic_slice_and_pad_match_cpu() {
     let gpu_input = upload(&gpu, &input);
     let gpu_starts = upload(&gpu, &starts);
 
-    let expected = cpu.slice(&input, &slice_config).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.slice(&input, &slice_config))
+        .unwrap();
     let gpu_out = gpu.slice(&gpu_input, &slice_config).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.dynamic_slice(&input, &starts, &[2, 2]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.dynamic_slice(&input, &starts, &[2, 2]))
+        .unwrap();
     let gpu_out = gpu.dynamic_slice(&gpu_input, &gpu_starts, &[2, 2]).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.pad(&input, &pad_config).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.pad(&input, &pad_config))
+        .unwrap();
     let gpu_out = gpu.pad(&gpu_input, &pad_config).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
@@ -929,7 +980,9 @@ fn test_cubecl_signed_pad_cropping_matches_cpu_values() {
     let mut cpu = cpu_backend();
     let mut gpu = gpu_backend();
     for (input, config, expected_values) in cases {
-        let expected = cpu.pad(&input, &config).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.pad(&input, &config))
+            .unwrap();
         assert_eq!(expected.shape(), expected_values.shape());
         assert_tensor_close(&expected, &expected_values, 0.0);
 
@@ -961,7 +1014,7 @@ fn test_cubecl_gather_and_scatter_match_cpu() {
     let gpu_operand = upload(&gpu, &operand);
     let gpu_start_indices = upload(&gpu, &start_indices);
     let expected = cpu
-        .gather(&operand, &start_indices, &simple_gather_config())
+        .with_backend_session(|__s| __s.gather(&operand, &start_indices, &simple_gather_config()))
         .unwrap();
     let gpu_out = gpu
         .gather(&gpu_operand, &gpu_start_indices, &simple_gather_config())
@@ -973,12 +1026,14 @@ fn test_cubecl_gather_and_scatter_match_cpu() {
     let gpu_scatter_indices = upload(&gpu, &scatter_indices);
     let gpu_updates = upload(&gpu, &updates);
     let expected = cpu
-        .scatter(
-            &scatter_operand,
-            &scatter_indices,
-            &updates,
-            &diagonal_scatter_config(),
-        )
+        .with_backend_session(|__s| {
+            __s.scatter(
+                &scatter_operand,
+                &scatter_indices,
+                &updates,
+                &diagonal_scatter_config(),
+            )
+        })
         .unwrap();
     let gpu_out = gpu
         .scatter(
@@ -1012,7 +1067,7 @@ fn test_cubecl_scatter_skips_invalid_windows_like_cpu() {
     let gpu_updates = upload(&gpu, &updates);
 
     let expected = cpu
-        .scatter(&operand, &scatter_indices, &updates, &config)
+        .with_backend_session(|__s| __s.scatter(&operand, &scatter_indices, &updates, &config))
         .unwrap();
     let gpu_out = gpu
         .scatter(&gpu_operand, &gpu_indices, &gpu_updates, &config)
@@ -1041,7 +1096,7 @@ fn test_cubecl_scatter_accumulates_overlapping_updates_like_cpu() {
     let gpu_updates = upload(&gpu, &updates);
 
     let expected = cpu
-        .scatter(&operand, &scatter_indices, &updates, &config)
+        .with_backend_session(|__s| __s.scatter(&operand, &scatter_indices, &updates, &config))
         .unwrap();
     let gpu_out = gpu
         .scatter(&gpu_operand, &gpu_indices, &gpu_updates, &config)
@@ -1084,7 +1139,7 @@ fn test_cubecl_complex_scatter_accumulates_overlapping_updates_like_cpu() {
     let gpu_updates = upload(&gpu, &updates);
 
     let expected = cpu
-        .scatter(&operand, &scatter_indices, &updates, &config)
+        .with_backend_session(|__s| __s.scatter(&operand, &scatter_indices, &updates, &config))
         .unwrap();
     let gpu_out = gpu
         .scatter(&gpu_operand, &gpu_indices, &gpu_updates, &config)

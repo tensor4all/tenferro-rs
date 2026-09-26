@@ -20,7 +20,9 @@ use tenferro_runtime::{
 };
 #[cfg(feature = "cuda")]
 use tenferro_tensor::MemoryKind;
-use tenferro_tensor::{BackendSession, DType, Tensor, TensorRead, TensorStructural, TensorValue};
+use tenferro_tensor::{
+    BackendSession, BackendSessionHost, DType, Tensor, TensorRead, TensorStructural, TensorValue,
+};
 
 #[derive(Clone, Debug)]
 struct BridgeProbe {
@@ -190,7 +192,8 @@ impl PreparedOperationExecutor for BridgePrepared {
                     source,
                 )
             })?;
-        let output = TensorStructural::to_contiguous_read(backend, inputs[0].clone())
+        let output = backend
+            .with_backend_session(|__s| __s.to_contiguous_read(inputs[0].clone()))
             .map_err(tenferro_runtime::Error::from)?;
         Ok(vec![output])
     }

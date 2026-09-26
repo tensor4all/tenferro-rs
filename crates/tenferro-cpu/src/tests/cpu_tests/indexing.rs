@@ -300,7 +300,9 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
         strides: vec![2, 2],
     };
     let mut backend = CpuBackend::new();
-    let sliced = backend.slice(&input, &config).unwrap();
+    let sliced = backend
+        .with_backend_session(|__s| __s.slice(&input, &config))
+        .unwrap();
     assert_eq!(sliced.shape(), &[2, 2]);
     assert_eq!(get_f64(&sliced, &[0, 0]), 1.0);
     assert_eq!(get_f64(&sliced, &[1, 0]), 3.0);
@@ -316,13 +318,17 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
     let c = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 1], vec![5.0, 6.0]).unwrap(),
     );
-    let concatenated = backend.concatenate(&[&a, &b, &c], 1).unwrap();
+    let concatenated = backend
+        .with_backend_session(|__s| __s.concatenate(&[&a, &b, &c], 1))
+        .unwrap();
     assert_eq!(concatenated.shape(), &[2, 3]);
     assert_eq!(get_f64(&concatenated, &[0, 0]), 1.0);
     assert_eq!(get_f64(&concatenated, &[1, 1]), 4.0);
     assert_eq!(get_f64(&concatenated, &[0, 2]), 5.0);
 
-    let reversed = backend.reverse(&input, &[0, 1]).unwrap();
+    let reversed = backend
+        .with_backend_session(|__s| __s.reverse(&input, &[0, 1]))
+        .unwrap();
     assert_eq!(reversed.shape(), &[4, 3]);
     assert_eq!(get_f64(&reversed, &[0, 0]), 12.0);
     assert_eq!(get_f64(&reversed, &[3, 2]), 1.0);
@@ -417,7 +423,9 @@ fn test_backend_cast_supports_real_complex_and_precision_changes() {
     ];
 
     for (input, to) in cases {
-        let output = backend.cast(input, to).unwrap();
+        let output = backend
+            .with_backend_session(|__s| __s.cast(input, to))
+            .unwrap();
         assert_eq!(output.shape(), &[2]);
         assert_eq!(output.dtype(), to);
 
@@ -518,7 +526,9 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
         )
         .unwrap(),
     );
-    let err = backend.cast(&f64_bad, DType::I32).unwrap_err();
+    let err = backend
+        .with_backend_session(|__s| __s.cast(&f64_bad, DType::I32))
+        .unwrap_err();
     assert!(matches!(
         err,
         crate::Error::Validation {
@@ -533,7 +543,9 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
     let f32_bad = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![1], vec![i64::MAX as f32]).unwrap(),
     );
-    let err = backend.cast(&f32_bad, DType::I64).unwrap_err();
+    let err = backend
+        .with_backend_session(|__s| __s.cast(&f32_bad, DType::I64))
+        .unwrap_err();
     assert!(matches!(
         err,
         crate::Error::Validation {
@@ -545,7 +557,9 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
     let c64_bad = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(f64::INFINITY, 0.0)]).unwrap(),
     );
-    let err = backend.cast(&c64_bad, DType::I64).unwrap_err();
+    let err = backend
+        .with_backend_session(|__s| __s.cast(&c64_bad, DType::I64))
+        .unwrap_err();
     assert!(matches!(
         err,
         crate::Error::Validation {
@@ -560,11 +574,15 @@ fn test_cpu_supports_i32_and_bool_structural_paths() {
     let mut backend = CpuBackend::new();
 
     let i32_tensor = Tensor::from_vec_col_major(vec![2], vec![-1_i32, 0]).unwrap();
-    let i32_as_bool = backend.cast(&i32_tensor, DType::Bool).unwrap();
+    let i32_as_bool = backend
+        .with_backend_session(|__s| __s.cast(&i32_tensor, DType::Bool))
+        .unwrap();
     assert_eq!(i32_as_bool.as_slice::<bool>().unwrap(), &[true, false]);
 
     let bool_tensor = Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap();
-    let bool_as_i64 = backend.convert(&bool_tensor, DType::I64).unwrap();
+    let bool_as_i64 = backend
+        .with_backend_session(|__s| __s.convert(&bool_tensor, DType::I64))
+        .unwrap();
     assert_eq!(bool_as_i64.as_slice::<i64>().unwrap(), &[1, 0]);
 
     let bool_matrix =
@@ -703,7 +721,9 @@ fn test_backend_structural_ops_dispatch() {
     assert_eq!(get_f64(&broadcast, &[0, 0]), 5.0);
     assert_eq!(get_f64(&broadcast, &[1, 1]), 5.0);
 
-    let diag = backend.extract_diagonal(&a, 0, 1).unwrap();
+    let diag = backend
+        .with_backend_session(|__s| __s.extract_diagonal(&a, 0, 1))
+        .unwrap();
     assert_eq!(diag.shape(), &[2]);
     assert_eq!(get_f64(&diag, &[0]), 1.0);
     assert_eq!(get_f64(&diag, &[1]), 4.0);
@@ -711,16 +731,18 @@ fn test_backend_structural_ops_dispatch() {
     let d = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![10.0, 20.0]).unwrap(),
     );
-    let embedded = backend.embed_diagonal(&d, 0, 1).unwrap();
+    let embedded = backend
+        .with_backend_session(|__s| __s.embed_diagonal(&d, 0, 1))
+        .unwrap();
     assert_eq!(embedded.shape(), &[2, 2]);
     assert_eq!(get_f64(&embedded, &[0, 0]), 10.0);
     assert_eq!(get_f64(&embedded, &[1, 1]), 20.0);
 
-    let tril_result = backend.tril(&a, 0).unwrap();
+    let tril_result = backend.with_backend_session(|__s| __s.tril(&a, 0)).unwrap();
     assert_eq!(tril_result.shape(), &[2, 2]);
     assert_eq!(get_f64(&tril_result, &[0, 1]), 0.0);
 
-    let triu_result = backend.triu(&a, 0).unwrap();
+    let triu_result = backend.with_backend_session(|__s| __s.triu(&a, 0)).unwrap();
     assert_eq!(triu_result.shape(), &[2, 2]);
     assert_eq!(get_f64(&triu_result, &[1, 0]), 0.0);
 
@@ -817,7 +839,7 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     );
     let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
     let gathered = backend
-        .gather(&operand, &start_indices, &simple_gather_config())
+        .with_backend_session(|__s| __s.gather(&operand, &start_indices, &simple_gather_config()))
         .unwrap();
     assert_eq!(gathered.shape(), &[3]);
     assert_eq!(get_f64(&gathered, &[0]), 10.0);
@@ -830,12 +852,14 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
         TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap(),
     );
     let scattered = backend
-        .scatter(
-            &operand,
-            &scatter_indices,
-            &updates,
-            &diagonal_scatter_config(),
-        )
+        .with_backend_session(|__s| {
+            __s.scatter(
+                &operand,
+                &scatter_indices,
+                &updates,
+                &diagonal_scatter_config(),
+            )
+        })
         .unwrap();
     assert_eq!(get_f64(&scattered, &[0, 0]), 5.0);
     assert_eq!(get_f64(&scattered, &[1, 1]), 6.0);
@@ -852,7 +876,9 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
         .unwrap(),
     );
     let starts = Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]).unwrap();
-    let ds = backend.dynamic_slice(&input, &starts, &[2, 2]).unwrap();
+    let ds = backend
+        .with_backend_session(|__s| __s.dynamic_slice(&input, &starts, &[2, 2]))
+        .unwrap();
     assert_eq!(ds.shape(), &[2, 2]);
     assert_eq!(get_f64(&ds, &[0, 0]), 11.0);
     assert_eq!(get_f64(&ds, &[1, 1]), 16.0);
@@ -867,14 +893,18 @@ fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
     let indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
     let config = simple_gather_config();
 
-    backend.gather(&operand, &indices, &config).unwrap();
+    backend
+        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
+        .unwrap();
     let after_compile = backend.indexed_plan_cache_stats().unwrap();
     assert_eq!(after_compile.entries, 1);
     assert_eq!(after_compile.hits, 0);
     assert_eq!(after_compile.misses, 1);
     assert!(after_compile.retained_bytes > 0);
 
-    backend.gather(&operand, &indices, &config).unwrap();
+    backend
+        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
+        .unwrap();
     let scatter_operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![5]).unwrap());
     let updates = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap(),
@@ -891,11 +921,15 @@ fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
     );
     for _ in 0..2 {
         backend
-            .scatter(&scatter_operand, &indices, &updates, &scatter_config)
+            .with_backend_session(|__s| {
+                __s.scatter(&scatter_operand, &indices, &updates, &scatter_config)
+            })
             .unwrap();
-        backend.dynamic_slice(&operand, &starts, &[2]).unwrap();
         backend
-            .dynamic_update_slice(&operand, &update, &starts)
+            .with_backend_session(|__s| __s.dynamic_slice(&operand, &starts, &[2]))
+            .unwrap();
+        backend
+            .with_backend_session(|__s| __s.dynamic_update_slice(&operand, &update, &starts))
             .unwrap();
     }
 

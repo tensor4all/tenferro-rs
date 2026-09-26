@@ -984,7 +984,7 @@ macro_rules! test_backend_impls {
 
         impl TensorStructural for $ty {
             fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                CpuBackend::new().to_contiguous_read(input)
+                CpuBackend::new().with_backend_session(|__s| __s.to_contiguous_read(input))
             }
 
             fn copy_read_into(
@@ -992,7 +992,7 @@ macro_rules! test_backend_impls {
                 src: TensorRead<'_>,
                 dst: TensorWrite<'_>,
             ) -> tenferro_tensor::Result<()> {
-                CpuBackend::new().copy_read_into(src, dst)
+                CpuBackend::new().with_backend_session(|__s| __s.copy_read_into(src, dst))
             }
 
             // The previous read-half default delegated owned tensors to the one-shot
@@ -1369,7 +1369,7 @@ impl BackendRuntimeCache for WrongDTypeSessionBackend {
 
 impl TensorStructural for WrongDTypeSessionBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-        CpuBackend::new().to_contiguous_read(input)
+        CpuBackend::new().with_backend_session(|__s| __s.to_contiguous_read(input))
     }
 
     fn copy_read_into(
@@ -1377,7 +1377,7 @@ impl TensorStructural for WrongDTypeSessionBackend {
         src: TensorRead<'_>,
         dst: TensorWrite<'_>,
     ) -> tenferro_tensor::Result<()> {
-        CpuBackend::new().copy_read_into(src, dst)
+        CpuBackend::new().with_backend_session(|__s| __s.copy_read_into(src, dst))
     }
 
     fn reshape_read(&mut self, _input: TensorRead<'_>, _shape: &[usize]) -> TensorResult {

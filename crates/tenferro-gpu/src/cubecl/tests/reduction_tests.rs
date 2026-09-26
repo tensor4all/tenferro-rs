@@ -159,7 +159,9 @@ fn test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes() {
         let gpu_input = upload(&gpu, input);
         for axes in [&[0, 1][..], &[][..]] {
             let expected = cpu
-                .reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
+                .with_backend_session(|__s| {
+                    __s.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
+                })
                 .unwrap();
             let gpu_output = gpu
                 .reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), axes)

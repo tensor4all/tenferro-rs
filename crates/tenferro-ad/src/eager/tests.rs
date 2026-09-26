@@ -545,7 +545,8 @@ impl PreparedOperationExecutor for ReadPathFallbackPrepared {
                     source,
                 )
             })?;
-        let materialized = TensorStructural::to_contiguous_read(backend, inputs[0].clone())?;
+        let materialized =
+            backend.with_backend_session(|__s| __s.to_contiguous_read(inputs[0].clone()))?;
         Ok(vec![materialized.duplicate()?])
     }
 

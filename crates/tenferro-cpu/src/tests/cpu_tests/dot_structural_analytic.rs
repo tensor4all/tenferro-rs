@@ -69,7 +69,7 @@ fn test_dot_general_with_conj_matches_materialized_complex_matmul() {
     let mut backend = CpuBackend::new();
 
     let out = backend
-        .dot_general_with_conj(&lhs, &rhs, &config, true, true)
+        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
         .unwrap();
 
     let lhs_conj: Vec<Complex64> = lhs_data.iter().map(|value| value.conj()).collect();
@@ -101,11 +101,13 @@ fn test_dot_general_read_accepts_tensor_and_view_inputs() {
     let mut backend = CpuBackend::new();
 
     let direct = backend
-        .dot_general_read(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_view(rhs_view.clone()),
-            &config,
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_view(rhs_view.clone()),
+                &config,
+            )
+        })
         .unwrap();
     assert_eq!(direct.shape(), &[2, 2]);
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
@@ -141,11 +143,13 @@ fn test_dot_general_read_accepts_transposed_host_view_input() {
     let mut backend = CpuBackend::new();
 
     let out = backend
-        .dot_general_read(
-            TensorRead::from_view(TensorView::F64(lhs_view)),
-            TensorRead::from_tensor(&rhs),
-            &config,
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_view(TensorView::F64(lhs_view)),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
         .unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
@@ -168,12 +172,14 @@ fn test_dot_general_read_into_writes_compact_and_strided_outputs() {
 
     let mut compact = Tensor::from_vec_col_major(vec![2, 2], vec![-1.0_f64; 4]).unwrap();
     backend
-        .dot_general_read_into(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
-            &config,
-            TensorWrite::from_tensor(&mut compact),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
+                &config,
+                TensorWrite::from_tensor(&mut compact),
+            )
+        })
         .unwrap();
     assert_eq!(
         compact.as_slice::<f64>().unwrap(),
@@ -218,12 +224,14 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
 
     let mut wrong_shape = Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4]).unwrap();
     let shape_err = backend
-        .dot_general_read_into(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_tensor(&rhs),
-            &config,
-            TensorWrite::from_tensor(&mut wrong_shape),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut wrong_shape),
+            )
+        })
         .unwrap_err();
     assert!(matches!(
         shape_err,
@@ -235,12 +243,14 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
 
     let mut wrong_dtype = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f32; 4]).unwrap();
     let dtype_err = backend
-        .dot_general_read_into(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_tensor(&rhs),
-            &config,
-            TensorWrite::from_tensor(&mut wrong_dtype),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut wrong_dtype),
+            )
+        })
         .unwrap_err();
     assert!(matches!(
         dtype_err,
@@ -274,13 +284,15 @@ fn test_dot_general_read_into_accum_updates_existing_output() {
     let mut backend = CpuBackend::new();
 
     backend
-        .dot_general_read_into_accum(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_tensor(&rhs),
-            &config,
-            accum,
-            TensorWrite::from_tensor(&mut out),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                accum,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
         .unwrap();
 
     let expected_dot = [22.0, 28.0, 49.0, 64.0];
@@ -376,13 +388,15 @@ fn test_dot_general_read_into_accum_applies_complex_conj_and_scalars() {
     let mut backend = CpuBackend::new();
 
     backend
-        .dot_general_read_into_accum(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_tensor(&rhs),
-            &config,
-            accum,
-            TensorWrite::from_tensor(&mut out),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                accum,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
         .unwrap();
 
     let lhs_conj: Vec<Complex64> = lhs_data.iter().map(|value| value.conj()).collect();
@@ -416,13 +430,15 @@ fn test_dot_general_read_into_accum_rejects_scalar_dtype_mismatch() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .dot_general_read_into_accum(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_tensor(&rhs),
-            &config,
-            accum,
-            TensorWrite::from_tensor(&mut out),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                accum,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
         .unwrap_err();
 
     assert!(matches!(
@@ -447,18 +463,20 @@ fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
     let rhs_f32 = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f32, 6.0]).unwrap();
     let mut out_f32 = Tensor::from_vec_col_major(vec![2, 1], vec![7.0_f32, 8.0]).unwrap();
     CpuBackend::new()
-        .dot_general_read_into_accum(
-            TensorRead::from_tensor(&lhs_f32),
-            TensorRead::from_tensor(&rhs_f32),
-            &config,
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::F32(2.0),
-                beta: ContractionScalar::F32(-0.5),
-            },
-            TensorWrite::from_tensor(&mut out_f32),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs_f32),
+                TensorRead::from_tensor(&rhs_f32),
+                &config,
+                DotGeneralAccumulation {
+                    lhs_conj: false,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::F32(2.0),
+                    beta: ContractionScalar::F32(-0.5),
+                },
+                TensorWrite::from_tensor(&mut out_f32),
+            )
+        })
         .unwrap();
     let out_f32 = out_f32.as_slice::<f32>().unwrap();
     assert!((out_f32[0] - 42.5).abs() < 1.0e-5);
@@ -484,18 +502,20 @@ fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
     let alpha = Complex32::new(1.5, -0.25);
     let beta = Complex32::new(0.25, 0.5);
     CpuBackend::new()
-        .dot_general_read_into_accum(
-            TensorRead::from_tensor(&lhs_c32),
-            TensorRead::from_tensor(&rhs_c32),
-            &config,
-            DotGeneralAccumulation {
-                lhs_conj: true,
-                rhs_conj: false,
-                alpha: ContractionScalar::C32(alpha),
-                beta: ContractionScalar::C32(beta),
-            },
-            TensorWrite::from_tensor(&mut out_c32),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs_c32),
+                TensorRead::from_tensor(&rhs_c32),
+                &config,
+                DotGeneralAccumulation {
+                    lhs_conj: true,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::C32(alpha),
+                    beta: ContractionScalar::C32(beta),
+                },
+                TensorWrite::from_tensor(&mut out_c32),
+            )
+        })
         .unwrap();
     let dot = lhs_c32.as_slice::<Complex32>().unwrap()[0].conj()
         * rhs_c32.as_slice::<Complex32>().unwrap()[0]
@@ -702,11 +722,13 @@ fn test_dot_general_falls_back_for_mixed_batch_orders() {
     let mut backend = CpuBackend::new();
 
     let output = backend
-        .dot_general_read(
-            TensorRead::from_view(TensorView::F64(lhs_view)),
-            TensorRead::from_view(TensorView::F64(rhs_view)),
-            &config,
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_view(TensorView::F64(lhs_view)),
+                TensorRead::from_view(TensorView::F64(rhs_view)),
+                &config,
+            )
+        })
         .unwrap();
 
     assert_eq!(output.shape(), &[1, 1, 2, 3]);

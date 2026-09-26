@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor,
-    TensorRead, TensorScalar, TypedTensor,
+    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
+    StorageBuffer, Tensor, TensorRead, TensorScalar, TypedTensor,
 };
 
 use super::with_cpu_linalg;
@@ -448,7 +448,7 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
     let foreign = Tensor::from_typed(other.tensor(&[1], vec![2.0_f64]));
     let before = domain.counts.allocations.load(Ordering::Relaxed);
     let error = cpu
-        .to_contiguous_read(TensorRead::from_tensor(&foreign))
+        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&foreign)))
         .unwrap_err();
     assert!(matches!(
         error,
@@ -468,14 +468,18 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
             memory_kind,
         ));
         assert!(matches!(
-            cpu.to_contiguous_read(TensorRead::from_tensor(&invalid)),
+            cpu.with_backend_session(
+                |__s| __s.to_contiguous_read(TensorRead::from_tensor(&invalid))
+            ),
             Err(tenferro_tensor::Error::HostAccess { .. })
         ));
         assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
     }
     let transposed = input.as_view().transpose_view([1, 0]).unwrap();
     assert!(cpu
-        .to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed)))
+        .with_backend_session(
+            |__s| __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed)))
+        )
         .is_err());
     assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
 }

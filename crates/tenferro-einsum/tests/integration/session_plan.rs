@@ -71,7 +71,7 @@ macro_rules! test_backend_impls {
 
         impl TensorStructural for $ty {
             fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                CpuBackend::new().to_contiguous_read(input)
+                CpuBackend::new().with_backend_session(|__s| __s.to_contiguous_read(input))
             }
 
             fn copy_read_into(
@@ -79,7 +79,7 @@ macro_rules! test_backend_impls {
                 src: TensorRead<'_>,
                 dst: TensorWrite<'_>,
             ) -> tenferro_tensor::Result<()> {
-                CpuBackend::new().copy_read_into(src, dst)
+                CpuBackend::new().with_backend_session(|__s| __s.copy_read_into(src, dst))
             }
 
             panic_backend_methods! {
@@ -433,19 +433,23 @@ impl TensorDot for SessionCountingBackend {
         config: &DotGeneralConfig,
     ) -> TensorResult {
         match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.inner.dot_general_read(
-                TensorRead::from_tensor(lhs),
-                TensorRead::from_tensor(rhs),
-                config,
-            ),
+            (Some(lhs), Some(rhs)) => self.inner.with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(lhs),
+                    TensorRead::from_tensor(rhs),
+                    config,
+                )
+            }),
             _ => {
                 let lhs = self.to_contiguous_read(lhs)?;
                 let rhs = self.to_contiguous_read(rhs)?;
-                self.inner.dot_general_read(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
-                    config,
-                )
+                self.inner.with_backend_session(|__s| {
+                    __s.dot_general_read(
+                        TensorRead::from_tensor(&lhs),
+                        TensorRead::from_tensor(&rhs),
+                        config,
+                    )
+                })
             }
         }
     }
@@ -458,7 +462,8 @@ impl TensorElementwise for SessionCountingBackend {
         inputs: &[TensorRead<'_>],
         out: TensorWrite<'_>,
     ) -> tenferro_tensor::Result<()> {
-        self.inner.elementwise_read_into(op, inputs, out)
+        self.inner
+            .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

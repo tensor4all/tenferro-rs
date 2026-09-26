@@ -29,7 +29,6 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     BackendSessionHost, DType, DotGeneralConfig, Tensor, TensorIndexing, TensorRead,
-    TensorStructural,
 };
 
 /// Operations per entry for the `marginal` arms.
@@ -158,7 +157,8 @@ fn reduce_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor) -> Tensor 
 }
 
 fn slice_oneshot(ops: &mut CpuBackend, a: &Tensor, config: &SliceConfig) -> Tensor {
-    ops.slice(a, config).expect("oneshot slice should succeed")
+    ops.with_backend_session(|__s| __s.slice(a, config))
+        .expect("oneshot slice should succeed")
 }
 
 fn slice_session(owner: &mut CpuBackend, a: &Tensor, config: &SliceConfig) -> Tensor {
@@ -419,7 +419,9 @@ fn bench_cast(c: &mut Criterion) {
     let mut owner = backend();
     let mut ops = owner.clone();
 
-    let oneshot = ops.cast(&a, DType::F32).expect("oneshot cast");
+    let oneshot = ops
+        .with_backend_session(|__s| __s.cast(&a, DType::F32))
+        .expect("oneshot cast");
     let session_out = owner
         .with_backend_session(|session| session.cast(&a, DType::F32))
         .expect("session cast");
@@ -427,7 +429,9 @@ fn bench_cast(c: &mut Criterion) {
     assert_eq!(session_out.as_slice::<f32>().unwrap()[0], 1.0);
 
     group.bench_function("oneshot/single", |bench| {
-        bench.iter(|| black_box(ops.cast(black_box(&a), DType::F32)));
+        bench.iter(|| {
+            black_box(ops.with_backend_session(|__s| __s.cast(black_box(&a), DType::F32)))
+        });
     });
     group.bench_function("session/single", |bench| {
         bench.iter(|| {

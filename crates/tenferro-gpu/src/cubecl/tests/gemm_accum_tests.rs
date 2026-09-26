@@ -36,13 +36,15 @@ fn run_accum_case(
     let mut gpu = gpu_backend();
 
     let mut expected = out_init.duplicate().expect("host output duplication");
-    cpu.dot_general_read_into_accum(
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        accumulation,
-        TensorWrite::from_tensor(&mut expected),
-    )
+    cpu.with_backend_session(|__s| {
+        __s.dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            accumulation,
+            TensorWrite::from_tensor(&mut expected),
+        )
+    })
     .unwrap();
 
     let gpu_lhs = upload(&gpu, &lhs);

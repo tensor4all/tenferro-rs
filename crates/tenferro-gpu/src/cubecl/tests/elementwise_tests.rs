@@ -128,11 +128,13 @@ fn elementwise_read_preserves_offset_and_strided_layouts() {
         let read = TensorRead::from_view(TensorView::F64(device_view));
         let expected_read = TensorRead::from_view(TensorView::F64(host_view));
         let expected = cpu
-            .add_read(expected_read.clone(), expected_read.clone())
+            .with_backend_session(|__s| __s.add_read(expected_read.clone(), expected_read.clone()))
             .unwrap();
         let actual = gpu.add_read(read.clone(), read.clone()).unwrap();
         assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
-        let expected = cpu.tanh_read(expected_read).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.tanh_read(expected_read))
+            .unwrap();
         let actual = gpu.tanh_read(read).unwrap();
         assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
     }
@@ -798,12 +800,14 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 .map(|value| download(&gpu, &value)),
             ),
             (
-                cpu.rem(&scalar, &tensor).unwrap(),
+                cpu.with_backend_session(|__s| __s.rem(&scalar, &tensor))
+                    .unwrap(),
                 gpu.rem(&gpu_scalar, &gpu_tensor)
                     .map(|value| download(&gpu, &value)),
             ),
             (
-                cpu.rem(&tensor, &scalar).unwrap(),
+                cpu.with_backend_session(|__s| __s.rem(&tensor, &scalar))
+                    .unwrap(),
                 gpu.rem(&gpu_tensor, &gpu_scalar)
                     .map(|value| download(&gpu, &value)),
             ),
@@ -831,7 +835,9 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_negative_multiple = upload(&gpu, &negative_multiple);
         let gpu_divisor = upload(&gpu, &divisor);
 
-        let expected = cpu.rem(&tensor, &divisor).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.rem(&tensor, &divisor))
+            .unwrap();
         let actual = gpu.rem(&gpu_tensor, &gpu_divisor).unwrap();
         let actual = download(&gpu, &actual);
         assert_float_classes_and_zero_signs_match("scalar rhs rem", &actual, &expected);
@@ -840,7 +846,9 @@ fn test_scalar_div_rem_pow_match_cpu() {
             (&negative_zero, &gpu_negative_zero),
             (&negative_multiple, &gpu_negative_multiple),
         ] {
-            let expected = cpu.rem(scalar, &tensor).unwrap();
+            let expected = cpu
+                .with_backend_session(|__s| __s.rem(scalar, &tensor))
+                .unwrap();
             let actual = gpu.rem(gpu_scalar, &gpu_tensor).unwrap();
             let actual = download(&gpu, &actual);
             assert_float_classes_and_zero_signs_match("scalar lhs rem", &actual, &expected);
@@ -906,7 +914,9 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 )
             })
             .unwrap();
-        let expected_rem = cpu.rem(&lhs, &minus_one).unwrap();
+        let expected_rem = cpu
+            .with_backend_session(|__s| __s.rem(&lhs, &minus_one))
+            .unwrap();
         let gpu_div = gpu
             .with_backend_session(|__s| {
                 __s.div_read(
@@ -942,7 +952,9 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 )
             })
             .unwrap();
-        let expected_rem = cpu.rem(&min_scalar, &minus_one_rhs).unwrap();
+        let expected_rem = cpu
+            .with_backend_session(|__s| __s.rem(&min_scalar, &minus_one_rhs))
+            .unwrap();
         let gpu_div = gpu
             .with_backend_session(|__s| {
                 __s.div_read(
@@ -1446,7 +1458,7 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.rem(&lhs, &rhs).unwrap();
+    let expected = cpu.with_backend_session(|__s| __s.rem(&lhs, &rhs)).unwrap();
     let gpu_out = gpu.rem(&gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
@@ -1699,7 +1711,9 @@ fn test_cubecl_float_div_rem_preserve_ieee_special_values() {
         let actual = download(&gpu, &gpu_out);
         assert_float_classes_and_zero_signs_match("div", &actual, &expected);
 
-        let expected = cpu.rem(&lhs, &rem_rhs).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.rem(&lhs, &rem_rhs))
+            .unwrap();
         let gpu_out = gpu.rem(&gpu_lhs, &gpu_rem_rhs).unwrap();
         let actual = download(&gpu, &gpu_out);
         assert_float_classes_and_zero_signs_match("rem", &actual, &expected);
@@ -2093,7 +2107,7 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu.rem(lhs, rhs).unwrap();
+    let expected = cpu.with_backend_session(|__s| __s.rem(lhs, rhs)).unwrap();
     let gpu_out = gpu.rem(&gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);

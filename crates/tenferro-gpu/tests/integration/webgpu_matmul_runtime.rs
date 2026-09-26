@@ -101,7 +101,9 @@ fn assert_c32_dot_general_with_conj_matches_cpu(
 
     let mut cpu = CpuBackend::new();
     let expected = cpu
-        .dot_general_with_conj(&lhs, &rhs, &config, lhs_conj, rhs_conj)
+        .with_backend_session(|__s| {
+            __s.dot_general_with_conj(&lhs, &rhs, &config, lhs_conj, rhs_conj)
+        })
         .unwrap();
 
     let gpu_lhs = backend
@@ -218,7 +220,7 @@ fn webgpu_f32_dot_general_with_conj_is_identity_when_adapter_available() {
 
     let mut cpu = CpuBackend::new();
     let expected = cpu
-        .dot_general_with_conj(&lhs, &rhs, &config, true, true)
+        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
         .unwrap();
 
     let gpu_lhs = backend

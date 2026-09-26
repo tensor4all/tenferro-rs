@@ -1,4 +1,5 @@
 use super::*;
+use tenferro_tensor::DotGeneralConfig;
 
 use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp};
 use tenferro_tensor::BackendSessionHost;
@@ -108,12 +109,14 @@ fn metadata_only_reshape_and_caller_owned_output_are_not_retagged() {
         .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[4]))
         .unwrap();
     backend
-        .dot_general_read_into(
-            TensorRead::from_tensor(&input),
-            TensorRead::from_tensor(&input),
-            &config,
-            TensorWrite::from_tensor(&mut output),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into(
+                TensorRead::from_tensor(&input),
+                TensorRead::from_tensor(&input),
+                &config,
+                TensorWrite::from_tensor(&mut output),
+            )
+        })
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -129,7 +132,7 @@ fn direct_tensor_read_reshape_preserves_remote_storage_affinity() {
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
 
     let output = backend
-        .reshape_read(TensorRead::from_tensor(&input), &[4])
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[4]))
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -196,10 +199,12 @@ fn reshaping_a_borrowed_view_tags_only_the_materialized_output() {
     let view = input_tensor.as_view().transpose_view([1, 0]).unwrap();
 
     let output = backend
-        .reshape_read(
-            TensorRead::from_view(tenferro_tensor::TensorView::F64(view)),
-            &[4],
-        )
+        .with_backend_session(|__s| {
+            __s.reshape_read(
+                TensorRead::from_view(tenferro_tensor::TensorView::F64(view)),
+                &[4],
+            )
+        })
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -221,12 +226,14 @@ fn validation_failure_does_not_mutate_or_retag_caller_owned_output() {
     };
 
     let error = backend
-        .dot_general_read_into(
-            TensorRead::from_tensor(&input),
-            TensorRead::from_tensor(&input),
-            &invalid,
-            TensorWrite::from_tensor(&mut output),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into(
+                TensorRead::from_tensor(&input),
+                TensorRead::from_tensor(&input),
+                &invalid,
+                TensorWrite::from_tensor(&mut output),
+            )
+        })
         .unwrap_err();
 
     assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));

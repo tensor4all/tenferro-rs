@@ -957,35 +957,38 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
         .dot_general_with_conj(&a, &b, &config, true, false)
         .unwrap();
     let mut cache = ();
-    BackendCachedDot::dot_general_read_cached(
-        &mut backend,
-        &mut cache,
-        Some(0),
-        TensorRead::from_tensor(&a),
-        TensorRead::from_tensor(&b),
-        &config,
-    )
-    .unwrap();
-    BackendCachedDot::dot_general_read_cached(
-        &mut backend,
-        &mut cache,
-        Some(1),
-        TensorRead::from_view(TensorView::F64(view_source.as_view())),
-        TensorRead::from_tensor(&b),
-        &config,
-    )
-    .unwrap();
-    BackendCachedDot::dot_general_with_conj_read_cached(
-        &mut backend,
-        &mut cache,
-        Some(2),
-        TensorRead::from_tensor(&a),
-        TensorRead::from_tensor(&b),
-        &config,
-        true,
-        false,
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_read_cached(
+                Some(0),
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &config,
+            )
+        })
+        .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_read_cached(
+                Some(1),
+                TensorRead::from_view(TensorView::F64(view_source.as_view())),
+                TensorRead::from_tensor(&b),
+                &config,
+            )
+        })
+        .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_with_conj_read_cached(
+                Some(2),
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &config,
+                true,
+                false,
+            )
+        })
+        .unwrap();
 
     let err = backend
         .add_read(
@@ -1480,30 +1483,32 @@ fn run_grouped_f64_default_combo(
             let out_view =
                 TypedTensorViewMut::from_slice(vec![1], vec![1], 1, out_storage.as_mut_slice())
                     .unwrap();
-            BackendCachedDot::grouped_gemm_cached(
-                &mut backend,
-                &mut cache,
-                Some(3),
-                lhs_read,
-                rhs_read,
-                &config,
-                TensorWrite::from_view(TensorViewMut::F64(out_view)),
-            )
-            .unwrap();
+            backend
+                .with_backend_session_cached(&mut cache, |__s| {
+                    __s.grouped_gemm_cached(
+                        Some(3),
+                        lhs_read,
+                        rhs_read,
+                        &config,
+                        TensorWrite::from_view(TensorViewMut::F64(out_view)),
+                    )
+                })
+                .unwrap();
         }
         out_storage
     } else {
         let mut out = Tensor::from_vec_col_major(vec![1], vec![9.0_f64]).unwrap();
-        BackendCachedDot::grouped_gemm_cached(
-            &mut backend,
-            &mut cache,
-            Some(3),
-            lhs_read,
-            rhs_read,
-            &config,
-            TensorWrite::from_tensor(&mut out),
-        )
-        .unwrap();
+        backend
+            .with_backend_session_cached(&mut cache, |__s| {
+                __s.grouped_gemm_cached(
+                    Some(3),
+                    lhs_read,
+                    rhs_read,
+                    &config,
+                    TensorWrite::from_tensor(&mut out),
+                )
+            })
+            .unwrap();
         out.as_slice::<f64>().unwrap().to_vec()
     }
 }
@@ -1548,16 +1553,17 @@ fn grouped_gemm_default_fallback_updates_shared_buffer_offsets() {
         ..Default::default()
     };
 
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        Some(9),
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                Some(9),
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[13.0, 20.0, 23.0, 40.0]);
     assert_eq!(
@@ -1582,24 +1588,25 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
         dot_result: Some(Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f32]).unwrap()),
         ..Default::default()
     };
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &GroupedGemmConfig::new(
-            &jobs,
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::F32(3.0),
-                beta: ContractionScalar::F32(1.0),
-            },
-        ),
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &GroupedGemmConfig::new(
+                    &jobs,
+                    DotGeneralAccumulation {
+                        lhs_conj: false,
+                        rhs_conj: false,
+                        alpha: ContractionScalar::F32(3.0),
+                        beta: ContractionScalar::F32(1.0),
+                    },
+                ),
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     assert_eq!(out.as_slice::<f32>().unwrap(), &[11.0]);
 
     let lhs = Tensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 0.0)]).unwrap();
@@ -1611,24 +1618,25 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
         ),
         ..Default::default()
     };
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &GroupedGemmConfig::new(
-            &jobs,
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::C32(Complex32::new(2.0, 0.0)),
-                beta: ContractionScalar::C32(Complex32::new(0.0, 1.0)),
-            },
-        ),
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &GroupedGemmConfig::new(
+                    &jobs,
+                    DotGeneralAccumulation {
+                        lhs_conj: false,
+                        rhs_conj: false,
+                        alpha: ContractionScalar::C32(Complex32::new(2.0, 0.0)),
+                        beta: ContractionScalar::C32(Complex32::new(0.0, 1.0)),
+                    },
+                ),
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     assert_eq!(
         out.as_slice::<Complex32>().unwrap(),
         &[Complex32::new(3.0, 5.0)]
@@ -1643,24 +1651,25 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
         ),
         ..Default::default()
     };
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &GroupedGemmConfig::new(
-            &jobs,
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::C64(Complex64::new(1.0, 0.0)),
-                beta: ContractionScalar::C64(Complex64::new(0.0, 0.0)),
-            },
-        ),
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &GroupedGemmConfig::new(
+                    &jobs,
+                    DotGeneralAccumulation {
+                        lhs_conj: false,
+                        rhs_conj: false,
+                        alpha: ContractionScalar::C64(Complex64::new(1.0, 0.0)),
+                        beta: ContractionScalar::C64(Complex64::new(0.0, 0.0)),
+                    },
+                ),
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     assert_eq!(
         out.as_slice::<Complex64>().unwrap(),
         &[Complex64::new(4.0, -2.0)]
@@ -1846,16 +1855,17 @@ fn grouped_gemm_default_fallback_rejects_offsets_that_do_not_fit_isize() {
         ..Default::default()
     };
 
-    let err = BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap_err();
+    let err = backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap_err();
 
     assert!(err.to_string().contains("offset"));
 }

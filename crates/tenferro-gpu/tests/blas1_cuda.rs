@@ -20,7 +20,8 @@ use tenferro_gpu::cuda::{
 };
 use tenferro_tensor::backend::BackendSession;
 use tenferro_tensor::{
-    ContractionScalar, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensorView,
+    BackendSessionHost, ContractionScalar, Tensor, TensorRead, TensorView, TensorViewMut,
+    TensorWrite, TypedTensorView,
 };
 
 fn c64(re: f64, im: f64) -> Complex64 {
@@ -83,21 +84,25 @@ fn cuda_blas1_covers_all_supported_dtypes() {
             let host_x = Tensor::from_vec_col_major(vec![2], $x).unwrap();
             let host_y = Tensor::from_vec_col_major(vec![2], $y).unwrap();
             let expected_dot = cpu
-                .vdot_read(
-                    TensorRead::from_tensor(&host_x),
-                    TensorRead::from_tensor(&host_y),
-                )
+                .with_backend_session(|__s| {
+                    __s.vdot_read(
+                        TensorRead::from_tensor(&host_x),
+                        TensorRead::from_tensor(&host_y),
+                    )
+                })
                 .unwrap();
             let expected_norm = cpu
-                .norm_squared_read(TensorRead::from_tensor(&host_x))
+                .with_backend_session(|__s| __s.norm_squared_read(TensorRead::from_tensor(&host_x)))
                 .unwrap();
             let mut expected_y = host_y.duplicate().unwrap();
-            cpu.axpby_read_into_accum(
-                ContractionScalar::$scalar($alpha),
-                TensorRead::from_tensor(&host_x),
-                ContractionScalar::$scalar($beta),
-                TensorWrite::from_tensor(&mut expected_y),
-            )
+            cpu.with_backend_session(|__s| {
+                __s.axpby_read_into_accum(
+                    ContractionScalar::$scalar($alpha),
+                    TensorRead::from_tensor(&host_x),
+                    ContractionScalar::$scalar($beta),
+                    TensorWrite::from_tensor(&mut expected_y),
+                )
+            })
             .unwrap();
 
             let x = upload_tensor(cuda.runtime(), &host_x).unwrap();
@@ -182,10 +187,12 @@ fn cuda_vdot_matches_cpu_and_conjugates_the_left_operand() {
         let host_rhs = sample(len, -1.5);
 
         let expected = cpu
-            .vdot_read(
-                TensorRead::from_tensor(&host_lhs),
-                TensorRead::from_tensor(&host_rhs),
-            )
+            .with_backend_session(|__s| {
+                __s.vdot_read(
+                    TensorRead::from_tensor(&host_lhs),
+                    TensorRead::from_tensor(&host_rhs),
+                )
+            })
             .unwrap();
 
         let lhs = upload_tensor(cuda.runtime(), &host_lhs).unwrap();
@@ -288,10 +295,12 @@ fn cuda_vdot_accepts_two_strided_operands() {
     let host_rhs = grid(-1.5);
 
     let expected = cpu
-        .vdot_read(
-            transposed_host_view(&host_lhs),
-            transposed_host_view(&host_rhs),
-        )
+        .with_backend_session(|__s| {
+            __s.vdot_read(
+                transposed_host_view(&host_lhs),
+                transposed_host_view(&host_rhs),
+            )
+        })
         .unwrap();
 
     let lhs = upload_tensor(cuda.runtime(), &host_lhs).unwrap();
@@ -344,12 +353,14 @@ fn cuda_axpby_accepts_a_non_contiguous_read() {
     .unwrap();
 
     let mut expected = host_y.duplicate().unwrap();
-    cpu.axpby_read_into_accum(
-        alpha,
-        transposed_host_view(&host_x),
-        beta,
-        TensorWrite::from_tensor(&mut expected),
-    )
+    cpu.with_backend_session(|__s| {
+        __s.axpby_read_into_accum(
+            alpha,
+            transposed_host_view(&host_x),
+            beta,
+            TensorWrite::from_tensor(&mut expected),
+        )
+    })
     .unwrap();
 
     let x = upload_tensor(cuda.runtime(), &host_x).unwrap();
@@ -401,9 +412,13 @@ fn cuda_reductions_accept_compact_views_with_offsets() {
     .unwrap();
 
     let expected_dot = cpu
-        .vdot_read(offset_host_view(&host), offset_host_view(&host_other))
+        .with_backend_session(|__s| {
+            __s.vdot_read(offset_host_view(&host), offset_host_view(&host_other))
+        })
         .unwrap();
-    let expected_norm = cpu.norm_squared_read(offset_host_view(&host)).unwrap();
+    let expected_norm = cpu
+        .with_backend_session(|__s| __s.norm_squared_read(offset_host_view(&host)))
+        .unwrap();
 
     let device = upload_tensor(cuda.runtime(), &host).unwrap();
     let device_other = upload_tensor(cuda.runtime(), &host_other).unwrap();
@@ -456,7 +471,9 @@ fn cuda_reductions_accept_a_non_contiguous_read() {
     .unwrap();
 
     let expected = cpu
-        .vdot_read(transposed_host_view(&host), TensorRead::from_tensor(&other))
+        .with_backend_session(|__s| {
+            __s.vdot_read(transposed_host_view(&host), TensorRead::from_tensor(&other))
+        })
         .unwrap();
 
     let device = upload_tensor(cuda.runtime(), &host).unwrap();
@@ -471,7 +488,9 @@ fn cuda_reductions_accept_a_non_contiguous_read() {
 
     assert_close_c64(&got, &expected, "vdot transposed");
 
-    let expected = cpu.norm_squared_read(transposed_host_view(&host)).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.norm_squared_read(transposed_host_view(&host)))
+        .unwrap();
     let got = cuda
         .norm_squared_read(transposed_device_view(&device))
         .unwrap();
@@ -489,7 +508,7 @@ fn cuda_norm_squared_matches_cpu() {
     for len in [1_usize, 5, 4096] {
         let host = sample(len, 0.125);
         let expected = cpu
-            .norm_squared_read(TensorRead::from_tensor(&host))
+            .with_backend_session(|__s| __s.norm_squared_read(TensorRead::from_tensor(&host)))
             .unwrap();
 
         let device = upload_tensor(cuda.runtime(), &host).unwrap();
@@ -529,12 +548,14 @@ fn cuda_axpby_matches_cpu_with_complex_coefficients() {
         let host_y = sample(len, -0.25);
 
         let mut expected = sample(len, -0.25);
-        cpu.axpby_read_into_accum(
-            alpha,
-            TensorRead::from_tensor(&host_x),
-            beta,
-            TensorWrite::from_tensor(&mut expected),
-        )
+        cpu.with_backend_session(|__s| {
+            __s.axpby_read_into_accum(
+                alpha,
+                TensorRead::from_tensor(&host_x),
+                beta,
+                TensorWrite::from_tensor(&mut expected),
+            )
+        })
         .unwrap();
 
         let x = upload_tensor(cuda.runtime(), &host_x).unwrap();

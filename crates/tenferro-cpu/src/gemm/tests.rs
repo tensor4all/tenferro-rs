@@ -17,8 +17,9 @@ use crate::provider::tests::execution_context_fixture;
 use crate::provider::ParallelMode;
 #[cfg(feature = "cpu-blas")]
 use num_complex::Complex64;
+use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::RuntimeCacheControl;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 #[cfg(feature = "cpu-faer")]
 use tenferro_tensor::{TensorRead, TensorView};
 
@@ -448,11 +449,13 @@ fn faer_read_transposed_view_uses_provider_runtime() {
     let mut backend =
         crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Faer).unwrap();
     let out = backend
-        .dot_general_read(
-            TensorRead::from_view(TensorView::F64(lhs_view)),
-            TensorRead::from_tensor(&rhs),
-            &config,
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_view(TensorView::F64(lhs_view)),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
         .unwrap();
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);

@@ -587,7 +587,7 @@ fn run_cpu_binary(
         PrimitiveOpKind::Div => cpu.with_backend_session(|__s| {
             __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
         }),
-        PrimitiveOpKind::Rem => cpu.rem(lhs, rhs),
+        PrimitiveOpKind::Rem => cpu.with_backend_session(|__s| __s.rem(lhs, rhs)),
         PrimitiveOpKind::Maximum => cpu.with_backend_session(|__s| {
             __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
         }),
@@ -611,9 +611,9 @@ fn run_cpu_reduction(
     match op {
         PrimitiveOpKind::ReduceSum => cpu
             .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes)),
-        PrimitiveOpKind::ReduceSumSquares => {
-            cpu.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
-        }
+        PrimitiveOpKind::ReduceSumSquares => cpu.with_backend_session(|__s| {
+            __s.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
+        }),
         PrimitiveOpKind::ReduceProd => cpu
             .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(input), axes)),
         PrimitiveOpKind::ReduceMax => cpu

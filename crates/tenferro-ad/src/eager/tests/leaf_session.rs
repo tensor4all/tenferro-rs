@@ -8,7 +8,7 @@ use crate::eager_backend::EagerBackend;
 use crate::{EagerRuntime, Error};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    MemoryKind, Placement, Tensor, TensorRead, TensorStructural, TensorView, TypedTensor,
+    BackendSessionHost, MemoryKind, Placement, Tensor, TensorRead, TensorView, TypedTensor,
     TypedTensorView,
 };
 use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
@@ -69,7 +69,8 @@ fn host_leaf_materialization_matches_the_cpu_backend_acceptance() -> Result<(), 
         .expect("an owned host tensor has a session-free path")
         .map_err(Error::from)?;
     let mut cpu = CpuBackend::new();
-    let session = TensorStructural::to_contiguous_read(&mut cpu, TensorRead::from_tensor(&host))
+    let session = cpu
+        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&host)))
         .map_err(Error::from)?;
     assert_eq!(
         fast.as_slice::<f64>().map_err(Error::from)?,
@@ -101,11 +102,9 @@ fn host_leaf_materialization_matches_the_cpu_backend_acceptance() -> Result<(), 
     assert!(backend
         .to_contiguous_host_read(&TensorRead::from_tensor(&placed))
         .is_none());
-    assert!(TensorStructural::to_contiguous_read(
-        &mut CpuBackend::new(),
-        TensorRead::from_tensor(&placed)
-    )
-    .is_err());
+    assert!(CpuBackend::new()
+        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&placed)))
+        .is_err());
 
     // Declined: a caller-owned external scalar keeps the session path.
     let payload =

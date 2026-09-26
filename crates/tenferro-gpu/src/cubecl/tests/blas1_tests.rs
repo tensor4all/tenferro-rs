@@ -1,6 +1,7 @@
 use super::super::blas1::blas1_len;
 use cudarc::cublas::sys as cublas;
 use num_complex::{Complex32, Complex64};
+use tenferro_tensor::BackendSessionHost;
 
 #[test]
 fn blas1_length_stays_within_the_portable_cublas_interface() {
@@ -52,12 +53,14 @@ fn cuda_axpby_reads_an_offset_strided_source_in_place() {
             }
         }
         let host_x = tensor_c64(vec![2, 3], host_region);
-        cpu.axpby_read_into_accum(
-            alpha,
-            TensorRead::from_tensor(&host_x),
-            beta,
-            TensorWrite::from_tensor(&mut expected),
-        )
+        cpu.with_backend_session(|__s| {
+            __s.axpby_read_into_accum(
+                alpha,
+                TensorRead::from_tensor(&host_x),
+                beta,
+                TensorWrite::from_tensor(&mut expected),
+            )
+        })
         .unwrap();
     }
 

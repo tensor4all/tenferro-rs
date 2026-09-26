@@ -1,9 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, DotGeneralConfig, Tensor, TensorDot,
-};
+use tenferro_tensor::{BackendRuntimeCache, BackendSessionHost, DotGeneralConfig, Tensor};
 
 const L: usize = 32;
 const PHYS_DIM: usize = 2;
@@ -92,10 +90,14 @@ fn inner_fresh_backend_cache(
     let mut env = scalar_one();
     for (bra_core, ket_core) in bra.iter().zip(ket) {
         let tmp = backend
-            .dot_general_with_conj(&env, bra_core, &configs.env_bra, false, true)
+            .with_backend_session(|__s| {
+                __s.dot_general_with_conj(&env, bra_core, &configs.env_bra, false, true)
+            })
             .expect("environment and conjugated bra contraction should succeed");
         env = backend
-            .dot_general_with_conj(&tmp, ket_core, &configs.tmp_ket, false, false)
+            .with_backend_session(|__s| {
+                __s.dot_general_with_conj(&tmp, ket_core, &configs.tmp_ket, false, false)
+            })
             .expect("normal ket contraction should succeed");
     }
     env
@@ -111,26 +113,28 @@ fn inner_persistent_backend_cache(
     let mut env = scalar_one();
     for (site, (bra_core, ket_core)) in bra.iter().zip(ket).enumerate() {
         let tmp = backend
-            .dot_general_with_conj_cached(
-                cache,
-                Some(2 * site),
-                &env,
-                bra_core,
-                &configs.env_bra,
-                false,
-                true,
-            )
+            .with_backend_session_cached(cache, |__s| {
+                __s.dot_general_with_conj_cached(
+                    Some(2 * site),
+                    &env,
+                    bra_core,
+                    &configs.env_bra,
+                    false,
+                    true,
+                )
+            })
             .expect("environment and conjugated bra contraction should succeed");
         env = backend
-            .dot_general_with_conj_cached(
-                cache,
-                Some(2 * site + 1),
-                &tmp,
-                ket_core,
-                &configs.tmp_ket,
-                false,
-                false,
-            )
+            .with_backend_session_cached(cache, |__s| {
+                __s.dot_general_with_conj_cached(
+                    Some(2 * site + 1),
+                    &tmp,
+                    ket_core,
+                    &configs.tmp_ket,
+                    false,
+                    false,
+                )
+            })
             .expect("normal ket contraction should succeed");
     }
     env

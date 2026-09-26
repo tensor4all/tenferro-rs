@@ -37,19 +37,14 @@ use tenferro_tensor::{
 #[test]
 fn with_cpu_exec_session_checks_exact_marker_and_scopes_borrow() {
     let mut backend = CpuBackend::new();
-    assert_ne!(
-        backend.session_type_id(),
-        std::any::TypeId::of::<crate::exec_session::CpuExecSessionMarker>()
-    );
-    let mut called = false;
-    assert!(with_cpu_exec_session(&mut backend, |_| {
-        called = true;
-    })
-    .is_none());
-    assert!(!called);
-
     let value = backend
         .with_backend_session(|session| {
+            // The session the owner builds is the CPU execution session, which
+            // is what the capability bridge recognizes.
+            assert_eq!(
+                session.session_type_id(),
+                std::any::TypeId::of::<crate::exec_session::CpuExecSessionMarker>()
+            );
             with_cpu_exec_session(session, |session: &mut CpuExecSession<'_>| {
                 let _: &mut CpuExecSession<'_> = session;
                 17usize
@@ -72,10 +67,9 @@ fn faer_parallelism_capability_runs_inside_a_cpu_session() {
         })
         .unwrap();
 
-    let error = backend
-        .with_faer_parallelism(|_| Ok::<_, Error>(()))
-        .unwrap_err();
-    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+    // A session that is not a CPU execution session is rejected with
+    // `Unsupported`; this crate can only build CPU sessions, so that half is
+    // asserted where a foreign session exists (the GPU and extension crates).
 }
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
@@ -300,16 +294,17 @@ fn grouped_gemm_shared_buffers_f64_matches_sequential_reference() {
     let mut backend = CpuBackend::new();
     let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
 
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        Some(0),
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                Some(0),
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), expected.as_slice());
 }
@@ -350,16 +345,17 @@ fn grouped_gemm_shared_buffers_c64_matches_sequential_reference() {
     let mut backend = CpuBackend::new();
     let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
 
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
 
     for (actual, expected) in out.as_slice::<Complex64>().unwrap().iter().zip(expected) {
         assert_c64_close_tol(*actual, expected, 1.0e-10);
@@ -389,16 +385,17 @@ fn grouped_gemm_covers_f32_and_c32() {
     );
     let mut backend = CpuBackend::new();
     let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     for (actual, expected) in out.as_slice::<f32>().unwrap().iter().zip(f32_expected) {
         assert!((*actual - expected).abs() < 1.0e-5);
     }
@@ -429,16 +426,17 @@ fn grouped_gemm_covers_f32_and_c32() {
             beta: ContractionScalar::C32(beta),
         },
     );
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     for (actual, expected) in out
         .as_slice::<Complex32>()
         .unwrap()
@@ -465,16 +463,17 @@ fn grouped_gemm_rejects_overlapping_output_ranges() {
     );
     let mut backend = CpuBackend::new();
     let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
-    let err = BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap_err();
+    let err = backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap_err();
     assert!(format!("{err}").contains("overlaps"));
     assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0; 8]);
 }
@@ -491,16 +490,17 @@ fn grouped_gemm_zero_jobs_is_noop_and_empty_contract_scales_output() {
         &no_jobs,
         DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
     );
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &noop,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &noop,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 3.0, 4.0, 5.0]);
 
     let empty_jobs = [GroupedGemmJob::new(0, 0, 0, 2, 0, 2)];
@@ -513,16 +513,17 @@ fn grouped_gemm_zero_jobs_is_noop_and_empty_contract_scales_output() {
             beta: ContractionScalar::F64(3.0),
         },
     );
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &scale,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &scale,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0, 9.0, 12.0, 15.0]);
 }
 

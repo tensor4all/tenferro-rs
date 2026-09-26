@@ -11,8 +11,8 @@ use tenferro_runtime::{
     SpecializationRequirements,
 };
 use tenferro_tensor::{
-    CpuDomainId, GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig,
-    StrideVec, Tensor, TensorIndexing,
+    BackendSessionHost, CpuDomainId, GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec,
+    SliceConfig, StrideVec, Tensor,
 };
 
 use super::{
@@ -423,10 +423,10 @@ fn cpu_backend_cache_owner_hooks_report_and_clear_current_engine_caches() {
         slice_sizes: vec![1],
     };
     backend
-        .gather(&operand, &indices, &config)
+        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
         .expect("compile gather plan");
     backend
-        .gather(&operand, &indices, &config)
+        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
         .expect("reuse gather plan");
     let populated = RuntimeCacheOwner::cache_stats(&backend).expect("populated cache stats");
     assert_eq!(populated.entries, 1);

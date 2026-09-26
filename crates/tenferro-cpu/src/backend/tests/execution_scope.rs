@@ -1,5 +1,6 @@
 use super::*;
 use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::TensorRead;
 
 fn input() -> Tensor {

@@ -411,10 +411,10 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
     );
     let config = matmul_config();
     let uninit_output = uninit_backend
-        .dot_general_with_conj(&lhs, &rhs, &config, true, true)
+        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
         .unwrap();
     let zeroed_output = zeroed_backend
-        .dot_general_with_conj(&lhs, &rhs, &config, true, true)
+        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
         .unwrap();
     assert_eq!(
         uninit_output.as_slice::<Complex64>().unwrap(),

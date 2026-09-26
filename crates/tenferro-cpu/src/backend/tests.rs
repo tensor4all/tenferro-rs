@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
+use tenferro_tensor::DotGeneralConfig;
 
 use super::*;
 use tenferro_tensor::BackendSessionHost;
@@ -945,13 +946,19 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
     let mut cache = gemm::GemmAnalysisCache::default();
 
     for result in [
-        backend.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, &config),
-        backend.dot_general_with_conj_cached(&mut cache, Some(1), &lhs, &rhs, &config, false, true),
-        backend.dot_general_read(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_tensor(&rhs),
-            &config,
-        ),
+        backend.with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
+        }),
+        backend.with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, false, true)
+        }),
+        backend.with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        }),
     ] {
         let err = result.unwrap_err();
         assert_eq!(err.kind(), tenferro_tensor::ErrorKind::Unsupported);
@@ -1078,7 +1085,9 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    let dot_error = backend.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, &config);
+    let dot_error = backend.with_backend_session_cached(&mut cache, |__s| {
+        __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
+    });
     assert!(matches!(
         dot_error,
         Err(crate::Error::Validation {
@@ -1087,8 +1096,9 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
         })
     ));
 
-    let dot_conj_error =
-        backend.dot_general_with_conj_cached(&mut cache, Some(1), &lhs, &rhs, &config, true, false);
+    let dot_conj_error = backend.with_backend_session_cached(&mut cache, |__s| {
+        __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, true, false)
+    });
     assert!(matches!(
         dot_conj_error,
         Err(crate::Error::Validation {

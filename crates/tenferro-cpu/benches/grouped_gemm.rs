@@ -2,8 +2,8 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, ContractionScalar, DotGeneralAccumulation,
-    DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorView, TensorWrite,
+    BackendRuntimeCache, BackendSessionHost, ContractionScalar, DotGeneralAccumulation,
+    DotGeneralConfig, Tensor, TensorRead, TensorView, TensorWrite,
 };
 
 struct GroupedFixture {
@@ -59,16 +59,17 @@ fn run_grouped_into(
     config: &GroupedGemmConfig<'_>,
     out: &mut Tensor,
 ) {
-    BackendCachedDot::grouped_gemm_cached(
-        backend,
-        cache,
-        Some(0),
-        TensorRead::from_tensor(&fixture.lhs),
-        TensorRead::from_tensor(&fixture.rhs),
-        config,
-        TensorWrite::from_tensor(out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(cache, |__s| {
+            __s.grouped_gemm_cached(
+                Some(0),
+                TensorRead::from_tensor(&fixture.lhs),
+                TensorRead::from_tensor(&fixture.rhs),
+                config,
+                TensorWrite::from_tensor(out),
+            )
+        })
+        .unwrap();
 }
 
 fn f64_view(tensor: &Tensor) -> TensorView<'_> {
@@ -89,16 +90,17 @@ fn run_grouped_views_into(
     config: &GroupedGemmConfig<'_>,
     out: &mut Tensor,
 ) {
-    BackendCachedDot::grouped_gemm_cached(
-        backend,
-        cache,
-        Some(0),
-        TensorRead::from_view(lhs.clone()),
-        TensorRead::from_view(rhs.clone()),
-        config,
-        TensorWrite::from_tensor(out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(cache, |__s| {
+            __s.grouped_gemm_cached(
+                Some(0),
+                TensorRead::from_view(lhs.clone()),
+                TensorRead::from_view(rhs.clone()),
+                config,
+                TensorWrite::from_tensor(out),
+            )
+        })
+        .unwrap();
 }
 
 fn run_grouped(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
@@ -153,13 +155,15 @@ fn run_sequential(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor 
         )
         .unwrap();
         backend
-            .dot_general_read_into_accum(
-                TensorRead::from_view(tenferro_tensor::TensorView::F64(lhs_view)),
-                TensorRead::from_view(tenferro_tensor::TensorView::F64(rhs_view)),
-                &dot_config,
-                accumulation,
-                TensorWrite::from_view(tenferro_tensor::TensorViewMut::F64(out_matrix)),
-            )
+            .with_backend_session(|__s| {
+                __s.dot_general_read_into_accum(
+                    TensorRead::from_view(tenferro_tensor::TensorView::F64(lhs_view)),
+                    TensorRead::from_view(tenferro_tensor::TensorView::F64(rhs_view)),
+                    &dot_config,
+                    accumulation,
+                    TensorWrite::from_view(tenferro_tensor::TensorViewMut::F64(out_matrix)),
+                )
+            })
             .unwrap();
     }
     out
