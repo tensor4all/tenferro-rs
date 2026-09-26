@@ -1,14 +1,13 @@
 use crate::error::{Error, Result};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::{
-    BackendSession, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackend, TensorBackendOps,
+    BackendSession, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackendOps,
     TensorDeviceTransfer, TensorRead,
 };
 
 use super::{
-    collect_tensor_refs, constant_tensor, ensure_owned, execute_extension_instruction, get,
-    get_read, resolve_tensor_shape_exprs, DispatchMode, ExecInstruction, ExecOp, ExecSlot,
-    ExtensionExecutionDispatch,
+    collect_tensor_refs, constant_tensor, ensure_owned, get, get_read,
+    resolve_tensor_shape_exprs, ExecInstruction, ExecOp, ExecSlot,
 };
 use crate::scalar_semantics::dynamic_truncate_size;
 
@@ -17,14 +16,6 @@ type BackendDispatchFn = for<'a> fn(
     &mut [Option<ExecSlot<'_>>],
     &ExecInstruction,
 ) -> Result<Tensor>;
-
-type FfiDispatchFn<B> = fn(
-    &mut B,
-    &mut [Option<ExecSlot<'_>>],
-    &ExecInstruction,
-    DispatchMode,
-    Option<&mut ExtensionExecutionDispatch<'_>>,
-) -> Result<()>;
 
 pub(super) trait HostExecution: TensorBackendOps + TensorDeviceTransfer {}
 
@@ -52,7 +43,7 @@ macro_rules! define_backend_dispatch {
 }
 
 macro_rules! define_ffi_dispatch {
-    ($( $key:ident => $pattern:pat => $execute:ident, )*) => {
+    ($( $key:ident => $pattern:pat, )*) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub(super) enum FfiDispatchKey {
             $( $key, )*
@@ -61,7 +52,6 @@ macro_rules! define_ffi_dispatch {
         impl FfiDispatchKey {
             #[cfg(test)]
             pub(super) const COUNT: usize = <[()]>::len(&[$(count_keys!($key)),*]);
-            const COUNT_FOR_TABLE: usize = <[()]>::len(&[$(count_keys!($key)),*]);
 
             pub(super) fn for_op(op: &ExecOp) -> Option<Self> {
                 match op {
@@ -69,17 +59,6 @@ macro_rules! define_ffi_dispatch {
                     _ => None,
                 }
             }
-        }
-
-        fn ffi_dispatch_table<B: TensorBackend + 'static>() -> [FfiDispatchEntry<B>; FfiDispatchKey::COUNT_FOR_TABLE] {
-            [
-                $(
-                    FfiDispatchEntry {
-                        key: FfiDispatchKey::$key,
-                        execute: $execute::<B>,
-                    },
-                )*
-            ]
         }
     };
 }
@@ -122,22 +101,9 @@ pub(super) struct BackendDispatchEntry {
     execute: BackendDispatchFn,
 }
 
-pub(super) struct FfiDispatchEntry<B: TensorBackend + 'static> {
-    pub(super) key: FfiDispatchKey,
-    execute: FfiDispatchFn<B>,
-}
-
 pub(super) struct HostDispatchEntry<B: HostExecution + ?Sized> {
     pub(super) key: HostDispatchKey,
     execute: HostDispatchFn<B>,
-}
-
-impl<B: TensorBackend + 'static> Copy for FfiDispatchEntry<B> {}
-
-impl<B: TensorBackend + 'static> Clone for FfiDispatchEntry<B> {
-    fn clone(&self) -> Self {
-        *self
-    }
 }
 
 impl<B: HostExecution + ?Sized> Copy for HostDispatchEntry<B> {}
@@ -198,9 +164,9 @@ define_backend_dispatch! {
 }
 
 define_ffi_dispatch! {
-    DotGeneral => ExecOp::DotGeneral(_) => execute_dot_general_ffi,
-    DotGeneralWithConj => ExecOp::DotGeneralWithConj { .. } => execute_dot_general_with_conj_ffi,
-    Extension => ExecOp::Extension(_) => execute_extension_ffi,
+    DotGeneral => ExecOp::DotGeneral(_),
+    DotGeneralWithConj => ExecOp::DotGeneralWithConj { .. },
+    Extension => ExecOp::Extension(_),
 }
 
 define_host_dispatch! {
@@ -215,17 +181,6 @@ pub(super) fn backend_dispatch_entry(op: &ExecOp) -> Option<&'static BackendDisp
     // INVARIANT: this macro-generated table is fixed at compile time and has
     // one entry per core primitive family, so the scan is constant-bounded.
     BACKEND_DISPATCH_TABLE.iter().find(|entry| entry.key == key)
-}
-
-pub(super) fn ffi_dispatch_entry<B: TensorBackend + 'static>(
-    op: &ExecOp,
-) -> Option<FfiDispatchEntry<B>> {
-    let key = FfiDispatchKey::for_op(op)?;
-    // INVARIANT: the FFI dispatch table is macro-generated and fixed at
-    // compile time, so this lookup is constant-bounded.
-    ffi_dispatch_table::<B>()
-        .into_iter()
-        .find(|entry| entry.key == key)
 }
 
 pub(super) fn is_host_op(op: &ExecOp) -> bool {
@@ -282,22 +237,6 @@ pub(super) fn execute_host_dispatch<B: HostExecution + ?Sized>(
     (entry.execute)(backend, slots, inst)
 }
 
-pub(super) fn execute_ffi_dispatch<B: TensorBackend + 'static>(
-    backend: &mut B,
-    slots: &mut [Option<ExecSlot<'_>>],
-    inst: &ExecInstruction,
-    mode: DispatchMode,
-    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
-) -> Result<()> {
-    let Some(entry) = ffi_dispatch_entry::<B>(&inst.op) else {
-        return Err(Error::Internal(format!(
-            "non-ffi op reached ffi executor: {:?}",
-            inst.op
-        )));
-    };
-    (entry.execute)(backend, slots, inst, mode, extension_dispatch)
-}
-
 fn ensure_backend_inputs(
     exec: &mut dyn BackendSession,
     slots: &mut [Option<ExecSlot<'_>>],
@@ -313,12 +252,6 @@ fn ensure_backend_inputs(
 fn dispatch_mismatch(expected: PrimitiveOpKind, op: &ExecOp) -> Error {
     Error::Internal(format!(
         "backend dispatch table key {expected:?} called with mismatched op: {op:?}"
-    ))
-}
-
-fn ffi_dispatch_mismatch(expected: FfiDispatchKey, op: &ExecOp) -> Error {
-    Error::Internal(format!(
-        "FFI dispatch table key {expected:?} called with mismatched op: {op:?}"
     ))
 }
 
@@ -484,67 +417,6 @@ fn execute_constant_host<B: HostExecution + ?Sized>(
         backend.upload_host_tensor(TensorRead::from_tensor(&host))?,
     ));
     Ok(())
-}
-
-fn execute_dot_general_ffi<B: TensorBackend + 'static>(
-    backend: &mut B,
-    slots: &mut [Option<ExecSlot<'_>>],
-    inst: &ExecInstruction,
-    _mode: DispatchMode,
-    _extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
-) -> Result<()> {
-    let ExecOp::DotGeneral(config) = &inst.op else {
-        return Err(ffi_dispatch_mismatch(FfiDispatchKey::DotGeneral, &inst.op));
-    };
-    let result = backend.dot_general_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-        config,
-    )?;
-    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
-    Ok(())
-}
-
-fn execute_dot_general_with_conj_ffi<B: TensorBackend + 'static>(
-    backend: &mut B,
-    slots: &mut [Option<ExecSlot<'_>>],
-    inst: &ExecInstruction,
-    _mode: DispatchMode,
-    _extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
-) -> Result<()> {
-    let ExecOp::DotGeneralWithConj {
-        config,
-        lhs_conj,
-        rhs_conj,
-    } = &inst.op
-    else {
-        return Err(ffi_dispatch_mismatch(
-            FfiDispatchKey::DotGeneralWithConj,
-            &inst.op,
-        ));
-    };
-    let result = backend.dot_general_with_conj_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-        config,
-        *lhs_conj,
-        *rhs_conj,
-    )?;
-    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
-    Ok(())
-}
-
-fn execute_extension_ffi<B: TensorBackend + 'static>(
-    backend: &mut B,
-    slots: &mut [Option<ExecSlot<'_>>],
-    inst: &ExecInstruction,
-    _mode: DispatchMode,
-    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
-) -> Result<()> {
-    let ExecOp::Extension(ext) = &inst.op else {
-        return Err(ffi_dispatch_mismatch(FfiDispatchKey::Extension, &inst.op));
-    };
-    execute_extension_instruction(backend, slots, inst, ext.as_ref(), extension_dispatch)
 }
 
 fn execute_transpose(

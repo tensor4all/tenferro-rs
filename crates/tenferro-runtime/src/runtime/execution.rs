@@ -20,7 +20,7 @@ use tenferro_tensor::{
 
 use crate::error::ErrorPhase;
 use crate::exec::{
-    DispatchMode, ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
+    ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
 };
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
@@ -1267,17 +1267,33 @@ where
         {
             // Already handled as a metadata-only TensorValue.
         } else if crate::exec::is_host_instruction(instruction) {
-            crate::exec::execute_host_instruction(backend, slots, instruction)?;
+            backend.with_backend_session(|exec| {
+                crate::exec::execute_host_instruction_exec(exec, slots, instruction)
+            })?;
         } else if crate::exec::is_ffi_instruction(instruction) {
-            crate::exec::execute_ffi_instruction_cached(
-                backend,
-                backend_cache,
-                slots,
+            if crate::exec::needs_owner_extension_fallback(
                 instruction,
-                DispatchMode::Unsegmented,
-                Some(instruction_index),
-                Some(&mut extension_dispatch),
-            )?;
+                Some(&extension_dispatch),
+            ) {
+                // The extension entry forms its own session; no operation runs
+                // on the owner.
+                crate::exec::execute_owner_extension_fallback(
+                    backend,
+                    slots,
+                    instruction,
+                    Some(&mut extension_dispatch),
+                )?;
+            } else {
+                backend.with_backend_session_cached(backend_cache, |exec| {
+                    crate::exec::execute_ffi_instruction_exec(
+                        exec,
+                        slots,
+                        instruction,
+                        Some(instruction_index),
+                        Some(&mut extension_dispatch),
+                    )
+                })?;
+            }
         } else {
             let result = backend.with_backend_session(|exec| {
                 crate::exec::execute_backend_op(exec, slots, instruction)

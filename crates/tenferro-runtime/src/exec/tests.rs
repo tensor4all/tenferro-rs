@@ -13,8 +13,8 @@ use tenferro_tensor::{
 };
 
 use super::dispatch::{
-    backend_dispatch_entry, ffi_dispatch_entry, host_dispatch_entry, FfiDispatchKey,
-    HostDispatchKey, BACKEND_DISPATCH_TABLE,
+    backend_dispatch_entry, host_dispatch_entry, FfiDispatchKey, HostDispatchKey,
+    BACKEND_DISPATCH_TABLE,
 };
 use super::{
     collect_outputs_from, constant_tensor, get, initialize_exec_slots_in,
@@ -95,17 +95,13 @@ fn ffi_dispatch_table_covers_dot_and_extension_exec_ops() {
 
     for (op, expected) in cases {
         assert_eq!(FfiDispatchKey::for_op(&op), Some(expected), "{op:?}");
-        let entry = ffi_dispatch_entry::<CpuBackend>(&op)
-            .unwrap_or_else(|| panic!("missing FFI dispatch table entry for {expected:?}: {op:?}"));
-        assert_eq!(entry.key, expected);
     }
 }
 
 #[test]
-fn ffi_dispatch_table_excludes_host_and_backend_exec_ops() {
+fn ffi_dispatch_keys_exclude_host_and_backend_exec_ops() {
     for op in non_ffi_dispatch_cases() {
         assert_eq!(FfiDispatchKey::for_op(&op), None, "{op:?}");
-        assert!(ffi_dispatch_entry::<CpuBackend>(&op).is_none(), "{op:?}");
     }
 }
 

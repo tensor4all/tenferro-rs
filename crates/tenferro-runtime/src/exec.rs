@@ -8,9 +8,9 @@ use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::backend::ElementwiseFusionOp;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    BackendCachedDot, BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig,
-    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
-    ValidationError,
+    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorBuffer, TensorRead, TensorValue,
+    TypedTensor, ValidationError,
 };
 
 use crate::extension_cache::ExtensionCacheStore;
@@ -68,12 +68,6 @@ pub(crate) struct ExtensionExecutionDispatch<'a> {
 pub(crate) struct MissingPreparedOperationExecutorError {
     pub(crate) family_id: &'static str,
     pub(crate) operation_index: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DispatchMode {
-    Unsegmented,
-    Segmented,
 }
 
 // INVARIANT: execution slots carry either a move-only tensor or a borrowed
@@ -644,23 +638,51 @@ pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
         validate_exec_program(program, "unsegmented executor")?;
         initialize_exec_slots_in(program, inputs, slots)?;
 
-        for inst in &program.instructions {
-            if is_host_instruction(inst) {
-                execute_host_instruction(backend, slots, inst)?;
-            } else if is_ffi_instruction(inst) {
-                execute_ffi_instruction(
+        let instructions = &program.instructions;
+        let mut index = 0usize;
+        while index < instructions.len() {
+            let run_start = index;
+            while index < instructions.len()
+                && !needs_owner_extension_fallback(
+                    &instructions[index],
+                    extension_dispatch.as_deref(),
+                )
+            {
+                index += 1;
+            }
+            if run_start < index {
+                backend.with_backend_session(|exec| {
+                    for inst in &instructions[run_start..index] {
+                        if is_host_instruction(inst) {
+                            execute_host_instruction_exec(exec, slots, inst)?;
+                        } else if is_ffi_instruction(inst) {
+                            execute_ffi_instruction_exec(
+                                exec,
+                                slots,
+                                inst,
+                                None,
+                                extension_dispatch.as_deref_mut(),
+                            )?;
+                        } else {
+                            let result = execute_backend_op(exec, slots, inst)?;
+                            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
+                        }
+                        reclaim_last_use_inputs_exec(slots, inst, exec);
+                    }
+                    Ok::<(), Error>(())
+                })?;
+            }
+            if index < instructions.len() {
+                let inst = &instructions[index];
+                execute_owner_extension_fallback(
                     backend,
                     slots,
                     inst,
-                    DispatchMode::Unsegmented,
                     extension_dispatch.as_deref_mut(),
                 )?;
-            } else {
-                let result =
-                    backend.with_backend_session(|exec| execute_backend_op(exec, slots, inst))?;
-                slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
+                reclaim_last_use_inputs_backend(slots, inst, backend);
+                index += 1;
             }
-            reclaim_last_use_inputs_backend(slots, inst, backend);
         }
 
         backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))
@@ -685,29 +707,59 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
         initialize_exec_slots_in(program, inputs, slots)?;
         let terminal_slots = terminal_output_slots(program);
 
-        for (inst_idx, inst) in program.instructions.iter().enumerate() {
-            if backend.with_backend_session(|exec| {
-                try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
-            })? {
-                // Already handled as a metadata-only TensorValue.
-            } else if is_host_instruction(inst) {
-                execute_host_instruction(backend, slots, inst)?;
-            } else if is_ffi_instruction(inst) {
-                execute_ffi_instruction_cached(
+        let instructions = &program.instructions;
+        let mut index = 0usize;
+        while index < instructions.len() {
+            let run_start = index;
+            while index < instructions.len()
+                && !needs_owner_extension_fallback(
+                    &instructions[index],
+                    extension_dispatch.as_deref(),
+                )
+            {
+                index += 1;
+            }
+            if run_start < index {
+                backend.with_backend_session_cached(backend_cache, |exec| {
+                    for (offset, inst) in instructions[run_start..index].iter().enumerate() {
+                        let inst_idx = run_start + offset;
+                        if try_execute_terminal_value_instruction(
+                            exec,
+                            slots,
+                            inst,
+                            &terminal_slots,
+                        )? {
+                            // Already handled as a metadata-only TensorValue.
+                        } else if is_host_instruction(inst) {
+                            execute_host_instruction_exec(exec, slots, inst)?;
+                        } else if is_ffi_instruction(inst) {
+                            execute_ffi_instruction_exec(
+                                exec,
+                                slots,
+                                inst,
+                                Some(inst_idx),
+                                extension_dispatch.as_deref_mut(),
+                            )?;
+                        } else {
+                            let result = execute_backend_op(exec, slots, inst)?;
+                            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
+                        }
+                        reclaim_last_use_inputs_exec(slots, inst, exec);
+                    }
+                    Ok::<(), Error>(())
+                })?;
+            }
+            if index < instructions.len() {
+                let inst = &instructions[index];
+                execute_owner_extension_fallback(
                     backend,
-                    backend_cache,
                     slots,
                     inst,
-                    DispatchMode::Unsegmented,
-                    Some(inst_idx),
                     extension_dispatch.as_deref_mut(),
                 )?;
-            } else {
-                let result =
-                    backend.with_backend_session(|exec| execute_backend_op(exec, slots, inst))?;
-                slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
+                reclaim_last_use_inputs_backend(slots, inst, backend);
+                index += 1;
             }
-            reclaim_last_use_inputs_backend(slots, inst, backend);
         }
 
         backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))
@@ -804,14 +856,6 @@ pub(crate) fn execute_backend_op<'input>(
     dispatch::execute_backend_dispatch(exec, slots, inst)
 }
 
-pub(crate) fn execute_host_instruction<'input, B: TensorBackend>(
-    backend: &mut B,
-    slots: &mut [Option<ExecSlot<'input>>],
-    inst: &ExecInstruction,
-) -> Result<()> {
-    dispatch::execute_host_dispatch(backend, slots, inst)
-}
-
 pub(crate) fn execute_host_instruction_exec<'input>(
     exec: &mut dyn BackendSession,
     slots: &mut [Option<ExecSlot<'input>>],
@@ -820,58 +864,36 @@ pub(crate) fn execute_host_instruction_exec<'input>(
     dispatch::execute_host_dispatch(exec, slots, inst)
 }
 
-pub(crate) fn execute_ffi_instruction<'input, B: TensorBackend + 'static>(
-    backend: &mut B,
-    slots: &mut [Option<ExecSlot<'input>>],
+/// True when `inst` cannot run inside a session and needs the extension owner
+/// fallback, which forms the session itself.
+///
+/// `is_session_compatible_instruction` returns `true` for every non-FFI op and
+/// for the session-capable FFI ops, so a `false` result can only come from an
+/// extension whose `supports_session()` is false.
+pub(crate) fn needs_owner_extension_fallback(
     inst: &ExecInstruction,
-    mode: DispatchMode,
-    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
-) -> Result<()> {
-    dispatch::execute_ffi_dispatch(backend, slots, inst, mode, extension_dispatch)
+    extension_dispatch: Option<&ExtensionExecutionDispatch<'_>>,
+) -> bool {
+    !is_session_compatible_instruction(inst, extension_dispatch)
 }
 
-pub(crate) fn execute_ffi_instruction_cached<'input, B: TensorBackend + 'static>(
+/// Run one non-session-compatible extension instruction through its owner entry.
+///
+/// The entry is the extension runtime's own `execute`, which forms the session
+/// and runs the operation through it; no operation runs on the owner.
+pub(crate) fn execute_owner_extension_fallback<'input, B: TensorBackend + 'static>(
     backend: &mut B,
-    backend_cache: &mut B::RuntimeCache,
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
-    mode: DispatchMode,
-    cache_slot: Option<usize>,
     extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<()> {
-    match &inst.op {
-        ExecOp::DotGeneral(config) => {
-            let result = BackendCachedDot::dot_general_read_cached(
-                backend,
-                backend_cache,
-                cache_slot,
-                get_read(slots, &inst.input_slots, 0)?,
-                get_read(slots, &inst.input_slots, 1)?,
-                config,
-            )?;
-            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
-            Ok(())
-        }
-        ExecOp::DotGeneralWithConj {
-            config,
-            lhs_conj,
-            rhs_conj,
-        } => {
-            let result = BackendCachedDot::dot_general_with_conj_read_cached(
-                backend,
-                backend_cache,
-                cache_slot,
-                get_read(slots, &inst.input_slots, 0)?,
-                get_read(slots, &inst.input_slots, 1)?,
-                config,
-                *lhs_conj,
-                *rhs_conj,
-            )?;
-            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
-            Ok(())
-        }
-        _ => execute_ffi_instruction(backend, slots, inst, mode, extension_dispatch),
-    }
+    let ExecOp::Extension(ext) = &inst.op else {
+        return Err(Error::Internal(format!(
+            "non-session-compatible instruction is not an extension op: {:?}",
+            inst.op
+        )));
+    };
+    execute_extension_instruction(backend, slots, inst, ext.as_ref(), extension_dispatch)
 }
 
 pub(crate) fn execute_ffi_instruction_exec<'input>(
@@ -1228,7 +1250,12 @@ pub(crate) fn reclaim_last_use_inputs_exec<'input>(
     }
 }
 
-pub(crate) fn reclaim_last_use_inputs_backend<'input, B: TensorBackend>(
+/// Reclaim the inputs the fallback instruction consumed.
+///
+/// This is the owner-side buffer capability, not an operation: it stays on the
+/// owner with an explicit bound because the fallback runs outside the region the
+/// session owns.
+pub(crate) fn reclaim_last_use_inputs_backend<'input, B: TensorBackend + TensorBuffer>(
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
     backend: &mut B,
@@ -1252,7 +1279,7 @@ fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn BackendSess
     }
 }
 
-fn reclaim_exec_slot_with_backend<B: TensorBackend>(slot: ExecSlot<'_>, backend: &mut B) {
+fn reclaim_exec_slot_with_backend<B: TensorBackend + TensorBuffer>(slot: ExecSlot<'_>, backend: &mut B) {
     match slot {
         ExecSlot::Owned(tensor) => backend.reclaim_buffer(tensor),
         ExecSlot::Value(value) => {

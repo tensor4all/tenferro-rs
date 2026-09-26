@@ -8,12 +8,13 @@ use crate::exec::{
     collect_outputs_from, eval_exec_ir_single_session_slots_with_workspace,
     eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace,
     eval_exec_ir_unsegmented_slots_with_cache_and_workspace, execute_backend_op,
-    execute_ffi_instruction_cached, execute_ffi_instruction_exec, execute_host_instruction,
-    execute_host_instruction_exec, get_read, has_session_capable_extension,
+    execute_ffi_instruction_exec, execute_host_instruction_exec, execute_owner_extension_fallback,
+    get_read, has_session_capable_extension,
     initialize_exec_slots_in, is_ffi_instruction, is_host_instruction,
-    is_session_compatible_instruction, reclaim_last_use_inputs_backend,
+    is_session_compatible_instruction,
+    reclaim_last_use_inputs_backend,
     reclaim_last_use_inputs_exec, resolve_tensor_shape_exprs, terminal_output_slots,
-    try_execute_terminal_value_instruction, validate_exec_program, DispatchMode, ExecInstruction,
+    try_execute_terminal_value_instruction, validate_exec_program, ExecInstruction,
     ExecOp, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
 };
 use tenferro_ops::dim_expr::DimExpr;
@@ -262,45 +263,53 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
         initialize_exec_slots_in(program, inputs, slots)?;
 
         let segments = segment_exec_program(program);
+        let mut segment_idx = 0usize;
         let mut inst_idx = 0usize;
-        for segment in &segments {
-            match segment {
-                Segment::Fused {
-                    instructions,
-                    input_slots,
-                    output_slots,
-                    last_use,
-                } => {
-                    backend.with_backend_session(|exec| {
-                        execute_fused_segment(
+        while segment_idx < segments.len() {
+            let run_start = segment_idx;
+            let run_inst_start = inst_idx;
+            while segment_idx < segments.len()
+                && segment_is_session_compatible(
+                    &segments[segment_idx],
+                    extension_dispatch.as_deref(),
+                )
+            {
+                inst_idx += segment_instruction_count(&segments[segment_idx]);
+                segment_idx += 1;
+            }
+            if run_start < segment_idx {
+                backend.with_backend_session_cached(backend_cache, |exec| {
+                    let mut region_inst_idx = run_inst_start;
+                    for segment in &segments[run_start..segment_idx] {
+                        execute_segment_in_session(
                             exec,
                             slots,
-                            instructions,
-                            input_slots,
-                            output_slots,
-                            last_use,
-                        )
-                    })?;
-                    inst_idx += instructions.len();
-                }
-                Segment::Ffi(inst) => {
-                    execute_ffi_instruction_cached(
-                        backend,
-                        backend_cache,
-                        slots,
-                        inst,
-                        DispatchMode::Segmented,
-                        Some(inst_idx),
-                        extension_dispatch.as_deref_mut(),
-                    )?;
-                    reclaim_last_use_inputs_backend(slots, inst, backend);
-                    inst_idx += 1;
-                }
-                Segment::Host(inst) => {
-                    execute_host_instruction(backend, slots, inst)?;
-                    reclaim_last_use_inputs_backend(slots, inst, backend);
-                    inst_idx += 1;
-                }
+                            segment,
+                            region_inst_idx,
+                            extension_dispatch.as_deref_mut(),
+                        )?;
+                        region_inst_idx += segment_instruction_count(segment);
+                    }
+                    Ok::<(), crate::error::Error>(())
+                })?;
+            }
+            if segment_idx < segments.len() {
+                let Segment::Ffi(inst) = &segments[segment_idx] else {
+                    return Err(crate::error::Error::runtime_state(
+                        "segmented_execution",
+                        crate::error::ErrorPhase::Execution,
+                        "incompatible execution segment was not an FFI instruction",
+                    ));
+                };
+                execute_owner_extension_fallback(
+                    backend,
+                    slots,
+                    inst,
+                    extension_dispatch.as_deref_mut(),
+                )?;
+                reclaim_last_use_inputs_backend(slots, inst, backend);
+                inst_idx += 1;
+                segment_idx += 1;
             }
         }
 
@@ -359,58 +368,58 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
         let terminal_slots = terminal_output_slots(program);
 
         let segments = segment_exec_program(program);
+        let mut segment_idx = 0usize;
         let mut inst_idx = 0usize;
-        for segment in &segments {
-            match segment {
-                Segment::Fused {
-                    instructions,
-                    input_slots,
-                    output_slots,
-                    last_use,
-                } => {
-                    backend.with_backend_session(|exec| {
-                        execute_fused_value_segment(
+        while segment_idx < segments.len() {
+            let run_start = segment_idx;
+            let run_inst_start = inst_idx;
+            while segment_idx < segments.len()
+                && segment_is_session_compatible(
+                    &segments[segment_idx],
+                    extension_dispatch.as_deref(),
+                )
+            {
+                inst_idx += segment_instruction_count(&segments[segment_idx]);
+                segment_idx += 1;
+            }
+            if run_start < segment_idx {
+                backend.with_backend_session_cached(backend_cache, |exec| {
+                    let mut region_inst_idx = run_inst_start;
+                    for segment in &segments[run_start..segment_idx] {
+                        execute_value_segment_in_session(
                             exec,
                             slots,
-                            instructions,
-                            input_slots,
-                            output_slots,
-                            last_use,
+                            segment,
+                            region_inst_idx,
                             &terminal_slots,
-                        )
-                    })?;
-                    inst_idx += instructions.len();
-                }
-                Segment::Ffi(inst) => {
-                    if backend.with_backend_session(|exec| {
-                        try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
-                    })? {
-                        // Already handled as a metadata-only TensorValue.
-                    } else {
-                        execute_ffi_instruction_cached(
-                            backend,
-                            backend_cache,
-                            slots,
-                            inst,
-                            DispatchMode::Segmented,
-                            Some(inst_idx),
                             extension_dispatch.as_deref_mut(),
                         )?;
+                        region_inst_idx += segment_instruction_count(segment);
                     }
-                    reclaim_last_use_inputs_backend(slots, inst, backend);
-                    inst_idx += 1;
+                    Ok::<(), crate::error::Error>(())
+                })?;
+            }
+            if segment_idx < segments.len() {
+                let Segment::Ffi(inst) = &segments[segment_idx] else {
+                    return Err(crate::error::Error::runtime_state(
+                        "segmented_execution",
+                        crate::error::ErrorPhase::Execution,
+                        "incompatible execution segment was not an FFI instruction",
+                    ));
+                };
+                if !backend.with_backend_session(|exec| {
+                    try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
+                })? {
+                    execute_owner_extension_fallback(
+                        backend,
+                        slots,
+                        inst,
+                        extension_dispatch.as_deref_mut(),
+                    )?;
                 }
-                Segment::Host(inst) => {
-                    if backend.with_backend_session(|exec| {
-                        try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
-                    })? {
-                        // Already handled as a metadata-only TensorValue.
-                    } else {
-                        execute_host_instruction(backend, slots, inst)?;
-                    }
-                    reclaim_last_use_inputs_backend(slots, inst, backend);
-                    inst_idx += 1;
-                }
+                reclaim_last_use_inputs_backend(slots, inst, backend);
+                inst_idx += 1;
+                segment_idx += 1;
             }
         }
 
@@ -492,13 +501,10 @@ fn eval_exec_segmented_session_regions_slots_with_workspace<'input, B: TensorBac
                         "incompatible execution segment was not an FFI instruction",
                     ));
                 };
-                execute_ffi_instruction_cached(
+                execute_owner_extension_fallback(
                     backend,
-                    backend_cache,
                     slots,
                     inst,
-                    DispatchMode::Segmented,
-                    Some(inst_idx),
                     extension_dispatch.as_deref_mut(),
                 )?;
                 reclaim_last_use_inputs_backend(slots, inst, backend);
@@ -576,13 +582,10 @@ fn eval_exec_segmented_session_regions_slot_values_with_workspace<
                 if !backend.with_backend_session(|exec| {
                     try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
                 })? {
-                    execute_ffi_instruction_cached(
+                    execute_owner_extension_fallback(
                         backend,
-                        backend_cache,
                         slots,
                         inst,
-                        DispatchMode::Segmented,
-                        Some(inst_idx),
                         extension_dispatch.as_deref_mut(),
                     )?;
                 }
