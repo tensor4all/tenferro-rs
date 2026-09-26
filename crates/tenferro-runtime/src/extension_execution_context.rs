@@ -20,7 +20,7 @@ use crate::extension_cache::ExtensionCacheStore;
 ///
 /// ```rust
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_tensor::{BackendSessionHost, Tensor};
+/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
 /// use tenferro_runtime::{
 ///     ExtensionCacheSelector, ExtensionCacheStore, ExtensionExecutionContext,
 /// };
@@ -31,7 +31,10 @@ use crate::extension_cache::ExtensionCacheStore;
 ///     let mut context = ExtensionExecutionContext::new(session, &mut caches);
 ///     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 ///     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-///     let output = context.backend_mut().add(&lhs, &rhs).unwrap();
+///     let output = context
+///         .backend_mut()
+///         .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+///         .unwrap();
 ///
 ///     assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 ///     assert_eq!(context.caches().stats(ExtensionCacheSelector::All).entries, 0);

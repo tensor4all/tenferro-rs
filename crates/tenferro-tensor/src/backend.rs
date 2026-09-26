@@ -3896,7 +3896,7 @@ fn validate_compatible_placement(
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{BackendSessionHost, Tensor, TypedTensor};
+/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TypedTensor};
 ///
 /// fn add_in_session<B: BackendSessionHost>(
 ///     backend: &mut B,
@@ -3906,7 +3906,9 @@ fn validate_compatible_placement(
 /// where
 ///     B: tenferro_tensor::TensorBackend,
 /// {
-///     backend.with_backend_session(|exec| exec.add(a, b))
+///     backend.with_backend_session(|exec| {
+///         exec.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
+///     })
 /// }
 /// ```
 pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {

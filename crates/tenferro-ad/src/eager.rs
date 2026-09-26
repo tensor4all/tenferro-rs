@@ -964,14 +964,16 @@ impl CpuPlacementBoundEager {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Error};
     /// use tenferro_cpu::CpuPlacement;
-    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    /// use tenferro_tensor::{Tensor, TensorRead};
     ///
     /// let runtime = EagerRuntime::new()?;
     /// let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
     /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
     /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
     /// let output = cpu.with_eager_session(|session| {
-    ///     TensorElementwise::add(session, &lhs, &rhs).map_err(Error::from)
+    ///     session
+    ///         .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+    ///         .map_err(Error::from)
     /// })?;
     /// assert_eq!(output.as_slice::<f64>().unwrap(), &[3.0]);
     /// # Ok::<(), Error>(())
@@ -1844,13 +1846,13 @@ impl EagerRuntime {
     /// ```
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    /// use tenferro_tensor::{Tensor, TensorRead};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
     /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
     /// let output = ctx.with_execution_session(|session| {
-    ///     TensorElementwise::add(session, &lhs, &rhs)
+    ///     session.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
     /// })??;
     /// assert_eq!(output.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -1904,13 +1906,15 @@ impl EagerRuntime {
     /// ```
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    /// use tenferro_tensor::{Tensor, TensorRead};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
     /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
     /// let output = ctx.with_extension_execution_context(|extension_ctx| {
-    ///     TensorElementwise::add(extension_ctx.backend_mut(), &lhs, &rhs)
+    ///     extension_ctx
+    ///         .backend_mut()
+    ///         .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
     /// })??;
     /// assert_eq!(output.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())

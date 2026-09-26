@@ -85,14 +85,18 @@ impl CpuBackend {
     ///
     /// ```
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     ///
     /// let owner = CpuBackend::with_threads(1)?;
     /// let mut operations = owner.clone();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
     /// let y = owner.with_execution_scope(|| {
-    ///     let y = operations.add(&x, &x)?;
-    ///     operations.add(&y, &x)
+    ///     let y = operations.with_backend_session(|session| {
+    ///         session.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+    ///     })?;
+    ///     operations.with_backend_session(|session| {
+    ///         session.add_read(TensorRead::from_tensor(&y), TensorRead::from_tensor(&x))
+    ///     })
     /// })??;
     /// assert_eq!(y.as_slice::<f64>()?, &[3.0, 9.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
