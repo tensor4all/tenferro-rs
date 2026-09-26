@@ -1494,7 +1494,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         }
 
         panic_backend_methods! {
-        abs(input: &Tensor) -> crate::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
@@ -1566,7 +1565,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            self.abs(tenferro_tensor::backend::read_owned_tensor("abs", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.abs_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1986,7 +1989,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         }
 
         panic_backend_methods! {
-        abs(input: &Tensor) -> crate::Result<Tensor>;
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
@@ -2058,7 +2060,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            self.abs(tenferro_tensor::backend::read_owned_tensor("abs", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.abs_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

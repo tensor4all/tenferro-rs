@@ -42,7 +42,6 @@ macro_rules! impl_minimal_tensor_backend {
             }
 
             unreachable_backend_methods! {
-                abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
                 compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
                 clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
             }
@@ -96,7 +95,8 @@ macro_rules! impl_minimal_tensor_backend {
                 // Reproduce the previous read-half default: delegate an owned tensor and
                 // reject a borrowed view.
                 fn abs_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-                    self.abs(tenferro_tensor::backend::read_owned_tensor("abs", input)?)
+                    let _ = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+                    panic!("abs should not be called by this test")
                 }
 
                 // Reproduce the previous read-half default: delegate an owned tensor and

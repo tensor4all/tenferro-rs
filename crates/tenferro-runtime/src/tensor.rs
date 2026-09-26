@@ -75,7 +75,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn abs(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.abs(self)
+        session.abs_read(TensorRead::from_tensor(self))
     }
 
     fn sign(&self, session: &mut dyn BackendSession) -> Result<Tensor> {

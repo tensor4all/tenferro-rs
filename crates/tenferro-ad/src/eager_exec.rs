@@ -782,7 +782,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                     TensorRead::from_tensor(b.tensor()),
                 )?]
             }
-            StdTensorOp::Abs => vec![exec.abs(inputs[0])?],
+            StdTensorOp::Abs => vec![exec.abs_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Sign => vec![exec.sign_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Conj => vec![exec.conj_read(TensorRead::from_tensor(inputs[0]))?],
             StdTensorOp::Maximum => {

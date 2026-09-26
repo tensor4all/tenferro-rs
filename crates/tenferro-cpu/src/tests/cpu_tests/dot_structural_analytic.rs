@@ -1234,7 +1234,9 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&div, &[1]), -0.4);
     assert_eq!(get_f64(&div, &[2]), 3.0);
 
-    let abs = backend.abs(&lhs).unwrap();
+    let abs = backend
+        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&lhs)))
+        .unwrap();
     assert_eq!(get_f64(&abs, &[0]), 8.0);
     assert_eq!(get_f64(&abs, &[1]), 2.0);
     assert_eq!(get_f64(&abs, &[2]), 9.0);
@@ -1333,7 +1335,9 @@ fn test_tier2_elementwise_ops_complex() {
     );
     let mut backend = CpuBackend::new();
 
-    let abs = backend.abs(&input).unwrap();
+    let abs = backend
+        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
+        .unwrap();
     assert_eq!(abs.dtype(), DType::F64);
     assert_eq!(get_f64(&abs, &[0]), 5.0);
     assert_eq!(get_f64(&abs, &[1]), 0.0);

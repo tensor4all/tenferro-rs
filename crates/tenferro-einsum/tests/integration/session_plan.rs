@@ -178,7 +178,6 @@ macro_rules! panic_elementwise {
             }
 
             panic_backend_methods! {
-                abs(input: &Tensor) -> TensorResult;
                 compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
                 clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult;
             }
@@ -232,7 +231,8 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn abs_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.abs(tenferro_tensor::backend::read_owned_tensor("abs", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+                panic!("abs should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -476,10 +476,6 @@ impl TensorElementwise for SessionCountingBackend {
         self.inner.elementwise_read_into(op, inputs, out)
     }
 
-    fn abs(&mut self, input: &Tensor) -> TensorResult {
-        self.inner.abs(input)
-    }
-
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult {
         self.inner.compare(lhs, rhs, dir)
     }
@@ -537,7 +533,8 @@ impl TensorElementwise for SessionCountingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn abs_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-        self.abs(tenferro_tensor::backend::read_owned_tensor("abs", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+        panic!("abs should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

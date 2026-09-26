@@ -210,10 +210,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         CpuBackend::new().mul_read(lhs, rhs)
     }
 
-    fn abs(&mut self, _input: &Tensor) -> Result<Tensor> {
-        Err(unexpected("abs"))
-    }
-
     fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> Result<Tensor> {
         Err(unexpected("compare"))
     }
@@ -262,7 +258,8 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn abs_read(&mut self, input: TensorRead<'_>) -> Result<Tensor> {
-        self.abs(tenferro_tensor::backend::read_owned_tensor("abs", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+        Err(unexpected("abs"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

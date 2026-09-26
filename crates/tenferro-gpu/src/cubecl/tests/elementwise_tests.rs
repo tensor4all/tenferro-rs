@@ -1197,9 +1197,13 @@ fn test_cubecl_complex_abs_matches_cpu() {
     ];
 
     for input in cases {
-        let expected = cpu.abs(&input).unwrap();
+        let expected = cpu
+            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
+            .unwrap();
         let gpu_input = upload(&gpu, &input);
-        let gpu_output = gpu.abs(&gpu_input).unwrap();
+        let gpu_output = gpu
+            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_input)))
+            .unwrap();
         let actual = download(&gpu, &gpu_output);
 
         assert_eq!(actual.dtype(), expected.dtype());
@@ -1717,8 +1721,12 @@ fn test_float_unary_special_values_match_cpu() {
     for input in cases {
         let gpu_input = upload(&gpu, &input);
 
-        let expected_abs = cpu.abs(&input).unwrap();
-        let gpu_abs = gpu.abs(&gpu_input).unwrap();
+        let expected_abs = cpu
+            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
+            .unwrap();
+        let gpu_abs = gpu
+            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_input)))
+            .unwrap();
         let actual_abs = download(&gpu, &gpu_abs);
         match (actual_abs.dtype(), expected_abs.dtype()) {
             (DType::F32, DType::F32) => {
@@ -1811,8 +1819,12 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.abs(&signed).unwrap();
-    let gpu_out = gpu.abs(&gpu_signed).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&signed)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_signed)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -2116,8 +2128,12 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu.abs(lhs).unwrap();
-    let gpu_out = gpu.abs(&gpu_lhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(lhs)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_lhs)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
@@ -2326,8 +2342,12 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.abs(&lhs).unwrap();
-    let gpu_out = gpu.abs(&gpu_lhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&lhs)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_lhs)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 

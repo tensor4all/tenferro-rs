@@ -188,11 +188,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(())
     }
 
-    fn abs(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("abs");
-        Ok(marker())
-    }
-
     fn compare(
         &mut self,
         _lhs: &Tensor,
@@ -268,7 +263,9 @@ impl TensorElementwise for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.abs(crate::backend::read_owned_tensor("abs", input)?)
+        let _ = crate::backend::read_owned_tensor("abs", input)?;
+        self.calls.push("abs");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

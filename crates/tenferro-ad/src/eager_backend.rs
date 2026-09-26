@@ -317,7 +317,6 @@ impl TensorElementwise for RecordingBackend {
 
     delegate_recording_backend_methods! {
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn abs(input: &Tensor) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
     }
@@ -365,7 +364,8 @@ impl TensorElementwise for RecordingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn abs_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
-        self.abs(tenferro_tensor::backend::read_owned_tensor("abs", input)?)
+        let input = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+        self.inner.abs_read(TensorRead::from_tensor(input))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -738,7 +738,6 @@ impl TensorElementwise for EagerBackend {
         fn div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn rem(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn rem_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn abs(input: &Tensor) -> TensorResult<Tensor>;
         fn abs_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn sign_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;

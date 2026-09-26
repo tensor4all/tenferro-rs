@@ -3025,12 +3025,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::abs_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
     fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool_context(|context, buffers| {
             elementwise::abs_read_with_pool(buffers, &context.strided_exec_context(), input)
