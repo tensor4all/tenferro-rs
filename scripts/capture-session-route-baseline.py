@@ -31,14 +31,21 @@ from pathlib import Path
 SCHEMA = "tenferro.session-route-baseline.v1"
 
 # package|bench -> required case count at the capturing harness revision.
+#
+# Recaptured for the post-unification harness (issue #1926 deleted the one-shot
+# spelling, so the `oneshot`/`one_shot` arms no longer exist): route_matrix
+# 47 -> 31, session_chain 6 -> 5, route_matrix_gpu 25 -> 13. The 29 before-only
+# rows stay in the frozen `docs/testing/session-route-baseline.json`, which
+# remains the before-reference; `docs/testing/session-route-baseline-recaptured.json`
+# is the matched baseline for comparisons against the current harness.
 EXPECTED_CASES: dict[str, int] = {
-    "tenferro-cpu|route_matrix": 47,
-    "tenferro-runtime|session_chain": 6,
+    "tenferro-cpu|route_matrix": 31,
+    "tenferro-runtime|session_chain": 5,
     "tenferro-runtime|elementwise_fusion": 14,
     "tenferro-ad|eager_dispatch_baseline": 28,
     "tenferro-ad|eager_backward_shape_churn": 1,
     "tenferro-linalg|linalg_vjp_gate": 4,
-    "tenferro-gpu|route_matrix_gpu": 25,
+    "tenferro-gpu|route_matrix_gpu": 13,
 }
 
 # Cases that exist only because the one-shot operation spelling still exists.
