@@ -904,6 +904,45 @@ Two things to keep in mind while doing it:
   Opening a session per instruction would be a needless change in session-entry
   count for the very path the Phase-C baseline measures.
 
+### B3(iii) work list: deleting the owner implementations
+
+`bed79ade0` removed the supertraits, so nothing *requires* the owner-side
+operation implementations any more; deleting them is the last step, and the
+measured shape of that step is recorded here because it is a call-site migration,
+not a deletion.
+
+Deleting the eight CPU owner impls (`BackendSession`, `TensorElementwise`,
+`TensorAnalytic`, `TensorStructural`, `TensorReduction`, `TensorDot`,
+`BackendCachedDot`, `TensorIndexing`) leaves 261 errors in the CPU crate alone,
+across about a dozen test/bench files. They split into four shapes, and only the
+first two are mechanical:
+
+| Shape | Count (CPU crate) | Rewrite |
+|---|---:|---|
+| paired one-shot with a `_read` sibling (`slice`, `pad`, `gather`, `reverse`, `concatenate`, `cast`, `copy_read_into`, `to_contiguous_read`, `reduce_*_read`) | ~120 | `recv.op(args)` → `recv.with_backend_session(\|__s\| __s.op_read(args))` |
+| session method with the same name (`dot_general_read_into_accum`, `elementwise_read_into`, `grouped_gemm_cached`) | ~30 | `recv.op(args)` → `recv.with_backend_session(\|__s\| __s.op(args))` |
+| cached dot family (`dot_general[_with_conj]_cached`, `_read_cached`, `grouped_gemm_cached`) | ~20 | the owner form takes `(&mut cache, cache_slot, ..)` and the session form takes `(cache_slot, ..)`, so the cache becomes the receiver of `with_backend_session_cached` |
+| receivers that are not a plain identifier (`CpuBackend::new().op(..)`, trait-qualified `BackendCachedDot::op(&mut backend, ..)`) and `&mut dyn` sites | ~15 | hand edits |
+
+Two codemods were used and are worth reusing, outside the repository:
+
+* a diagnostic-driven wrapper that reacts to `E0599 no method named `op`` and
+  rewrites only the reported call span, one edit per file per round so later
+  line numbers stay valid; it cleared ~80 of the first two shapes in a few
+  rounds and left a short manual list;
+* a cached-shape rewriter for the third shape. It must match "first argument is
+  the cache" only when the call is *not* already cache-bound, or it re-wraps its
+  own output — the version that ran here oscillated and was reverted.
+
+Remaining work, in order: finish the CPU crate (about 20 hand sites), repeat for
+the CUDA and WebGPU owner impls (which also removes the `delegate!` shim and
+moves their bodies to the module functions the sessions already call), migrate
+the downstream call sites in `tenferro-ad`, `tenferro-linalg`, `tenferro-einsum`
+and the runtime tests/benches, delete `install_with_pool_context*` once the CPU
+owner impls are gone, and re-bless
+`scripts/session-entry-allowlist.json` (the CPU entries it lists are exactly the
+ones that disappear).
+
 ### B1 fail fixtures: the deleted spellings are pinned by `compile_fail` doctests
 
 The B1 contract file covers the surviving surface with trybuild pass fixtures.

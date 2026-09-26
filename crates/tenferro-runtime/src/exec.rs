@@ -8,9 +8,8 @@ use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::backend::ElementwiseFusionOp;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig,
-    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue,
-    TypedTensor, ValidationError,
+    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor, ValidationError,
 };
 
 use crate::extension_cache::ExtensionCacheStore;
@@ -1249,7 +1248,6 @@ pub(crate) fn reclaim_last_use_inputs_exec<'input>(
         }
     }
 }
-
 
 fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn BackendSession) {
     match slot {

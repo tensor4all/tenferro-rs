@@ -9,19 +9,17 @@ use crate::exec::{
     eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace,
     eval_exec_ir_unsegmented_slots_with_cache_and_workspace, execute_backend_op,
     execute_ffi_instruction_exec, execute_host_instruction_exec, execute_owner_extension_fallback,
-    get_read, has_session_capable_extension,
-    initialize_exec_slots_in, is_ffi_instruction, is_host_instruction,
-    is_session_compatible_instruction,
-    reclaim_last_use_inputs_via_session,
-    reclaim_last_use_inputs_exec, resolve_tensor_shape_exprs, terminal_output_slots,
-    try_execute_terminal_value_instruction, validate_exec_program, ExecInstruction,
-    ExecOp, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
+    get_read, has_session_capable_extension, initialize_exec_slots_in, is_ffi_instruction,
+    is_host_instruction, is_session_compatible_instruction, reclaim_last_use_inputs_exec,
+    reclaim_last_use_inputs_via_session, resolve_tensor_shape_exprs, terminal_output_slots,
+    try_execute_terminal_value_instruction, validate_exec_program, ExecInstruction, ExecOp,
+    ExecProgram, ExecSlot, ExtensionExecutionDispatch,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionPlan,
 };
-use tenferro_tensor::{    BackendSession, Tensor, TensorBackend, TensorRead, TensorValue};
+use tenferro_tensor::{BackendSession, Tensor, TensorBackend, TensorRead, TensorValue};
 
 /// A compiled execution segment.
 ///

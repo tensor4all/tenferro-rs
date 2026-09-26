@@ -1050,7 +1050,9 @@ fn execute_einsum_extension_reads_in_session(
     execute_einsum_extension_session_reads(op, inputs, &mut ctx)
 }
 
-fn einsum_session_supported<B: tenferro_tensor::TensorBackend + 'static>(_op: &EinsumExtensionOp) -> bool {
+fn einsum_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
+    _op: &EinsumExtensionOp,
+) -> bool {
     // The session executor runs the same forward kernel on any backend session
     // below (the einsum execution only needs elementwise/dot session ops), so
     // CPU and CUDA sessions both qualify for `apply_eager`'s native path.

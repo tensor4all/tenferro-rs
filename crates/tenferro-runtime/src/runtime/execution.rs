@@ -19,9 +19,7 @@ use tenferro_tensor::{
 };
 
 use crate::error::ErrorPhase;
-use crate::exec::{
-    ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
-};
+use crate::exec::{ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch};
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
 use crate::runtime::schedule::{
@@ -1271,10 +1269,7 @@ where
                 crate::exec::execute_host_instruction_exec(exec, slots, instruction)
             })?;
         } else if crate::exec::is_ffi_instruction(instruction) {
-            if crate::exec::needs_owner_extension_fallback(
-                instruction,
-                Some(&extension_dispatch),
-            ) {
+            if crate::exec::needs_owner_extension_fallback(instruction, Some(&extension_dispatch)) {
                 // The extension entry forms its own session; no operation runs
                 // on the owner.
                 crate::exec::execute_owner_extension_fallback(

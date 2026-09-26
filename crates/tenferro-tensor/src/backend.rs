@@ -4214,4 +4214,3 @@ pub fn with_session_entry_guard<R>(f: impl FnOnce() -> R) -> R {
     let _guard = InSessionGuard::enter();
     f()
 }
-

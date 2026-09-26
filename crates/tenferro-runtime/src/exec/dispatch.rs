@@ -6,8 +6,8 @@ use tenferro_tensor::{
 };
 
 use super::{
-    collect_tensor_refs, constant_tensor, ensure_owned, get, get_read,
-    resolve_tensor_shape_exprs, ExecInstruction, ExecOp, ExecSlot,
+    collect_tensor_refs, constant_tensor, ensure_owned, get, get_read, resolve_tensor_shape_exprs,
+    ExecInstruction, ExecOp, ExecSlot,
 };
 use crate::scalar_semantics::dynamic_truncate_size;
 
