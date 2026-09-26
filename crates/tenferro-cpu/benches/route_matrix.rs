@@ -96,17 +96,6 @@ fn add_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -
         .expect("scope add should succeed")
 }
 
-fn dot_oneshot(ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    ops.with_backend_session(|__s| {
-        __s.dot_general_read(
-            TensorRead::from_tensor(a),
-            TensorRead::from_tensor(b),
-            &dot_config(),
-        )
-    })
-    .expect("oneshot dot should succeed")
-}
-
 fn dot_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
     owner
         .with_backend_session(|session| {
@@ -132,11 +121,6 @@ fn dot_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -
         })
         .expect("scope admission should succeed")
         .expect("scope dot should succeed")
-}
-
-fn reduce_oneshot(ops: &mut CpuBackend, a: &Tensor) -> Tensor {
-    ops.with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(a), &[0]))
-        .expect("oneshot reduce_sum should succeed")
 }
 
 fn reduce_session(owner: &mut CpuBackend, a: &Tensor) -> Tensor {
@@ -303,7 +287,6 @@ fn bench_dot(c: &mut Criterion) {
 
         let expected = size as f64;
         for (name, value) in [
-            ("oneshot", dot_oneshot(&mut ops, &a, &b)),
             ("session", dot_session(&mut owner, &a, &b)),
             ("scope", dot_scope(&owner, &mut ops, &a, &b)),
         ] {
@@ -315,13 +298,6 @@ fn bench_dot(c: &mut Criterion) {
             );
         }
 
-        group.bench_with_input(
-            BenchmarkId::new("oneshot/single", size),
-            &size,
-            |bench, _| {
-                bench.iter(|| black_box(dot_oneshot(&mut ops, black_box(&a), black_box(&b))));
-            },
-        );
         group.bench_with_input(
             BenchmarkId::new("session/single", size),
             &size,
@@ -346,7 +322,6 @@ fn bench_reduce(c: &mut Criterion) {
 
         let expected = len as f64;
         for (name, value) in [
-            ("oneshot", reduce_oneshot(&mut ops, &a)),
             ("session", reduce_session(&mut owner, &a)),
             ("scope", reduce_scope(&owner, &mut ops, &a)),
         ] {
@@ -358,9 +333,6 @@ fn bench_reduce(c: &mut Criterion) {
             );
         }
 
-        group.bench_with_input(BenchmarkId::new("oneshot/single", len), &len, |bench, _| {
-            bench.iter(|| black_box(reduce_oneshot(&mut ops, black_box(&a))));
-        });
         group.bench_with_input(BenchmarkId::new("session/single", len), &len, |bench, _| {
             bench.iter(|| black_box(reduce_session(&mut owner, black_box(&a))));
         });
