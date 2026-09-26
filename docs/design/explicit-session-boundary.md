@@ -751,6 +751,45 @@ The criterion settings stay at the pinned defaults for certification; cheaper
 settings are acceptable for a diagnostic pass only, because they change the
 confidence intervals the comparator uses to separate `NOISY` from `REGRESSION`.
 
+#### Certification runbook
+
+The pieces below exist and were verified to the point this host allows; only the
+quiet window and a CUDA host are missing. Every run goes through the campaign
+script, which pins the criterion settings, the 1T thread environment and the CPU
+affinity:
+
+1. **Baseline side.** In the baseline worktree (`bench/1929-route-baseline`, which
+   holds `25da8d431`), apply the current harness source — the seven campaign
+   bench files — and confirm it builds:
+   `cargo bench --no-run -p tenferro-cpu --bench route_matrix`,
+   `-p tenferro-runtime --bench session_chain`,
+   `-p tenferro-gpu --features cuda --bench route_matrix_gpu`. This was verified
+   here: all three targets compile against the pinned code.
+2. **Pairs.** Alternate three times, each pair writing to its own output
+   directory:
+   baseline `bash scripts/run-session-route-performance-gate.sh --mode run
+   --label baseline --output-dir target/pair-N/baseline` in the baseline
+   worktree, then candidate with `--label candidate` and
+   `--output-dir target/pair-N/candidate` in the refactor worktree.
+3. **Compare.** For each pass,
+   `python3 scripts/compare-session-route-baseline.py --logs-dir
+   target/pair-N/candidate --label candidate` against the recorded
+   `docs/testing/session-route-baseline.json`. The `oneshot/*` and
+   `one_shot` rows are before-only and must come back as `DELETED`; a baseline row
+   that is neither deleted-route nor present in the candidate log is a
+   fail-closed error, not a skip.
+4. **GPU.** Steps 1–3 run on a CUDA host, because the campaign's
+   `route_matrix_gpu` target needs a device; the protocol also requires reporting
+   GPU enqueue and synchronized-completion cost separately.
+5. **Record.** Write the comparator report and the alternating-pair logs into
+   `docs/testing/` and a worklog entry, then remove the harness files from the
+   baseline worktree (`git -C .worktrees/issue-1929-bench checkout -- .`) so the
+   frozen harness is restored.
+
+The recorded baseline keeps the before-only rows: re-capturing produces
+`session`/`scope` rows only, and the before-reference stays the JSON that was
+captured while the deleted spellings still existed.
+
 ## Measurement protocol
 
 Removing syntax does not by itself save time; #1926 requires measurement

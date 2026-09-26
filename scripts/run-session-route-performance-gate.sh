@@ -53,8 +53,12 @@ The harness identity is the commit that adds this script and the
 `session_route_*` resolution below. If the harness source changes after
 baseline numbers are collected, baseline collection must restart.
 
-Baseline runs apply this harness source to the pinned baseline code without
-candidate implementation changes.
+This script measures the tree it is invoked in. A `--label baseline` run must
+therefore be executed in a worktree that holds the pinned baseline code
+(`TENFERRO_SESSION_ROUTE_BASELINE_COMMIT`) with this harness source applied, not
+in the candidate tree. The campaign's baseline worktree is the one on
+`bench/1929-route-baseline`. Verified: the current harness builds there for
+`route_matrix`, `session_chain` and `route_matrix_gpu` (`cargo bench --no-run`).
 EOF
 }
 
