@@ -464,7 +464,14 @@ impl BackendSession for WrongDTypeBackend {
     }
 }
 
-impl BackendSessionHost for WrongDTypeBackend {}
+impl BackendSessionHost for WrongDTypeBackend {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+    ) -> R {
+        tenferro_tensor::with_session_entry_guard(|| f(self))
+    }
+}
 
 impl TensorDeviceTransfer for WrongDTypeBackend {
     fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {

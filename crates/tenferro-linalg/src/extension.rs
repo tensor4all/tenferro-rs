@@ -1037,7 +1037,7 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
     execute_linalg(op.op(), &input_refs, session)
 }
 
-fn linalg_session_supported<B: BackendSession + 'static>(
+fn linalg_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
     #[cfg_attr(not(feature = "cuda"), allow(unused_variables))] op: &LinalgExtensionOp,
 ) -> bool {
     // The `supports_session` contract (capability.rs) requires that an op is

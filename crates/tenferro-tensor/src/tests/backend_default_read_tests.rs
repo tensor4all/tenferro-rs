@@ -744,7 +744,14 @@ impl BackendSession for DefaultReadBackend {
     }
 }
 
-impl BackendSessionHost for DefaultReadBackend {}
+impl BackendSessionHost for DefaultReadBackend {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn crate::BackendSession) -> R + Send,
+    ) -> R {
+        crate::with_session_entry_guard(|| f(self))
+    }
+}
 
 impl TensorBackend for DefaultReadBackend {}
 

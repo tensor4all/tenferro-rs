@@ -72,42 +72,42 @@ fn contraction_scalar_identity_errors_name_the_public_constructor() {
 #[test]
 #[cfg(debug_assertions)]
 #[should_panic(expected = "nested backend session entry")]
-fn nested_default_backend_session_is_rejected_in_debug_builds() {
+fn nested_backend_session_entry_is_rejected_in_debug_builds() {
     use crate::tests::backend_default_read_tests::DefaultReadBackend;
 
     let mut backend = DefaultReadBackend::default();
-    default_backend_session(&mut backend, |outer| {
-        // Recover the concrete backend from the session through the
-        // documented capability bridge so the nested call re-enters
-        // `default_backend_session` on the same backend, same thread.
+    backend.with_backend_session(|outer| {
+        // Recover the concrete backend from the session through the documented
+        // capability bridge so the nested call re-enters the session entry on
+        // the same backend, same thread.
         let concrete: &mut DefaultReadBackend =
             unsafe { &mut *outer.session_data_mut().cast::<DefaultReadBackend>() };
-        default_backend_session(concrete, |_inner| ())
+        concrete.with_backend_session(|_inner| ())
     });
 }
 
 #[test]
-fn default_backend_session_runs_and_clears_the_in_session_flag() {
+fn backend_session_entry_runs_and_clears_the_in_session_flag() {
     let mut backend = crate::tests::backend_default_read_tests::DefaultReadBackend::default();
 
-    let first = default_backend_session(&mut backend, |_| 1usize);
+    let first = backend.with_backend_session(|_| 1usize);
     assert_eq!(first, 1);
     assert!(!IN_SESSION.get());
 
     // A second sequential session proves the first guard restored the flag.
-    let second = default_backend_session(&mut backend, |_| 2usize);
+    let second = backend.with_backend_session(|_| 2usize);
     assert_eq!(second, 2);
     assert!(!IN_SESSION.get());
 }
 
 #[test]
-fn default_backend_session_clears_the_in_session_flag_after_panic() {
+fn backend_session_entry_clears_the_in_session_flag_after_panic() {
     // Panicking inside `f` must still restore the thread-local flag (the
     // guard is Drop-based), so a later session on the same thread succeeds.
     let mut backend = crate::tests::backend_default_read_tests::DefaultReadBackend::default();
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        default_backend_session(&mut backend, |_| {
+        backend.with_backend_session(|_| {
             assert!(IN_SESSION.get());
             panic!("boom");
         })
@@ -116,7 +116,7 @@ fn default_backend_session_clears_the_in_session_flag_after_panic() {
     assert!(!IN_SESSION.get());
 
     // The flag is usable again on the same thread.
-    let again = default_backend_session(&mut backend, |_| 3usize);
+    let again = backend.with_backend_session(|_| 3usize);
     assert_eq!(again, 3);
     assert!(!IN_SESSION.get());
 }

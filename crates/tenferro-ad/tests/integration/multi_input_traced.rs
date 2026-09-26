@@ -10,7 +10,7 @@ use tenferro_ad::semantic_extension::{
 use tenferro_ad::AdContext;
 use tenferro_runtime::extension::{
     apply, define_extension_runtime, ExtensionAliasDeclaration, ExtensionEffectDeclaration,
-    ExtensionExecutionContext, ExtensionOp, ExtensionShapeContext,
+    ExtensionOp, ExtensionShapeContext,
 };
 use tenferro_runtime::{DType, GraphCompiler, Runtime, Tensor, TracedTensor};
 use tenferro_tensor::{TensorBackend, TensorRead};
@@ -84,10 +84,11 @@ macro_rules! impl_extension_op {
 impl_extension_op!(ActionOp, ACTION_FAMILY, 4, 1);
 impl_extension_op!(ForceOp, FORCE_FAMILY, 5, 4);
 
-fn execute_action<B: TensorBackend + 'static>(
+fn execute_action(
     _op: &ActionOp,
+    _session: &mut dyn tenferro_tensor::BackendSession,
+    _caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
-    _context: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     let values = inputs
         .iter()
@@ -99,10 +100,11 @@ fn execute_action<B: TensorBackend + 'static>(
     )?])
 }
 
-fn execute_force<B: TensorBackend + 'static>(
+fn execute_force(
     _op: &ForceOp,
+    _session: &mut dyn tenferro_tensor::BackendSession,
+    _caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
-    _context: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     FORCE_EXECUTIONS.fetch_add(1, Ordering::SeqCst);
     let values = inputs
@@ -124,6 +126,14 @@ fn execute_force<B: TensorBackend + 'static>(
         .collect()
 }
 
+fn action_session_supported<B: TensorBackend + 'static>(_op: &ActionOp) -> bool {
+    true
+}
+
+fn force_session_supported<B: TensorBackend + 'static>(_op: &ForceOp) -> bool {
+    true
+}
+
 mod action_runtime {
     use super::*;
 
@@ -131,7 +141,8 @@ mod action_runtime {
         runtime = ActionRuntime,
         family_id = ACTION_FAMILY,
         op_type = ActionOp,
-        execute_reads = execute_action,
+        execute_in_session = execute_action,
+        session_supported = action_session_supported,
     }
 }
 
@@ -142,7 +153,8 @@ mod force_runtime {
         runtime = ForceRuntime,
         family_id = FORCE_FAMILY,
         op_type = ForceOp,
-        execute_reads = execute_force,
+        execute_in_session = execute_force,
+        session_supported = force_session_supported,
     }
 }
 

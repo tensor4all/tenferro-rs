@@ -12,7 +12,7 @@ use crate::exec::{
     get_read, has_session_capable_extension,
     initialize_exec_slots_in, is_ffi_instruction, is_host_instruction,
     is_session_compatible_instruction,
-    reclaim_last_use_inputs_backend,
+    reclaim_last_use_inputs_via_session,
     reclaim_last_use_inputs_exec, resolve_tensor_shape_exprs, terminal_output_slots,
     try_execute_terminal_value_instruction, validate_exec_program, ExecInstruction,
     ExecOp, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
@@ -21,7 +21,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionPlan,
 };
-use tenferro_tensor::{BackendSession, Tensor, TensorBackend, TensorRead, TensorValue};
+use tenferro_tensor::{    BackendSession, Tensor, TensorBackend, TensorRead, TensorValue};
 
 /// A compiled execution segment.
 ///
@@ -307,7 +307,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
                     inst,
                     extension_dispatch.as_deref_mut(),
                 )?;
-                reclaim_last_use_inputs_backend(slots, inst, backend);
+                reclaim_last_use_inputs_via_session(backend, slots, inst);
                 inst_idx += 1;
                 segment_idx += 1;
             }
@@ -417,7 +417,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                         extension_dispatch.as_deref_mut(),
                     )?;
                 }
-                reclaim_last_use_inputs_backend(slots, inst, backend);
+                reclaim_last_use_inputs_via_session(backend, slots, inst);
                 inst_idx += 1;
                 segment_idx += 1;
             }
@@ -507,7 +507,7 @@ fn eval_exec_segmented_session_regions_slots_with_workspace<'input, B: TensorBac
                     inst,
                     extension_dispatch.as_deref_mut(),
                 )?;
-                reclaim_last_use_inputs_backend(slots, inst, backend);
+                reclaim_last_use_inputs_via_session(backend, slots, inst);
                 segment_idx += 1;
                 inst_idx += 1;
             }
@@ -589,7 +589,7 @@ fn eval_exec_segmented_session_regions_slot_values_with_workspace<
                         extension_dispatch.as_deref_mut(),
                     )?;
                 }
-                reclaim_last_use_inputs_backend(slots, inst, backend);
+                reclaim_last_use_inputs_via_session(backend, slots, inst);
                 segment_idx += 1;
                 inst_idx += 1;
             }

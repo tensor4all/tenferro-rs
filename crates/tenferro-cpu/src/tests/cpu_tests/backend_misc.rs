@@ -1960,7 +1960,14 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         }
     }
 
-    impl BackendSessionHost for DefaultOnlyBackend {}
+    impl BackendSessionHost for DefaultOnlyBackend {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+    ) -> R {
+        tenferro_tensor::with_session_entry_guard(|| f(self))
+    }
+}
 
     impl TensorDeviceTransfer for DefaultOnlyBackend {
         fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {

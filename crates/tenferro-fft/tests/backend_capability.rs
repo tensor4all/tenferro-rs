@@ -373,7 +373,14 @@ macro_rules! impl_minimal_tensor_backend {
                 self as *mut Self as *mut ()
             }
         }
-        impl BackendSessionHost for $ty {}
+        impl BackendSessionHost for $ty {
+            fn with_backend_session<R: Send>(
+                &mut self,
+                f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+            ) -> R {
+                tenferro_tensor::with_session_entry_guard(|| f(self))
+            }
+        }
         impl TensorBackend for $ty {}
     };
 }

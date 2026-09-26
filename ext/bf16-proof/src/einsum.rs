@@ -529,10 +529,8 @@ impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> PreparedOperati
                     source,
                 )
             })?;
-        let mut execution =
-            tenferro_runtime::ExtensionExecutionContext::new(backend, extension_caches);
-        let materialized = execution
-            .backend_mut()
+        let _ = extension_caches;
+        let materialized = backend
             .with_backend_session(|exec| {
                 inputs
                     .iter()

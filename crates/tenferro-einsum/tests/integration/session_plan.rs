@@ -734,7 +734,14 @@ impl TensorDot for WrongDTypeSessionBackend {
 panic_elementwise!(WrongDTypeSessionBackend);
 panic_analytic!(WrongDTypeSessionBackend);
 panic_reduction!(WrongDTypeSessionBackend);
-impl BackendSessionHost for WrongDTypeSessionBackend {}
+impl BackendSessionHost for WrongDTypeSessionBackend {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+    ) -> R {
+        tenferro_tensor::with_session_entry_guard(|| f(self))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Single-session-entry proof

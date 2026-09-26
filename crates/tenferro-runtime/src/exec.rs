@@ -9,7 +9,7 @@ use tenferro_tensor::backend::ElementwiseFusionOp;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
     BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig,
-    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorBuffer, TensorRead, TensorValue,
+    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue,
     TypedTensor, ValidationError,
 };
 
@@ -680,7 +680,7 @@ pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
                     inst,
                     extension_dispatch.as_deref_mut(),
                 )?;
-                reclaim_last_use_inputs_backend(slots, inst, backend);
+                reclaim_last_use_inputs_via_session(backend, slots, inst);
                 index += 1;
             }
         }
@@ -757,7 +757,7 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
                     inst,
                     extension_dispatch.as_deref_mut(),
                 )?;
-                reclaim_last_use_inputs_backend(slots, inst, backend);
+                reclaim_last_use_inputs_via_session(backend, slots, inst);
                 index += 1;
             }
         }
@@ -1250,22 +1250,6 @@ pub(crate) fn reclaim_last_use_inputs_exec<'input>(
     }
 }
 
-/// Reclaim the inputs the fallback instruction consumed.
-///
-/// This is the owner-side buffer capability, not an operation: it stays on the
-/// owner with an explicit bound because the fallback runs outside the region the
-/// session owns.
-pub(crate) fn reclaim_last_use_inputs_backend<'input, B: TensorBackend + TensorBuffer>(
-    slots: &mut [Option<ExecSlot<'input>>],
-    inst: &ExecInstruction,
-    backend: &mut B,
-) {
-    for (i, &is_last) in inst.last_use.iter().enumerate() {
-        if is_last && let Some(slot) = slots[inst.input_slots[i]].take() {
-            reclaim_exec_slot_with_backend(slot, backend);
-        }
-    }
-}
 
 fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn BackendSession) {
     match slot {
@@ -1279,16 +1263,17 @@ fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn BackendSess
     }
 }
 
-fn reclaim_exec_slot_with_backend<B: TensorBackend + TensorBuffer>(slot: ExecSlot<'_>, backend: &mut B) {
-    match slot {
-        ExecSlot::Owned(tensor) => backend.reclaim_buffer(tensor),
-        ExecSlot::Value(value) => {
-            if let Ok(tensor) = value.into_tensor() {
-                backend.reclaim_buffer(tensor);
-            }
-        }
-        ExecSlot::Read(_) => {}
-    }
+/// Reclaim the inputs a fallback instruction consumed, through a session.
+///
+/// The fallback runs outside the region the session owns, so this opens a short
+/// session for the buffer capability instead of asking the owner to reclaim;
+/// that keeps the owner free of operation capabilities.
+pub(crate) fn reclaim_last_use_inputs_via_session<'input, B: TensorBackend>(
+    backend: &mut B,
+    slots: &mut [Option<ExecSlot<'input>>],
+    inst: &ExecInstruction,
+) {
+    backend.with_backend_session(|exec| reclaim_last_use_inputs_exec(slots, inst, exec));
 }
 
 #[cfg(test)]

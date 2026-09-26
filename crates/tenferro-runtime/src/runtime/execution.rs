@@ -1300,7 +1300,7 @@ where
             })?;
             slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
         }
-        crate::exec::reclaim_last_use_inputs_backend(slots, instruction, backend);
+        crate::exec::reclaim_last_use_inputs_via_session(backend, slots, instruction);
         Ok(())
     }
 

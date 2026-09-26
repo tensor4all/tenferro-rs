@@ -1657,7 +1657,14 @@ impl TensorReduction for WrongDTypeSessionBackend {
     }
 }
 
-impl BackendSessionHost for WrongDTypeSessionBackend {}
+impl BackendSessionHost for WrongDTypeSessionBackend {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+    ) -> R {
+        tenferro_tensor::with_session_entry_guard(|| f(self))
+    }
+}
 
 fn wrong_dtype_tensor() -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![1.0]).unwrap())

@@ -3842,25 +3842,21 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
 /// fn accepts_session_host<B: BackendSessionHost>(_backend: &mut B) {}
 /// ```
 pub trait BackendSessionHost: BackendRuntimeCache {
+    /// Open one backend session and run `f` inside it.
+    ///
+    /// The session is built by the backend rather than by coercing the owner, so
+    /// this is the only way an operation is reached from a backend.
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R
-    where
-        Self: TensorBackend + Sized,
-    {
-        default_backend_session(self, f)
-    }
+    ) -> R;
 
     #[doc(hidden)]
     fn with_backend_session_cached<R: Send>(
         &mut self,
         _cache: &mut Self::RuntimeCache,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R
-    where
-        Self: TensorBackend + Sized,
-    {
+    ) -> R {
         self.with_backend_session(f)
     }
 }
@@ -4172,17 +4168,9 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
 ///
 /// fn accepts_backend<B: TensorBackend>(_backend: &mut B) {}
 /// ```
-pub trait TensorBackend:
-    BackendRuntimeCache
-    + BackendSession
-    + TensorBackendOps
-    + BackendCachedDot
-    + TensorDeviceTransfer
-    + BackendSessionHost
-{
-}
+pub trait TensorBackend: BackendRuntimeCache + TensorDeviceTransfer + BackendSessionHost {}
 
-impl<T> SessionCachedDot for T where T: TensorBackend + ?Sized {}
+impl<T> SessionCachedDot for T where T: TensorBackend + TensorDot + ?Sized {}
 
 thread_local! {
     /// Tracks whether a session-entry closure is currently running on this
@@ -4201,7 +4189,7 @@ impl InSessionGuard {
         debug_assert!(
             !IN_SESSION.get(),
             "nested backend session entry: a session closure called \
-             with_backend_session / default_backend_session again on this thread"
+             with_backend_session again on this thread"
         );
         IN_SESSION.set(true);
         InSessionGuard
@@ -4219,32 +4207,11 @@ impl Drop for InSessionGuard {
 /// already inside a session closure.
 ///
 /// This is the portable nested-entry guard shared by every backend-session
-/// entry point: [`default_backend_session`] and the GPU
-/// `BackendSessionHost::with_backend_session` overrides. CPU keeps its own
-/// release-mode `EXECUTION_OWNER` panic on top of this debug check.
+/// entry point. CPU keeps its own release-mode `EXECUTION_OWNER` panic on top
+/// of this debug check.
 #[doc(hidden)]
 pub fn with_session_entry_guard<R>(f: impl FnOnce() -> R) -> R {
     let _guard = InSessionGuard::enter();
     f()
 }
 
-/// Run a closure using the backend itself as a default execution session.
-///
-/// This is suitable for backends whose individual ops already manage their own
-/// execution context.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_tensor::{default_backend_session, TensorBackend};
-///
-/// fn run_with_default_session<B: TensorBackend>(backend: &mut B) -> usize {
-///     default_backend_session(backend, |_exec| 1usize)
-/// }
-/// ```
-pub fn default_backend_session<B: TensorBackend, R: Send>(
-    backend: &mut B,
-    f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-) -> R {
-    with_session_entry_guard(|| f(backend))
-}

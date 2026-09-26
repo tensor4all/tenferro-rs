@@ -1551,7 +1551,7 @@ fn execute_fft_extension_reads_in_session(
     execute_fft_extension_reads_session(op, inputs, &mut ctx)
 }
 
-fn fft_session_supported<B: BackendSession + 'static>(_op: &FftOp) -> bool {
+fn fft_session_supported<B: tenferro_tensor::TensorBackend + 'static>(_op: &FftOp) -> bool {
     // The session executor routes CPU/CUDA/WebGPU through their FftBackend exec
     // sessions; keep scheduler-session admission consistent with the backends
     // that `execute_fft_extension_reads_on_session` actually handles.

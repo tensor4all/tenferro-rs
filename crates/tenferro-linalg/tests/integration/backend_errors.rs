@@ -572,7 +572,14 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             self as *mut Self as *mut ()
         }
     }
-    impl BackendSessionHost for DefaultOnlyLinalgBackend {}
+    impl BackendSessionHost for DefaultOnlyLinalgBackend {
+        fn with_backend_session<R: Send>(
+            &mut self,
+            f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+        ) -> R {
+            tenferro_tensor::with_session_entry_guard(|| f(self))
+        }
+    }
     impl TensorBackend for DefaultOnlyLinalgBackend {}
 
     impl LinalgBackend for DefaultOnlyLinalgBackend {

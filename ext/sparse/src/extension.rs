@@ -351,8 +351,8 @@ impl<B: TensorBackend + 'static> PreparedOperationExecutor for SparseReferencePr
             .map_err(|source| {
                 RuntimeError::runtime_state_source("extension", ErrorPhase::Execution, source)
             })?;
-        let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(backend, extension_caches);
-        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+        let _ = extension_caches;
+        let materialized_inputs = backend.with_backend_session(|exec| {
             inputs
                 .iter()
                 .cloned()
