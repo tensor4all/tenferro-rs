@@ -487,6 +487,24 @@ This half should be finished where a CUDA device is available: the CUDA tests ar
 hardware-gated, so here only compilation and the source-text contracts can be
 checked, not the kernels' behaviour.
 
+### Local gate state (mid-Phase-B)
+
+`bash scripts/check-pr-fast.sh --no-fetch --coverage-reviewed --test 'cargo test
+-p tenferro-gpu --features webgpu --lib --tests'` passes on the current branch
+after the fixes it surfaced, which are worth remembering:
+
+* the standalone `ext/tenferro-cpu-tblis` manifest is outside the root workspace,
+  so its provider test kept the deleted one-shot spelling;
+* `docs/guides/devices-and-gpu.md` is generated from a snippet source and was
+  stale for the same reason (`check-doc-snippets.py` syncs it);
+* clippy (`-D warnings`) caught seven orphaned `# Errors` doc blocks left behind
+  by deleted trait items and the needless `&` borrows the migration introduced.
+
+Run it with `RUSTC_WRAPPER=""` locally: the kache wrapper's path remapping breaks
+trybuild `.stderr` comparisons, which is also why the pre-existing
+`tenferro-ad::eager_backend_capability_contract` fixture mismatches here while the
+`tenferro-gpu` session contracts pass.
+
 ## Measurement protocol
 
 Removing syntax does not by itself save time; #1926 requires measurement
