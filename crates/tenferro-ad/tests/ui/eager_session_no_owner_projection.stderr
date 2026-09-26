@@ -8,4 +8,3 @@ error[E0308]: mismatched types
   |
   = note: expected mutable reference `&mut CpuBackend`
              found mutable reference `&mut dyn BackendSession`
-  = help: `CpuBackend` implements `BackendSession` so you could change the expected type to `Box<dyn BackendSession>`

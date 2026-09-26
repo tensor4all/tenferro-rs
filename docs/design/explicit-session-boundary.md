@@ -601,6 +601,15 @@ trybuild `.stderr` comparisons, which is also why the pre-existing
 same `E0432` is reported, with a wider underline than the recorded `.stderr`, so it
 is a rustc-rendering difference on this toolchain rather than a behaviour change.
 
+Two other fixtures of that contract *were* invalidated by this refactor and are
+blessed with it. Both reported `E0308`/`E0576` for the removed owner-projection
+APIs, and the only change in their `.stderr` is the removal of the compiler's
+suggestion that the expected type could become a session, which is false now that
+the owner is not a session. The third, span-only fixture is deliberately left
+untouched, so after this change the contract reports exactly the same single
+mismatch it reports on the baseline worktree — the pre-existing claim above is a
+comparison, not an assumption.
+
 ### Phase-B completion audit
 
 Each Phase-B requirement mapped to the artifact that satisfies it. "Evidence"
@@ -648,7 +657,7 @@ With the CUDA body move in, Phase B is closed on this host:
 | `scripts/check-pr-fast.sh --no-fetch --coverage-reviewed --test 'cargo test -p tenferro-gpu --features cuda --test integration'` | pass (`fast PR checks passed`) |
 | `cargo check --workspace --all-targets` | 0 error, 0 warning |
 | `cargo check -p tenferro-gpu --features cuda --all-targets` | 0 error, 0 warning |
-| `cargo test --workspace --no-fail-fast` | all targets pass except the span-only `tenferro-ad` trybuild fixture above |
+| `cargo test --workspace --no-fail-fast` | all targets pass except one fixture of the pre-existing `tenferro-ad` trybuild contract, verified pre-existing by running the same test on the baseline worktree |
 | `cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml` | 5 + 3 passed |
 | `scripts/audit-session-entry.py --check` | pass, 16 entries, no allowlist change |
 | `scripts/repository-rules-review.py --dry-run` | pass |

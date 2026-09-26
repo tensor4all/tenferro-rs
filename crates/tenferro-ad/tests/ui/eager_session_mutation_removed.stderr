@@ -14,7 +14,6 @@ error[E0308]: mismatched types
   |
   = note: expected trait object `dyn BackendSession`
                    found struct `CpuBackend`
-  = help: `CpuBackend` implements `BackendSession` so you could box the found value and coerce it to the trait object `Box<dyn BackendSession>`, you will have to change the expected type as well
 
 error[E0277]: the size for values of type `dyn BackendSession` cannot be known at compilation time
  --> tests/ui/eager_session_mutation_removed.rs:8:5
@@ -43,7 +42,6 @@ error[E0308]: mismatched types
    |
    = note: expected mutable reference `&mut CpuBackend`
               found mutable reference `&mut dyn BackendSession`
-   = help: `CpuBackend` implements `BackendSession` so you could change the expected type to `Box<dyn BackendSession>`
 
 error[E0277]: the trait bound `dyn BackendSession: DerefMut` is not satisfied
   --> tests/ui/eager_session_mutation_removed.rs:22:54
