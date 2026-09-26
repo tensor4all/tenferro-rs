@@ -8,7 +8,7 @@
 mod cuda {
     use tenferro_gpu::{cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId};
     use tenferro_tensor::{
-        AllocationDomainId, AllocationId, DType, Tensor, TensorRead, TensorStructural,
+        AllocationDomainId, AllocationId, BackendSessionHost, DType, Tensor, TensorRead,
     };
 
     fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
@@ -27,7 +27,9 @@ mod cuda {
         let input = upload_tensor(backend.runtime(), &host).unwrap();
         let (domain, allocation) = identity(&input);
 
-        let duplicate = backend.cast(&input, DType::F32).unwrap();
+        let duplicate = backend
+            .with_backend_session(|session| session.cast(&input, DType::F32))
+            .unwrap();
 
         let (duplicate_domain, duplicate_allocation) = identity(&duplicate);
         assert_eq!(duplicate_domain, domain);
@@ -44,7 +46,9 @@ mod cuda {
         let input = upload_tensor(first.runtime(), &host).unwrap();
 
         let error = second
-            .to_contiguous_read(TensorRead::from_tensor(&input))
+            .with_backend_session(|session| {
+                session.to_contiguous_read(TensorRead::from_tensor(&input))
+            })
             .unwrap_err();
         assert!(matches!(error, tenferro_tensor::Error::RuntimeState { .. }));
     }
@@ -53,7 +57,7 @@ mod cuda {
 #[cfg(feature = "webgpu")]
 mod webgpu {
     use tenferro_gpu::{webgpu::upload_webgpu_tensor, webgpu::WebGpuBackend};
-    use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead, TensorStructural};
+    use tenferro_tensor::{AllocationDomainId, AllocationId, BackendSessionHost, Tensor, TensorRead};
 
     fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
         let Some(tensor) = tensor.as_typed::<f32>() else {
@@ -72,7 +76,9 @@ mod webgpu {
         let (domain, allocation) = identity(&input);
 
         let duplicate = backend
-            .to_contiguous_read(TensorRead::from_tensor(&input))
+            .with_backend_session(|session| {
+                session.to_contiguous_read(TensorRead::from_tensor(&input))
+            })
             .unwrap();
 
         let (duplicate_domain, duplicate_allocation) = identity(&duplicate);
@@ -92,7 +98,9 @@ mod webgpu {
         let input = upload_webgpu_tensor(first.runtime(), &host).unwrap();
 
         let error = second
-            .to_contiguous_read(TensorRead::from_tensor(&input))
+            .with_backend_session(|session| {
+                session.to_contiguous_read(TensorRead::from_tensor(&input))
+            })
             .unwrap_err();
         assert!(matches!(error, tenferro_tensor::Error::HostAccess { .. }));
     }

@@ -8,7 +8,7 @@ use tenferro_gpu::{
 use tenferro_runtime::{DType, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::TensorRead;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDeviceTransfer, TensorDot};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDeviceTransfer};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -113,7 +113,9 @@ fn assert_c32_dot_general_with_conj_matches_cpu(
         .upload_host_tensor(tenferro_tensor::TensorRead::from_tensor(&rhs))
         .unwrap();
     let gpu_out = backend
-        .dot_general_with_conj(&gpu_lhs, &gpu_rhs, &config, lhs_conj, rhs_conj)
+        .with_backend_session(|__s| {
+            __s.dot_general_with_conj(&gpu_lhs, &gpu_rhs, &config, lhs_conj, rhs_conj)
+        })
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))
@@ -230,7 +232,9 @@ fn webgpu_f32_dot_general_with_conj_is_identity_when_adapter_available() {
         .upload_host_tensor(tenferro_tensor::TensorRead::from_tensor(&rhs))
         .unwrap();
     let gpu_out = backend
-        .dot_general_with_conj(&gpu_lhs, &gpu_rhs, &config, true, true)
+        .with_backend_session(|__s| {
+            __s.dot_general_with_conj(&gpu_lhs, &gpu_rhs, &config, true, true)
+        })
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))

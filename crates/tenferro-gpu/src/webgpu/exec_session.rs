@@ -1,17 +1,19 @@
 use std::any::TypeId;
 use tenferro_tensor::backend::{
-    BackendSession, BackendSessionHost, ElementwiseFusionPlan, ElementwiseReadOp,
-    GroupedGemmConfig, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    BackendSession, BackendSessionHost, ElementwiseReadOp, SessionCachedDot, TensorAnalytic,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural,
 };
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use tenferro_tensor::{
-    with_session_entry_guard, DotGeneralAccumulation, Tensor, TensorRead, TensorValue, TensorWrite,
-};
+use tenferro_tensor::DType;
+use tenferro_tensor::{with_session_entry_guard, Tensor, TensorRead, TensorWrite};
 
-use super::{WebGpuBackend, WebGpuRuntime, WebGpuRuntimeIdentity};
+use super::{
+    gemm, structural, unsupported, unsupported_op, WebGpuBackend, WebGpuRuntime,
+    WebGpuRuntimeIdentity,
+};
 
 /// Marker for the concrete erased WebGPU execution-session target.
 #[doc(hidden)]
@@ -73,117 +75,487 @@ macro_rules! delegate {
     };
 }
 
-delegate!(TensorElementwise {
-    fn elementwise_read_into(op: ElementwiseReadOp, inputs: &[TensorRead<'_>], out: TensorWrite<'_>) -> crate::Result<()>;
-    fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn neg_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn conj_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn abs_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn sign_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> crate::Result<Tensor>;
-    fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> crate::Result<Tensor>;
-});
+impl TensorElementwise for WebGpuExecSession<'_> {
+    fn elementwise_read_into(
+        &mut self,
+        _op: ElementwiseReadOp,
+        _inputs: &[TensorRead<'_>],
+        _out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        unsupported!("webgpu_elementwise_read_into")
+    }
 
-delegate!(TensorAnalytic {
-    fn exp_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn log_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn sin_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn cos_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn tanh_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn sqrt_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn rsqrt_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn expm1_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn log1p_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-});
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+        unsupported!("webgpu_add")
+    }
 
-delegate!(TensorStructural {
-    fn transpose_read(input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor>;
-    fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor>;
-    fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
-    fn to_contiguous_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()>;
-    fn cast(input: &Tensor, to: tenferro_tensor::DType) -> crate::Result<Tensor>;
-    fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
-    fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
-    fn tril(input: &Tensor, k: i64) -> crate::Result<Tensor>;
-    fn triu(input: &Tensor, k: i64) -> crate::Result<Tensor>;
-});
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("sub", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("sub", rhs)?;
+        unsupported!("webgpu_sub")
+    }
 
-delegate!(TensorReduction {
-    fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
-    fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
-    fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
-    fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
-});
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
+        unsupported!("webgpu_mul")
+    }
 
-delegate!(TensorDot {
-    fn dot_general_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, config: &DotGeneralConfig) -> crate::Result<Tensor>;
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("neg", input)?;
+        unsupported!("webgpu_neg")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+        unsupported!("webgpu_conj")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
+        unsupported!("webgpu_div")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+        unsupported!("webgpu_abs")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
+        unsupported!("webgpu_sign")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
+        unsupported!("webgpu_maximum")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+        unsupported!("webgpu_minimum")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn compare_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        _dir: &CompareDir,
+    ) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+        unsupported!("webgpu_compare")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn select_read(
+        &mut self,
+        pred: TensorRead<'_>,
+        on_true: TensorRead<'_>,
+        on_false: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+        unsupported!("webgpu_select")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read inputs first and then raise the same
+    // unsupported error. Written against the read inputs directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn clamp_read(
+        &mut self,
+        input: TensorRead<'_>,
+        lower: TensorRead<'_>,
+        upper: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
+        unsupported!("webgpu_clamp")
+    }
+}
+
+impl TensorAnalytic for WebGpuExecSession<'_> {
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
+        unsupported!("webgpu_exp")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("log", input)?;
+        unsupported!("webgpu_log")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
+        unsupported!("webgpu_sin")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("cos", input)?;
+        unsupported!("webgpu_cos")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("tanh", input)?;
+        unsupported!("webgpu_tanh")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn sqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
+        unsupported!("webgpu_sqrt")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
+        unsupported!("webgpu_rsqrt")
+    }
+
+    // See the unary analytic read halves above: evaluate the read inputs and then
+    // raise the same unsupported error.
+    fn pow_read(
+        &mut self,
+        lhs: tenferro_tensor::TensorRead<'_>,
+        rhs: tenferro_tensor::TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
+        unsupported!("webgpu_pow")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
+        unsupported!("webgpu_expm1")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
+        unsupported!("webgpu_log1p")
+    }
+}
+
+impl TensorStructural for WebGpuExecSession<'_> {
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        structural::to_contiguous_read(self.backend, input)
+    }
+
+    fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
+        unsupported!("WebGpuBackend::copy_read_into")
+    }
+
+    fn cast(&mut self, _input: &Tensor, _to: DType) -> crate::Result<Tensor> {
+        unsupported!("webgpu_cast")
+    }
+
+    fn extract_diagonal(
+        &mut self,
+        _input: &Tensor,
+        _axis_a: usize,
+        _axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        unsupported!("webgpu_extract_diagonal")
+    }
+
+    fn embed_diagonal(
+        &mut self,
+        _input: &Tensor,
+        _axis_a: usize,
+        _axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        unsupported!("webgpu_embed_diagonal")
+    }
+
+    fn tril(&mut self, _input: &Tensor, _k: i64) -> crate::Result<Tensor> {
+        unsupported!("webgpu_tril")
+    }
+
+    fn triu(&mut self, _input: &Tensor, _k: i64) -> crate::Result<Tensor> {
+        unsupported!("webgpu_triu")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
+        // The one-shot entry used to run the device transpose; the read half is
+        // now that entry, so it must keep the operation rather than report it
+        // unsupported.
+        let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+        structural::transpose(self.backend, input, perm)
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reshape_read(&mut self, input: TensorRead<'_>, _shape: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+        unsupported!("webgpu_reshape")
+    }
+
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the operation
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn broadcast_in_dim_read(
+        &mut self,
+        input: TensorRead<'_>,
+        _shape: &[usize],
+        _dims: &[usize],
+    ) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
+        unsupported!("webgpu_broadcast_in_dim")
+    }
+}
+
+impl TensorReduction for WebGpuExecSession<'_> {
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the reduction
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, _axes: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+        unsupported!("webgpu_reduce_sum")
+    }
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the reduction
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reduce_prod_read(
+        &mut self,
+        input: TensorRead<'_>,
+        _axes: &[usize],
+    ) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+        unsupported!("webgpu_reduce_prod")
+    }
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the reduction
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, _axes: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+        unsupported!("webgpu_reduce_max")
+    }
+    // The old chain was: owned input -> the one-shot method -> its unsupported
+    // error; view input -> the read-boundary error. WebGPU rejects the reduction
+    // either way, so evaluate the read input first and then raise the same
+    // unsupported error. Written against the read input directly so the later
+    // removal of the one-shot methods does not need to revisit this.
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, _axes: &[usize]) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+        unsupported!("webgpu_reduce_min")
+    }
+}
+
+impl TensorDot for WebGpuExecSession<'_> {
+    // The previous read-half default delegated an owned pair to the one-shot
+    // method and materialized views through to_contiguous_read before
+    // contracting. That default is inlined here so the later removal of the
+    // one-shot methods does not need to revisit WebGPU.
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => gemm::dot_general(self.backend, lhs, rhs, config),
+            _ => {
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
+                gemm::dot_general(self.backend, &lhs, &rhs, config)
+            }
+        }
+    }
+
     fn dot_general_with_conj(
+        &mut self,
         lhs: &Tensor,
         rhs: &Tensor,
         config: &DotGeneralConfig,
         lhs_conj: bool,
         rhs_conj: bool,
-    ) -> crate::Result<Tensor>;
-});
+    ) -> crate::Result<Tensor> {
+        gemm::dot_general_with_conj(self.backend, lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+}
 
-delegate!(TensorIndexing {
+impl TensorIndexing for WebGpuExecSession<'_> {
     fn gather(
-        operand: &Tensor,
-        start_indices: &Tensor,
-        config: &GatherConfig,
-    ) -> crate::Result<Tensor>;
-    fn scatter(
-        operand: &Tensor,
-        scatter_indices: &Tensor,
-        updates: &Tensor,
-        config: &ScatterConfig,
-    ) -> crate::Result<Tensor>;
-    fn slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
-    fn dynamic_slice(
-        input: &Tensor,
-        starts: &Tensor,
-        slice_sizes: &[usize],
-    ) -> crate::Result<Tensor>;
-    fn dynamic_update_slice(
-        operand: &Tensor,
-        update: &Tensor,
-        starts: &Tensor,
-    ) -> crate::Result<Tensor>;
-    fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
-    fn concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
-    fn reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-});
+        &mut self,
+        _operand: &Tensor,
+        _start_indices: &Tensor,
+        _config: &GatherConfig,
+    ) -> crate::Result<Tensor> {
+        unsupported!("webgpu_gather")
+    }
 
-delegate!(TensorFusion {
-    fn execute_elementwise_fusion(
-        inputs: &[&Tensor],
-        plan: &ElementwiseFusionPlan,
-    ) -> crate::Result<Option<Vec<Tensor>>>;
-    fn execute_broadcast_multiply(
-        lhs: TensorRead<'_>,
-        lhs_shape: &[usize],
-        lhs_dims: &[usize],
-        rhs: TensorRead<'_>,
-        rhs_shape: &[usize],
-        rhs_dims: &[usize],
-    ) -> crate::Result<Option<Tensor>>;
-    fn execute_broadcast_multiply_value(
-        lhs: TensorRead<'_>,
-        lhs_shape: &[usize],
-        lhs_dims: &[usize],
-        rhs: TensorRead<'_>,
-        rhs_shape: &[usize],
-        rhs_dims: &[usize],
-    ) -> crate::Result<Option<TensorValue>>;
-});
+    fn scatter(
+        &mut self,
+        _operand: &Tensor,
+        _scatter_indices: &Tensor,
+        _updates: &Tensor,
+        _config: &ScatterConfig,
+    ) -> crate::Result<Tensor> {
+        unsupported!("webgpu_scatter")
+    }
+
+    fn slice(&mut self, _input: &Tensor, _config: &SliceConfig) -> crate::Result<Tensor> {
+        unsupported!("webgpu_slice")
+    }
+
+    fn dynamic_slice(
+        &mut self,
+        _input: &Tensor,
+        _starts: &Tensor,
+        _slice_sizes: &[usize],
+    ) -> crate::Result<Tensor> {
+        unsupported!("webgpu_dynamic_slice")
+    }
+
+    fn dynamic_update_slice(
+        &mut self,
+        _operand: &Tensor,
+        _update: &Tensor,
+        _starts: &Tensor,
+    ) -> crate::Result<Tensor> {
+        unsupported!("webgpu_dynamic_update_slice")
+    }
+
+    fn pad(&mut self, _input: &Tensor, _config: &PadConfig) -> crate::Result<Tensor> {
+        unsupported!("webgpu_pad")
+    }
+
+    fn concatenate(&mut self, _inputs: &[&Tensor], _axis: usize) -> crate::Result<Tensor> {
+        unsupported!("webgpu_concatenate")
+    }
+
+    fn reverse(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
+        unsupported!("webgpu_reverse")
+    }
+}
+
+impl TensorFusion for WebGpuExecSession<'_> {}
 
 delegate!(TensorBuffer {
     fn reclaim_buffer(tensor: Tensor) -> ();
@@ -194,63 +566,9 @@ delegate!(TensorDeviceTransfer {
     fn upload_host_tensor(tensor: TensorRead<'_>) -> crate::Result<Tensor>;
 });
 
-macro_rules! delegate_cached {
-    ($(fn $method:ident($($arg:ident: $arg_ty:ty),* $(,)?) -> $ret:ty;)*) => {
-        impl SessionCachedDot for WebGpuExecSession<'_> {
-            $(
-                fn $method(&mut self, $($arg: $arg_ty),*) -> $ret {
-                    <WebGpuBackend as SessionCachedDot>::$method(self.backend, $($arg),*)
-                }
-            )*
-        }
-    };
-}
-
-delegate_cached! {
-    fn dot_general_cached(
-        cache_slot: Option<usize>,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor>;
-    fn dot_general_read_cached(
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor>;
-    fn dot_general_with_conj_cached(
-        cache_slot: Option<usize>,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
-    ) -> crate::Result<Tensor>;
-    fn dot_general_with_conj_read_cached(
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
-    ) -> crate::Result<Tensor>;
-    fn dot_general_read_into_accum_cached(
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-        accumulation: DotGeneralAccumulation,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()>;
-    fn grouped_gemm_cached(
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &GroupedGemmConfig<'_>,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()>;
-}
+// The cached reads are the trait's provided defaults here: WebGPU owns no
+// runtime cache of its own, so the session implements them directly.
+impl SessionCachedDot for WebGpuExecSession<'_> {}
 
 impl BackendSession for WebGpuExecSession<'_> {
     fn session_type_id(&self) -> TypeId {

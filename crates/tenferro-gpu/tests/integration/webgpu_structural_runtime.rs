@@ -3,8 +3,7 @@
 use num_complex::Complex32;
 use tenferro_gpu::{webgpu::webgpu_available, webgpu::WebGpuBackend};
 use tenferro_tensor::{
-    BackendSessionHost, Error, ErrorKind, Tensor, TensorDeviceTransfer, TensorRead,
-    TensorStructural, TensorView,
+    BackendSessionHost, Error, ErrorKind, Tensor, TensorDeviceTransfer, TensorRead, TensorView,
 };
 
 #[test]
@@ -88,7 +87,9 @@ fn webgpu_to_contiguous_f32_materializes_a_noncompact_resident_view() {
     let view = input.backend_region_view(vec![3], vec![2], 0).unwrap();
 
     let materialized = backend
-        .to_contiguous_read(TensorRead::from_view(TensorView::F32(view)))
+        .with_backend_session(|__s| {
+            __s.to_contiguous_read(TensorRead::from_view(TensorView::F32(view)))
+        })
         .unwrap();
 
     assert_eq!(materialized.placement(), input.placement());

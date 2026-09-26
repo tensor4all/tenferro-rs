@@ -16,16 +16,17 @@ fn webgpu_backend_implements_tensor_backend_contract() {
     assert_tensor_backend::<WebGpuBackend>();
     assert_f32_view_canonicalization::<WebGpuBackend>();
 
-    let _upload: fn(&mut WebGpuBackend, TensorRead<'_>) -> Result<Tensor> =
-        <WebGpuBackend as TensorDeviceTransfer>::upload_host_tensor;
-    let _download: fn(&mut WebGpuBackend, TensorRead<'_>) -> Result<Tensor> =
-        <WebGpuBackend as TensorDeviceTransfer>::download_to_host;
+    let _upload: fn(&mut tenferro_gpu::webgpu::WebGpuExecSession<'static>, TensorRead<'_>) -> Result<Tensor> =
+        <tenferro_gpu::webgpu::WebGpuExecSession<'static> as TensorDeviceTransfer>::upload_host_tensor;
+    let _download: fn(&mut tenferro_gpu::webgpu::WebGpuExecSession<'static>, TensorRead<'_>) -> Result<Tensor> =
+        <tenferro_gpu::webgpu::WebGpuExecSession<'static> as TensorDeviceTransfer>::download_to_host;
     let _dot: fn(
-        &mut WebGpuBackend,
+        &mut tenferro_gpu::webgpu::WebGpuExecSession<'static>,
         TensorRead<'_>,
         TensorRead<'_>,
         &DotGeneralConfig,
-    ) -> Result<Tensor> = <WebGpuBackend as TensorDot>::dot_general_read;
+    ) -> Result<Tensor> =
+        <tenferro_gpu::webgpu::WebGpuExecSession<'static> as TensorDot>::dot_general_read;
 }
 
 #[test]

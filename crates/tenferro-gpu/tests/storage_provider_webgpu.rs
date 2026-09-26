@@ -1,7 +1,7 @@
 #![cfg(feature = "webgpu")]
 
 use tenferro_gpu::{webgpu::upload_webgpu_tensor, webgpu::WebGpuBackend};
-use tenferro_tensor::{AllocationId, DType, Tensor, TensorRead, TensorStructural};
+use tenferro_tensor::{AllocationId, BackendSessionHost, DType, Tensor, TensorRead};
 
 fn allocation_id(tensor: &Tensor) -> Option<AllocationId> {
     fn typed<T: tenferro_tensor::TensorScalar>(tensor: &Tensor) -> Option<AllocationId> {
@@ -50,7 +50,9 @@ fn uploaded_storage_is_root_owned_and_prepares_once_at_the_descriptor_boundary()
         .expect("root preparation should accept the checked descriptor");
 
     let duplicate = backend
-        .to_contiguous_read(TensorRead::from_tensor(&tensor))
+        .with_backend_session(|session| {
+            session.to_contiguous_read(TensorRead::from_tensor(&tensor))
+        })
         .unwrap();
     assert_eq!(duplicate.dtype(), DType::F32);
     assert_ne!(allocation_id(&duplicate), allocation_id(&tensor));
