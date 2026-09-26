@@ -88,6 +88,32 @@ def test_opencode_missing_reference_fails() -> None:
         assert any("OpenCode entry is missing" in error for error in errors)
 
 
+def test_other_skill_mirror_drift_fails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        make_skill_root(root)
+        write(root / ".agents" / "skills" / "tenferro-benchmark" / "SKILL.md", "canonical\n")
+        write(root / ".claude" / "skills" / "tenferro-benchmark" / "SKILL.md", "canonical\n")
+        write(root / ".kimi" / "skills" / "tenferro-benchmark" / "SKILL.md", "stale\n")
+        write(root / ".opencode" / "commands" / "tenferro-benchmark.md", "@PERFORMANCE_TIPS.md\n")
+        errors = CHECKER.check(root)
+        assert any("tenferro-benchmark/SKILL.md" in error for error in errors), errors
+
+
+def test_other_skill_missing_opencode_entry_fails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        make_skill_root(root)
+        write(root / ".agents" / "skills" / "tenferro-benchmark" / "SKILL.md", "canonical\n")
+        for mirror in (root / ".claude" / "skills", root / ".kimi" / "skills"):
+            write(mirror / "tenferro-benchmark" / "SKILL.md", "canonical\n")
+        errors = CHECKER.check(root)
+        assert any(
+            "missing OpenCode entry: .opencode/commands/tenferro-benchmark.md" in error
+            for error in errors
+        ), errors
+
+
 if __name__ == "__main__":
     for name, value in sorted(globals().items()):
         if name.startswith("test_"):

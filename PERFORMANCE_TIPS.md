@@ -328,6 +328,29 @@ Audit hints:
 - Benchmark each execution mode that users can select (untracked eager,
   tracked eager, trace) for the same op, so a lowering that bypasses the eager
   fast path shows up as a mode gap.
+- Build parallelism and measured thread count are different settings. Compile
+  with an explicit job count (`cargo bench -j 16`, or `CARGO_BUILD_JOBS=16`);
+  leaving the build at one job spends minutes in serial compilation without
+  making the measurement any more single-threaded than the thread environment
+  already does. The measured binary itself must run with a pinned thread count.
+- Pin the measured process to a core and check that core is idle immediately
+  before and after each measurement (a `/proc/stat` busy fraction over a few
+  seconds is enough). Unpinned background jobs on a shared host migrate between
+  cores and can inflate one run of an entire target; prefer short per-case runs
+  (one filtered case at `--sample-size 100` is seconds) over long target-wide
+  runs. A record of how the run was made is part of the evidence; note in the
+  work log whether the build parallelism matched the recorded manifest.
+- Read the shape of a slowdown before claiming a cause. A constant absolute
+  delta across sizes is a per-operation, per-entry or per-invocation cost; a
+  uniform multiplicative factor across cases the change cannot affect is host
+  contention. A same-binary A/A run (the same source measured twice, minutes
+  apart) gives the noise floor that separates the two, and Criterion's own
+  `change:` line against the previous run in the same target directory is an
+  independent check.
+- Keep before/after harness identity explicit: the arm list, the case names and
+  the Criterion settings are part of a baseline's identity. When the arm list
+  changes, recapture the baseline with the new harness rather than comparing
+  across it, and record which commit produced each side.
 
 Audit hints:
 
@@ -380,6 +403,16 @@ diff-scoped review bot.
   and all required non-regression/correctness gates pass. Do not relax
   thresholds, redefine the primary metric, or add post-hoc exclusions after
   seeing the candidate.
+- Record the host observables that decide validity next to the predeclared
+  thresholds: the pinned core, its idle observation before and after each
+  measurement, and the load at start. A paired experiment whose pinned core was
+  busy during either side is `INCONCLUSIVE`, not a candidate result.
+- When a claim is about a countable mechanism (session entries, provider calls,
+  kernel launches), count it rather than infer it from timing. For CPU session
+  entries, `TENFERRO_PROFILE_CPU_SESSION=1` with
+  `TENFERRO_PROFILE_CPU_SESSION_PRINT_EVERY=<n>` reports per-section call counts;
+  a probe or lookup that cannot succeed should be shown to cost no entry rather
+  than assumed free.
 
 Audit hints:
 

@@ -30,7 +30,7 @@ def check(root: pathlib.Path) -> list[str]:
             errors.append(f"missing canonical skill file: {CANONICAL_SKILL / relative}")
 
     if not canonical.is_dir():
-        return errors
+        return errors + check_skill_mirrors(root)
 
     for mirror_relative in MIRROR_SKILLS:
         mirror = root / mirror_relative
@@ -53,6 +53,8 @@ def check(root: pathlib.Path) -> list[str]:
             for relative in unexpected:
                 errors.append(f"unexpected mirror Markdown file: {mirror_relative / relative}")
 
+    errors.extend(check_skill_mirrors(root))
+
     entry = root / OPENCODE_ENTRY
     if not entry.is_file():
         errors.append(f"missing OpenCode entry: {OPENCODE_ENTRY}")
@@ -63,6 +65,52 @@ def check(root: pathlib.Path) -> list[str]:
             if reference not in entry_text:
                 errors.append(f"OpenCode entry is missing reference: {reference}")
 
+    return errors
+
+
+def check_skill_mirrors(root: pathlib.Path) -> list[str]:
+    """Every skill under `.agents/skills` must be mirrored byte-identically.
+
+    `tenferro-compute` has the stricter pass above (canonical-only files plus
+    reference links in its OpenCode entry), so it is skipped here to avoid
+    reporting the same drift twice.
+    """
+    errors: list[str] = []
+    canonical_root = root / ".agents" / "skills"
+    if not canonical_root.is_dir():
+        return errors
+    for skill in sorted(path for path in canonical_root.iterdir() if path.is_dir()):
+        if skill.name == CANONICAL_SKILL.name or not (skill / "SKILL.md").is_file():
+            continue
+        portable = sorted(
+            path.relative_to(skill).as_posix()
+            for path in skill.rglob("*.md")
+            if path.is_file()
+        )
+        for mirror_root in MIRROR_SKILLS:
+            mirror = root / mirror_root.parent / skill.name
+            for relative in portable:
+                canonical_file = skill / relative
+                mirror_file = mirror / relative
+                label = f"{mirror_root.parent.as_posix()}/{skill.name}/{relative}"
+                if not mirror_file.is_file():
+                    errors.append(f"missing mirror file: {label}")
+                elif canonical_file.read_bytes() != mirror_file.read_bytes():
+                    errors.append(f"mirror file does not match canonical: {label}")
+            if mirror.is_dir():
+                actual = {
+                    path.relative_to(mirror).as_posix()
+                    for path in mirror.rglob("*.md")
+                    if path.is_file()
+                }
+                for relative in sorted(actual.difference(portable)):
+                    errors.append(
+                        f"unexpected mirror Markdown file: "
+                        f"{mirror_root.parent.as_posix()}/{skill.name}/{relative}"
+                    )
+        entry = root / ".opencode" / "commands" / f"{skill.name}.md"
+        if not entry.is_file():
+            errors.append(f"missing OpenCode entry: .opencode/commands/{skill.name}.md")
     return errors
 
 
