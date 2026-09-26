@@ -487,6 +487,26 @@ This half should be finished where a CUDA device is available: the CUDA tests ar
 hardware-gated, so here only compilation and the source-text contracts can be
 checked, not the kernels' behaviour.
 
+**Use the module-function shape, not an in-place body move.** Four attempts at
+rewriting the bodies directly into the session impls failed on macro subtleties
+(`self` inside a `macro_rules!` *definition* and inside a macro *invocation*'s
+token positions), and each revert cost more than the alternative below, which is
+also what the GPU-entry decision above prescribed:
+
+1. for each owner method, emit a free function on the backend —
+   `fn <op>(backend: &CudaBackend, <args>) -> crate::Result<...> { <body> }` —
+   renaming the receiver `self` to `backend` (a plain rename, so macro
+   invocations that take `self` keep receiving a backend and stay valid);
+2. delete the owner impl blocks;
+3. change `delegate!` to forward to those functions
+   (`fn <op>(&mut self, <args>) -> R { <module>::<op>(self.backend, <args>) }`),
+   which keeps the session's method table generated from one list;
+4. then the imports, the `SessionCachedDot` impl, the contract retargets and the
+   allowlist re-bless as for WebGPU.
+
+The rename is mechanical and reviewable per function, and step 3 keeps a single
+implementation per operation, which is what B3 requires.
+
 ### Local gate state (mid-Phase-B)
 
 `bash scripts/check-pr-fast.sh --no-fetch --coverage-reviewed --test 'cargo test
