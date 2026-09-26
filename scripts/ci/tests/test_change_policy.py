@@ -67,6 +67,7 @@ class ChangePolicyTests(unittest.TestCase):
             ".github/workflows/ci-cache-publish.yml",
             "scripts/ci/find_archive_artifact.py",
             "scripts/ci/gpu_test_partition.py",
+            "scripts/ci/gpu_nextest.toml",
             "scripts/ci/cuda_test_partition.tsv",
             "scripts/ci/pjrt_test_partition.tsv",
             "scripts/ci/install_cuda_toolkit_hosted.sh",

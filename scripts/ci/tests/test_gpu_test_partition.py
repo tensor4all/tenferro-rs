@@ -1,9 +1,15 @@
 from pathlib import Path
+import json
+import os
+import subprocess
 import tempfile
+import tomllib
 import unittest
+from unittest.mock import patch
 
 from scripts.ci.gpu_test_partition import (
     filter_expression,
+    main,
     read_partition,
     report,
     validate_inventory,
@@ -90,6 +96,34 @@ class GpuTestPartitionTests(unittest.TestCase):
         self.assertEqual(cuda[("tenferro-gpu::storage_provider_cuda", "cuda_provider_does_not_expose_safe_unscoped_raw_access")], "host")
         self.assertEqual(cuda[("tenferro-linalg::integration", "determinant_extremes::cuda_complex_determinant_retains_existing_support")], "gpu")
         self.assertEqual(cuda[("tenferro-linalg::integration", "determinant_extremes::determinant_extremes_preserve_value_and_sign")], "host")
+
+    def test_gpu_timeout_is_twice_the_observed_maximum(self):
+        config = tomllib.loads((ROOT / "scripts/ci/gpu_nextest.toml").read_text())
+        self.assertEqual(config["profile"]["gpu-ci"]["slow-timeout"], {
+            "period": "100s", "terminate-after": 2, "grace-period": "10s",
+        })
+
+    def test_only_gpu_execution_selects_the_timeout_profile(self):
+        for kind in ("cuda", "pjrt"):
+            for lane in ("host", "gpu"):
+                with self.subTest(kind=kind, lane=lane), \
+                     patch("sys.argv", ["gpu_test_partition.py", "--kind", kind,
+                                        "--lane", lane, "--archive-file", "tests.tar.zst"]), \
+                     patch.dict(os.environ, {}, clear=True), \
+                     patch("scripts.ci.gpu_test_partition.read_partition", return_value=self.partition), \
+                     patch("scripts.ci.gpu_test_partition.subprocess.run") as run:
+                    run.return_value = subprocess.CompletedProcess([], 0, json.dumps(self.inventory))
+                    self.assertEqual(main(), 0)
+                    command = run.call_args.args[0]
+                    self.assertEqual(command[:3], ["cargo", "nextest", "run"])
+                    if lane == "gpu":
+                        self.assertEqual(command[command.index("--profile") + 1], "gpu-ci")
+                        config_path = Path(command[command.index("--config-file") + 1])
+                        self.assertEqual(config_path.resolve(), ROOT / "scripts/ci/gpu_nextest.toml")
+                        self.assertEqual(run.call_args.kwargs["env"]["TENFERRO_REQUIRE_GPU"], "1")
+                    else:
+                        self.assertNotIn("--profile", command)
+                        self.assertNotIn("--config-file", command)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+# RTX 2000 Ada, run 36225045359: the slowest CUDA test took 98.923s.
+# Allow about twice that duration per test, then fail instead of hanging.
+# https://github.com/tensor4all/tenferro-rs/actions/runs/36225045359
+[profile.gpu-ci]
+slow-timeout = { period = "100s", terminate-after = 2, grace-period = "10s" }

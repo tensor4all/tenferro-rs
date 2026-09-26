@@ -105,10 +105,15 @@ def main() -> int:
             with open(summary_path, "a") as stream:
                 stream.write(f"```text\n{summary}```\n")
         env = os.environ.copy()
+        timeout_profile = []
         if args.lane == "gpu":
             env["TENFERRO_REQUIRE_GPU"] = "1"
+            timeout_profile = [
+                "--config-file", str(Path(__file__).with_name("gpu_nextest.toml")),
+                "--profile", "gpu-ci",
+            ]
         subprocess.run([
-            "cargo", "nextest", "run", *reuse, "--run-ignored", "all",
+            "cargo", "nextest", "run", *timeout_profile, *reuse, "--run-ignored", "all",
             "--no-fail-fast", "-j", "1", "-E", filter_expression(partition, args.lane),
         ], check=True, env=env)
     return 0
