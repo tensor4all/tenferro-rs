@@ -579,7 +579,6 @@ impl TensorStructural for RecordingBackend {
 #[cfg(test)]
 impl TensorReduction for RecordingBackend {
     delegate_recording_backend_methods! {
-        fn reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
@@ -590,10 +589,9 @@ impl TensorReduction for RecordingBackend {
     // method and rejected views, which is not the same as forwarding a view to
     // the inner backend. Reproduce the old default explicitly.
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        self.reduce_sum(
-            tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
-            axes,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+        self.inner
+            .reduce_sum_read(TensorRead::from_tensor(&input), axes)
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
@@ -783,7 +781,6 @@ impl TensorStructural for EagerBackend {
 
 impl TensorReduction for EagerBackend {
     delegate_tensor_backend_methods! {
-        fn reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
@@ -794,10 +791,8 @@ impl TensorReduction for EagerBackend {
     // method and rejected views. Dispatching a view to the concrete backend
     // would widen the accepted input surface, so reproduce the old default.
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        self.reduce_sum(
-            tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
-            axes,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+        dispatch!(self, reduce_sum_read(TensorRead::from_tensor(&input), axes))
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {

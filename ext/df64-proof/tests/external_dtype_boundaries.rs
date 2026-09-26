@@ -40,14 +40,14 @@ fn a_reduction_refuses_a_caller_owned_payload() {
     // A reduction over no axes is the identity for every scalar, so it returns the
     // caller's value unchanged rather than rejecting it.
     let identity = backend
-        .reduce_sum(&values, &[])
+        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&values), &[]))
         .expect("sum over no axes is the identity");
     assert_eq!(identity.dtype(), external_dtype());
 
     // A reduction that actually computes something has no CPU implementation for a
     // caller-owned payload and says so.
     let error = backend
-        .reduce_sum(&values, &[0])
+        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&values), &[0]))
         .expect_err("no CPU reduction exists for a caller-owned payload");
     assert!(
         error.to_string().contains("external") || error.to_string().contains("unsupported"),
@@ -97,7 +97,9 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
             let tensor = Tensor::from_vec_col_major(vec![2], $values).expect("shape matches data");
             assert_eq!(
                 backend
-                    .reduce_sum(&tensor, &[0])
+                    .with_backend_session(
+                        |__s| __s.reduce_sum_read(TensorRead::from_tensor(&tensor), &[0])
+                    )
                     .expect("sum")
                     .as_slice::<$ty>()
                     .expect("slice"),

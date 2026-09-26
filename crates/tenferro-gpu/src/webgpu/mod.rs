@@ -1119,10 +1119,6 @@ impl TensorViewCanonicalization<f32, tenferro_tensor::DynRank> for WebGpuBackend
 }
 
 impl TensorReduction for WebGpuBackend {
-    fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reduce_sum")
-    }
-
     fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
         unsupported!("webgpu_reduce_prod")
     }

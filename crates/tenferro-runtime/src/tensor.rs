@@ -29,7 +29,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn reduce_sum(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.reduce_sum(self, axes)
+        session.reduce_sum_read(TensorRead::from_tensor(self), axes)
     }
 
     fn convert(&self, to: DType, session: &mut dyn BackendSession) -> Result<Tensor> {

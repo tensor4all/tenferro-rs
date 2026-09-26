@@ -19,7 +19,7 @@ use tenferro_cpu::{
 use tenferro_tensor::{
     BackendSessionHost, ContractionScalar, CpuDomainId, DType, DotGeneralAccumulation,
     DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorDot, TensorIndexing, TensorRead,
-    TensorReduction, TensorWrite,
+    TensorWrite,
 };
 
 struct CountingAllocator;
@@ -364,7 +364,9 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
             })
             .unwrap();
         backend.reclaim_buffer(output);
-        let output = backend.reduce_sum(&matrix, &[0]).unwrap();
+        let output = backend
+            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&matrix), &[0]))
+            .unwrap();
         backend.reclaim_buffer(output);
         let output = backend.slice(&matrix, &slice).unwrap();
         backend.reclaim_buffer(output);
@@ -388,7 +390,11 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
     );
     let reduction = count_repeated(
         || {
-            let output = backend.reduce_sum(&matrix, &[0]).unwrap();
+            let output = backend
+                .with_backend_session(|__s| {
+                    __s.reduce_sum_read(TensorRead::from_tensor(&matrix), &[0])
+                })
+                .unwrap();
             backend.reclaim_buffer(output);
         },
         ITERATIONS,

@@ -476,12 +476,6 @@ impl TensorStructural for CpuExecSession<'_> {
 
 impl TensorReduction for CpuExecSession<'_> {
     // Reduction
-    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, _| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_sum(input, axes, &exec_context)
-        })
-    }
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         self.run_native_fresh_with_context(|context, buffers| {

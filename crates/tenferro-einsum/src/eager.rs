@@ -436,7 +436,7 @@ fn reduce_tensor<'a>(
         .map(|(_, label)| *label)
         .collect();
     let operand_tensor = operand.tensor_owned(exec)?;
-    let tensor = exec.reduce_sum(&operand_tensor, &reduce_axes)?;
+    let tensor = exec.reduce_sum_read(TensorRead::from_tensor(&operand_tensor), &reduce_axes)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
         tensor: TensorValue::Owned(tensor),

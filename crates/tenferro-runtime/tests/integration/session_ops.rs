@@ -1324,7 +1324,6 @@ macro_rules! panic_reduction {
     ($ty:ident) => {
         impl TensorReduction for $ty {
             panic_backend_methods! {
-                reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
@@ -1333,10 +1332,9 @@ macro_rules! panic_reduction {
             // The previous read-half default delegated owned tensors to the
             // one-shot method and rejected views. Reproduce it explicitly.
             fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-                self.reduce_sum(
-                    tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
-                    axes,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+                let _ = axes;
+                panic!("reduce_sum should not be called in this test")
             }
 
             fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
@@ -1663,10 +1661,6 @@ impl TensorReduction for WrongDTypeSessionBackend {
         reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
         reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
         reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
-    }
-
-    fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> TensorResult {
-        Ok(wrong_dtype_tensor())
     }
 
     fn reduce_sum_read(&mut self, _input: TensorRead<'_>, _axes: &[usize]) -> TensorResult {

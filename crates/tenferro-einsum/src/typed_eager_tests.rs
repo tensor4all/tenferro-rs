@@ -370,7 +370,6 @@ impl TensorStructural for WrongDTypeBackend {
 
 impl TensorReduction for WrongDTypeBackend {
     panic_backend_methods! {
-        reduce_sum(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reduce_prod(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reduce_max(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reduce_min(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
@@ -383,10 +382,8 @@ impl TensorReduction for WrongDTypeBackend {
         input: TensorRead<'_>,
         axes: &[usize],
     ) -> tenferro_tensor::Result<Tensor> {
-        self.reduce_sum(
-            tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
-            axes,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+        CpuBackend::new().reduce_sum_read(TensorRead::from_tensor(&input), axes)
     }
 
     // The previous read-half default delegated owned tensors to the one-shot

@@ -574,7 +574,7 @@ fn bcgs2_append<B: BenchSession>(
         .concatenate(&[q, &appended_q], 1)
         .map_err(|error| error.to_string())?;
     let scalar = session
-        .reduce_sum(&projection, &[0, 1])
+        .reduce_sum_read(TensorRead::from_tensor(&projection), &[0, 1])
         .map_err(|error| error.to_string())?;
     let zero = session
         .sub_read(

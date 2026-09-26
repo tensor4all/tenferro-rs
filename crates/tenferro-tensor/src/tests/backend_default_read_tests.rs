@@ -567,16 +567,11 @@ impl TensorStructural for DefaultReadBackend {
 }
 
 impl TensorReduction for DefaultReadBackend {
-    fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("reduce_sum", input)?;
+        let _axes = axes;
         self.calls.push("reduce_sum");
         Ok(marker())
-    }
-
-    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.reduce_sum(
-            crate::backend::read_owned_tensor("reduce_sum", input)?,
-            axes,
-        )
     }
 
     fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {

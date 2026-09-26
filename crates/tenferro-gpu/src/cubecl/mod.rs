@@ -6631,25 +6631,7 @@ impl TensorReduction for CudaBackend {
     // `TensorRead`; a view is materialized before the CUDA kernel runs.
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         let input = self.read_input(input)?;
-        self.reduce_sum(input.as_tensor(), axes)
-    }
-
-    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        let input = self.read_input(input)?;
-        self.reduce_prod(input.as_tensor(), axes)
-    }
-
-    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        let input = self.read_input(input)?;
-        self.reduce_max(input.as_tensor(), axes)
-    }
-
-    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        let input = self.read_input(input)?;
-        self.reduce_min(input.as_tensor(), axes)
-    }
-
-    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = input.as_tensor();
         let op = op_name(
             PrimitiveOpKind::ReduceSum,
             op_descriptor::GpuLaunchKind::Reduction,
@@ -6692,6 +6674,21 @@ impl TensorReduction for CudaBackend {
                 "an externally defined payload is not supported by this GPU operation",
             )),
         }
+    }
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.reduce_prod(input.as_tensor(), axes)
+    }
+
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.reduce_max(input.as_tensor(), axes)
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = self.read_input(input)?;
+        self.reduce_min(input.as_tensor(), axes)
     }
 
     fn reduce_sum_squares_read(

@@ -117,7 +117,6 @@ delegate!(TensorStructural {
 });
 
 delegate!(TensorReduction {
-    fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;

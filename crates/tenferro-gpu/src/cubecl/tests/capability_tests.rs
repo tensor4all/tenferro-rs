@@ -315,9 +315,9 @@ fn run_supported_case(
         PrimitiveOpKind::Log1p => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(x)))
         }),
-        PrimitiveOpKind::ReduceSum => {
-            assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_sum(x, axes))
-        }
+        PrimitiveOpKind::ReduceSum => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
+            b.with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(x), axes))
+        }),
         PrimitiveOpKind::ReduceSumSquares => {
             assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
                 b.reduce_sum_squares_read(TensorRead::from_tensor(x), axes)
@@ -593,7 +593,8 @@ fn run_cpu_reduction(
     axes: &[usize],
 ) -> Tensor {
     match op {
-        PrimitiveOpKind::ReduceSum => cpu.reduce_sum(input, axes),
+        PrimitiveOpKind::ReduceSum => cpu
+            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes)),
         PrimitiveOpKind::ReduceSumSquares => {
             cpu.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
         }

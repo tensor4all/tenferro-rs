@@ -724,7 +724,9 @@ fn test_backend_structural_ops_dispatch() {
     assert_eq!(triu_result.shape(), &[2, 2]);
     assert_eq!(get_f64(&triu_result, &[1, 0]), 0.0);
 
-    let summed = TensorReduction::reduce_sum(&mut backend, &a, &[0]).unwrap();
+    let summed = backend
+        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&a), &[0]))
+        .unwrap();
     assert_eq!(summed.shape(), &[2]);
     assert_eq!(get_f64(&summed, &[0]), 3.0);
     assert_eq!(get_f64(&summed, &[1]), 7.0);

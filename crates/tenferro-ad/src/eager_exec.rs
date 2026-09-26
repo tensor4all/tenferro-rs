@@ -810,7 +810,9 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Transpose { perm } => {
                 vec![exec.transpose_read(TensorRead::from_tensor(inputs[0]), perm)?]
             }
-            StdTensorOp::ReduceSum { axes, .. } => vec![exec.reduce_sum(inputs[0], axes)?],
+            StdTensorOp::ReduceSum { axes, .. } => {
+                vec![exec.reduce_sum_read(TensorRead::from_tensor(inputs[0]), axes)?]
+            }
             StdTensorOp::ReduceSumSquares { axes, .. } => {
                 vec![exec.reduce_sum_squares_read(
                     tenferro_tensor::TensorRead::from_tensor(inputs[0]),

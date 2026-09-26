@@ -386,7 +386,6 @@ macro_rules! panic_reduction {
     ($ty:ident) => {
         impl TensorReduction for $ty {
             panic_backend_methods! {
-                reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
@@ -395,10 +394,9 @@ macro_rules! panic_reduction {
             // The previous read-half default delegated owned tensors to the one-shot
             // method and rejected borrowed views. Reproduce it explicitly.
             fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-                self.reduce_sum(
-                    tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
-                    axes,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+                let _ = axes;
+                panic!("reduce_sum should not be called in this test")
             }
 
             // The previous read-half default delegated owned tensors to the one-shot
@@ -669,10 +667,6 @@ impl TensorAnalytic for SessionCountingBackend {
 }
 
 impl TensorReduction for SessionCountingBackend {
-    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> TensorResult {
-        self.inner.reduce_sum(input, axes)
-    }
-
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> TensorResult {
         self.inner.reduce_prod(input, axes)
     }
@@ -688,10 +682,9 @@ impl TensorReduction for SessionCountingBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-        self.reduce_sum(
-            tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?,
-            axes,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+        let _ = axes;
+        panic!("reduce_sum should not be called in this test")
     }
 
     // The previous read-half default delegated owned tensors to the one-shot

@@ -202,7 +202,9 @@ fn test_cuda_read_entry_points_accept_borrowed_views() {
         .unwrap();
     assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
 
-    let expected = cpu.reduce_sum(&host, &[1]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&host), &[1]))
+        .unwrap();
     let out = gpu.reduce_sum_read(view(), &[1]).unwrap();
     assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
 

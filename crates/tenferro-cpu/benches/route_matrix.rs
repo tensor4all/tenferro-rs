@@ -29,7 +29,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     BackendSessionHost, DType, DotGeneralConfig, Tensor, TensorDot, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural,
+    TensorStructural,
 };
 
 /// Operations per entry for the `marginal` arms.
@@ -130,7 +130,7 @@ fn dot_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -
 }
 
 fn reduce_oneshot(ops: &mut CpuBackend, a: &Tensor) -> Tensor {
-    ops.reduce_sum(a, &[0])
+    ops.with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(a), &[0]))
         .expect("oneshot reduce_sum should succeed")
 }
 
