@@ -16,6 +16,71 @@
 //! assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 //! # Ok::<(), tenferro_tensor::Error>(())
 //! ```
+//!
+//! The deleted one-shot spellings do not compile on the owner or on a session.
+//! Each fixture below fails for that reason and nothing else.
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+//! let _ = backend.add(&a, &b);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+//! let _ = backend.mul(&a, &b);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let _ = backend.exp(&a);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let _ = backend.reduce_sum(&a, &[0]);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+//! let _ = backend.transpose(&a, &[1, 0]);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::{DotGeneralConfig, Tensor};
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+//! let config = DotGeneralConfig {
+//!     lhs_contracting_dims: [1].as_slice().into(),
+//!     rhs_contracting_dims: [0].as_slice().into(),
+//!     lhs_batch_dims: [].as_slice().into(),
+//!     rhs_batch_dims: [].as_slice().into(),
+//! };
+//! let _ = backend.dot_general(&a, &a, &config);
+//! ```
 
 // `provider-inject` unit tests deliberately omit the broad default-backend
 // suite below because no fixture has registered its FFI symbols. That makes

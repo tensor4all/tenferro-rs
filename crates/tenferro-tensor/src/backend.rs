@@ -3899,6 +3899,23 @@ fn validate_compatible_placement(
 ///     })
 /// }
 /// ```
+///
+/// The operation one-shot spelling is gone; a session only answers to the read
+/// form:
+///
+/// ```compile_fail
+/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorBackend};
+///
+/// fn add_in_session<B: BackendSessionHost + TensorBackend>(
+///     backend: &mut B,
+///     a: &Tensor,
+///     b: &Tensor,
+/// ) {
+///     backend.with_backend_session(|exec| {
+///         let _ = exec.add(a, b);
+///     });
+/// }
+/// ```
 pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
     /// Build-local identity for backend-extension session capability dispatch.
     #[doc(hidden)]

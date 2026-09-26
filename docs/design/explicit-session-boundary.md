@@ -697,3 +697,61 @@ The remaining Phase-B work is unchanged: B3 (drop `BackendSession`,
 and keep only the session implementations), B4 (extension owner routes), B5
 (audit gate, `REPOSITORY_RULES.md` owner, batched repository gate), then the
 Phase-C paired benchmark against the recorded baseline.
+
+### B3 reconnaissance: what removing the owner supertraits surfaces
+
+Dropping `BackendSession`, `TensorBackendOps` and `BackendCachedDot` from
+`TensorBackend` was measured once, then reverted, so the next session starts from
+a known work list instead of rediscovering it.
+
+Inside `tenferro-tensor` the change is small and self-contained:
+
+* `impl<T> SessionCachedDot for T where T: TensorBackend` has to name `TensorDot`
+  itself once the blanket access through `TensorBackendOps` is gone;
+* `default_backend_session` and the default bodies of
+  `BackendSessionHost::with_backend_session[_cached]` are what make an owner
+  usable as a session. Removing them makes `with_backend_session` a required
+  method, which in turn forces the test fixtures that write
+  `impl BackendSessionHost for Fixture {}` to open a real session
+  (`with_session_entry_guard(|| f(self))`) instead of borrowing the owner's own
+  operation implementations.
+
+Everything else is in `tenferro-runtime`, which is the crate that still treats
+the owner as an operation host:
+
+* `exec/dispatch.rs` calls `dot_general_read` / `dot_general_with_conj_read` on a
+  `&mut B: TensorBackend`, so the FFI dispatch functions must take a session (or
+  open one) rather than the owner;
+* `HostExecution` (`TensorBackendOps + TensorDeviceTransfer`) and the host
+  dispatch table lose their blanket source, so `execute_host_dispatch` and its
+  `B: TensorBackend` re-exports in `exec.rs` have to become session-taking;
+* `BackendCachedDot::dot_general_read_cached` / `..._with_conj_read_cached` need
+  the cached trait bound back explicitly, or a session route;
+* `reclaim_exec_slot_with_backend` uses `TensorBuffer::reclaim_buffer` on the
+  owner, which was previously reachable through `TensorBackendOps`.
+
+The public boundary this reaches is `TensorBackend`-bounded generic API: 103
+sites in 21 files, of which the runtime dispatch layer, `tenferro-ad`'s eager
+execution, and the `ext/*` extension modules dominate. B3 therefore splits into
+(i) the supertrait trim plus the `tenferro-tensor` fixture changes above, (ii)
+the runtime dispatch/execution layer moved to session-taking, and (iii) the
+owner-side operation implementations and `BackendCachedDot` impls deleted once
+nothing calls them. (i) alone does not compile the workspace, so it must ship in
+the same commit as (ii); (iii) is what makes the removal observable.
+
+### B1 fail fixtures: the deleted spellings are pinned by `compile_fail` doctests
+
+The B1 contract file covers the surviving surface with trybuild pass fixtures.
+The *fail* side is pinned with rustdoc `compile_fail` examples instead of
+trybuild `.stderr` files, because `compile_fail` only requires compilation to
+fail and therefore does not depend on the compiler's span rendering or on any
+local build wrapper rewriting paths:
+
+* `tenferro_tensor::BackendSession` documents that `exec.add(a, b)` inside
+  `with_backend_session` no longer compiles;
+* `tenferro_cpu`'s crate docs pin the deleted owner spellings for one operation
+  per family (`add`, `mul`, `exp`, `reduce_sum`, `transpose`, `dot_general`).
+
+The fixtures still owed here are the ones whose targets B3 removes
+(`default_backend_session`, `BackendCachedDot`, the owner three-backend
+`add`/`add_read` split), and they land with that slice.
