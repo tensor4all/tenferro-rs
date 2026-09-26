@@ -777,10 +777,6 @@ impl TensorElementwise for WebGpuBackend {
         unsupported!("webgpu_abs")
     }
 
-    fn sign(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_sign")
-    }
-
     fn compare(
         &mut self,
         _lhs: &Tensor,

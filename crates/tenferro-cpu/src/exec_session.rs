@@ -392,7 +392,6 @@ impl TensorElementwise for CpuExecSession<'_> {
     delegate_with_pool_context!(rem_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::rem_read_with_pool);
     delegate_with_pool_context!(abs(input: &Tensor) => elementwise::abs_with_pool);
     delegate_with_pool_context!(abs_read(input: TensorRead<'_>) => elementwise::abs_read_with_pool);
-    delegate_with_pool_context!(sign(input: &Tensor) => elementwise::sign_with_pool);
     delegate_with_pool_context!(sign_read(input: TensorRead<'_>) => elementwise::sign_read_with_pool);
     delegate_with_pool_context!(maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::maximum_read_with_pool);
     delegate_with_pool_context!(minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::minimum_read_with_pool);

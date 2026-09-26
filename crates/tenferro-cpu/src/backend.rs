@@ -3049,12 +3049,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::sign_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
     fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool_context(|context, buffers| {
             elementwise::sign_read_with_pool(buffers, &context.strided_exec_context(), input)

@@ -78,7 +78,6 @@ delegate!(TensorElementwise {
     fn neg(input: &Tensor) -> crate::Result<Tensor>;
     fn conj(input: &Tensor) -> crate::Result<Tensor>;
     fn abs(input: &Tensor) -> crate::Result<Tensor>;
-    fn sign(input: &Tensor) -> crate::Result<Tensor>;
     fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
     fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
     fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;

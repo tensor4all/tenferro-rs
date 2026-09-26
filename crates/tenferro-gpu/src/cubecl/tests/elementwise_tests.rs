@@ -1750,8 +1750,12 @@ fn test_float_unary_special_values_match_cpu() {
             _ => panic!("expected matching F32 or F64 abs tensors"),
         }
 
-        let expected_sign = cpu.sign(&input).unwrap();
-        let gpu_sign = gpu.sign(&gpu_input).unwrap();
+        let expected_sign = cpu
+            .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+            .unwrap();
+        let gpu_sign = gpu
+            .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_input)))
+            .unwrap();
         let actual_sign = download(&gpu, &gpu_sign);
         match (actual_sign.dtype(), expected_sign.dtype()) {
             (DType::F32, DType::F32) => {
@@ -1808,8 +1812,12 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.sign(&signed).unwrap();
-    let gpu_out = gpu.sign(&gpu_signed).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&signed)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_signed)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -2105,8 +2113,12 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu.sign(lhs).unwrap();
-    let gpu_out = gpu.sign(&gpu_lhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(lhs)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_lhs)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 

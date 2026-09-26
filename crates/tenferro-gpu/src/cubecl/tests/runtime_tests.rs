@@ -8,7 +8,6 @@ use crate::cubecl::{
 };
 use crate::{Error, Tensor};
 use tenferro_tensor::backend::BackendSessionHost;
-use tenferro_tensor::TensorElementwise;
 use tenferro_tensor::TensorRead;
 
 #[cube(launch_unchecked)]
@@ -322,7 +321,9 @@ gpu_test!(test_complex_sign_is_scale_safe, {
     )
     .unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
-    let output = backend.sign(&input).unwrap();
+    let output = backend
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+        .unwrap();
     let actual = download_tensor(backend.runtime(), &output).unwrap();
     for (&value, expected) in actual.as_slice::<Complex64>().unwrap().iter().zip([
         Complex64::new(0.0, 0.0),
@@ -345,7 +346,9 @@ gpu_test!(test_complex_sign_is_scale_safe, {
     )
     .unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
-    let output = backend.sign(&input).unwrap();
+    let output = backend
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+        .unwrap();
     let actual = download_tensor(backend.runtime(), &output).unwrap();
     for (&value, expected) in actual.as_slice::<Complex32>().unwrap().iter().zip([
         Complex32::new(0.0, 0.0),

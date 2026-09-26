@@ -222,10 +222,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("abs"))
     }
 
-    fn sign(&mut self, _input: &Tensor) -> Result<Tensor> {
-        Err(unexpected("sign"))
-    }
-
     fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> Result<Tensor> {
         Err(unexpected("compare"))
     }
@@ -278,7 +274,8 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sign_read(&mut self, input: TensorRead<'_>) -> Result<Tensor> {
-        self.sign(tenferro_tensor::backend::read_owned_tensor("sign", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
+        Err(unexpected("sign"))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

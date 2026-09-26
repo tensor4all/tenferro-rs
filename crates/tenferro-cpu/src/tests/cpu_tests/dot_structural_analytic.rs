@@ -1,5 +1,6 @@
 use super::*;
 use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 #[test]
 fn test_dot_general_matmul() {
@@ -1238,7 +1239,9 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&abs, &[1]), 2.0);
     assert_eq!(get_f64(&abs, &[2]), 9.0);
 
-    let sign = backend.sign(&lhs).unwrap();
+    let sign = backend
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&lhs)))
+        .unwrap();
     assert_eq!(get_f64(&sign, &[0]), 1.0);
     assert_eq!(get_f64(&sign, &[1]), -1.0);
     assert_eq!(get_f64(&sign, &[2]), 1.0);
@@ -1335,7 +1338,9 @@ fn test_tier2_elementwise_ops_complex() {
     assert_eq!(get_f64(&abs, &[0]), 5.0);
     assert_eq!(get_f64(&abs, &[1]), 0.0);
 
-    let sign = backend.sign(&input).unwrap();
+    let sign = backend
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+        .unwrap();
     assert_c64_close(get_c64(&sign, &[0]), Complex64::new(0.6, 0.8));
     assert_c64_close(get_c64(&sign, &[1]), Complex64::new(0.0, 0.0));
 

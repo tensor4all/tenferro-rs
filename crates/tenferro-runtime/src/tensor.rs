@@ -79,7 +79,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn sign(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.sign(self)
+        session.sign_read(TensorRead::from_tensor(self))
     }
 
     fn conj(&self, session: &mut dyn BackendSession) -> Result<Tensor> {

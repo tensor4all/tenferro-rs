@@ -4989,7 +4989,15 @@ impl TensorElementwise for CudaBackend {
 
     fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         let input = self.read_input(input)?;
-        self.sign(input.as_tensor())
+        let input = input.as_tensor();
+        dispatch::dispatch_unary_float_complex_int!(
+            self,
+            input,
+            PrimitiveOpKind::Sign,
+            sign_float,
+            sign_int,
+            sign_complex
+        )
     }
 
     fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5425,17 +5433,6 @@ impl TensorElementwise for CudaBackend {
                 "an externally defined payload is not supported by this GPU operation",
             )),
         }
-    }
-
-    fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_complex_int!(
-            self,
-            input,
-            PrimitiveOpKind::Sign,
-            sign_float,
-            sign_int,
-            sign_complex
-        )
     }
 
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {

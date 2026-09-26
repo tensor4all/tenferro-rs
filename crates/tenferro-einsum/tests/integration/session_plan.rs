@@ -180,7 +180,6 @@ macro_rules! panic_elementwise {
             panic_backend_methods! {
                 neg(input: &Tensor) -> TensorResult;
                 abs(input: &Tensor) -> TensorResult;
-                sign(input: &Tensor) -> TensorResult;
                 compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
                 clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult;
             }
@@ -238,7 +237,8 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn sign_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.sign(tenferro_tensor::backend::read_owned_tensor("sign", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
+                panic!("sign should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -487,10 +487,6 @@ impl TensorElementwise for SessionCountingBackend {
         self.inner.abs(input)
     }
 
-    fn sign(&mut self, input: &Tensor) -> TensorResult {
-        self.inner.sign(input)
-    }
-
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult {
         self.inner.compare(lhs, rhs, dir)
     }
@@ -555,7 +551,8 @@ impl TensorElementwise for SessionCountingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sign_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-        self.sign(tenferro_tensor::backend::read_owned_tensor("sign", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
+        panic!("sign should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

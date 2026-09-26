@@ -203,11 +203,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn sign(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("sign");
-        Ok(marker())
-    }
-
     fn compare(
         &mut self,
         _lhs: &Tensor,
@@ -285,7 +280,9 @@ impl TensorElementwise for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.sign(crate::backend::read_owned_tensor("sign", input)?)
+        let _ = crate::backend::read_owned_tensor("sign", input)?;
+        self.calls.push("sign");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
