@@ -1253,7 +1253,81 @@ where
             caches: extension_caches,
         };
 
-        if matches!(output_mode, RuntimeOutputMode::Value)
+        // One session per instruction. The terminal-value probe, the execution and
+        // the last-use reclaim all share a single entry; opening one each cost two
+        // extra session constructions per instruction (issue #1929 measurement: a
+        // two-instruction compiled graph paid ~+14 us).
+        let value_mode = matches!(output_mode, RuntimeOutputMode::Value);
+        if crate::exec::is_host_instruction(instruction) {
+            backend.with_backend_session(|exec| -> crate::Result<()> {
+                if value_mode
+                    && crate::exec::try_execute_terminal_value_instruction(
+                        exec,
+                        slots,
+                        instruction,
+                        terminal_slots,
+                    )?
+                {
+                    crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                    return Ok(());
+                }
+                crate::exec::execute_host_instruction_exec(exec, slots, instruction)?;
+                crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                Ok(())
+            })?;
+        } else if crate::exec::is_ffi_instruction(instruction) {
+            if crate::exec::needs_owner_extension_fallback(instruction, Some(&extension_dispatch)) {
+                // The extension entry forms its own session; no operation runs
+                // on the owner. Its probe and reclaim cannot join that session,
+                // so this path keeps its own entries.
+                if !(value_mode
+                    && crate::exec::instruction_may_be_terminal_value(instruction, terminal_slots)
+                    && backend.with_backend_session(|exec| {
+                        crate::exec::try_execute_terminal_value_instruction(
+                            exec,
+                            slots,
+                            instruction,
+                            terminal_slots,
+                        )
+                    })?)
+                {
+                    crate::exec::execute_owner_extension_fallback(
+                        backend,
+                        slots,
+                        instruction,
+                        Some(&mut extension_dispatch),
+                    )?;
+                }
+                crate::exec::reclaim_last_use_inputs_via_session(backend, slots, instruction);
+            } else {
+                backend.with_backend_session_cached(
+                    backend_cache,
+                    |exec| -> crate::Result<()> {
+                        if value_mode
+                            && crate::exec::try_execute_terminal_value_instruction(
+                                exec,
+                                slots,
+                                instruction,
+                                terminal_slots,
+                            )?
+                        {
+                            crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                            return Ok(());
+                        }
+                        crate::exec::execute_ffi_instruction_exec(
+                            exec,
+                            slots,
+                            instruction,
+                            Some(instruction_index),
+                            Some(&mut extension_dispatch),
+                        )?;
+                        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                        Ok(())
+                    },
+                )?;
+            }
+        } else if value_mode
+            && crate::exec::instruction_may_be_terminal_value(instruction, terminal_slots)
             && backend.with_backend_session(|exec| {
                 crate::exec::try_execute_terminal_value_instruction(
                     exec,
@@ -1264,38 +1338,15 @@ where
             })?
         {
             // Already handled as a metadata-only TensorValue.
-        } else if crate::exec::is_host_instruction(instruction) {
-            backend.with_backend_session(|exec| {
-                crate::exec::execute_host_instruction_exec(exec, slots, instruction)
-            })?;
-        } else if crate::exec::is_ffi_instruction(instruction) {
-            if crate::exec::needs_owner_extension_fallback(instruction, Some(&extension_dispatch)) {
-                // The extension entry forms its own session; no operation runs
-                // on the owner.
-                crate::exec::execute_owner_extension_fallback(
-                    backend,
-                    slots,
-                    instruction,
-                    Some(&mut extension_dispatch),
-                )?;
-            } else {
-                backend.with_backend_session_cached(backend_cache, |exec| {
-                    crate::exec::execute_ffi_instruction_exec(
-                        exec,
-                        slots,
-                        instruction,
-                        Some(instruction_index),
-                        Some(&mut extension_dispatch),
-                    )
-                })?;
-            }
+            crate::exec::reclaim_last_use_inputs_via_session(backend, slots, instruction);
         } else {
-            let result = backend.with_backend_session(|exec| {
-                crate::exec::execute_backend_op(exec, slots, instruction)
+            backend.with_backend_session(|exec| -> crate::Result<()> {
+                let result = crate::exec::execute_backend_op(exec, slots, instruction)?;
+                slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
+                crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                Ok(())
             })?;
-            slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
         }
-        crate::exec::reclaim_last_use_inputs_via_session(backend, slots, instruction);
         Ok(())
     }
 

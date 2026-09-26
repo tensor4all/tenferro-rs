@@ -440,18 +440,31 @@ pub(crate) fn terminal_output_slots(program: &ExecProgram) -> Vec<bool> {
     terminal
 }
 
+/// Session-free precondition for [`try_execute_terminal_value_instruction`].
+///
+/// Only an instruction whose single output is a terminal slot can be satisfied
+/// as a lazy view, so a caller can skip the probe *and its session entry* when
+/// this is false. Reads no backend state on purpose: opening a session just to
+/// learn that an instruction is not terminal cost one entry per instruction
+/// (issue #1929 measurement).
+pub(crate) fn instruction_may_be_terminal_value(
+    inst: &ExecInstruction,
+    terminal_slots: &[bool],
+) -> bool {
+    inst.output_slots.len() == 1
+        && terminal_slots
+            .get(inst.output_slots[0])
+            .copied()
+            .unwrap_or(false)
+}
+
 pub(crate) fn try_execute_terminal_value_instruction<'input>(
     exec: &mut dyn BackendSession,
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
     terminal_slots: &[bool],
 ) -> Result<bool> {
-    if inst.output_slots.len() != 1
-        || !terminal_slots
-            .get(inst.output_slots[0])
-            .copied()
-            .unwrap_or(false)
-    {
+    if !instruction_may_be_terminal_value(inst, terminal_slots) {
         return Ok(false);
     }
 

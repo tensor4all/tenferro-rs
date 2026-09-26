@@ -9,8 +9,9 @@ use crate::exec::{
     eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace,
     eval_exec_ir_unsegmented_slots_with_cache_and_workspace, execute_backend_op,
     execute_ffi_instruction_exec, execute_host_instruction_exec, execute_owner_extension_fallback,
-    get_read, has_session_capable_extension, initialize_exec_slots_in, is_ffi_instruction,
-    is_host_instruction, is_session_compatible_instruction, reclaim_last_use_inputs_exec,
+    get_read, has_session_capable_extension, initialize_exec_slots_in,
+    instruction_may_be_terminal_value, is_ffi_instruction, is_host_instruction,
+    is_session_compatible_instruction, reclaim_last_use_inputs_exec,
     reclaim_last_use_inputs_via_session, resolve_tensor_shape_exprs, terminal_output_slots,
     try_execute_terminal_value_instruction, validate_exec_program, ExecInstruction, ExecOp,
     ExecProgram, ExecSlot, ExtensionExecutionDispatch,
@@ -405,17 +406,34 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                         "incompatible execution segment was not an FFI instruction",
                     ));
                 };
-                if !backend.with_backend_session(|exec| {
-                    try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
-                })? {
+                // Only a terminal-slot instruction can be satisfied as a lazy
+                // view, so the probe's session is skipped when it cannot
+                // succeed; when it does, the reclaim shares that same entry.
+                let handled = if instruction_may_be_terminal_value(inst, &terminal_slots) {
+                    backend.with_backend_session(|exec| -> crate::error::Result<bool> {
+                        let handled = try_execute_terminal_value_instruction(
+                            exec,
+                            slots,
+                            inst,
+                            &terminal_slots,
+                        )?;
+                        if handled {
+                            reclaim_last_use_inputs_exec(slots, inst, exec);
+                        }
+                        Ok(handled)
+                    })?
+                } else {
+                    false
+                };
+                if !handled {
                     execute_owner_extension_fallback(
                         backend,
                         slots,
                         inst,
                         extension_dispatch.as_deref_mut(),
                     )?;
+                    reclaim_last_use_inputs_via_session(backend, slots, inst);
                 }
-                reclaim_last_use_inputs_via_session(backend, slots, inst);
                 inst_idx += 1;
                 segment_idx += 1;
             }
@@ -577,17 +595,31 @@ fn eval_exec_segmented_session_regions_slot_values_with_workspace<
                         "incompatible execution segment was not an FFI instruction",
                     ));
                 };
-                if !backend.with_backend_session(|exec| {
-                    try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
-                })? {
+                let handled = if instruction_may_be_terminal_value(inst, &terminal_slots) {
+                    backend.with_backend_session(|exec| -> crate::error::Result<bool> {
+                        let handled = try_execute_terminal_value_instruction(
+                            exec,
+                            slots,
+                            inst,
+                            &terminal_slots,
+                        )?;
+                        if handled {
+                            reclaim_last_use_inputs_exec(slots, inst, exec);
+                        }
+                        Ok(handled)
+                    })?
+                } else {
+                    false
+                };
+                if !handled {
                     execute_owner_extension_fallback(
                         backend,
                         slots,
                         inst,
                         extension_dispatch.as_deref_mut(),
                     )?;
+                    reclaim_last_use_inputs_via_session(backend, slots, inst);
                 }
-                reclaim_last_use_inputs_via_session(backend, slots, inst);
                 segment_idx += 1;
                 inst_idx += 1;
             }
