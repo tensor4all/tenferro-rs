@@ -559,7 +559,27 @@ after the fixes it surfaced, which are worth remembering:
 Run it with `RUSTC_WRAPPER=""` locally: the kache wrapper's path remapping breaks
 trybuild `.stderr` comparisons, which is also why the pre-existing
 `tenferro-ad::eager_backend_capability_contract` fixture mismatches here while the
-`tenferro-gpu` session contracts pass.
+`tenferro-gpu` session contracts pass. That fixture mismatch is span-only: the
+same `E0432` is reported, with a wider underline than the recorded `.stderr`, so it
+is a rustc-rendering difference on this toolchain rather than a behaviour change.
+
+### Phase-B closing state
+
+With the CUDA body move in, Phase B is closed on this host:
+
+| Check | Result |
+| --- | --- |
+| `scripts/check-pr-fast.sh --no-fetch --coverage-reviewed --test 'cargo test -p tenferro-gpu --features cuda --test integration'` | pass (`fast PR checks passed`) |
+| `cargo check --workspace --all-targets` | 0 error, 0 warning |
+| `cargo check -p tenferro-gpu --features cuda --all-targets` | 0 error, 0 warning |
+| `cargo test --workspace --no-fail-fast` | all targets pass except the span-only `tenferro-ad` trybuild fixture above |
+| `cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml` | 5 + 3 passed |
+| `scripts/audit-session-entry.py --check` | pass, 16 entries, no allowlist change |
+| `scripts/repository-rules-review.py --dry-run` | pass |
+
+What Phase B does not include is evidence that the refactor is
+performance-neutral. That is Phase C, which is still open and needs the quiet
+window and a CUDA host described below.
 
 ### Phase-C pre-flight (tooling verified, measurement pending)
 
