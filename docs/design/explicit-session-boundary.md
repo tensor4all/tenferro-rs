@@ -548,8 +548,55 @@ two expected failures that prove the fail-closed behaviour:
 So the harness, the capture/comparison pair and the thresholds work; what remains
 for Phase C is the measurement itself, which needs the documented quiet window
 (load below the recorded threshold with no live `cargo`/`rustc`), plus a CUDA host
-for the GPU target. On this host the load has been 18-27 with compiler processes
-running throughout the session, so the run was not attempted.
+for the GPU target.
+
+#### Harness identity bug found during the first candidate run
+
+The first candidate run compared a route-matrix case against a route the
+candidate no longer has: `route_matrix` still registered `oneshot` arms for
+`dot_general` and `reduce_sum`, whose one-shot spellings Step 2 deleted. The arms
+therefore timed the session route under a before-route name and the comparator
+reported a false `REGRESSION` (`reduce_sum_f64/oneshot/single/65536`, +10.1%)
+against the owner-route baseline. The arms and their helpers were removed, which
+is what the baseline's deleted-route predicate expects; `slice` and `cast` keep
+their `oneshot` arms because those spellings survive.
+
+#### Measurement attempt on a shared host (diagnostic only)
+
+A candidate campaign was then attempted on this host: ten benchmark runs over
+three passes for `route_matrix`, `session_chain`, `eager_dispatch_baseline`,
+`eager_backward_shape_churn`, `elementwise_fusion` and `linalg_vjp_gate`, with the
+campaign's pinned criterion settings (`--warm-up-time 2 --measurement-time 5
+--sample-size 100`, which are at or below criterion's own defaults) and
+`taskset -c 0` under the 1T environment. The host was **not** quiet: a foreign
+`cargo` process was live throughout and the load average stayed near 6.8.
+
+Result as a diagnostic: the `session_chain` cases showed no reproducible
+deviation above +5% across the three passes, and of the 34 `route_matrix` cases
+two exceeded +5%, both with a pass-to-pass spread (12.2% and 17.7%) larger than
+their deviation (+9.5% and +5.4%). The single-pass `session_chain` deviations of
++5.5% to +14.5% seen in the first attempt did not reproduce.
+
+Those numbers are **not** a Phase-C certificate and must not be reported as one:
+on a shared host with concurrent compiler processes, the absence of a
+reproducible deviation is not evidence that no regression exists. The same
+qualification applies to the tempting explanation that the first attempt's
+deviations were CPU frequency or thermal drift (the baseline is a recorded value
+while the candidate is measured under long sustained single-core load) — that
+hypothesis is consistent with the data but cannot be confirmed on a loaded host.
+
+Phase C certification therefore remains open and requires all of:
+
+* the documented quiet window, with the effective thread count recorded;
+* three alternating baseline/candidate pairs, where the baseline side is
+  re-measured from the pinned baseline commit with this harness rather than
+  compared against the recorded numbers across a loaded window;
+* the `tenferro-gpu|route_matrix_gpu` target on a CUDA host, which this host
+  cannot run at all.
+
+The criterion settings stay at the pinned defaults for certification; cheaper
+settings are acceptable for a diagnostic pass only, because they change the
+confidence intervals the comparator uses to separate `NOISY` from `REGRESSION`.
 
 ## Measurement protocol
 
