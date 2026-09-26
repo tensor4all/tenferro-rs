@@ -1202,6 +1202,11 @@ local build wrapper rewriting paths:
 * `tenferro_cpu`'s crate docs pin the deleted owner spellings for one operation
   per family (`add`, `mul`, `exp`, `reduce_sum`, `transpose`, `dot_general`).
 
-The fixtures still owed here are the ones whose targets B3 removes
-(`default_backend_session`, `BackendCachedDot`, the owner three-backend
-`add`/`add_read` split), and they land with that slice.
+The fixtures whose targets B3 removes have landed with that slice:
+`tenferro_tensor::BackendSessionHost` pins the deleted
+`default_backend_session` factory, and `tenferro_cpu`'s crate docs pin the
+owner-level `BackendCachedDot` bound in addition to the one-shot spellings. The
+positive counterpart is the `pass` fixture for the cache-aware session route
+(`with_backend_session_cached` plus a session `_cached` contraction), which
+still compiles, so the two sides together pin that the cached route moved from
+the owner to the session rather than disappearing.

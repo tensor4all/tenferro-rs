@@ -3781,8 +3781,8 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
 
 /// Backend execution-session entry points.
 ///
-/// `with_backend_session` is the canonical user entry; one-shot concrete ops
-/// delegate to the session form. `with_backend_session_cached` is the
+/// `with_backend_session` is the canonical user entry and the only way an
+/// operation is reached from a backend; `with_backend_session_cached` is the
 /// runtime-cache-aware entry used by the runtime layer.
 ///
 /// # Examples
@@ -3791,6 +3791,13 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
 /// use tenferro_tensor::BackendSessionHost;
 ///
 /// fn accepts_session_host<B: BackendSessionHost>(_backend: &mut B) {}
+/// ```
+///
+/// The session factory this trait's default bodies used to call was deleted
+/// with the one-shot spellings, so naming it does not compile:
+///
+/// ```compile_fail
+/// use tenferro_tensor::default_backend_session;
 /// ```
 pub trait BackendSessionHost: BackendRuntimeCache {
     /// Open one backend session and run `f` inside it.

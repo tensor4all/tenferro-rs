@@ -26,11 +26,17 @@
 //! is what must survive. Adding the trait imports would produce unused-import
 //! warnings and would pin nothing extra.
 //!
-//! Sequencing note. A `compile_fail` fixture for the deleted one-shot spelling
-//! cannot be registered here yet: `trybuild` requires it to fail at the time it
-//! is registered, and the one-shot spelling is still present. The `fail` set is
-//! therefore introduced when the deletion lands, at which point these `pass`
-//! fixtures are the counterweight proving the surviving surface did not change.
+//! Sequencing note. The deletion has landed, and the *fail* side is pinned by
+//! rustdoc `compile_fail` examples rather than by trybuild `.stderr` fixtures:
+//! `BackendSession::add` in this crate's dependency, the owner one-shot
+//! spellings and the owner `BackendCachedDot` bound in `tenferro-cpu`, and the
+//! deleted `default_backend_session` factory in `tenferro-tensor`. A
+//! `compile_fail` example only requires compilation to fail, so it does not
+//! depend on the compiler's span rendering or on a local build wrapper
+//! rewriting paths, which is what makes trybuild `.stderr` comparisons fragile
+//! here. The `pass` fixtures in this file remain the counterweight proving the
+//! surviving surface did not change, which is why
+//! `session_surface_pass_contract` drives only the `pass` directory.
 
 use std::fs;
 use std::path::{Path, PathBuf};

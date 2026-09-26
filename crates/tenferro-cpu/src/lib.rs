@@ -81,6 +81,19 @@
 //! };
 //! let _ = backend.dot_general(&a, &a, &config);
 //! ```
+//!
+//! The owner no longer implements the cache-aware contraction entry, so an
+//! owner-level `BackendCachedDot` bound does not hold either:
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::BackendCachedDot;
+//!
+//! fn requires_cached_dot<B: BackendCachedDot>(_backend: &mut B) {}
+//!
+//! let mut backend = CpuBackend::new();
+//! requires_cached_dot(&mut backend);
+//! ```
 
 // `provider-inject` unit tests deliberately omit the broad default-backend
 // suite below because no fixture has registered its FFI symbols. That makes
