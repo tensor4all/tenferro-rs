@@ -90,6 +90,7 @@ _GPU_CONTROL_FILES = frozenset(
         "scripts/ci/recover_runpod_pr.py",
         "scripts/ci/find_archive_artifact.py",
         "scripts/ci/gpu_test_partition.py",
+        "scripts/ci/gpu_nextest.toml",
         "scripts/ci/cuda_test_partition.tsv",
         "scripts/ci/pjrt_test_partition.tsv",
         "scripts/ci/install_cuda_toolkit_hosted.sh",
