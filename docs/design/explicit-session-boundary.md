@@ -864,6 +864,46 @@ The workable order is:
   `BackendCachedDot` impls and the GPU `delegate!` shims, then shrink
   `scripts/session-entry-allowlist.json`.
 
+### B4 landed: the owner entry now forms the session
+
+`8468debd5` made `execute_reads` optional in `define_extension_runtime!`. A
+family that registers the session route (`execute_in_session` +
+`session_supported`) now gets an owner entry that calls
+`with_backend_session` itself and hands the extension nothing but
+`&mut dyn BackendSession`; supplying both routes, or neither, is a compile
+error. The einsum, linalg and fft owner routes (`execute_*_reads_owner`,
+`execute_einsum_extension_reads`) are deleted, the linalg session-context
+variant that only the owner route used is deleted, and the three tests that
+drove the owner routes now drive the session route. No operation runs on the
+owner through the extension path any more.
+
+That removes the reason B3 could not start. What remains for B3(ii) is a
+mechanical, now-safe conversion of the runtime dispatch layer, with these exact
+call sites:
+
+| Site | Today | After |
+|---|---|---|
+| `segment.rs:287`, `:390`, `:495`, `:579` | `execute_ffi_instruction_cached(backend, ..)` | session run, or the extension fallback |
+| `segment.rs:296`, `:301`, `:400`, `:411`, `:504`, `:589` | `reclaim_last_use_inputs_backend(slots, inst, backend)` | `reclaim_last_use_inputs_exec` inside the run |
+| `segment.rs:300`, `:409` | `execute_host_instruction(backend, ..)` | `execute_host_instruction_exec` inside the run |
+| `exec.rs:649`–`:663`, `:694`–`:710` | the same pair in the unsegmented evaluators | the same run structure |
+| `exec.rs:873` | `execute_ffi_instruction(backend, ..)` fallback | deleted with the owner wrapper |
+| `runtime/execution.rs:1270`–`:1287` | owner host/ffi/reclaim | the run structure |
+
+Two things to keep in mind while doing it:
+
+* the fallback instruction is always an extension op: `is_session_compatible_instruction`
+  returns `true` for non-FFI ops and for `DotGeneral`/`DotGeneralWithConj`
+  (`is_exec_session_ffi_op`), so a `false` result can only come from an
+  extension whose `supports_session()` is false. The fallback therefore calls
+  `execute_extension_instruction` and can report an internal error for anything
+  else, and it needs no `BackendCachedDot` bound.
+* the unsegmented evaluators execute instruction-by-instruction, so the
+  conversion must group each maximal run of session-compatible instructions into
+  *one* session (`with_backend_session_cached`) and run the fallback outside it.
+  Opening a session per instruction would be a needless change in session-entry
+  count for the very path the Phase-C baseline measures.
+
 ### B1 fail fixtures: the deleted spellings are pinned by `compile_fail` doctests
 
 The B1 contract file covers the surviving surface with trybuild pass fixtures.

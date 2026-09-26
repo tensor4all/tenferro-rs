@@ -280,7 +280,15 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
         let outputs = backend
             .with_backend_session(|session| {
                 let mut ctx = ExtensionExecutionContext::new(session, &mut caches);
-                execute_einsum_extension_session_reads(&op, &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&mid), TensorRead::from_tensor(&rhs)], &mut ctx)
+                execute_einsum_extension_session_reads(
+                    &op,
+                    &[
+                        TensorRead::from_tensor(&lhs),
+                        TensorRead::from_tensor(&mid),
+                        TensorRead::from_tensor(&rhs),
+                    ],
+                    &mut ctx,
+                )
             })
             .unwrap();
 
@@ -296,7 +304,15 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
     let outputs = backend
         .with_backend_session(|session| {
             let mut ctx = ExtensionExecutionContext::new(session, &mut caches);
-            execute_einsum_extension_session_reads(&op, &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&mid), TensorRead::from_tensor(&rhs)], &mut ctx)
+            execute_einsum_extension_session_reads(
+                &op,
+                &[
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&mid),
+                    TensorRead::from_tensor(&rhs),
+                ],
+                &mut ctx,
+            )
         })
         .unwrap();
     assert_einsum_matches_matmul_chain(&outputs[0], &lhs, &mid, &rhs);

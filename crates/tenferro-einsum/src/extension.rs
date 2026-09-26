@@ -28,9 +28,7 @@ use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 use tenferro_runtime::program::{
     CoreSemanticOp, ProgramValue, ProgramValueMetadata, SemanticProgramBuilder,
 };
-use tenferro_tensor::{
-    BackendSession, DType, Error as TensorError, Tensor, TensorRead,
-};
+use tenferro_tensor::{BackendSession, DType, Error as TensorError, Tensor, TensorRead};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{

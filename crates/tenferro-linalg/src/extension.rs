@@ -6,7 +6,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{ExtensionOp};
+use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{BackendSession, DType, Error, ErrorKind, Tensor, TensorBackend, TensorRead};
 
 #[cfg(feature = "cuda")]
