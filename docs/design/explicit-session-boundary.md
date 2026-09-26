@@ -352,6 +352,42 @@ entries that B3 removes (`install_with_pool_context` in 27 functions,
 `run_backend_session_cached` in 14). B3's commits must shrink this file, and any
 entry that reappears outside the allowlist fails the local gate.
 
+### B3(iii) blocks on an acceptance-surface decision
+
+A third attempt deleted the eight CPU owner implementations and migrated the
+resulting 317 errors (about 140 wrapped mechanically, the cached family moved to
+`with_backend_session_cached`, and the contract tests retargeted to
+`exec_session.rs`). The CPU crate's own suite passed, and the session-entry
+allowlist shrank from 76 entries to 17, which is the shape B3(iii) is supposed to
+have.
+
+It then failed in `tenferro-ad`, and the reason is a design question rather than
+a migration gap:
+
+* `eager::tests::untracked_nary_ops_consume_lazy_views_without_materializing_inputs`
+  reduces a lazy view and now sees `Unsupported { op: "reduce_sum", message:
+  "backend does not accept borrowed tensor views at this execution boundary" }`.
+  The ad layer reached the CPU *owner*, whose read half materializes a view; the
+  CPU *session* deliberately rejects one instead. Both behaviours are documented
+  (the CPU session's read halves reject borrowed views, the owner's accepted
+  them), and Step-1's contract test pins the session behaviour.
+* `eager::tests::eager_backend_session_identity_projects_to_owner` compares
+  session identities and now sees the same id on both sides, because the ad
+  layer's arrangement assumes the owner is its own session.
+
+So "one implementation set on the session" is not behaviour-preserving for
+consumers that relied on the owner's wider acceptance: either the session's
+accepted input surface is widened to the owner's (changing the session contract
+that Step 1 pinned and that the session-route benchmark measures), or those
+consumers materialize explicitly before the call (a real change in the ad layer).
+That choice belongs to the issue, not to a migration slice, so the attempt was
+reverted and B3(iii) waits on the decision.
+
+The rest of the CPU-side work is then mechanical: the eight `impl ... for
+CpuBackend` blocks, the now-dead `CpuBackendSessionMarker` and
+`install_with_indexed_pool_context*`, the source-text contract retargets to
+`exec_session.rs`, and the allowlist re-bless.
+
 ## Measurement protocol
 
 Removing syntax does not by itself save time; #1926 requires measurement
