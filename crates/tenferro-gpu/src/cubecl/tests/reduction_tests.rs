@@ -1,5 +1,5 @@
 // Run with: cargo test --features cuda -- --ignored
-use tenferro_tensor::{DType, TensorRead, TensorReduction};
+use tenferro_tensor::{DType, TensorRead};
 
 use super::{
     assert_cuda_unsupported_dtype, assert_tensor_close, cpu_backend, download, gpu_backend,
@@ -164,7 +164,9 @@ fn test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes() {
                 })
                 .unwrap();
             let gpu_output = gpu
-                .reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), axes)
+                .with_backend_session(|__s| {
+                    __s.reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), axes)
+                })
                 .unwrap();
             assert_tensor_close(&download(&gpu, &gpu_output), &expected, 1e-5);
         }
@@ -172,7 +174,9 @@ fn test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes() {
 
     let integer = upload(&gpu, &tensor_i32(vec![2], vec![1, 2]));
     let error = gpu
-        .reduce_sum_squares_read(TensorRead::from_tensor(&integer), &[0])
+        .with_backend_session(|__s| {
+            __s.reduce_sum_squares_read(TensorRead::from_tensor(&integer), &[0])
+        })
         .unwrap_err();
     assert_cuda_unsupported_dtype(&error, "reduce_sum_squares", DType::I32);
 }
@@ -191,7 +195,9 @@ fn test_cubecl_sum_squares_does_not_contract_multiply_and_add() {
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
     let gpu_output = gpu
-        .reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), &[0])
+        .with_backend_session(|__s| {
+            __s.reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), &[0])
+        })
         .unwrap();
     let actual = download(&gpu, &gpu_output);
     let Some(actual) = actual.as_typed::<f32>() else {

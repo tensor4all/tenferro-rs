@@ -2,7 +2,7 @@ use tenferro_gpu::{
     cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaBackend,
 };
 use tenferro_tensor::BackendSessionHost;
-use tenferro_tensor::{Tensor, TensorRead, TensorStructural, TensorWrite};
+use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(device) = cuda_devices()?.into_iter().next() else {
@@ -26,10 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(cpu_c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 
     let mut gpu_reuse = upload_tensor(backend.runtime(), &cpu_c)?;
-    backend.copy_read_into(
-        TensorRead::from_tensor(&gpu_c),
-        TensorWrite::from_tensor(&mut gpu_reuse),
-    )?;
+    backend.with_backend_session(|__s| {
+        __s.copy_read_into(
+            TensorRead::from_tensor(&gpu_c),
+            TensorWrite::from_tensor(&mut gpu_reuse),
+        )
+    })?;
     let copied = download_tensor(backend.runtime(), &gpu_reuse)?;
     assert_eq!(copied.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     Ok(())

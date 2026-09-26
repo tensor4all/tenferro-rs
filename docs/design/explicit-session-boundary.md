@@ -483,36 +483,65 @@ Attempted twice and reverted. What the attempts measured, in addition to the
   like WebGPU's, since the CUDA owner's cached behaviour was the trait default
   plus the provider's own caching.
 
-This half should be finished where a CUDA device is available: the CUDA tests are
-hardware-gated, so here only compilation and the source-text contracts can be
-checked, not the kernels' behaviour.
+**The module-function shape landed, and it is what the attempt history argued.
+The CUDA operation bodies now live in `crates/tenferro-gpu/src/cubecl/ops.rs` as
+57 free functions over `&mut CudaBackend`, the seven owner impls and the owner
+`BackendSession`/`BackendCachedDot` impls are deleted, and `exec_session.rs`
+keeps one delegation macro per direction:
 
-**Use the module-function shape, not an in-place body move.** Four attempts at
-rewriting the bodies directly into the session impls failed on macro subtleties
-(`self` inside a `macro_rules!` *definition* and inside a macro *invocation*'s
-token positions), and each revert cost more than the alternative below, which is
-also what the GPU-entry decision above prescribed:
+1. each owner method became `pub(super) fn <op>(backend: &mut CudaBackend,
+   <args>) -> crate::Result<...> { <body> }` with a plain `self` -> `backend`
+   rename, which is also what keeps `self`-taking macro invocations valid;
+2. `delegate_ops!` generates the session impls and forwards
+   `ops::<op>(self.backend, <args>)`, so the session's method table still comes
+   from one list per family;
+3. `delegate!` continues to serve the families that stay on the owner
+   (`TensorBuffer`, `TensorDeviceTransfer`);
+4. `impl SessionCachedDot for CudaExecSession<'_>` keeps the two device-path
+   `_read_cached` overrides and takes the trait defaults for the rest, matching
+   WebGPU.
 
-1. for each owner method, emit a free function on the backend —
-   `fn <op>(backend: &CudaBackend, <args>) -> crate::Result<...> { <body> }` —
-   renaming the receiver `self` to `backend` (a plain rename, so macro
-   invocations that take `self` keep receiving a backend and stay valid);
-2. delete the owner impl blocks;
-3. change `delegate!` to forward to those functions
-   (`fn <op>(&mut self, <args>) -> R { <module>::<op>(self.backend, <args>) }`),
-   which keeps the session's method table generated from one list;
-4. then the imports, the `SessionCachedDot` impl, the contract retargets and the
-   allowlist re-bless as for WebGPU.
+The receiver rename is mechanical and reviewable per function, and step 2 keeps
+one implementation per operation, which is what B3 requires. The measured
+fallout supports the choice: the in-place attempts produced 1113 errors, while
+this shape left six — four `to_contiguous_read` calls in `blas1.rs` and an
+inherent helper, the owner `BackendCachedDot` impl, and one helper that needs a
+session-typed receiver.
 
-The rename is mechanical and reviewable per function, and step 3 keeps a single
-implementation per operation, which is what B3 requires.
+Two traps worth recording, both caught by the compiler rather than by review:
 
-Two caveats for the generator, from a first attempt at this shape: the method
-splitter must find each signature's opening brace by paren depth (a signature may
-contain a `where` clause or a default const), and it must strip `&mut self`
-without touching `&mut self`-like parameters of nested items. Generating the file
-and deleting the impls must be one atomic write, so a crash cannot leave the
-module in a half-moved state.
+* `TensorElementwise::elementwise_read_into` cannot move to a free function: its
+  allocating fallback is generic over `TensorElementwise`, which only the session
+  implements once the owner impl is gone. It stays a hand-written session method,
+  and `delegate_ops!` grew an optional `override { ... }` group for it;
+* that first version silently dropped the native read-into kernels, which showed
+  up only as three `never used` warnings (`elementwise_read_into_native` and two
+  launch helpers). The override now tries the native path first and falls back to
+  the allocating helper, so no work moved onto the allocating path.
+
+The CUDA tests and example migrated through the same wrapper as CPU and WebGPU.
+Two shapes needed hand work: `upload(&gpu, ..)` inside a session closure borrows
+`gpu` immutably while the session needs it mutably (E0502), so the upload is
+hoisted into a `let` before the enclosing statement, and two object-safety tests
+that wrote `let exec: &mut dyn BackendSession = &mut gpu;` now obtain the erased
+session from `with_backend_session`, which still proves the same interface.
+
+The source-text contracts were retargeted to the module that now holds the
+bodies: `cubecl_launch_contract` (eight anchors), `public_surface_contract` (two)
+and `backend_read_contract`, whose session half became a compile-time assertion
+that `CudaExecSession<'static>` implements all six operation traits — the same
+shape `webgpu_backend_contract` uses, and stronger than the source scan it
+replaced. `backend_read_contract` is now `#![cfg(feature = "cuda")]`, because
+that assertion names the CUDA session type.
+
+Verification on this host: `cargo check --workspace --all-targets` and
+`cargo check -p tenferro-gpu --features cuda --all-targets` are error- and
+warning-free; the CUDA suite reports 108 passed / 189 ignored in the lib and 73
+passed in the integration target; the WebGPU suite reports 89 + 31 + 3 + 2
+passed; and `scripts/audit-session-entry.py --check` stays green without an
+allowlist change. What this host cannot do is run the hardware-gated kernels, so
+their behaviour remains with the hosted GPU matrix; the bodies themselves are
+verbatim moves, and no receiver rewrite changes an argument.
 
 ### Local gate state (mid-Phase-B)
 

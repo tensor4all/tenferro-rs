@@ -237,14 +237,16 @@ gpu_test!(test_trivial_cube_kernel, {
 gpu_test!(
     test_zero_stride_view_materializes_without_cutensor_descriptor,
     {
-        use tenferro_tensor::{TensorStructural, TensorValue};
+        use tenferro_tensor::TensorValue;
         let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
         let host = Tensor::from_vec_col_major([2], vec![2.0_f64, 5.0]).unwrap();
         let input = upload_tensor(backend.runtime(), &host).unwrap();
         let view = TensorValue::from_tensor(input)
             .broadcast_in_dim_view([3, 2], [1])
             .unwrap();
-        let output = backend.to_contiguous_read(view.tensor_read()).unwrap();
+        let output = backend
+            .with_backend_session(|__s| __s.to_contiguous_read(view.tensor_read()))
+            .unwrap();
         assert_eq!(
             backend
                 .cutensor_permutation_plan_cache_stats()

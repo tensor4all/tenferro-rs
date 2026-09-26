@@ -13,8 +13,8 @@ use tenferro_gpu::{
     cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session, cuda::CudaBackend,
     cuda::CudaDeviceId,
 };
-use tenferro_tensor::backend::BackendSessionHost as _;
-use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead, TensorStructural};
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead};
 
 fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
     let Some(tensor) = tensor.as_typed::<f32>() else {
@@ -86,7 +86,7 @@ fn cuda_duplicate_is_explicit_same_placement_allocation() {
     let (domain, allocation) = identity(&input);
 
     let duplicate = backend
-        .to_contiguous_read(TensorRead::from_tensor(&input))
+        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&input)))
         .unwrap();
     let (duplicate_domain, duplicate_allocation) = identity(&duplicate);
     assert_eq!(duplicate_domain, domain);

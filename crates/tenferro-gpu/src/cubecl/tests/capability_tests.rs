@@ -3,7 +3,7 @@ use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use tenferro_cpu::cpu_capabilities;
 use tenferro_tensor::{
     capability_output_dtype, BackendId, BackendSessionHost, DType, OperationCapability,
-    SupportLevel, Tensor, TensorElementwise, TensorRead, TensorReduction,
+    SupportLevel, Tensor, TensorRead,
 };
 
 use crate::config::CompareDir;
@@ -257,7 +257,9 @@ fn run_supported_case(
                 __s.div_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
             })
         }),
-        PrimitiveOpKind::Rem => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.rem(l, r)),
+        PrimitiveOpKind::Rem => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
+            b.with_backend_session(|__s| __s.rem(l, r))
+        }),
         PrimitiveOpKind::Abs => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(x)))
         }),
@@ -320,7 +322,9 @@ fn run_supported_case(
         }),
         PrimitiveOpKind::ReduceSumSquares => {
             assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
-                b.reduce_sum_squares_read(TensorRead::from_tensor(x), axes)
+                b.with_backend_session(|__s| {
+                    __s.reduce_sum_squares_read(TensorRead::from_tensor(x), axes)
+                })
             })
         }
         PrimitiveOpKind::ReduceProd => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {

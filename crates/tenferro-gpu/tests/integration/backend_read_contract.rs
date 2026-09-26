@@ -1,3 +1,5 @@
+#![cfg(feature = "cuda")]
+
 //! Backend `_read` coverage contract.
 //!
 //! Issue #1926 made the operation read halves **required** trait items, so a
@@ -5,11 +7,17 @@
 //! silently reject borrowed views. What this contract still watches is the part
 //! the compiler does not enforce: CUDA kernels consume owned compact tensors, so
 //! `tenferro-gpu` has to materialize a view through `to_contiguous_read` and
-//! then run the owned kernel, and both the backend and the erased session shim
-//! must keep implementing every required read entry point.
+//! then run the owned kernel. The operation bodies live in the `cubecl::ops`
+//! module after #1929 moved them off the backend owner, so that module is what
+//! the entry-point scan reads; the erased session side is covered by a
+//! compile-time assertion that `CudaExecSession` implements every family.
 
 use std::collections::BTreeSet;
 use std::fs;
+
+use tenferro_tensor::{
+    TensorAnalytic, TensorDot, TensorElementwise, TensorIndexing, TensorReduction, TensorStructural,
+};
 
 /// The operation families this contract covers.
 const OPERATION_TRAITS: [&str; 6] = [
@@ -64,10 +72,10 @@ fn cuda_backend_implements_every_required_read_entry_point() {
         "the trait scan should find the required read entry points, found {entry_points:?}"
     );
 
-    let backend = fs::read_to_string("src/cubecl/mod.rs")
-        .expect("the CUDA backend source should be readable");
-    let session = fs::read_to_string("src/cubecl/exec_session.rs")
-        .expect("the CUDA session source should be readable");
+    // The CUDA operation bodies now live in the `ops` module as free functions, so
+    // the owner scan follows them there.
+    let backend = fs::read_to_string("src/cubecl/ops.rs")
+        .expect("the CUDA operation-body source should be readable");
 
     let missing_backend: Vec<&String> = entry_points
         .iter()
@@ -75,17 +83,23 @@ fn cuda_backend_implements_every_required_read_entry_point() {
         .collect();
     assert!(
         missing_backend.is_empty(),
-        "CudaBackend must implement {missing_backend:?}; a read entry point materializes the view \
-         and then runs the owned kernel"
+        "the CUDA operation bodies must implement {missing_backend:?}; a read entry point \
+         materializes the view and then runs the owned kernel"
     );
 
-    let missing_session: Vec<&String> = entry_points
-        .iter()
-        .filter(|name| !session.contains(&format!("fn {name}(")))
-        .collect();
-    assert!(
-        missing_session.is_empty(),
-        "CudaExecSession must forward {missing_session:?} to CudaBackend; the traced runtime reaches \
-         these entry points through the erased BackendSession surface"
-    );
+    // The session forwards through `delegate_ops!`, so what replaces the source
+    // scan is the guarantee the compiler enforces: the erased session type
+    // implements every operation family. `\'static` is the erased form
+    // `with_cuda_exec_session` hands out, so no concrete lifetime is assumed.
+    fn assert_operation_families<S>()
+    where
+        S: TensorElementwise
+            + TensorAnalytic
+            + TensorStructural
+            + TensorReduction
+            + TensorIndexing
+            + TensorDot,
+    {
+    }
+    assert_operation_families::<tenferro_gpu::cuda::CudaExecSession<'static>>();
 }

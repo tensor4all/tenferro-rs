@@ -33,8 +33,15 @@ fn reduction_first_axis_reads_input_without_pre_materializing() {
 
 #[test]
 fn cuda_elementwise_read_into_has_native_output_path() {
-    let source = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
-    let body = source_section(&source, "    fn elementwise_read_into(", "    fn add(");
+    // The read-into body stayed on the session rather than moving to `ops.rs`:
+    // its allocating fallback is generic over `TensorElementwise`, which only the
+    // session implements now.
+    let source = std::fs::read_to_string("src/cubecl/exec_session.rs").unwrap();
+    let body = source_section(
+        &source,
+        "    fn elementwise_read_into(",
+        "    fn dot_general_read_cached(",
+    );
     assert!(body.contains("elementwise_read_into_native"));
     assert!(body.contains("elementwise_read_into_via_allocating_ops"));
     let dispatch = std::fs::read_to_string("src/cubecl/dispatch.rs").unwrap();
@@ -43,7 +50,7 @@ fn cuda_elementwise_read_into_has_native_output_path() {
 
 #[test]
 fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
-    let source = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    let source = cubecl_source("ops.rs");
     for needle in [
         "typed_or_unsupported::<bool>(input, \"transpose\")?;",
         "typed_or_unsupported::<bool>(input, \"broadcast_in_dim\")?;",
@@ -58,7 +65,7 @@ fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
             "missing Bool copy/index dispatch: {needle}"
         );
     }
-    let scatter = source_section(&source, "    fn scatter(", "    fn slice(");
+    let scatter = source_section(&source, "fn scatter(", "fn slice(");
     assert!(
         scatter.contains("(DType::Bool, _, _)")
             && scatter.contains("Err(unsupported_operation(")
@@ -654,11 +661,11 @@ fn assert_ordered_needles(source_name: &str, source: &str, needles: &[&str]) {
 
 #[test]
 fn cubecl_scatter_does_not_use_single_thread_launch_fallback() {
-    let mod_source = cubecl_source("mod.rs");
-    let scatter_source = source_section(&mod_source, "    fn scatter(", "    fn slice(");
+    let mod_source = cubecl_source("ops.rs");
+    let scatter_source = source_section(&mod_source, "fn scatter(", "fn slice(");
     let dispatch_source = cubecl_source("dispatch.rs");
     let sources = [
-        ("cubecl/mod.rs scatter body", scatter_source),
+        ("cubecl/ops.rs scatter body", scatter_source),
         ("cubecl/dispatch.rs", dispatch_source.as_str()),
     ];
     let banned = ["single_thread_launch_config", "CubeCount::new_single()"];
@@ -973,11 +980,11 @@ fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
         "scalar broadcast should be represented as BroadcastInDim and fused by backend hooks"
     );
 
-    let mod_source = cubecl_source("mod.rs");
+    let ops_source = cubecl_source("ops.rs");
     let fusion_impl = source_section(
-        &mod_source,
-        "impl TensorFusion for CudaBackend",
-        "impl BackendCachedDot for CudaBackend",
+        &ops_source,
+        "pub(super) fn execute_broadcast_multiply(",
+        "pub(super) fn vdot_read(",
     );
     assert_ordered_needles(
         "CudaBackend broadcast multiply hook",
@@ -1022,7 +1029,7 @@ fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
     let checked_helper = source_section(
         &mod_source,
         "fn launch_checked_integer_scalar_binary",
-        "impl TensorElementwise for CudaBackend",
+        "impl CudaReadInput<'_>",
     );
     assert_ordered_needles(
         "checked scalar binary launch validation",
@@ -1046,8 +1053,15 @@ fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
     // is deleted; `rem` still launches from its own entry.
     // The `rem` section ends at the next session method line so that later
     // one-shot deletions do not have to touch this contract again.
-    for (op, end) in [("fn div_read(", "fn rem_read("), ("fn rem(", "\n    fn ")] {
-        let section = source_section(&mod_source, op, end);
+    // `div` and `rem` live in the operation bodies `ops.rs` owns now that the
+    // one-shot entries are deleted. `rem` is the last elementwise body, so its
+    // section ends where the analytic family starts.
+    let ops_source = cubecl_source("ops.rs");
+    for (op, end) in [
+        ("fn div_read(", "fn rem_read("),
+        ("fn rem(", "pub(super) fn exp_read("),
+    ] {
+        let section = source_section(&ops_source, op, end);
         assert!(
             section.contains("launch_scalar_binary"),
             "{op} must use the narrow scalar launcher"
@@ -1057,7 +1071,7 @@ fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
             "{op} must not materialize the scalar"
         );
     }
-    let pow = source_section(&mod_source, "fn pow_read(", "\n    fn ");
+    let pow = source_section(&ops_source, "fn pow_read(", "pub(super) fn expm1_read(");
     assert!(pow.contains("launch_scalar_binary"));
     assert!(pow.contains("launch_checked_integer_scalar_binary"));
     assert!(!pow.contains("broadcast_typed"));
@@ -1447,8 +1461,8 @@ fn cubecl_pad_mapping_avoids_signed_edge_subtraction_overflow() {
 
 #[test]
 fn cubecl_scatter_reports_unsupported_integer_operand_dtypes() {
-    let mod_source = cubecl_source("mod.rs");
-    let scatter_source = source_section(&mod_source, "    fn scatter(", "    fn slice(");
+    let mod_source = cubecl_source("ops.rs");
+    let scatter_source = source_section(&mod_source, "fn scatter(", "fn slice(");
     for needle in [
         "(DType::I32, _, _)",
         "(DType::I64, _, _)",
@@ -1718,7 +1732,9 @@ fn cutensor_ffi_binds_permutation_symbols() {
 
 #[test]
 fn cuda_float_permutation_routes_through_cutensor_and_policy_is_recorded() {
-    let cuda = cubecl_source("mod.rs");
+    // The permutation calls live in the operation bodies `ops.rs` now owns; the
+    // inherent copy helpers they call are still in `mod.rs`.
+    let cuda = format!("{}\n{}", cubecl_source("mod.rs"), cubecl_source("ops.rs"));
     let permutation = cubecl_source("permutation.rs");
     let rules = std::fs::read_to_string("../../REPOSITORY_RULES.md").unwrap();
 
@@ -1727,7 +1743,7 @@ fn cuda_float_permutation_routes_through_cutensor_and_policy_is_recorded() {
         "CUDA backend should have a dedicated cuTENSOR permutation module"
     );
     assert!(
-        cuda.contains("permutation::transpose(self, t, perm)")
+        cuda.contains("permutation::transpose(backend, t, perm)")
             && cuda.contains("permutation::to_contiguous_view(")
             && cuda.contains("permutation::copy_view_into(self, src, dst, op)"),
         "CUDA f32/f64/c32/c64 structural permutation and copy paths should route through cuTENSOR"
@@ -1891,11 +1907,11 @@ fn cuda_float_index_validation_stays_device_native_and_preflighted() {
 
 #[test]
 fn cuda_dynamic_slice_dispatch_matches_cpu_supported_dtype_matrix() {
-    let backend = cubecl_source("mod.rs");
+    let backend = cubecl_source("ops.rs");
     let dispatch = source_section(
         &backend,
-        "    fn dynamic_slice(\n",
-        "    fn dynamic_update_slice(\n",
+        "fn dynamic_slice(\n",
+        "fn dynamic_update_slice(\n",
     );
     for data in ["F32", "F64", "C32", "C64", "I32"] {
         for starts in ["F32", "F64", "I32", "I64"] {

@@ -57,7 +57,6 @@ use super::gemm::typed_device_ptr;
 use super::interop::{alloc_zero_output, offset_device_ptr, upload_typed_tensor};
 use super::runtime::check_cublas;
 use super::{CudaBackend, CudaRuntime};
-use crate::backend::TensorStructural;
 use crate::{
     Error, Tensor, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
@@ -123,12 +122,18 @@ pub(super) fn vdot_read(
     let lhs_materialized = if lhs.is_col_major_contiguous()? {
         None
     } else {
-        Some(Box::new(backend.to_contiguous_read(lhs.clone())?))
+        Some(Box::new(super::ops::to_contiguous_read(
+            backend,
+            lhs.clone(),
+        )?))
     };
     let rhs_materialized = if rhs.is_col_major_contiguous()? {
         None
     } else {
-        Some(Box::new(backend.to_contiguous_read(rhs.clone())?))
+        Some(Box::new(super::ops::to_contiguous_read(
+            backend,
+            rhs.clone(),
+        )?))
     };
     let lhs = lhs_materialized
         .as_deref()
@@ -164,7 +169,10 @@ pub(super) fn norm_squared_read(
     let materialized = if input.is_col_major_contiguous()? {
         None
     } else {
-        Some(Box::new(backend.to_contiguous_read(input.clone())?))
+        Some(Box::new(super::ops::to_contiguous_read(
+            backend,
+            input.clone(),
+        )?))
     };
     let input = materialized
         .as_deref()
