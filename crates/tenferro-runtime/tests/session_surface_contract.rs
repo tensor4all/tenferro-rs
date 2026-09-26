@@ -79,14 +79,13 @@ fn surface_ui_files(kind: &str) -> Vec<PathBuf> {
 
 #[test]
 fn session_surface_pass_contract() {
-    // trybuild drives rustc directly and is not compatible with the nextest
-    // process-per-test runner, matching the other compile-only contracts in
-    // this workspace.
-    if std::env::var_os("NEXTEST").is_some() {
-        eprintln!("skipping compile-only trybuild contract under nextest");
-        return;
-    }
-
+    // The contract drives `trybuild`, which compiles each fixture as an external
+    // crate against the built library. That works under the nextest runner: the
+    // CI workspace profile runs `cargo nextest run --workspace` plus
+    // `cargo test --doc --workspace`, and the `fail` side of this contract is
+    // rustdoc `compile_fail` examples, so both sides execute in CI. Measured here
+    // under `cargo nextest run -p tenferro-runtime --test session_surface_contract`:
+    // 1 passed, about 60 s cold (compiling the five fixtures) and about 3 s warm.
     let tests = trybuild::TestCases::new();
     for path in surface_ui_files("pass") {
         tests.pass(path);

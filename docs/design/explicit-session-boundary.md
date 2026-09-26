@@ -347,10 +347,48 @@ records today's legitimate entry functions in
   `REPOSITORY_RULES.md` names it as the single owner of the rule (routed by
   `scripts/repository-rules-review.py` for backend/session paths).
 
-The frozen inventory is 76 `path::function` entries, dominated by the CPU owner
-entries that B3 removes (`install_with_pool_context` in 27 functions,
-`run_backend_session_cached` in 14). B3's commits must shrink this file, and any
-entry that reappears outside the allowlist fails the local gate.
+The frozen inventory started at 76 `path::function` entries, dominated by the CPU
+owner entries that B3 removes (`install_with_pool_context` in 27 functions,
+`run_backend_session_cached` in 14). B3's commits shrank it to **16**, and any
+entry that reappears outside the allowlist fails the local gate:
+
+| Mechanism | Entries |
+| --- | --- |
+| `CpuExecSession construction` | 2 |
+| `CudaExecSession construction` | 1 |
+| `WebGpuExecSession construction` | 1 |
+| `install_with_pool_context` | 3 |
+| `run_backend_session_cached` | 3 |
+| `with_session_entry_guard` | 6 |
+| `default_backend_session`, `install_with_indexed_pool_context*`, `install_with_pool_context_fresh` | 0 |
+
+The zero rows are kept deliberately: the mechanism stays tracked, so one
+reappearing entry is reported rather than silently untracked.
+
+#### Demonstration: a hidden entry fails, the boundary implementations do not
+
+Run on the final tree. With an aliased hidden entry appended to a library file
+(`use run_backend_session_cached as __audit_demo_alias;` plus a new private
+function calling it), the gate reports and exits non-zero:
+
+```text
+self-test passed: alias, boundary, method and grouped-import cases
+run_backend_session_cached: unallowlisted session entry at crates/tenferro-tensor/src/backend.rs::audit_demo_hidden_entry
+exit=1
+```
+
+On the pristine tree — where the same mechanism is reached only by the
+allowlisted boundary implementations — the same command reports no finding and
+exits zero:
+
+```text
+self-test passed: alias, boundary, method and grouped-import cases
+exit=0
+```
+
+The temporary entry is not in the tree; the demonstration is reproducible by
+appending those two lines and re-running `python3 scripts/audit-session-entry.py
+--check`.
 
 ### B3(iii) blocks on an acceptance-surface decision
 
@@ -562,6 +600,44 @@ trybuild `.stderr` comparisons, which is also why the pre-existing
 `tenferro-gpu` session contracts pass. That fixture mismatch is span-only: the
 same `E0432` is reported, with a wider underline than the recorded `.stderr`, so it
 is a rustc-rendering difference on this toolchain rather than a behaviour change.
+
+### Phase-B completion audit
+
+Each Phase-B requirement mapped to the artifact that satisfies it. "Evidence"
+means a file, a command output, or a test that runs in CI, not an intention.
+
+| Requirement | Evidence |
+| --- | --- |
+| B1 fail: owner `add`/`add_read` on three backends | `tenferro-cpu/src/lib.rs` crate docs pin the deleted owner spellings for `add`, `mul`, `exp`, `reduce_sum`, `transpose`, `dot_general`; `cubecl/exec_session.rs` and `webgpu/mod.rs` pin that the CUDA/WebGPU owners do not implement an operation trait (a call cannot resolve for the same reason) |
+| B1 fail: `dyn BackendSession` old `add` | `tenferro-tensor/src/backend.rs::BackendSession` `compile_fail` example |
+| B1 fail: `BackendCachedDot` | `tenferro-cpu/src/lib.rs` owner-bound `compile_fail` example |
+| B1 fail: `default_backend_session` | `tenferro-tensor/src/backend.rs::BackendSessionHost` `compile_fail` example |
+| B1 pass: `Tensor::add(.., session)`, cached operations, typed-view operations, scheduler/extension `dyn BackendSession`, scope nesting | five trybuild fixtures in `tenferro-runtime/tests/ui/session_surface/pass/`, driven by `session_surface_contract.rs`, which runs under the CI nextest profile (verified with `cargo nextest run -p tenferro-runtime --test session_surface_contract`) |
+| B2 delegation inverted, one-shot spelling deleted | 31 per-operation deletion commits; `_read`/`_into` are required items |
+| B2 acceptance ranges unchanged | `backend_default_read_tests.rs`: `default_read_methods_delegate_owned_tensors_and_reject_views`, `structural_runtime_materialization_rejects_views_by_default` |
+| B3 supertraits trimmed | `pub trait TensorBackend: BackendRuntimeCache + TensorDeviceTransfer + BackendSessionHost` |
+| B3 one operation implementation set per backend | CPU `CpuExecSession`; CUDA `ops.rs` bodies with `delegate_ops!`; WebGPU real impls on `WebGpuExecSession` |
+| B3 deletions | owner impls, the non-public `install_with_pool_context*`, every `BackendCachedDot` impl, `default_backend_session`, the backend-as-session markers and factory |
+| B3 CPU linalg policy preserved | `preferred_linalg_mode` consumed at `tenferro-cpu/src/backend.rs:2752`, defined in `provider.rs` |
+| B3 GPU `delegate!` shim decided and documented | CUDA operations moved to `ops.rs` and deleted from the shim; `delegate!` remains only for `TensorBuffer`/`TensorDeviceTransfer` |
+| B3 generic-bound and call-site migration (~215 sites, doctests, examples) | `cargo check --workspace --all-targets` is clean, which is the machine-checkable form of the migration |
+| B4 extension owner path is session-primary | `define_extension_runtime!`'s owner entry forms the session and hands extensions `&mut dyn BackendSession`; owner routes are limited to the runtime-formed fallback (`execute_owner_extension_fallback`); the linalg helper is session-typed |
+| B5 deterministic audit gate | `scripts/audit-session-entry.py` + `scripts/session-entry-allowlist.json`, run by `scripts/check-pr-fast.sh`; tracked mechanisms and the 16-entry inventory are in the table above |
+| B5 alias negative test, deny on a hidden entry, pass on the boundary | the `--check` self-test plus the recorded demonstration below (exit 1 with the hidden entry, exit 0 without) |
+| B5 single rules owner and doc consistency | `REPOSITORY_RULES.md` "Backend Session Entry" section, routed by `scripts/repository-rules-review.py`; `docs/design/explicit-session-boundary.md` and `docs/design/index.md` updated together |
+| B5 `with_cpu_exec_session` as the single documented exception | `explicit-session-boundary.md` "capability bridge" entry plus the allowlist row |
+| Final state: one-shot spellings do not compile | the `compile_fail` fixtures above |
+| Final state: `with_backend_session`/`with_execution_scope` are the only boundaries | the 16-entry allowlist, whose remaining rows are session construction and the runtime cache entry |
+| Final state: operations are not reachable from `TensorBackend` | the trimmed supertrait list together with the owner `compile_fail` fixtures |
+| Evidence: build/check and tests pass | the table under "Phase-B closing state" |
+| Evidence: doctests compile and run, deleted-API doctests moved | `cargo test --doc` for the affected crates, including the fail fixtures that now run as doctests |
+| Evidence: pushed to the work branch | `refactor/1929-session-route-unification` |
+| Evidence: one batched local gate at the end | `scripts/check-pr-fast.sh` and `scripts/repository-rules-review.py --dry-run` |
+
+Outside this goal's scope, by the task's own split: the harness change forced by
+the deletions (before-only arms cannot outlive the spellings) means the recorded
+baseline is the before-reference and the certification run that re-measures the
+baseline side, including the CUDA target, is the umbrella's Phase C.
 
 ### Phase-B closing state
 
@@ -1269,6 +1345,14 @@ local build wrapper rewriting paths:
   `with_backend_session` no longer compiles;
 * `tenferro_cpu`'s crate docs pin the deleted owner spellings for one operation
   per family (`add`, `mul`, `exp`, `reduce_sum`, `transpose`, `dot_general`).
+
+The `pass` side is a trybuild contract that originally skipped itself when the
+`NEXTEST` environment variable was set. That skip was wrong for this repository:
+CI's workspace profile is `cargo nextest run --workspace` plus `cargo test --doc
+--workspace`, so a nextest-only skip made the surviving-surface fixtures a CI
+*target* that never ran. The skip is removed after verifying the contract under
+nextest here (1 passed, about 60 s cold, about 3 s warm), so the fixtures and the
+`compile_fail` examples both execute in CI.
 
 The fixtures whose targets B3 removes have landed with that slice:
 `tenferro_tensor::BackendSessionHost` pins the deleted
