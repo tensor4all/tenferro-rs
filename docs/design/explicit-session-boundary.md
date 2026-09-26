@@ -645,3 +645,55 @@ migrations so the tree compiles after every slice. If a codemod is used again, i
 should take an explicit file allowlist, refuse any site whose diagnostic points
 into a `macro_rules!` definition, and require `cargo check --workspace
 --all-targets` to pass after each file rather than once per family.
+
+### Step 2 complete: 31 of 31 pairs deleted
+
+Every paired one-shot in the Step-2 inventory is gone, one operation per commit,
+in the smallest-first order the sizing table implies: the 10 analytic
+operations, the 13 elementwise ones, the three structural ones, the four
+reductions, and finally `TensorDot::dot_general`. `dot_general_with_conj`
+remains, because it is one of the 13 required one-shots with no `_read` sibling,
+and its body now calls `dot_general_read`.
+
+The deletion exposed two failures that a compile-and-test pass alone would not
+have caught, and both are now guarded:
+
+* **A real implementation can hide behind the one-shot.** `WebGpuExecSession`'s
+  `transpose_read` had been written as `unsupported!` while the working device
+  transpose lived in the one-shot, so deleting `transpose` silently downgraded a
+  supported operation. The read halves of every deleted operation were therefore
+  re-checked against the removed body, and WebGPU transpose now keeps its
+  `structural::transpose` route.
+* **A migrated read half can call itself.** When a read half delegated to the
+  one-shot and the one-shot was removed first, rewriting the delegate produced
+  `fn op_read(..) { .. self.op_read(..) }` in test fixtures. A repo-wide scan for
+  self-recursive `*_read` bodies is now clean; the fixtures that had one carry
+  the removed behaviour directly (delegate to the wrapped backend, return the
+  fixture result, or keep the same rejection after materializing a view).
+
+The migration tooling that made 31 slices tractable:
+
+* the work list came from `cargo check` diagnostics, never from a name grep, so
+  the look-alike APIs (`EagerTensor::dot_general`, `TracedTensor::transpose`,
+  provider capability queries, `gemm::*` free functions) were never touched;
+* call sites were rewritten from the diagnostic's own span, with a
+  string/comment-aware delimiter matcher over the original text, and only
+  arguments whose `_read` parameter is a `TensorRead` were wrapped;
+* the structural half of each slice (trait item, CUDA body absorption into the
+  read half, CPU session delegation, runtime extension, eager dispatcher) was
+  driven by a per-operation table, and every count was asserted before writing;
+* `cargo fmt --all`, `cargo check --workspace --all-targets`, the workspace
+  doctests and the focused suites ran per operation, and the full workspace suite
+  once at the end.
+
+Verification for the completed Step 2: `cargo check --workspace --all-targets`
+is clean and warning-free; `cargo test --workspace` passes 5207 tests with the
+single pre-existing environmental `tenferro-ad` trybuild span mismatch
+(`eager_backend_capability_contract`); the workspace doctests pass; and no
+`*_read` method recurses into itself.
+
+The remaining Phase-B work is unchanged: B3 (drop `BackendSession`,
+`TensorBackendOps` and `BackendCachedDot` from the `TensorBackend` supertraits
+and keep only the session implementations), B4 (extension owner routes), B5
+(audit gate, `REPOSITORY_RULES.md` owner, batched repository gate), then the
+Phase-C paired benchmark against the recorded baseline.
