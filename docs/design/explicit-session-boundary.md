@@ -601,14 +601,22 @@ for the GPU target.
 
 #### Harness identity bug found during the first candidate run
 
-The first candidate run compared a route-matrix case against a route the
-candidate no longer has: `route_matrix` still registered `oneshot` arms for
-`dot_general` and `reduce_sum`, whose one-shot spellings Step 2 deleted. The arms
-therefore timed the session route under a before-route name and the comparator
-reported a false `REGRESSION` (`reduce_sum_f64/oneshot/single/65536`, +10.1%)
-against the owner-route baseline. The arms and their helpers were removed, which
-is what the baseline's deleted-route predicate expects; `slice` and `cast` keep
-their `oneshot` arms because those spellings survive.
+The first candidate run compared route-matrix cases against routes the candidate
+no longer has. `route_matrix` still registered `oneshot` arms for `dot_general`
+and `reduce_sum`, whose one-shot spellings Step 2 deleted, and later runs found the
+same for `slice` and `cast`, whose arms the Step-2 migration had already rewritten
+to `with_backend_session` — every one of them timed the session route under a
+before-route name, so the comparator compared them against owner-route baseline
+numbers. `route_matrix_gpu` had the same shape for `dot_general`: its `oneshot`
+helper had become a byte-for-byte duplicate of its `session` helper.
+
+All before-only arms and their helpers are now removed from the campaign
+harnesses, so no live registration uses an `oneshot`/`one_shot` label. That is
+what the baseline's deleted-route predicate expects: the recorded numbers stay the
+before reference and the comparator reports those cases as `DELETED` rather than
+as regressions. The comparable pairs are `session/*` and `scope/*` against their
+own recorded values, and the price of the unification is read off the recorded
+`oneshot/*` numbers against the candidate's `session/*`.
 
 #### Measurement attempt on a shared host (diagnostic only)
 

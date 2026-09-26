@@ -2,18 +2,13 @@
 //! logical contraction, reported separately for enqueue and synchronized
 //! completion.
 //!
-//! Issue #1926 / umbrella #1929. `CudaBackend` implements the `Tensor*`
-//! operation traits by calling the same functions as its `BackendSession`
-//! impl — the backend is effectively its own session — so a one-shot call does
-//! not open a session, it runs *unbatched*. Two spellings therefore coexist:
-//!
-//! * `oneshot` — `TensorDot::dot_general(&mut backend, ..)` on `CudaBackend`
-//!   itself.
-//! * `session` — `with_backend_session` plus `dot_general_read` on the borrowed
-//!   session.
-//!
-//! The route/API unification deletes the `oneshot` spelling, so its rows are
-//! before-only references.
+//! Issue #1926 / umbrella #1929. `CudaBackend` used to implement the `Tensor*`
+//! operation traits by calling the same functions as its `BackendSession` impl
+//! — the backend was effectively its own session — so a one-shot call did not
+//! open a session, it ran *unbatched*. That owner spelling is deleted, so the
+//! only route measured here is `with_backend_session` plus `dot_general_read` on
+//! the borrowed session; the before-only `oneshot` numbers stay in
+//! `docs/testing/session-route-baseline.json`.
 //!
 //! Timing modes. The umbrella requires GPU enqueue cost and synchronized
 //! completion cost to be reported distinctly, because a per-call "round trip"
@@ -59,21 +54,7 @@ where
     Tensor::from_vec_col_major(vec![rows, cols], data).expect("benchmark matrix")
 }
 
-/// One-shot route: the operation method on the backend object.
-fn oneshot(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) {
-    let out = backend
-        .with_backend_session(|__s| {
-            __s.dot_general_read(
-                TensorRead::from_tensor(lhs),
-                TensorRead::from_tensor(rhs),
-                config,
-            )
-        })
-        .expect("one-shot dot_general should succeed");
-    black_box(out);
-}
-
-/// Session route: the same kernel through a borrowed session.
+/// Session route: the kernel through a borrowed session.
 fn session(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) {
     backend
         .with_backend_session(|exec| {
@@ -112,33 +93,11 @@ where
 
     let mut group = c.benchmark_group(format!("route_matrix_gpu/dot_general_{label}"));
     group.bench_with_input(
-        BenchmarkId::new("oneshot/round_trip", size),
-        &size,
-        |bench, _| {
-            bench.iter(|| {
-                oneshot(&mut backend, black_box(&lhs), black_box(&rhs), &config);
-                backend.runtime().synchronize().expect("sync");
-            });
-        },
-    );
-    group.bench_with_input(
         BenchmarkId::new("session/round_trip", size),
         &size,
         |bench, _| {
             bench.iter(|| {
                 session(&mut backend, black_box(&lhs), black_box(&rhs), &config);
-                backend.runtime().synchronize().expect("sync");
-            });
-        },
-    );
-    group.bench_with_input(
-        BenchmarkId::new("oneshot/enqueue_batch16", size),
-        &size,
-        |bench, _| {
-            bench.iter(|| {
-                for _ in 0..BATCH {
-                    oneshot(&mut backend, black_box(&lhs), black_box(&rhs), &config);
-                }
                 backend.runtime().synchronize().expect("sync");
             });
         },

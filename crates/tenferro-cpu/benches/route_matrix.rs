@@ -1,11 +1,11 @@
 //! CPU execution-route matrix: the coexisting entry mechanisms measured on the
 //! same logical operation.
 //!
-//! Issue #1926 / umbrella #1929. The CPU backend currently exposes three
-//! distinct ways to reach the same kernel:
+//! Issue #1926 / umbrella #1929. The CPU backend used to expose three distinct
+//! ways to reach the same kernel:
 //!
 //! * `oneshot` — an operation method on `CpuBackend` itself
-//!   (`TensorElementwise::add(&mut backend, ..)`), which enters through
+//!   (`TensorElementwise::add(&mut backend, ..)`), which entered through
 //!   `install_with_pool_context` (permit + `CpuOperationEntry`, no session).
 //! * `session` — the same kernel through `BackendSessionHost::with_backend_session`
 //!   and an `_read` method on the borrowed session, which enters through
@@ -14,11 +14,14 @@
 //! * `scope` — an operation method on a backend clone inside
 //!   `CpuBackend::with_execution_scope`, which reuses the scope's permit.
 //!
-//! The route/API unification deletes the `oneshot` spelling and keeps the
-//! session surface. The pair that measures the price of that unification on
-//! small operations is `oneshot/single` (before) versus `session/single`
-//! (after). The marginal arms expose the per-operation cost once an entry is
-//! already open, which is what a caller amortizes; those must not regress.
+//! The route/API unification deleted the `oneshot` spelling, so this harness
+//! registers only `session` and `scope`. The before-only `oneshot` rows stay in
+//! `docs/testing/session-route-baseline.json` and the comparator reports them as
+//! deleted, so a session route is never compared against owner-route numbers.
+//! The price of the unification is read off `session/single` against the recorded
+//! `oneshot/single` values, and the marginal arms expose the per-operation cost
+//! once an entry is already open, which is what a caller amortizes; those must
+//! not regress.
 //!
 //! All arms run on an explicit one-worker backend (`CpuBackend::with_threads(1)`),
 //! per the repository rule for dispatch/overhead measurement. Every arm
@@ -138,11 +141,6 @@ fn reduce_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor) -> Tensor 
         })
         .expect("scope admission should succeed")
         .expect("scope reduce_sum should succeed")
-}
-
-fn slice_oneshot(ops: &mut CpuBackend, a: &Tensor, config: &SliceConfig) -> Tensor {
-    ops.with_backend_session(|__s| __s.slice(a, config))
-        .expect("oneshot slice should succeed")
 }
 
 fn slice_session(owner: &mut CpuBackend, a: &Tensor, config: &SliceConfig) -> Tensor {
@@ -353,7 +351,6 @@ fn bench_indexing(c: &mut Criterion) {
         let mut ops = owner.clone();
 
         for (name, value) in [
-            ("oneshot", slice_oneshot(&mut ops, &a, &config)),
             ("session", slice_session(&mut owner, &a, &config)),
             ("scope", slice_scope(&owner, &mut ops, &a, &config)),
         ] {
@@ -361,9 +358,6 @@ fn bench_indexing(c: &mut Criterion) {
             assert_eq!(value.as_slice::<f64>().unwrap()[0], 1.0, "{name} value");
         }
 
-        group.bench_with_input(BenchmarkId::new("oneshot/single", len), &len, |bench, _| {
-            bench.iter(|| black_box(slice_oneshot(&mut ops, black_box(&a), black_box(&config))));
-        });
         group.bench_with_input(BenchmarkId::new("session/single", len), &len, |bench, _| {
             bench.iter(|| black_box(slice_session(&mut owner, black_box(&a), black_box(&config))));
         });
@@ -389,22 +383,12 @@ fn bench_cast(c: &mut Criterion) {
     let len = 4096;
     let a = full_tensor(vec![len]);
     let mut owner = backend();
-    let mut ops = owner.clone();
 
-    let oneshot = ops
-        .with_backend_session(|__s| __s.cast(&a, DType::F32))
-        .expect("oneshot cast");
     let session_out = owner
         .with_backend_session(|session| session.cast(&a, DType::F32))
         .expect("session cast");
-    assert_eq!(oneshot.as_slice::<f32>().unwrap()[0], 1.0);
     assert_eq!(session_out.as_slice::<f32>().unwrap()[0], 1.0);
 
-    group.bench_function("oneshot/single", |bench| {
-        bench.iter(|| {
-            black_box(ops.with_backend_session(|__s| __s.cast(black_box(&a), DType::F32)))
-        });
-    });
     group.bench_function("session/single", |bench| {
         bench.iter(|| {
             black_box(
