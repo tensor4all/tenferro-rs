@@ -456,10 +456,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     }
 
     impl TensorReduction for DefaultOnlyLinalgBackend {
-        panic_backend_methods! {
-            reduce_prod(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
-        }
-
         // The previous read-half default delegated owned tensors to the one-shot
         // method and rejected borrowed views. Reproduce it explicitly.
         fn reduce_sum_read(
@@ -479,10 +475,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             input: TensorRead<'_>,
             axes: &[usize],
         ) -> tenferro_tensor::Result<Tensor> {
-            self.reduce_prod(
-                tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
-                axes,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+            let _ = axes;
+            panic!("reduce_prod should not be called in this test")
         }
 
         // The previous read-half default delegated owned tensors to the one-shot

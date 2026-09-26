@@ -117,7 +117,6 @@ delegate!(TensorStructural {
 });
 
 delegate!(TensorReduction {
-    fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;

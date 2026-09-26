@@ -1119,10 +1119,6 @@ impl TensorViewCanonicalization<f32, tenferro_tensor::DynRank> for WebGpuBackend
 }
 
 impl TensorReduction for WebGpuBackend {
-    fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reduce_prod")
-    }
-
     // The old chain was: owned input -> the one-shot method -> its unsupported
     // error; view input -> the read-boundary error. WebGPU rejects the reduction
     // either way, so evaluate the read input first and then raise the same

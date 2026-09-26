@@ -2672,31 +2672,6 @@ impl CpuBackend {
             .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
     }
 
-    fn try_install_with_context<R: Send>(
-        &self,
-        op: impl FnOnce(&CpuExecutionContext<'_>) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let admission = self.execution_admission()?;
-        let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
-        let mode = entry.preferred_engine_mode();
-        entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| op(context))
-            })
-            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
-    }
-
-    fn try_install_fresh_with_context<R: FreshCpuOutput + Send>(
-        &self,
-        op: impl FnOnce(&CpuExecutionContext<'_>) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let domain = self.engine.domain().id();
-        let mut output = self.try_install_with_context(op)?;
-        output.tag_fresh(domain);
-        Ok(output)
-    }
-
     fn install_with_pool_unmarked<R: Send>(
         &mut self,
         op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
@@ -3238,13 +3213,6 @@ impl TensorReduction for CpuBackend {
         self.install_with_pool_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             reduction::reduce_sum_squares_read(buffers, input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh_with_context(|context| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_prod(input, axes, &exec_context)
         })
     }
 

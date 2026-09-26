@@ -580,7 +580,6 @@ impl TensorStructural for RecordingBackend {
 impl TensorReduction for RecordingBackend {
     delegate_recording_backend_methods! {
         fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -593,10 +592,9 @@ impl TensorReduction for RecordingBackend {
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        self.reduce_prod(
-            tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
-            axes,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+        self.inner
+            .reduce_prod_read(TensorRead::from_tensor(&input), axes)
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
@@ -778,7 +776,6 @@ impl TensorStructural for EagerBackend {
 impl TensorReduction for EagerBackend {
     delegate_tensor_backend_methods! {
         fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -790,9 +787,10 @@ impl TensorReduction for EagerBackend {
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        self.reduce_prod(
-            tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
-            axes,
+        let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+        dispatch!(
+            self,
+            reduce_prod_read(TensorRead::from_tensor(&input), axes)
         )
     }
 

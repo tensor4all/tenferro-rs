@@ -53,7 +53,9 @@ fn a_reduction_refuses_a_caller_owned_payload() {
         error.to_string().contains("external") || error.to_string().contains("unsupported"),
         "unexpected error: {error}"
     );
-    assert!(backend.reduce_prod(&values, &[0]).is_err());
+    assert!(backend
+        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&values), &[0]))
+        .is_err());
     assert!(backend
         .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&values), &[0]))
         .is_err());
@@ -111,7 +113,9 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
             );
             assert_eq!(
                 backend
-                    .reduce_prod(&tensor, &[0])
+                    .with_backend_session(
+                        |__s| __s.reduce_prod_read(TensorRead::from_tensor(&tensor), &[0])
+                    )
                     .expect("product")
                     .as_slice::<$ty>()
                     .expect("slice"),

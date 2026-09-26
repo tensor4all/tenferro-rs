@@ -894,7 +894,9 @@ fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
     );
     let mut backend = CpuBackend::new();
 
-    let prod = backend.reduce_prod(&t, &[0]).unwrap();
+    let prod = backend
+        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&t), &[0]))
+        .unwrap();
     assert_eq!(prod.shape(), &[3]);
     assert_eq!(get_f64(&prod, &[0]), 2.0);
     assert_eq!(get_f64(&prod, &[1]), 12.0);

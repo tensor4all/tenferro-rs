@@ -323,9 +323,9 @@ fn run_supported_case(
                 b.reduce_sum_squares_read(TensorRead::from_tensor(x), axes)
             })
         }
-        PrimitiveOpKind::ReduceProd => {
-            assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_prod(x, axes))
-        }
+        PrimitiveOpKind::ReduceProd => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
+            b.with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(x), axes))
+        }),
         PrimitiveOpKind::ReduceMax => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
             b.with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(x), axes))
         }),
@@ -598,7 +598,8 @@ fn run_cpu_reduction(
         PrimitiveOpKind::ReduceSumSquares => {
             cpu.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
         }
-        PrimitiveOpKind::ReduceProd => cpu.reduce_prod(input, axes),
+        PrimitiveOpKind::ReduceProd => cpu
+            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(input), axes)),
         PrimitiveOpKind::ReduceMax => cpu
             .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes)),
         PrimitiveOpKind::ReduceMin => cpu

@@ -574,16 +574,11 @@ impl TensorReduction for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("reduce_prod", input)?;
+        let _axes = axes;
         self.calls.push("reduce_prod");
         Ok(marker())
-    }
-
-    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.reduce_prod(
-            crate::backend::read_owned_tensor("reduce_prod", input)?,
-            axes,
-        )
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {

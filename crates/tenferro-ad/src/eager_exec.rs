@@ -846,7 +846,9 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Slice(config) => vec![exec.slice(inputs[0], config)?],
             StdTensorOp::Pad(config) => vec![exec.pad(inputs[0], config)?],
             StdTensorOp::Reverse { axes } => vec![exec.reverse(inputs[0], axes)?],
-            StdTensorOp::ReduceProd { axes, .. } => vec![exec.reduce_prod(inputs[0], axes)?],
+            StdTensorOp::ReduceProd { axes, .. } => {
+                vec![exec.reduce_prod_read(TensorRead::from_tensor(inputs[0]), axes)?]
+            }
             StdTensorOp::ReduceMax { axes, .. } => {
                 vec![exec.reduce_max_read(TensorRead::from_tensor(inputs[0]), axes)?]
             }

@@ -1323,10 +1323,6 @@ macro_rules! panic_analytic {
 macro_rules! panic_reduction {
     ($ty:ident) => {
         impl TensorReduction for $ty {
-            panic_backend_methods! {
-                reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-            }
-
             // The previous read-half default delegated owned tensors to the
             // one-shot method and rejected views. Reproduce it explicitly.
             fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
@@ -1336,10 +1332,9 @@ macro_rules! panic_reduction {
             }
 
             fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-                self.reduce_prod(
-                    tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
-                    axes,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+                let _ = axes;
+                panic!("reduce_prod should not be called in this test")
             }
 
             fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
@@ -1653,10 +1648,6 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
 }
 
 impl TensorReduction for WrongDTypeSessionBackend {
-    panic_backend_methods! {
-        reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-    }
-
     fn reduce_sum_read(&mut self, _input: TensorRead<'_>, _axes: &[usize]) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
@@ -1664,10 +1655,9 @@ impl TensorReduction for WrongDTypeSessionBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected views. Reproduce it explicitly.
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-        self.reduce_prod(
-            tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?,
-            axes,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+        let _ = axes;
+        panic!("reduce_prod should not be called in this test")
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
