@@ -81,6 +81,14 @@ pub(super) struct CudaExecSessionMarker;
 /// carries thread-local execution capability. Success of an enrolled operation
 /// means the work was enqueued; only [`CudaExecSession::synchronize`] is a
 /// host barrier.
+///
+/// The backend owner is not an operation route, so an operation bound does not
+/// hold for it:
+///
+/// ```compile_fail
+/// fn requires_elementwise<B: tenferro_tensor::TensorElementwise>() {}
+/// requires_elementwise::<tenferro_gpu::cuda::CudaBackend>();
+/// ```
 #[derive(Debug)]
 pub struct CudaExecSession<'a> {
     backend: &'a mut CudaBackend,

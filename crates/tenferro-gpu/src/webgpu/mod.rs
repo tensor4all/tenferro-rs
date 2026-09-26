@@ -621,6 +621,14 @@ fn webgpu_placement(rt: &WebGpuRuntime) -> Placement {
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new;
 /// ```
+///
+/// The backend is not an operation route: the operations live on
+/// [`WebGpuExecSession`], so the owner does not implement the operation traits.
+///
+/// ```compile_fail
+/// fn requires_elementwise<B: tenferro_tensor::TensorElementwise>() {}
+/// requires_elementwise::<tenferro_gpu::webgpu::WebGpuBackend>();
+/// ```
 #[derive(Clone)]
 pub struct WebGpuBackend {
     runtime: WebGpuRuntime,
