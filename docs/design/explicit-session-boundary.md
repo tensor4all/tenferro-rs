@@ -618,6 +618,17 @@ as regressions. The comparable pairs are `session/*` and `scope/*` against their
 own recorded values, and the price of the unification is read off the recorded
 `oneshot/*` numbers against the candidate's `session/*`.
 
+The pruning was then verified without re-benchmarking, by deleting the
+`oneshot` blocks from an existing candidate log of `route_matrix` and re-running
+the comparator on a scratch logs directory: `deleted_route=16` and no regression
+came from a pruned arm. The three `+5.6%`/`+6.4%` entries it still reported are on
+`session`/`scope` cases of that loaded diagnostic capture, which is exactly the
+noise this host cannot resolve; they are not a result, only evidence that the
+classification path works. One caveat found while doing this: the comparator
+reads the gate's merged stdout/stderr form (`Benchmarking <case>: Analyzing`), so a
+stdout-only capture (`cargo bench ... > log`) cannot feed it and must be re-run
+through `scripts/run-session-route-performance-gate.sh`.
+
 #### Measurement attempt on a shared host (diagnostic only)
 
 A candidate campaign was then attempted on this host: ten benchmark runs over
