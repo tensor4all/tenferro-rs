@@ -663,8 +663,9 @@ With the CUDA body move in, Phase B is closed on this host:
 | `scripts/repository-rules-review.py --dry-run` | pass |
 
 What Phase B does not include is evidence that the refactor is
-performance-neutral. That is Phase C, which is still open and needs the quiet
-window and a CUDA host described below.
+performance-neutral. That is Phase C: its recapture and first matched comparison
+are recorded below, and they show a real cost on small operations that Phase C has
+to own.
 
 ### Phase-C pre-flight (tooling verified, measurement pending)
 
@@ -673,16 +674,17 @@ and the Phase-A candidate logs to validate the comparison path before the real
 measurement. Result: 98 `PAIRED_OK`, 1 `NOISY`, 0 `REGRESSION`, 0 `DELETED`, and
 two expected failures that prove the fail-closed behaviour:
 
-* `tenferro-gpu|route_matrix_gpu` has no candidate log — the CUDA target cannot run
-  on this host;
+* `tenferro-gpu|route_matrix_gpu` had no candidate log in those older logs. The CUDA
+  benchmark does run on this host (13 cases in the recapture below); the missing log
+  was a property of that log set, not of the host.
 * `session_chain/broadcast/execution_scope` is absent from those older candidate
   logs, and the comparator reports a missing non-deleted baseline case instead of
   skipping it.
 
 So the harness, the capture/comparison pair and the thresholds work; what remains
 for Phase C is the measurement itself, which needs the documented quiet window
-(load below the recorded threshold with no live `cargo`/`rustc`), plus a CUDA host
-for the GPU target.
+(load below the recorded threshold with no live `cargo`/`rustc`, and a free core —
+`cpu=0` is occupied on this host).
 
 #### Harness identity bug found during the first candidate run
 
@@ -744,8 +746,39 @@ Phase C certification therefore remains open and requires all of:
 * three alternating baseline/candidate pairs, where the baseline side is
   re-measured from the pinned baseline commit with this harness rather than
   compared against the recorded numbers across a loaded window;
-* the `tenferro-gpu|route_matrix_gpu` target on a CUDA host, which this host
-  cannot run at all.
+* the `tenferro-gpu|route_matrix_gpu` target on a CUDA host — corrected: the GPU
+  *benchmark* runs on this host (13 cases in the capture below); what is
+  hardware-gated is the CUDA *unit-test* suite that hosted CI owns.
+
+#### Recapture performed, and the first matched comparison
+
+The baseline side has since been re-collected with the current harness, which is
+what the harness-identity rule asks for once the before-only arms are pruned:
+seven targets, 96 cases, `docs/testing/session-route-baseline-recaptured.json`.
+The capture guard fired first (`expected 47 cases, parsed 31`), so the recapture
+is the deliberate `EXPECTED_CASES` update in `af916dd87`; the frozen
+`session-route-baseline.json` keeps its 125 rows and the 29 before-only references.
+
+The measurement used `cpu=1`, because `cpu=0` — the recorded runs' core — is 100%
+busy for 30-second averages, held by a foreign long-running `julia` process on
+this shared host. Three comparator runs followed:
+
+| Comparison | Result |
+| --- | --- |
+| matched: candidate vs recaptured baseline (one core, one window) | `paired_ok=49 noisy=27 regressions=20` |
+| historical: candidate vs recorded baseline | `paired_ok=67 noisy=21 regressions=8 deleted_route=29` |
+| A/A: candidate pass 2 vs candidate pass 1 | `paired_ok=53 noisy=7 regressions=0` |
+
+The A/A pass covers the targets carrying the matched regressions and flags none of
+them, so those deltas are not host noise: one multi-millisecond backward case
+(+14.9%) and ten small-operation dispatch cases (+5.0%…+7.2%), consistent with more
+session entries per unit of user work after B3/B4. That is the umbrella's Phase C
+optimization input, recorded in
+`docs/worklogs/2026-09-26-session-route-recapture-and-matched-comparison.md`; this
+document keeps it as a Phase-C finding rather than a Phase-B correctness issue.
+
+The three-pair certification is still owed, and it must use one free core
+consistently, since `cpu=0` is unavailable on this host.
 
 The criterion settings stay at the pinned defaults for certification; cheaper
 settings are acceptable for a diagnostic pass only, because they change the
@@ -754,7 +787,8 @@ confidence intervals the comparator uses to separate `NOISY` from `REGRESSION`.
 #### Certification runbook
 
 The pieces below exist and were verified to the point this host allows; only the
-quiet window and a CUDA host are missing. Every run goes through the campaign
+quiet window and a free core are missing (`cpu=0` is occupied here). Every run goes
+through the campaign
 script, which pins the criterion settings, the 1T thread environment and the CPU
 affinity:
 
@@ -778,9 +812,9 @@ affinity:
    `one_shot` rows are before-only and must come back as `DELETED`; a baseline row
    that is neither deleted-route nor present in the candidate log is a
    fail-closed error, not a skip.
-4. **GPU.** Steps 1–3 run on a CUDA host, because the campaign's
-   `route_matrix_gpu` target needs a device; the protocol also requires reporting
-   GPU enqueue and synchronized-completion cost separately.
+4. **GPU.** The campaign's `route_matrix_gpu` target needs a device; it ran on this
+   host (13 cases), and the protocol requires reporting GPU enqueue and
+   synchronized-completion cost separately.
 5. **Record.** Write the comparator report and the alternating-pair logs into
    `docs/testing/` and a worklog entry, then remove the harness files from the
    baseline worktree (`git -C .worktrees/issue-1929-bench checkout -- .`) so the

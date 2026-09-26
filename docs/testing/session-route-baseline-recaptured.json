@@ -1,0 +1,538 @@
+{
+  "baseline_commit": "25da8d431",
+  "campaign": "session-route-unification",
+  "captured_at_utc": "2026-09-26T11:58:42+00:00",
+  "deleted_route_predicate": "/oneshot/ or trailing one_shot",
+  "environment": {
+    "cpu_affinity": "1",
+    "host_loadavg_at_start": "3.98 7.94 9.52",
+    "measurement_time_s": "5",
+    "nproc_as_seen_by_runner": "1",
+    "sample_size": "100",
+    "taskset": "yes",
+    "thread_env": "RAYON=1 OMP=1 OPENBLAS=1 MKL=1 VECLIB=1 NUMEXPR=1 TENFERRO_BENCH_THREADS=1",
+    "warm_up_time_s": "2"
+  },
+  "harness_commit": "5c55496fe109e0d147589d3a9fb1b997238bed13",
+  "issue": 1926,
+  "label": "baseline",
+  "schema": "tenferro.session-route-baseline.v1",
+  "targets": {
+    "tenferro-ad|eager_backward_shape_churn": {
+      "cases": {
+        "tenferro_ad/eager_backward_shape_churn/threads_1/bond_dimension_sequence/16": {
+          "high_ns": 7460600.0,
+          "low_ns": 7309100.0,
+          "mid_ns": 7381400.0
+        }
+      },
+      "source": "crates/tenferro-ad/benches/eager_backward_shape_churn.rs"
+    },
+    "tenferro-ad|eager_dispatch_baseline": {
+      "cases": {
+        "eager_dispatch_baseline/lazy/add_f64/1": {
+          "high_ns": 14319.0,
+          "low_ns": 14095.0,
+          "mid_ns": 14204.0
+        },
+        "eager_dispatch_baseline/lazy/add_f64/64": {
+          "high_ns": 13811.0,
+          "low_ns": 13621.0,
+          "mid_ns": 13709.0
+        },
+        "eager_dispatch_baseline/lazy/add_f64/8": {
+          "high_ns": 13979.0,
+          "low_ns": 13726.0,
+          "mid_ns": 13850.0
+        },
+        "eager_dispatch_baseline/lazy/dot_general_f64/1": {
+          "high_ns": 14383.0,
+          "low_ns": 14046.0,
+          "mid_ns": 14205.0
+        },
+        "eager_dispatch_baseline/lazy/dot_general_f64/2": {
+          "high_ns": 14245.0,
+          "low_ns": 13997.0,
+          "mid_ns": 14116.0
+        },
+        "eager_dispatch_baseline/lazy/neg_f64/1": {
+          "high_ns": 12024.0,
+          "low_ns": 11799.0,
+          "mid_ns": 11907.0
+        },
+        "eager_dispatch_baseline/lazy/neg_f64/64": {
+          "high_ns": 11768.0,
+          "low_ns": 11603.0,
+          "mid_ns": 11681.0
+        },
+        "eager_dispatch_baseline/lazy/neg_f64/8": {
+          "high_ns": 12133.0,
+          "low_ns": 11824.0,
+          "mid_ns": 11970.0
+        },
+        "eager_dispatch_baseline/lazy/reduce_sum_f64/1": {
+          "high_ns": 12280.0,
+          "low_ns": 12083.0,
+          "mid_ns": 12178.0
+        },
+        "eager_dispatch_baseline/lazy/reduce_sum_f64/64": {
+          "high_ns": 12301.0,
+          "low_ns": 12052.0,
+          "mid_ns": 12170.0
+        },
+        "eager_dispatch_baseline/lazy/reduce_sum_f64/8": {
+          "high_ns": 12181.0,
+          "low_ns": 11910.0,
+          "mid_ns": 12028.0
+        },
+        "eager_dispatch_baseline/lazy/slice_f64/1": {
+          "high_ns": 2095.1,
+          "low_ns": 2050.3,
+          "mid_ns": 2071.8999999999996
+        },
+        "eager_dispatch_baseline/lazy/slice_f64/64": {
+          "high_ns": 2109.4,
+          "low_ns": 2058.3,
+          "mid_ns": 2083.1
+        },
+        "eager_dispatch_baseline/lazy/slice_f64/8": {
+          "high_ns": 2053.4,
+          "low_ns": 2024.0,
+          "mid_ns": 2037.5
+        },
+        "eager_dispatch_baseline/materialized/add_f64/1": {
+          "high_ns": 15622.0,
+          "low_ns": 15348.0,
+          "mid_ns": 15474.0
+        },
+        "eager_dispatch_baseline/materialized/add_f64/64": {
+          "high_ns": 15946.0,
+          "low_ns": 15537.0,
+          "mid_ns": 15732.0
+        },
+        "eager_dispatch_baseline/materialized/add_f64/8": {
+          "high_ns": 15688.0,
+          "low_ns": 15409.0,
+          "mid_ns": 15539.0
+        },
+        "eager_dispatch_baseline/materialized/dot_general_f64/1": {
+          "high_ns": 16056.000000000002,
+          "low_ns": 15792.0,
+          "mid_ns": 15914.0
+        },
+        "eager_dispatch_baseline/materialized/dot_general_f64/2": {
+          "high_ns": 16314.0,
+          "low_ns": 15953.0,
+          "mid_ns": 16123.000000000002
+        },
+        "eager_dispatch_baseline/materialized/neg_f64/1": {
+          "high_ns": 13363.0,
+          "low_ns": 13171.0,
+          "mid_ns": 13259.0
+        },
+        "eager_dispatch_baseline/materialized/neg_f64/64": {
+          "high_ns": 13888.0,
+          "low_ns": 13576.0,
+          "mid_ns": 13722.0
+        },
+        "eager_dispatch_baseline/materialized/neg_f64/8": {
+          "high_ns": 13784.0,
+          "low_ns": 13418.0,
+          "mid_ns": 13589.0
+        },
+        "eager_dispatch_baseline/materialized/reduce_sum_f64/1": {
+          "high_ns": 13755.0,
+          "low_ns": 13481.0,
+          "mid_ns": 13609.0
+        },
+        "eager_dispatch_baseline/materialized/reduce_sum_f64/64": {
+          "high_ns": 13633.0,
+          "low_ns": 13420.0,
+          "mid_ns": 13520.0
+        },
+        "eager_dispatch_baseline/materialized/reduce_sum_f64/8": {
+          "high_ns": 13524.0,
+          "low_ns": 13303.0,
+          "mid_ns": 13403.0
+        },
+        "eager_dispatch_baseline/materialized/slice_f64/1": {
+          "high_ns": 2627.8,
+          "low_ns": 2557.3,
+          "mid_ns": 2589.5
+        },
+        "eager_dispatch_baseline/materialized/slice_f64/64": {
+          "high_ns": 2684.0,
+          "low_ns": 2644.8999999999996,
+          "mid_ns": 2663.4
+        },
+        "eager_dispatch_baseline/materialized/slice_f64/8": {
+          "high_ns": 2672.2999999999997,
+          "low_ns": 2631.1,
+          "mid_ns": 2650.4
+        }
+      },
+      "source": "crates/tenferro-ad/benches/eager_dispatch_baseline.rs"
+    },
+    "tenferro-cpu|route_matrix": {
+      "cases": {
+        "route_matrix/cast_f64_f32/session/single": {
+          "high_ns": 9934.2,
+          "low_ns": 9768.3,
+          "mid_ns": 9847.0
+        },
+        "route_matrix/dot_general_f64/scope/single/2": {
+          "high_ns": 9929.4,
+          "low_ns": 9726.0,
+          "mid_ns": 9821.400000000001
+        },
+        "route_matrix/dot_general_f64/scope/single/256": {
+          "high_ns": 707220.0,
+          "low_ns": 685800.0,
+          "mid_ns": 696560.0
+        },
+        "route_matrix/dot_general_f64/scope/single/64": {
+          "high_ns": 22721.0,
+          "low_ns": 22356.0,
+          "mid_ns": 22538.0
+        },
+        "route_matrix/dot_general_f64/session/single/2": {
+          "high_ns": 9693.099999999999,
+          "low_ns": 9471.0,
+          "mid_ns": 9576.1
+        },
+        "route_matrix/dot_general_f64/session/single/256": {
+          "high_ns": 692090.0,
+          "low_ns": 682660.0,
+          "mid_ns": 687300.0
+        },
+        "route_matrix/dot_general_f64/session/single/64": {
+          "high_ns": 22213.0,
+          "low_ns": 21807.0,
+          "mid_ns": 22000.0
+        },
+        "route_matrix/elementwise_add_f64/scope/marginal16/1": {
+          "high_ns": 33751.0,
+          "low_ns": 33024.0,
+          "mid_ns": 33373.0
+        },
+        "route_matrix/elementwise_add_f64/scope/marginal16/4096": {
+          "high_ns": 53444.0,
+          "low_ns": 52524.0,
+          "mid_ns": 52958.0
+        },
+        "route_matrix/elementwise_add_f64/scope/marginal16/64": {
+          "high_ns": 33619.0,
+          "low_ns": 33054.0,
+          "mid_ns": 33327.0
+        },
+        "route_matrix/elementwise_add_f64/scope/marginal16/65536": {
+          "high_ns": 347110.0,
+          "low_ns": 340810.0,
+          "mid_ns": 343820.0
+        },
+        "route_matrix/elementwise_add_f64/scope/single/1": {
+          "high_ns": 9845.0,
+          "low_ns": 9594.6,
+          "mid_ns": 9714.6
+        },
+        "route_matrix/elementwise_add_f64/scope/single/4096": {
+          "high_ns": 10989.0,
+          "low_ns": 10782.0,
+          "mid_ns": 10882.0
+        },
+        "route_matrix/elementwise_add_f64/scope/single/64": {
+          "high_ns": 10088.0,
+          "low_ns": 9885.9,
+          "mid_ns": 9982.0
+        },
+        "route_matrix/elementwise_add_f64/scope/single/65536": {
+          "high_ns": 31055.0,
+          "low_ns": 30542.0,
+          "mid_ns": 30789.0
+        },
+        "route_matrix/elementwise_add_f64/session/marginal16/1": {
+          "high_ns": 29537.0,
+          "low_ns": 28873.0,
+          "mid_ns": 29188.0
+        },
+        "route_matrix/elementwise_add_f64/session/marginal16/4096": {
+          "high_ns": 48580.0,
+          "low_ns": 47806.0,
+          "mid_ns": 48192.0
+        },
+        "route_matrix/elementwise_add_f64/session/marginal16/64": {
+          "high_ns": 29591.0,
+          "low_ns": 29187.0,
+          "mid_ns": 29385.0
+        },
+        "route_matrix/elementwise_add_f64/session/marginal16/65536": {
+          "high_ns": 340740.0,
+          "low_ns": 334140.0,
+          "mid_ns": 337320.0
+        },
+        "route_matrix/elementwise_add_f64/session/single/1": {
+          "high_ns": 9689.0,
+          "low_ns": 9452.1,
+          "mid_ns": 9566.0
+        },
+        "route_matrix/elementwise_add_f64/session/single/4096": {
+          "high_ns": 11233.0,
+          "low_ns": 10990.0,
+          "mid_ns": 11107.0
+        },
+        "route_matrix/elementwise_add_f64/session/single/64": {
+          "high_ns": 9921.6,
+          "low_ns": 9734.8,
+          "mid_ns": 9825.4
+        },
+        "route_matrix/elementwise_add_f64/session/single/65536": {
+          "high_ns": 30731.0,
+          "low_ns": 30266.0,
+          "mid_ns": 30493.0
+        },
+        "route_matrix/reduce_sum_f64/scope/single/64": {
+          "high_ns": 9947.699999999999,
+          "low_ns": 9782.0,
+          "mid_ns": 9863.4
+        },
+        "route_matrix/reduce_sum_f64/scope/single/65536": {
+          "high_ns": 18151.0,
+          "low_ns": 17850.0,
+          "mid_ns": 17995.0
+        },
+        "route_matrix/reduce_sum_f64/session/single/64": {
+          "high_ns": 9683.400000000001,
+          "low_ns": 9521.9,
+          "mid_ns": 9601.6
+        },
+        "route_matrix/reduce_sum_f64/session/single/65536": {
+          "high_ns": 17863.0,
+          "low_ns": 17563.0,
+          "mid_ns": 17709.0
+        },
+        "route_matrix/slice_f64/scope/single/64": {
+          "high_ns": 9915.6,
+          "low_ns": 9762.9,
+          "mid_ns": 9837.6
+        },
+        "route_matrix/slice_f64/scope/single/65536": {
+          "high_ns": 24654.0,
+          "low_ns": 24289.0,
+          "mid_ns": 24467.0
+        },
+        "route_matrix/slice_f64/session/single/64": {
+          "high_ns": 9840.9,
+          "low_ns": 9703.099999999999,
+          "mid_ns": 9771.9
+        },
+        "route_matrix/slice_f64/session/single/65536": {
+          "high_ns": 24295.0,
+          "low_ns": 23897.0,
+          "mid_ns": 24088.0
+        }
+      },
+      "source": "crates/tenferro-cpu/benches/route_matrix.rs"
+    },
+    "tenferro-gpu|route_matrix_gpu": {
+      "cases": {
+        "route_matrix_gpu/dot_general_f32/session/enqueue_batch16/256": {
+          "high_ns": 607550.0,
+          "low_ns": 598550.0,
+          "mid_ns": 603070.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/enqueue_batch16/64": {
+          "high_ns": 536200.0,
+          "low_ns": 525440.0,
+          "mid_ns": 530850.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/enqueue_batch16/8": {
+          "high_ns": 433390.0,
+          "low_ns": 424860.0,
+          "mid_ns": 429090.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/round_trip/256": {
+          "high_ns": 61460.0,
+          "low_ns": 60949.0,
+          "mid_ns": 61202.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/round_trip/64": {
+          "high_ns": 57394.0,
+          "low_ns": 56331.0,
+          "mid_ns": 56866.0
+        },
+        "route_matrix_gpu/dot_general_f32/session/round_trip/8": {
+          "high_ns": 49184.0,
+          "low_ns": 48685.0,
+          "mid_ns": 48931.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/enqueue_batch16/256": {
+          "high_ns": 555330.0,
+          "low_ns": 545200.0,
+          "mid_ns": 550160.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/enqueue_batch16/64": {
+          "high_ns": 640730.0,
+          "low_ns": 632290.0,
+          "mid_ns": 636420.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/enqueue_batch16/8": {
+          "high_ns": 442670.0,
+          "low_ns": 432460.0,
+          "mid_ns": 437520.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/round_trip/256": {
+          "high_ns": 60552.0,
+          "low_ns": 59635.0,
+          "mid_ns": 60089.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/round_trip/64": {
+          "high_ns": 65569.0,
+          "low_ns": 64703.0,
+          "mid_ns": 65128.0
+        },
+        "route_matrix_gpu/dot_general_f64/session/round_trip/8": {
+          "high_ns": 49356.0,
+          "low_ns": 48752.0,
+          "mid_ns": 49049.0
+        },
+        "route_matrix_gpu/sync_empty/synchronize": {
+          "high_ns": 17329.0,
+          "low_ns": 17232.0,
+          "mid_ns": 17279.0
+        }
+      },
+      "source": "crates/tenferro-gpu/benches/route_matrix_gpu.rs"
+    },
+    "tenferro-linalg|linalg_vjp_gate": {
+      "cases": {
+        "tenferro_linalg/linalg_vjp_gate/threads_1/svd_values_vjp/16": {
+          "high_ns": 337010.0,
+          "low_ns": 329960.0,
+          "mid_ns": 333320.0
+        },
+        "tenferro_linalg/linalg_vjp_gate/threads_1/svd_values_vjp/8": {
+          "high_ns": 341200.0,
+          "low_ns": 331670.0,
+          "mid_ns": 336290.0
+        },
+        "tenferro_linalg/linalg_vjp_gate/threads_1/triangular_solve_vjp/16": {
+          "high_ns": 323180.0,
+          "low_ns": 316710.0,
+          "mid_ns": 319770.0
+        },
+        "tenferro_linalg/linalg_vjp_gate/threads_1/triangular_solve_vjp/8": {
+          "high_ns": 325230.0,
+          "low_ns": 317160.0,
+          "mid_ns": 320950.0
+        }
+      },
+      "source": "crates/tenferro-linalg/benches/linalg_vjp_gate.rs"
+    },
+    "tenferro-runtime|elementwise_fusion": {
+      "cases": {
+        "runtime_elementwise_chain/f64/add_mul/prepared_graph/1048576": {
+          "high_ns": 19951000.0,
+          "low_ns": 19525000.0,
+          "mid_ns": 19732000.0
+        },
+        "runtime_elementwise_chain/f64/add_mul/prepared_graph/4096": {
+          "high_ns": 53631.0,
+          "low_ns": 52860.0,
+          "mid_ns": 53233.0
+        },
+        "runtime_elementwise_chain/f64/add_mul/prepared_graph/65536": {
+          "high_ns": 1287800.0,
+          "low_ns": 1261900.0,
+          "mid_ns": 1274400.0
+        },
+        "runtime_elementwise_chain/f64/add_mul/unprepared_graph/1048576": {
+          "high_ns": 19840000.0,
+          "low_ns": 19527000.0,
+          "mid_ns": 19680000.0
+        },
+        "runtime_elementwise_chain/f64/add_mul/unprepared_graph/4096": {
+          "high_ns": 123260.0,
+          "low_ns": 121120.0,
+          "mid_ns": 122150.0
+        },
+        "runtime_elementwise_chain/f64/add_mul/unprepared_graph/65536": {
+          "high_ns": 1322400.0,
+          "low_ns": 1301900.0,
+          "mid_ns": 1311600.0
+        },
+        "runtime_elementwise_chain/f64/broadcast_mul/prepared_graph/1024x1024": {
+          "high_ns": 1139500.0,
+          "low_ns": 1109200.0,
+          "mid_ns": 1123100.0
+        },
+        "runtime_elementwise_chain/f64/broadcast_mul/prepared_graph/256x256": {
+          "high_ns": 132470.0,
+          "low_ns": 130539.99999999999,
+          "mid_ns": 131460.0
+        },
+        "runtime_elementwise_chain/f64/broadcast_mul/unprepared_graph/1024x1024": {
+          "high_ns": 1229700.0,
+          "low_ns": 1193800.0,
+          "mid_ns": 1210500.0
+        },
+        "runtime_elementwise_chain/f64/broadcast_mul/unprepared_graph/256x256": {
+          "high_ns": 208510.0,
+          "low_ns": 206260.0,
+          "mid_ns": 207370.0
+        },
+        "runtime_elementwise_chain/f64/broadcast_mul_add/prepared_graph/1024x1024": {
+          "high_ns": 19934000.0,
+          "low_ns": 19631000.0,
+          "mid_ns": 19779000.0
+        },
+        "runtime_elementwise_chain/f64/broadcast_mul_add/prepared_graph/256x256": {
+          "high_ns": 1301300.0,
+          "low_ns": 1283100.0,
+          "mid_ns": 1291700.0
+        },
+        "runtime_elementwise_chain/f64/broadcast_mul_add/unprepared_graph/1024x1024": {
+          "high_ns": 20108000.0,
+          "low_ns": 19743000.0,
+          "mid_ns": 19923000.0
+        },
+        "runtime_elementwise_chain/f64/broadcast_mul_add/unprepared_graph/256x256": {
+          "high_ns": 1356000.0,
+          "low_ns": 1328900.0,
+          "mid_ns": 1341800.0
+        }
+      },
+      "source": "crates/tenferro-runtime/benches/elementwise_fusion.rs"
+    },
+    "tenferro-runtime|session_chain": {
+      "cases": {
+        "session_chain/broadcast/execution_scope": {
+          "high_ns": 35619.0,
+          "low_ns": 35094.0,
+          "mid_ns": 35346.0
+        },
+        "session_chain/broadcast/one_session": {
+          "high_ns": 35562.0,
+          "low_ns": 34897.0,
+          "mid_ns": 35215.0
+        },
+        "session_chain/no_broadcast/execution_scope": {
+          "high_ns": 22991.0,
+          "low_ns": 22672.0,
+          "mid_ns": 22824.0
+        },
+        "session_chain/no_broadcast/one_session": {
+          "high_ns": 23216.0,
+          "low_ns": 22865.0,
+          "mid_ns": 23036.0
+        },
+        "session_chain/phase1/one_session": {
+          "high_ns": 35323.0,
+          "low_ns": 34810.0,
+          "mid_ns": 35060.0
+        }
+      },
+      "source": "crates/tenferro-runtime/benches/session_chain.rs"
+    }
+  },
+  "umbrella_issue": 1929
+}
