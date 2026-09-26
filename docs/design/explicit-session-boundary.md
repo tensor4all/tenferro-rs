@@ -826,10 +826,36 @@ session-only while that fallback exists. B4 (extension routes primarily
 session-based, owner route limited to the runtime-formed region fallback) is
 therefore a prerequisite for B3(iii), not a follow-up.
 
+**Why the owner is still needed: capability identity, not execution.** A second
+look at the extension routes narrows the reason. `execute_linalg_extension_reads_owner`
+(and the fft equivalent) already opens a session internally
+(`backend.with_backend_session(..)`) and runs the same session executor, so the
+*execution* is session-based today. What needs the owner is
+`ErasedExecutionContext<'_, B>` with `B: TensorBackend + 'static`, which the
+extension runtime uses to identify the concrete backend for capability
+dispatch. The session-based equivalent already exists
+(`BackendSession::session_type_id`, `with_cpu_exec_session`,
+`with_cuda_exec_session`), and `execute_prepared_extension_instruction_in_session`
+uses it, but the owner path is still reachable.
+
+It is reachable rather than dead because session support is per operation:
+`linalg_session_supported` returns `true` for the whole family on CPU, and
+`false` on CUDA for `FullPivLu`, `FullPivLuSolve` and general `eig`
+(`extension.rs:1060`, issue #1665). For those operations the scheduler keeps the
+owner path, and that path's `ErasedExecutionContext` cannot be built from
+`&mut dyn BackendSession`.
+
+So B4's deliverable is precise: move extension capability dispatch from the
+owner's type identity to the session's, and give the remaining per-op
+exceptions a session route (or an explicit documented refusal), after which no
+extension operation needs the owner and the runtime's owner extension path can
+be deleted. That is the prerequisite for B3.
+
 The workable order is:
 
-* B4: make the extension runtime registers session primary and keep the owner
-  route only where the runtime forms a region explicitly.
+* B4: make the extension runtime registers session primary, move capability
+  dispatch to `session_type_id`, and keep the owner route only where the runtime
+  forms a region explicitly.
 * B3(i)+(ii): trim the supertraits, delete `default_backend_session`, thread a
   session through the dispatch layer — after B4 the only remaining owner bound is
   gone and the FFI table can be session-only.
