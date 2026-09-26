@@ -380,8 +380,19 @@ consumers that relied on the owner's wider acceptance: either the session's
 accepted input surface is widened to the owner's (changing the session contract
 that Step 1 pinned and that the session-route benchmark measures), or those
 consumers materialize explicitly before the call (a real change in the ad layer).
-That choice belongs to the issue, not to a migration slice, so the attempt was
-reverted and B3(iii) waits on the decision.
+The issue's direction resolves it: #1926 keeps the *session* interface, and the
+session's read halves are the contract Step 1 pinned and that
+`docs/testing/session-route-baseline.json` measures, so the session's accepted
+input surface is authoritative and the consumers that relied on the owner's
+materialization have to materialize explicitly (the ad layer already has
+`to_contiguous_read` for exactly that). That is a behaviour-preserving migration
+of the consumer, not a widening of the session contract, and it is the path
+B3(iii) should take. The `eager_backend_session_identity_projects_to_owner` test
+then needs to state the new arrangement (the owner is the session provider, not a
+session).
+
+The attempt was reverted because that consumer migration is a real change of its
+own and had not been reviewed yet; the tree stays at B3(i)+(ii)+B4.
 
 The rest of the CPU-side work is then mechanical: the eight `impl ... for
 CpuBackend` blocks, the now-dead `CpuBackendSessionMarker` and
