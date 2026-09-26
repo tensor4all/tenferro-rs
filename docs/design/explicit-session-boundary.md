@@ -215,8 +215,25 @@ distinct one-shot session struct: the backend is effectively its own session.
 
 | Backend | `Tensor*` impls | `BackendSession` impl | Status |
 |---|---|---|---|
-| CUDA/CubeCL | `TensorElementwise` `cubecl/mod.rs:4719`, `TensorAnalytic` `:5601`, `TensorStructural` `:5879`, `TensorReduction` `:6669`, `TensorDot` `:6902`, `TensorIndexing` `:6959`, `TensorFusion` `:7895` | `:8109` | decide |
-| WebGPU | `TensorElementwise` `webgpu/mod.rs:758`, `TensorAnalytic` `:836`, `TensorStructural` `:878`, `TensorReduction` `:952`, `TensorDot` `:970`, `TensorIndexing` `:992`, `TensorFusion` `:1047` | `:1077` | decide |
+| CUDA/CubeCL | `TensorElementwise` `cubecl/mod.rs:4719`, `TensorAnalytic` `:5601`, `TensorStructural` `:5879`, `TensorReduction` `:6669`, `TensorDot` `:6902`, `TensorIndexing` `:6959`, `TensorFusion` `:7895` | `:8109` | remove the owner impls |
+| WebGPU | `TensorElementwise` `webgpu/mod.rs:758`, `TensorAnalytic` `:836`, `TensorStructural` `:878`, `TensorReduction` `:952`, `TensorDot` `:970`, `TensorIndexing` `:992`, `TensorFusion` `:1047` | `:1077` | remove the owner impls |
+
+**The `delegate!` shim is transitional and goes with them.** Both GPU exec
+sessions implement the operation traits with a `delegate!` macro whose bodies are
+`self.backend.<method>(..)` (`cubecl/exec_session.rs:444`,
+`webgpu/exec_session.rs:76`), so the session is a thin forwarder and the real
+implementation lives on the owner. That is precisely the owner-as-session shape
+B3 removes, and it cannot survive the removal of the owner impls: once
+`impl TensorElementwise for CudaBackend` is gone, the shim has nothing to forward
+to.
+
+Decision: B3(b) deletes the shim together with the owner impls, and the GPU
+operation bodies are expressed **once** as module-level functions over the
+backend — the shape `gemm::*`, `structural::*` and `dispatch::*` already use —
+with the session methods calling those functions. The session stays the only
+entry, the owner keeps only `BackendRuntimeCache`, `TensorDeviceTransfer` and
+`BackendSessionHost`, and no implementation is duplicated between an owner trait
+impl and a session trait impl.
 
 The GPU-specific risk is different from CPU: a one-shot `Tensor*` call on the
 GPU backend does not *open* a session, it runs unbatched. The migration question
