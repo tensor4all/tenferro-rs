@@ -801,7 +801,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::Compare(dir) => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.compare(a.tensor(), b.tensor(), dir)?]
+                vec![exec.compare_read(
+                    TensorRead::from_tensor(a.tensor()),
+                    TensorRead::from_tensor(b.tensor()),
+                    dir,
+                )?]
             }
             StdTensorOp::Transpose { perm } => vec![exec.transpose(inputs[0], perm)?],
             StdTensorOp::ReduceSum { axes, .. } => vec![exec.reduce_sum(inputs[0], axes)?],

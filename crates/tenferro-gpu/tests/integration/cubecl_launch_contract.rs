@@ -1044,7 +1044,9 @@ fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
 
     // `div` launches from its session read half now that the one-shot entry
     // is deleted; `rem` still launches from its own entry.
-    for (op, end) in [("fn div_read(", "fn rem_read("), ("fn rem(", "fn compare(")] {
+    // The `rem` section ends at the next session method line so that later
+    // one-shot deletions do not have to touch this contract again.
+    for (op, end) in [("fn div_read(", "fn rem_read("), ("fn rem(", "\n    fn ")] {
         let section = source_section(&mod_source, op, end);
         assert!(
             section.contains("launch_scalar_binary"),

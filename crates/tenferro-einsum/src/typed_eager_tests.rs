@@ -56,7 +56,6 @@ impl TensorElementwise for WrongDTypeBackend {
     }
 
     panic_backend_methods! {
-        compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
     }
 
@@ -168,9 +167,11 @@ impl TensorElementwise for WrongDTypeBackend {
         rhs: TensorRead<'_>,
         dir: &CompareDir,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.compare(
-            tenferro_tensor::backend::read_owned_tensor("compare", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("compare", rhs)?,
+        let lhs = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+        let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+        CpuBackend::new().compare_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
             dir,
         )
     }

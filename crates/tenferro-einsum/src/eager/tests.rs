@@ -210,10 +210,6 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         CpuBackend::new().mul_read(lhs, rhs)
     }
 
-    fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> Result<Tensor> {
-        Err(unexpected("compare"))
-    }
-
     fn clamp(&mut self, _input: &Tensor, _lower: &Tensor, _upper: &Tensor) -> Result<Tensor> {
         Err(unexpected("clamp"))
     }
@@ -293,11 +289,10 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         rhs: TensorRead<'_>,
         dir: &CompareDir,
     ) -> Result<Tensor> {
-        self.compare(
-            tenferro_tensor::backend::read_owned_tensor("compare", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("compare", rhs)?,
-            dir,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+        let _ = dir;
+        panic!("compare should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

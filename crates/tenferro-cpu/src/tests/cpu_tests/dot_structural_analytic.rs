@@ -1266,27 +1266,67 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&minimum, &[1]), -2.0);
     assert_eq!(get_f64(&minimum, &[2]), 3.0);
 
-    let eq = backend.compare(&lhs, &rhs, &CompareDir::Eq).unwrap();
+    let eq = backend
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &CompareDir::Eq,
+            )
+        })
+        .unwrap();
     assert!(!get_bool(&eq, &[0]));
     assert!(!get_bool(&eq, &[1]));
     assert!(!get_bool(&eq, &[2]));
 
-    let lt = backend.compare(&lhs, &rhs, &CompareDir::Lt).unwrap();
+    let lt = backend
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &CompareDir::Lt,
+            )
+        })
+        .unwrap();
     assert!(!get_bool(&lt, &[0]));
     assert!(get_bool(&lt, &[1]));
     assert!(!get_bool(&lt, &[2]));
 
-    let le = backend.compare(&lhs, &rhs, &CompareDir::Le).unwrap();
+    let le = backend
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &CompareDir::Le,
+            )
+        })
+        .unwrap();
     assert!(!get_bool(&le, &[0]));
     assert!(get_bool(&le, &[1]));
     assert!(!get_bool(&le, &[2]));
 
-    let gt = backend.compare(&lhs, &rhs, &CompareDir::Gt).unwrap();
+    let gt = backend
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &CompareDir::Gt,
+            )
+        })
+        .unwrap();
     assert!(get_bool(&gt, &[0]));
     assert!(!get_bool(&gt, &[1]));
     assert!(get_bool(&gt, &[2]));
 
-    let ge = backend.compare(&lhs, &rhs, &CompareDir::Ge).unwrap();
+    let ge = backend
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap();
     assert!(get_bool(&ge, &[0]));
     assert!(!get_bool(&ge, &[1]));
     assert!(get_bool(&ge, &[2]));

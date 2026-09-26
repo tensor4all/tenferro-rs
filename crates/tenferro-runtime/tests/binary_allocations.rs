@@ -114,7 +114,15 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
         check!(maximum, maximum_read);
         check!(minimum, minimum_read);
         eprintln!("compare: raw then public");
-        let (raw, baseline) = allocations(|| session.compare(&a, &b, &CompareDir::Lt).unwrap());
+        let (raw, baseline) = allocations(|| {
+            session
+                .compare_read(
+                    TensorRead::from_tensor(&a),
+                    TensorRead::from_tensor(&b),
+                    &CompareDir::Lt,
+                )
+                .unwrap()
+        });
         let (public, actual) = allocations(|| a.compare(&b, CompareDir::Lt, session).unwrap());
         assert_eq!(
             public.as_slice::<bool>().unwrap(),

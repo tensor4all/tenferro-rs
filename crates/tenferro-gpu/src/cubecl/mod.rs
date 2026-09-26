@@ -5161,8 +5161,95 @@ impl TensorElementwise for CudaBackend {
         dir: &CompareDir,
     ) -> crate::Result<Tensor> {
         let lhs = self.read_input(lhs)?;
+        let lhs = lhs.as_tensor();
         let rhs = self.read_input(rhs)?;
-        self.compare(lhs.as_tensor(), rhs.as_tensor(), dir)
+        let rhs = rhs.as_tensor();
+        let op = op_name(
+            PrimitiveOpKind::Compare,
+            op_descriptor::GpuLaunchKind::CompareFloatIntToBool,
+        )?;
+        match (lhs.dtype(), rhs.dtype()) {
+            (DType::F32, DType::F32) => launch_compare_bool(
+                self.runtime(),
+                typed_or_unsupported::<f32>(lhs, op)?,
+                typed_or_unsupported::<f32>(rhs, op)?,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::compare_float_bool::launch_unchecked::<f32, CubeclCudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out,
+                        lhs_arg,
+                        rhs_arg,
+                        dispatch::compare_mode(dir),
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<bool>),
+            (DType::F64, DType::F64) => launch_compare_bool(
+                self.runtime(),
+                typed_or_unsupported::<f64>(lhs, op)?,
+                typed_or_unsupported::<f64>(rhs, op)?,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::compare_float_bool::launch_unchecked::<f64, CubeclCudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out,
+                        lhs_arg,
+                        rhs_arg,
+                        dispatch::compare_mode(dir),
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<bool>),
+            (DType::I32, DType::I32) => launch_compare_bool(
+                self.runtime(),
+                typed_or_unsupported::<i32>(lhs, op)?,
+                typed_or_unsupported::<i32>(rhs, op)?,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::compare_int_bool::launch_unchecked::<i32, CubeclCudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out,
+                        lhs_arg,
+                        rhs_arg,
+                        dispatch::compare_mode(dir),
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<bool>),
+            (DType::I64, DType::I64) => launch_compare_bool(
+                self.runtime(),
+                typed_or_unsupported::<i64>(lhs, op)?,
+                typed_or_unsupported::<i64>(rhs, op)?,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::compare_int_bool::launch_unchecked::<i64, CubeclCudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out,
+                        lhs_arg,
+                        rhs_arg,
+                        dispatch::compare_mode(dir),
+                    );
+                },
+            )
+            .map(Tensor::from_typed::<bool>),
+            (DType::C32, DType::C32) | (DType::C64, DType::C64) => {
+                Err(unsupported_dtype(op, lhs.dtype()))
+            }
+            _ => Err(dtype_mismatch(op, lhs, rhs)),
+        }
     }
 
     fn select_read(
@@ -5419,95 +5506,6 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::from_typed::<i64>),
-            (DType::C32, DType::C32) | (DType::C64, DType::C64) => {
-                Err(unsupported_dtype(op, lhs.dtype()))
-            }
-            _ => Err(dtype_mismatch(op, lhs, rhs)),
-        }
-    }
-
-    fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
-        let op = op_name(
-            PrimitiveOpKind::Compare,
-            op_descriptor::GpuLaunchKind::CompareFloatIntToBool,
-        )?;
-        match (lhs.dtype(), rhs.dtype()) {
-            (DType::F32, DType::F32) => launch_compare_bool(
-                self.runtime(),
-                typed_or_unsupported::<f32>(lhs, op)?,
-                typed_or_unsupported::<f32>(rhs, op)?,
-                lhs.shape(),
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::compare_float_bool::launch_unchecked::<f32, CubeclCudaRuntime>(
-                        client,
-                        count,
-                        dim,
-                        out,
-                        lhs_arg,
-                        rhs_arg,
-                        dispatch::compare_mode(dir),
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<bool>),
-            (DType::F64, DType::F64) => launch_compare_bool(
-                self.runtime(),
-                typed_or_unsupported::<f64>(lhs, op)?,
-                typed_or_unsupported::<f64>(rhs, op)?,
-                lhs.shape(),
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::compare_float_bool::launch_unchecked::<f64, CubeclCudaRuntime>(
-                        client,
-                        count,
-                        dim,
-                        out,
-                        lhs_arg,
-                        rhs_arg,
-                        dispatch::compare_mode(dir),
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<bool>),
-            (DType::I32, DType::I32) => launch_compare_bool(
-                self.runtime(),
-                typed_or_unsupported::<i32>(lhs, op)?,
-                typed_or_unsupported::<i32>(rhs, op)?,
-                lhs.shape(),
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::compare_int_bool::launch_unchecked::<i32, CubeclCudaRuntime>(
-                        client,
-                        count,
-                        dim,
-                        out,
-                        lhs_arg,
-                        rhs_arg,
-                        dispatch::compare_mode(dir),
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<bool>),
-            (DType::I64, DType::I64) => launch_compare_bool(
-                self.runtime(),
-                typed_or_unsupported::<i64>(lhs, op)?,
-                typed_or_unsupported::<i64>(rhs, op)?,
-                lhs.shape(),
-                op,
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::compare_int_bool::launch_unchecked::<i64, CubeclCudaRuntime>(
-                        client,
-                        count,
-                        dim,
-                        out,
-                        lhs_arg,
-                        rhs_arg,
-                        dispatch::compare_mode(dir),
-                    );
-                },
-            )
-            .map(Tensor::from_typed::<bool>),
             (DType::C32, DType::C32) | (DType::C64, DType::C64) => {
                 Err(unsupported_dtype(op, lhs.dtype()))
             }

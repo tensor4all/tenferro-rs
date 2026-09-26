@@ -3049,12 +3049,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::compare_with_pool(buffers, &context.strided_exec_context(), lhs, rhs, dir)
-        })
-    }
-
     fn compare_read(
         &mut self,
         lhs: TensorRead<'_>,

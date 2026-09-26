@@ -141,7 +141,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         }
 
         panic_backend_methods! {
-            compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
             clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
         }
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -252,11 +251,10 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             rhs: TensorRead<'_>,
             dir: &CompareDir,
         ) -> tenferro_tensor::Result<Tensor> {
-            self.compare(
-                tenferro_tensor::backend::read_owned_tensor("compare", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("compare", rhs)?,
-                dir,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+            let _ = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+            let _ = dir;
+            panic!("compare should not be called in this test")
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

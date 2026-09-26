@@ -394,8 +394,24 @@ fn assert_compare_matches(
     let rhs = sample_rhs_tensor(entry.dtype);
     let gpu_lhs = upload(gpu, &lhs);
     let gpu_rhs = upload(gpu, &rhs);
-    let expected = cpu.compare(&lhs, &rhs, &CompareDir::Ge).unwrap();
-    let gpu_output = gpu.compare(&gpu_lhs, &gpu_rhs, &CompareDir::Ge).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap();
+    let gpu_output = gpu
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap();
     let actual = download(gpu, &gpu_output);
     assert_tensor_close(&actual, &expected, 0.0);
 }

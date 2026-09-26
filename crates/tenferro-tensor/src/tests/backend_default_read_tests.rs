@@ -188,16 +188,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(())
     }
 
-    fn compare(
-        &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
-        _dir: &CompareDir,
-    ) -> crate::Result<Tensor> {
-        self.calls.push("compare");
-        Ok(marker())
-    }
-
     fn clamp(
         &mut self,
         _input: &Tensor,
@@ -302,11 +292,11 @@ impl TensorElementwise for DefaultReadBackend {
         rhs: TensorRead<'_>,
         dir: &CompareDir,
     ) -> crate::Result<Tensor> {
-        self.compare(
-            crate::backend::read_owned_tensor("compare", lhs)?,
-            crate::backend::read_owned_tensor("compare", rhs)?,
-            dir,
-        )
+        let _ = crate::backend::read_owned_tensor("compare", lhs)?;
+        let _ = crate::backend::read_owned_tensor("compare", rhs)?;
+        let _ = dir;
+        self.calls.push("compare");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

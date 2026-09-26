@@ -1938,8 +1938,24 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     let gpu_lower = upload(&gpu, &lower);
     let gpu_upper = upload(&gpu, &upper);
 
-    let expected = cpu.compare(&lhs, &rhs, &CompareDir::Ge).unwrap();
-    let gpu_out = gpu.compare(&gpu_lhs, &gpu_rhs, &CompareDir::Ge).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -2146,8 +2162,24 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected_pred = cpu.compare(lhs, rhs, &CompareDir::Ge).unwrap();
-    let gpu_pred = gpu.compare(&gpu_lhs, &gpu_rhs, &CompareDir::Ge).unwrap();
+    let expected_pred = cpu
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap();
+    let gpu_pred = gpu
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap();
     let actual_pred = download(&gpu, &gpu_pred);
     assert_tensor_close(&actual_pred, &expected_pred, 0.0);
 
@@ -2357,7 +2389,13 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_cuda_unsupported_dtype(&err, "exp", DType::C64);
 
     let err = gpu
-        .compare(&gpu_lhs, &gpu_rhs, &CompareDir::Eq)
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &CompareDir::Eq,
+            )
+        })
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "compare", DType::C64);
 

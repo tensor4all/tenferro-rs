@@ -1494,7 +1494,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         }
 
         panic_backend_methods! {
-        compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
 
@@ -1620,11 +1619,16 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             rhs: TensorRead<'_>,
             dir: &CompareDir,
         ) -> crate::Result<Tensor> {
-            self.compare(
-                tenferro_tensor::backend::read_owned_tensor("compare", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("compare", rhs)?,
-                dir,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.compare_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    dir,
+                )
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1989,7 +1993,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         }
 
         panic_backend_methods! {
-        compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
 
@@ -2115,11 +2118,16 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             rhs: TensorRead<'_>,
             dir: &CompareDir,
         ) -> crate::Result<Tensor> {
-            self.compare(
-                tenferro_tensor::backend::read_owned_tensor("compare", lhs)?,
-                tenferro_tensor::backend::read_owned_tensor("compare", rhs)?,
-                dir,
-            )
+            let lhs = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+            let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.compare_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    dir,
+                )
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

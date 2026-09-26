@@ -1120,7 +1120,6 @@ macro_rules! panic_elementwise {
             }
 
             panic_backend_methods! {
-                compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
                 clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult;
             }
 
@@ -1208,11 +1207,10 @@ macro_rules! panic_elementwise {
                 rhs: TensorRead<'_>,
                 dir: &CompareDir,
             ) -> TensorResult {
-                self.compare(
-                    tenferro_tensor::backend::read_owned_tensor("compare", lhs)?,
-                    tenferro_tensor::backend::read_owned_tensor("compare", rhs)?,
-                    dir,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+                let _ = dir;
+                panic!("compare should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1562,10 +1560,6 @@ impl TensorElementwise for WrongDTypeSessionBackend {
     }
 
     fn abs_read(&mut self, _input: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 

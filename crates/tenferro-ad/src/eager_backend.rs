@@ -317,7 +317,6 @@ impl TensorElementwise for RecordingBackend {
 
     delegate_recording_backend_methods! {
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
     }
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -401,9 +400,11 @@ impl TensorElementwise for RecordingBackend {
         rhs: TensorRead<'_>,
         dir: &CompareDir,
     ) -> TensorResult<Tensor> {
-        self.compare(
-            tenferro_tensor::backend::read_owned_tensor("compare", lhs)?,
-            tenferro_tensor::backend::read_owned_tensor("compare", rhs)?,
+        let lhs = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+        let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+        self.inner.compare_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
             dir,
         )
     }
@@ -742,7 +743,6 @@ impl TensorElementwise for EagerBackend {
         fn sign_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> TensorResult<Tensor>;
         fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;

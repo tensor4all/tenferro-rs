@@ -42,7 +42,6 @@ macro_rules! impl_minimal_tensor_backend {
             }
 
             unreachable_backend_methods! {
-                compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
                 clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
             }
 
@@ -125,7 +124,10 @@ macro_rules! impl_minimal_tensor_backend {
                 // Reproduce the previous read-half default: delegate an owned tensor and
                 // reject a borrowed view.
                 fn compare_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> tenferro_tensor::Result<Tensor> {
-                    self.compare(tenferro_tensor::backend::read_owned_tensor("compare", lhs)?, tenferro_tensor::backend::read_owned_tensor("compare", rhs)?, dir)
+                                        let _ = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+                        let _ = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+                        let _ = dir;
+                        panic!("compare should not be called in this test")
                 }
 
                 // Reproduce the previous read-half default: delegate an owned tensor and
