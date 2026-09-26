@@ -794,6 +794,50 @@ owner-side operation implementations and `BackendCachedDot` impls deleted once
 nothing calls them. (i) alone does not compile the workspace, so it must ship in
 the same commit as (ii); (iii) is what makes the removal observable.
 
+### B3 depends on B4: the session-region path still falls back to the owner
+
+A second B3 attempt converted the runtime dispatch layer and then stopped,
+because it ran into the extension route. The finding is an ordering constraint
+that the slice list does not show.
+
+What converts cleanly: `exec/dispatch.rs`'s host table and the
+`execute_*_host` functions become `&mut dyn BackendSession` (the session path
+already calls them), the four owner-based evaluators in `segment.rs`/`exec.rs`
+open one session and use `execute_segment_in_session` /
+`execute_value_segment_in_session` / `execute_ffi_instruction_exec`, and the
+owner wrappers (`execute_host_instruction`, `execute_ffi_instruction[_cached]`,
+`reclaim_exec_slot_with_backend`, `reclaim_last_use_inputs_backend`) disappear.
+
+What does not convert yet is the *extension* operation route. Two facts pin it:
+
+1. `execute_prepared_extension_instruction` builds `ErasedExecutionContext`, which
+   requires a `Sized + 'static` type, so it needs the owner (`B: TensorBackend +
+   'static`), not `&mut dyn BackendSession`. The session equivalent
+   (`execute_prepared_extension_instruction_in_session`) exists and is used by
+   `execute_ffi_instruction_exec`, but the owner route is still reachable.
+2. `segment_is_session_compatible` excludes FFI ops that are not session
+   compatible, and the session-region evaluator falls back to
+   `execute_ffi_instruction_cached(backend, ..)` for them. With the owner-based
+   FFI dispatch deleted, that fallback has no callee.
+
+So B3's owner-side operation impls cannot be deleted while the extension fallback
+still runs operations on the owner, and the FFI dispatch table cannot become
+session-only while that fallback exists. B4 (extension routes primarily
+session-based, owner route limited to the runtime-formed region fallback) is
+therefore a prerequisite for B3(iii), not a follow-up.
+
+The workable order is:
+
+* B4: make the extension runtime registers session primary and keep the owner
+  route only where the runtime forms a region explicitly.
+* B3(i)+(ii): trim the supertraits, delete `default_backend_session`, thread a
+  session through the dispatch layer — after B4 the only remaining owner bound is
+  gone and the FFI table can be session-only.
+* B3(iii): delete the owner-side operation impls (`TensorElementwise` and the
+  other families for `CpuBackend`, `CudaBackend`, `WebGpuBackend`), the
+  `BackendCachedDot` impls and the GPU `delegate!` shims, then shrink
+  `scripts/session-entry-allowlist.json`.
+
 ### B1 fail fixtures: the deleted spellings are pinned by `compile_fail` doctests
 
 The B1 contract file covers the surviving surface with trybuild pass fixtures.
