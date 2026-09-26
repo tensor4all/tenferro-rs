@@ -553,7 +553,7 @@ preserve CUDA residency and never stage tensor payloads through host memory.
 
 ```text
 use tenferro_gpu::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
 
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
@@ -563,7 +563,10 @@ let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
 
 let gpu_a = upload_tensor(backend.runtime(), &a)?;
 let gpu_b = upload_tensor(backend.runtime(), &b)?;
-let gpu_c = backend.add(&gpu_a, &gpu_b)?;
+// Operations run on a borrowed session, not on the backend object.
+let gpu_c = backend.with_backend_session(|session| {
+    session.add_read(TensorRead::from_tensor(&gpu_a), TensorRead::from_tensor(&gpu_b))
+})?;
 let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 ```
 

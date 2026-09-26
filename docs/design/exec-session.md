@@ -30,7 +30,7 @@ Runtime::run_compiled(program, inputs)
               └── fused backend segment
                     └── backend.with_backend_session(|exec| {
                             for inst in segment {
-                                exec.transpose(...)
+                                exec.transpose_read(...)
                                 exec.reclaim_buffer(...)
                             }
                         })

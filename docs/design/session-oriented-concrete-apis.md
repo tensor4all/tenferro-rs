@@ -165,7 +165,7 @@ Scope decision for the first implementation PR. The design-review gate rules
 apply: this section is the pre-implementation design document; the
 implementation must not start until it has a reviewer-gpt verdict.
 
-### Measured current state of the one-shot path
+### Measured state of the one-shot path before #1926
 
 A binary op already pays more than one session entry today
 (`crates/tenferro-runtime/src/tensor.rs`):
@@ -173,11 +173,15 @@ A binary op already pays more than one session entry today
 - `add` → `broadcast_binary` → `broadcast_to` per operand (each
   `broadcast_to` can enter 0-2 sessions: `reshape` + `broadcast_in_dim`, or
   zero when shapes already match via `duplicate`) → then
-  `with_backend_session(|exec| exec.add(...))` for the op itself.
+  `with_backend_session(|exec| exec.add_read(...))` for the op itself.
   Worst case: **5 sessions per binary op** (both operands need
   reshape+broadcast = 2 each + 1 final add, e.g. `[1,2] + [2,1]` → `[2,2]`);
   the common one-sided reshape+broadcast case is 3; equal-shape case is 1.
 - `unary_fn` (exp etc.) and `reduce_sum`: 1 session each.
+
+This is the before-side of the measurement; the owner-level one-shot spelling it
+describes was deleted by #1926, so the numbers are now the reference that
+`docs/testing/session-route-baseline.json` compares against.
 
 So the session-explicit surface must own the broadcast step too, or a binary
 op still pays 2 entries inside one session.
