@@ -2317,8 +2317,12 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.conj(&lhs).unwrap();
-    let gpu_out = gpu.conj(&gpu_lhs).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(&lhs)))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(&gpu_lhs)))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -2390,7 +2394,13 @@ fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
     placement.device = None;
     gpu_input.set_placement(placement);
 
-    let err = gpu.conj(&Tensor::from_typed::<f64>(gpu_input)).unwrap_err();
+    let err = gpu
+        .with_backend_session(|__s| {
+            __s.conj_read(TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                gpu_input,
+            )))
+        })
+        .unwrap_err();
 
     assert_eq!(err.kind(), ErrorKind::RuntimeState);
 }

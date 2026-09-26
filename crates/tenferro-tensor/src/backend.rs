@@ -2109,7 +2109,6 @@ pub trait TensorElementwise: TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor>;
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -3049,14 +3048,14 @@ pub trait TensorDot: TensorElementwise {
 
         let lhs_tmp;
         let lhs_ref = if lhs_conj {
-            lhs_tmp = self.conj(lhs)?;
+            lhs_tmp = self.conj_read(TensorRead::from_tensor(lhs))?;
             &lhs_tmp
         } else {
             lhs
         };
         let rhs_tmp;
         let rhs_ref = if rhs_conj {
-            rhs_tmp = self.conj(rhs)?;
+            rhs_tmp = self.conj_read(TensorRead::from_tensor(rhs))?;
             &rhs_tmp
         } else {
             rhs

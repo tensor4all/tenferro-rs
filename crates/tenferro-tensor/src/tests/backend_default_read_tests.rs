@@ -188,11 +188,6 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(())
     }
 
-    fn conj(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        self.calls.push("conj");
-        Ok(marker())
-    }
-
     fn abs(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("abs");
         Ok(marker())
@@ -256,7 +251,9 @@ impl TensorElementwise for DefaultReadBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.conj(crate::backend::read_owned_tensor("conj", input)?)
+        let _ = crate::backend::read_owned_tensor("conj", input)?;
+        self.calls.push("conj");
+        Ok(marker())
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

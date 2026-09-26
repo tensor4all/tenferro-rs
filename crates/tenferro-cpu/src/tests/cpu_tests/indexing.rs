@@ -678,7 +678,9 @@ fn test_backend_mul_neg_conj_dispatch() {
     assert_eq!(get_f64(&negated, &[0]), -1.0);
     assert_eq!(get_f64(&negated, &[1]), 2.0);
 
-    let conjugated = backend.conj(&c).unwrap();
+    let conjugated = backend
+        .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(&c)))
+        .unwrap();
     assert_c64_close(get_c64(&conjugated, &[0]), Complex64::new(1.0, -2.0));
     assert_c64_close(get_c64(&conjugated, &[1]), Complex64::new(-3.0, -0.5));
 }

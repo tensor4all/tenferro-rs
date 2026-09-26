@@ -249,7 +249,9 @@ fn run_supported_case(
         PrimitiveOpKind::Neg => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(x)))
         }),
-        PrimitiveOpKind::Conj => assert_unary_matches(cpu, gpu, entry, |b, x| b.conj(x)),
+        PrimitiveOpKind::Conj => assert_unary_matches(cpu, gpu, entry, |b, x| {
+            b.with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(x)))
+        }),
         PrimitiveOpKind::Div => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
             b.with_backend_session(|__s| {
                 __s.div_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
@@ -475,7 +477,9 @@ fn run_cpu_unary(
         PrimitiveOpKind::Neg => {
             cpu.with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(input)))
         }
-        PrimitiveOpKind::Conj => cpu.conj(input),
+        PrimitiveOpKind::Conj => {
+            cpu.with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(input)))
+        }
         PrimitiveOpKind::Abs => cpu.abs(input),
         PrimitiveOpKind::Sign => {
             cpu.with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(input)))

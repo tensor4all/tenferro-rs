@@ -4815,7 +4815,62 @@ impl TensorElementwise for CudaBackend {
 
     fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         let input = self.read_input(input)?;
-        self.conj(input.as_tensor())
+        let input = input.as_tensor();
+        let op = op_name(
+            PrimitiveOpKind::Conj,
+            op_descriptor::GpuLaunchKind::UnaryFloatComplex,
+        )?;
+        // Dispatch on the tag and recover the typed tensor, which is what `as_typed` exists for.
+        match input.dtype() {
+            DType::F32 => {
+                let tensor = typed_or_unsupported::<f32>(input, op)?;
+                ensure_resident_on_runtime(self.runtime(), tensor, op)?;
+                self.to_contiguous_view_typed(&tensor.as_view(), op)
+                    .map(Tensor::from_typed::<f32>)
+            }
+            DType::F64 => {
+                let tensor = typed_or_unsupported::<f64>(input, op)?;
+                ensure_resident_on_runtime(self.runtime(), tensor, op)?;
+                self.to_contiguous_view_typed(&tensor.as_view(), op)
+                    .map(Tensor::from_typed::<f64>)
+            }
+            DType::I32 | DType::I64 | DType::Bool => Err(unsupported_dtype(op, input.dtype())),
+            DType::C32 => {
+                let tensor = typed_or_unsupported::<Complex32>(input, op)?;
+                launch_unary(
+                    self.runtime(),
+                    tensor,
+                    tensor.shape(),
+                    op,
+                    |client, count, dim, out, input_arg| unsafe {
+                        elementwise::conj_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
+                            client, count, dim, out, input_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<num_complex::Complex32>)
+            }
+            DType::C64 => {
+                let tensor = typed_or_unsupported::<Complex64>(input, op)?;
+                launch_unary(
+                    self.runtime(),
+                    tensor,
+                    tensor.shape(),
+                    op,
+                    |client, count, dim, out, input_arg| unsafe {
+                        elementwise::conj_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
+                            client, count, dim, out, input_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<num_complex::Complex64>)
+            }
+            // A caller-owned payload has no GPU implementation for this operation.
+            DType::External(_) => Err(crate::Error::unsupported(
+                "conj",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
+        }
     }
 
     fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -5179,64 +5234,6 @@ impl TensorElementwise for CudaBackend {
             return result;
         }
         tenferro_tensor::backend::elementwise_read_into_via_allocating_ops(self, op, inputs, out)
-    }
-
-    fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        let op = op_name(
-            PrimitiveOpKind::Conj,
-            op_descriptor::GpuLaunchKind::UnaryFloatComplex,
-        )?;
-        // Dispatch on the tag and recover the typed tensor, which is what `as_typed` exists for.
-        match input.dtype() {
-            DType::F32 => {
-                let tensor = typed_or_unsupported::<f32>(input, op)?;
-                ensure_resident_on_runtime(self.runtime(), tensor, op)?;
-                self.to_contiguous_view_typed(&tensor.as_view(), op)
-                    .map(Tensor::from_typed::<f32>)
-            }
-            DType::F64 => {
-                let tensor = typed_or_unsupported::<f64>(input, op)?;
-                ensure_resident_on_runtime(self.runtime(), tensor, op)?;
-                self.to_contiguous_view_typed(&tensor.as_view(), op)
-                    .map(Tensor::from_typed::<f64>)
-            }
-            DType::I32 | DType::I64 | DType::Bool => Err(unsupported_dtype(op, input.dtype())),
-            DType::C32 => {
-                let tensor = typed_or_unsupported::<Complex32>(input, op)?;
-                launch_unary(
-                    self.runtime(),
-                    tensor,
-                    tensor.shape(),
-                    op,
-                    |client, count, dim, out, input_arg| unsafe {
-                        elementwise::conj_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
-                            client, count, dim, out, input_arg,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<num_complex::Complex32>)
-            }
-            DType::C64 => {
-                let tensor = typed_or_unsupported::<Complex64>(input, op)?;
-                launch_unary(
-                    self.runtime(),
-                    tensor,
-                    tensor.shape(),
-                    op,
-                    |client, count, dim, out, input_arg| unsafe {
-                        elementwise::conj_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
-                            client, count, dim, out, input_arg,
-                        );
-                    },
-                )
-                .map(Tensor::from_typed::<num_complex::Complex64>)
-            }
-            // A caller-owned payload has no GPU implementation for this operation.
-            DType::External(_) => Err(crate::Error::unsupported(
-                "conj",
-                "an externally defined payload is not supported by this GPU operation",
-            )),
-        }
     }
 
     fn rem(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {

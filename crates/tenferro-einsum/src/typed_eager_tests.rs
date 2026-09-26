@@ -61,9 +61,6 @@ impl TensorElementwise for WrongDTypeBackend {
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
     }
 
-    fn conj(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        CpuBackend::new().conj(input)
-    }
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn add_read(
@@ -110,7 +107,8 @@ impl TensorElementwise for WrongDTypeBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn conj_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-        self.conj(tenferro_tensor::backend::read_owned_tensor("conj", input)?)
+        let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+        CpuBackend::new().conj_read(TensorRead::from_tensor(&input))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and

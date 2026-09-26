@@ -1499,10 +1499,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
 
-        fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-            CpuBackend::new().conj(input)
-        }
-
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -1549,7 +1545,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            self.conj(tenferro_tensor::backend::read_owned_tensor("conj", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.conj_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1991,10 +1991,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
         }
 
-        fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-            CpuBackend::new().conj(input)
-        }
-
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -2041,7 +2037,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         // Reproduce the previous read-half default: delegate an owned tensor and
         // reject a borrowed view.
         fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            self.conj(tenferro_tensor::backend::read_owned_tensor("conj", input)?)
+            let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.conj_read(TensorRead::from_tensor(input))
+            })
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and

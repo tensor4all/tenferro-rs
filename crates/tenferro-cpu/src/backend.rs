@@ -3001,12 +3001,6 @@ impl TensorElementwise for CpuBackend {
         })
     }
 
-    fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::conj_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
     fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool_context(|context, buffers| {
             elementwise::conj_read_with_pool(buffers, &context.strided_exec_context(), input)

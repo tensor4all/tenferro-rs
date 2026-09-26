@@ -317,7 +317,6 @@ impl TensorElementwise for RecordingBackend {
 
     delegate_recording_backend_methods! {
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn conj(input: &Tensor) -> TensorResult<Tensor>;
         fn abs(input: &Tensor) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
@@ -350,7 +349,8 @@ impl TensorElementwise for RecordingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn conj_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
-        self.conj(tenferro_tensor::backend::read_owned_tensor("conj", input)?)
+        let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+        self.inner.conj_read(TensorRead::from_tensor(input))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -734,7 +734,6 @@ impl TensorElementwise for EagerBackend {
         fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn neg_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn conj(input: &Tensor) -> TensorResult<Tensor>;
         fn conj_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn rem(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;

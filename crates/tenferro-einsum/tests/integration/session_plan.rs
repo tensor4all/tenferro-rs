@@ -217,7 +217,8 @@ macro_rules! panic_elementwise {
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn conj_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                self.conj(tenferro_tensor::backend::read_owned_tensor("conj", input)?)
+                let _ = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+                panic!("conj should not be called in this test")
             }
 
             // Reproduce the previous read-half default: delegate an owned tensor and
@@ -299,10 +300,6 @@ macro_rules! panic_elementwise {
                     tenferro_tensor::backend::read_owned_tensor("clamp", lower)?,
                     tenferro_tensor::backend::read_owned_tensor("clamp", upper)?,
                 )
-            }
-
-            fn conj(&mut self, input: &Tensor) -> TensorResult {
-                CpuBackend::new().conj(input)
             }
         }
     };
@@ -491,9 +488,6 @@ impl TensorElementwise for SessionCountingBackend {
         self.inner.clamp(input, lower, upper)
     }
 
-    fn conj(&mut self, input: &Tensor) -> TensorResult {
-        self.inner.conj(input)
-    }
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
@@ -528,7 +522,8 @@ impl TensorElementwise for SessionCountingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
     fn conj_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-        self.conj(tenferro_tensor::backend::read_owned_tensor("conj", input)?)
+        let _ = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+        panic!("conj should not be called in this test")
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
