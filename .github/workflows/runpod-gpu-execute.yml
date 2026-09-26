@@ -281,8 +281,10 @@ jobs:
           #     --jq '.tag_name, .body' | less
           # (the sha256 for actions-runner-linux-x64-<version>.tar.gz is in
           # the "SHA-256 Checksums" section of the release body).
-          RUNNER_VERSION="2.335.1"
-          RUNNER_SHA256="4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf"
+          # Keep this pin current: GitHub rejects deprecated runner versions
+          # before they can receive a job, even after CUDA smoke succeeds.
+          RUNNER_VERSION="2.337.0"
+          RUNNER_SHA256="70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
           RUNNER_TARBALL="actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
 
           # A persistent volume mount makes the pinned tarball a local read on
