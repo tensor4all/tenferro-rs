@@ -230,6 +230,15 @@ is a follow-up recorded in
 
 ### F. Explicitly not entries
 
+The single documented exception to the entry inventory is
+`with_cpu_exec_session` (`crates/tenferro-cpu`): it is a capability bridge for
+crates that must run a CPU-specific step inside a session they already own, not
+an alternative execution entry. It is retained deliberately on the
+out-of-scope list of #1929 (together with `with_backend_session` returning
+`Result<R>`, and release-mode nested-entry detection on the GPU), and any new use
+of it must justify why the ordinary session route does not apply. Every other
+entry below is excluded because it is *not* an operation entry at all.
+
 - `Runtime::run_compiled` region construction and the scheduler's session
   regions (`exec.rs:633`–`:796`, `segment.rs:313`–`:750`).
 - `tenferro-fft`'s plan/cache types and `*_on_session` bodies.
