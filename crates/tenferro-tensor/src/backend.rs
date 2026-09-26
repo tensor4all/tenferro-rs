@@ -1863,13 +1863,6 @@ pub trait TensorElementwise: TensorStructural {
         out: TensorWrite<'_>,
     ) -> crate::Result<()>;
 
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-
     /// Elementwise addition accepting either owned tensors or borrowed views.
     ///
     /// Backends that implement this method must not silently move data across
@@ -1960,13 +1953,6 @@ pub trait TensorElementwise: TensorStructural {
     ) -> crate::Result<()> {
         self.elementwise_read_into(ElementwiseReadOp::Add, &[lhs, rhs], out)
     }
-
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
 
     /// Elementwise subtraction accepting either owned tensors or borrowed views.
     ///
@@ -2927,13 +2913,6 @@ pub trait TensorStructural {
 /// fn accepts_reduction<B: TensorReduction>(_backend: &mut B) {}
 /// ```
 pub trait TensorReduction {
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-
     /// Sum elements across axes from an owned tensor or borrowed view.
     ///
     /// # Examples
@@ -2978,13 +2957,6 @@ pub trait TensorReduction {
         ))
     }
 
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-
     /// Multiply elements across axes from an owned tensor or borrowed view.
     ///
     /// # Examples
@@ -3007,13 +2979,6 @@ pub trait TensorReduction {
     /// backend execution or storage access cannot provide the requested result.
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
 
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-
     /// Take maximum values across axes from an owned tensor or borrowed view.
     ///
     /// # Examples
@@ -3035,13 +3000,6 @@ pub trait TensorReduction {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
-
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
 
     /// Take minimum values across axes from an owned tensor or borrowed view.
     ///
@@ -3076,13 +3034,6 @@ pub trait TensorReduction {
 /// fn accepts_dot<B: TensorDot>(_backend: &mut B) {}
 /// ```
 pub trait TensorDot: TensorElementwise {
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-
     #[doc(hidden)]
     fn dot_general_read(
         &mut self,

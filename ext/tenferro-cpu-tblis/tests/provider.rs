@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tenferro_cpu::provider::CpuGeneralContractionProvider;
 use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuProviderBundle};
 use tenferro_cpu_tblis::TblisGeneralContractionProvider;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorElementwise};
+use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead};
 
 fn backend_with_tblis_preferred() -> CpuBackend {
     let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
@@ -41,7 +41,15 @@ fn preferred_provider_falls_back_for_scalar_output_inner_product() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    let out = backend.dot_general(&lhs, &rhs, &config).unwrap();
+    let out = backend
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap();
 
     assert_eq!(out.shape(), &[] as &[usize]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[32.0]);
@@ -53,7 +61,11 @@ fn preferred_provider_leaves_non_contractions_on_default_backend() {
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
-    let out = backend.add(&lhs, &rhs).unwrap();
+    let out = backend
+        .with_backend_session(|session| {
+            session.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 }
@@ -70,7 +82,15 @@ fn required_provider_reports_unsupported_without_fallback() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    let error = backend.dot_general(&lhs, &rhs, &config).unwrap_err();
+    let error = backend
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap_err();
 
     assert!(error
         .to_string()

@@ -329,7 +329,9 @@ fn cpu_session_overrides_elementwise_read_into_with_pooled_context() {
     // The operation implementations live on the execution session only.
     let session_source = include_str!("../../src/exec_session.rs");
 
-    for (surface, source) in [("CpuExecSession", session_source)] {
+    {
+        let surface = "CpuExecSession";
+        let source = session_source;
         let elementwise_impl = source
             .split_once(&format!("impl TensorElementwise for {surface}"))
             .expect("TensorElementwise implementation must exist")
@@ -348,7 +350,9 @@ fn structural_read_paths_dispatch_directly_to_typed_view_helpers() {
     let session_source = include_str!("../../src/exec_session.rs");
     let structural_source = include_str!("../../src/structural.rs");
 
-    for (surface, source) in [("CpuExecSession", session_source)] {
+    {
+        let surface = "CpuExecSession";
+        let source = session_source;
         let structural_impl = source
             .split_once(&format!("impl TensorStructural for {surface}"))
             .expect("TensorStructural implementation must exist")

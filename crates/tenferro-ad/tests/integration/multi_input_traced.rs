@@ -127,10 +127,14 @@ fn execute_force(
 }
 
 fn action_session_supported<B: TensorBackend + 'static>(_op: &ActionOp) -> bool {
+    // The family runs through a session on every backend.
+    let _ = std::any::TypeId::of::<B>();
     true
 }
 
 fn force_session_supported<B: TensorBackend + 'static>(_op: &ForceOp) -> bool {
+    // The family runs through a session on every backend.
+    let _ = std::any::TypeId::of::<B>();
     true
 }
 

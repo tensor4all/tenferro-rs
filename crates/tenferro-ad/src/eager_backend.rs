@@ -416,8 +416,8 @@ impl TensorElementwise for RecordingBackend {
         let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
         self.inner.with_backend_session(|__s| {
             __s.compare_read(
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_tensor(&rhs),
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
                 dir,
             )
         })
@@ -456,9 +456,9 @@ impl TensorElementwise for RecordingBackend {
         let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
         self.inner.with_backend_session(|__s| {
             __s.clamp_read(
-                TensorRead::from_tensor(&input),
-                TensorRead::from_tensor(&lower),
-                TensorRead::from_tensor(&upper),
+                TensorRead::from_tensor(input),
+                TensorRead::from_tensor(lower),
+                TensorRead::from_tensor(upper),
             )
         })
     }
@@ -580,7 +580,7 @@ impl TensorStructural for RecordingBackend {
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
         self.inner
-            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), perm))
+            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(input), perm))
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -589,7 +589,7 @@ impl TensorStructural for RecordingBackend {
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), shape))
+            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(input), shape))
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -603,7 +603,7 @@ impl TensorStructural for RecordingBackend {
     ) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
         self.inner.with_backend_session(|__s| {
-            __s.broadcast_in_dim_read(TensorRead::from_tensor(&input), shape, dims)
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
         })
     }
 }
@@ -620,25 +620,25 @@ impl TensorReduction for RecordingBackend {
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), axes))
+            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes))
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), axes))
+            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(input), axes))
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), axes))
+            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes))
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), axes))
+            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), axes))
     }
 }
 
@@ -805,7 +805,7 @@ impl TensorStructural for EagerBackend {
     // forwarding a view, which would widen the accepted input surface.
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
-        dispatch!(self, transpose_read(TensorRead::from_tensor(&input), perm))
+        dispatch!(self, transpose_read(TensorRead::from_tensor(input), perm))
     }
 }
 
@@ -819,25 +819,22 @@ impl TensorReduction for EagerBackend {
     // would widen the accepted input surface, so reproduce the old default.
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
-        dispatch!(self, reduce_sum_read(TensorRead::from_tensor(&input), axes))
+        dispatch!(self, reduce_sum_read(TensorRead::from_tensor(input), axes))
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
-        dispatch!(
-            self,
-            reduce_prod_read(TensorRead::from_tensor(&input), axes)
-        )
+        dispatch!(self, reduce_prod_read(TensorRead::from_tensor(input), axes))
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
-        dispatch!(self, reduce_max_read(TensorRead::from_tensor(&input), axes))
+        dispatch!(self, reduce_max_read(TensorRead::from_tensor(input), axes))
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
-        dispatch!(self, reduce_min_read(TensorRead::from_tensor(&input), axes))
+        dispatch!(self, reduce_min_read(TensorRead::from_tensor(input), axes))
     }
 }
 

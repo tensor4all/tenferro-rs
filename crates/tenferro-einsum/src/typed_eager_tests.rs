@@ -102,7 +102,7 @@ impl TensorElementwise for WrongDTypeBackend {
     // reject a borrowed view.
     fn conj_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
-        CpuBackend::new().with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(&input)))
+        CpuBackend::new().with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(input)))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -121,7 +121,7 @@ impl TensorElementwise for WrongDTypeBackend {
     // reject a borrowed view.
     fn abs_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
-        CpuBackend::new().with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
+        CpuBackend::new().with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(input)))
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -167,8 +167,8 @@ impl TensorElementwise for WrongDTypeBackend {
         let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
         CpuBackend::new().with_backend_session(|__s| {
             __s.compare_read(
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_tensor(&rhs),
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
                 dir,
             )
         })
@@ -201,9 +201,9 @@ impl TensorElementwise for WrongDTypeBackend {
         let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
         CpuBackend::new().with_backend_session(|__s| {
             __s.clamp_read(
-                TensorRead::from_tensor(&input),
-                TensorRead::from_tensor(&lower),
-                TensorRead::from_tensor(&upper),
+                TensorRead::from_tensor(input),
+                TensorRead::from_tensor(lower),
+                TensorRead::from_tensor(upper),
             )
         })
     }
@@ -344,7 +344,7 @@ impl TensorStructural for WrongDTypeBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
         CpuBackend::new()
-            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), perm))
+            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(input), perm))
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -357,7 +357,7 @@ impl TensorStructural for WrongDTypeBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
         CpuBackend::new()
-            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), shape))
+            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(input), shape))
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -371,7 +371,7 @@ impl TensorStructural for WrongDTypeBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
         CpuBackend::new().with_backend_session(|__s| {
-            __s.broadcast_in_dim_read(TensorRead::from_tensor(&input), shape, dims)
+            __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
         })
     }
 }
@@ -386,7 +386,7 @@ impl TensorReduction for WrongDTypeBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
         CpuBackend::new()
-            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), axes))
+            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes))
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -398,7 +398,7 @@ impl TensorReduction for WrongDTypeBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
         CpuBackend::new()
-            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), axes))
+            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(input), axes))
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -410,7 +410,7 @@ impl TensorReduction for WrongDTypeBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
         CpuBackend::new()
-            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), axes))
+            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes))
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -422,7 +422,7 @@ impl TensorReduction for WrongDTypeBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
         CpuBackend::new()
-            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), axes))
+            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), axes))
     }
 }
 

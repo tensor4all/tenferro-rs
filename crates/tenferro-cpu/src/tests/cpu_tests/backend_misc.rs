@@ -1652,8 +1652,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.compare_read(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
+                    TensorRead::from_tensor(lhs),
+                    TensorRead::from_tensor(rhs),
                     dir,
                 )
             })
@@ -1694,9 +1694,9 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.clamp_read(
-                    TensorRead::from_tensor(&input),
-                    TensorRead::from_tensor(&lower),
-                    TensorRead::from_tensor(&upper),
+                    TensorRead::from_tensor(input),
+                    TensorRead::from_tensor(lower),
+                    TensorRead::from_tensor(upper),
                 )
             })
         }
@@ -1829,7 +1829,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.transpose_read(TensorRead::from_tensor(&input), perm)
+                __s.transpose_read(TensorRead::from_tensor(input), perm)
             })
         }
 
@@ -1844,7 +1844,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reshape_read(TensorRead::from_tensor(&input), shape)
+                __s.reshape_read(TensorRead::from_tensor(input), shape)
             })
         }
 
@@ -1860,7 +1860,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.broadcast_in_dim_read(TensorRead::from_tensor(&input), shape, dims)
+                __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
             })
         }
     }
@@ -1876,7 +1876,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_sum_read(TensorRead::from_tensor(&input), axes)
+                __s.reduce_sum_read(TensorRead::from_tensor(input), axes)
             })
         }
 
@@ -1890,7 +1890,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_prod_read(TensorRead::from_tensor(&input), axes)
+                __s.reduce_prod_read(TensorRead::from_tensor(input), axes)
             })
         }
 
@@ -1904,7 +1904,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_max_read(TensorRead::from_tensor(&input), axes)
+                __s.reduce_max_read(TensorRead::from_tensor(input), axes)
             })
         }
 
@@ -1918,7 +1918,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_min_read(TensorRead::from_tensor(&input), axes)
+                __s.reduce_min_read(TensorRead::from_tensor(input), axes)
             })
         }
     }
@@ -2160,8 +2160,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.compare_read(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
+                    TensorRead::from_tensor(lhs),
+                    TensorRead::from_tensor(rhs),
                     dir,
                 )
             })
@@ -2202,9 +2202,9 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.clamp_read(
-                    TensorRead::from_tensor(&input),
-                    TensorRead::from_tensor(&lower),
-                    TensorRead::from_tensor(&upper),
+                    TensorRead::from_tensor(input),
+                    TensorRead::from_tensor(lower),
+                    TensorRead::from_tensor(upper),
                 )
             })
         }
@@ -2337,7 +2337,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.transpose_read(TensorRead::from_tensor(&input), perm)
+                __s.transpose_read(TensorRead::from_tensor(input), perm)
             })
         }
 
@@ -2352,7 +2352,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reshape_read(TensorRead::from_tensor(&input), shape)
+                __s.reshape_read(TensorRead::from_tensor(input), shape)
             })
         }
 
@@ -2368,7 +2368,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.broadcast_in_dim_read(TensorRead::from_tensor(&input), shape, dims)
+                __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
             })
         }
     }
@@ -2384,7 +2384,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_sum_read(TensorRead::from_tensor(&input), axes)
+                __s.reduce_sum_read(TensorRead::from_tensor(input), axes)
             })
         }
 
@@ -2398,7 +2398,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_prod_read(TensorRead::from_tensor(&input), axes)
+                __s.reduce_prod_read(TensorRead::from_tensor(input), axes)
             })
         }
 
@@ -2412,7 +2412,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_max_read(TensorRead::from_tensor(&input), axes)
+                __s.reduce_max_read(TensorRead::from_tensor(input), axes)
             })
         }
 
@@ -2426,7 +2426,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_min_read(TensorRead::from_tensor(&input), axes)
+                __s.reduce_min_read(TensorRead::from_tensor(input), axes)
             })
         }
     }
