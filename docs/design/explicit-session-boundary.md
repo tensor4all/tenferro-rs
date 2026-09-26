@@ -425,6 +425,53 @@ reject). Each option has a different cost profile for the untracked path, which 
 exactly what the Phase-C baseline measures, so it should be decided with the
 issue rather than picked inside a migration slice.
 
+### B3(iii) status: CPU and WebGPU done, CUDA outlined
+
+The earlier "acceptance surface" blocker was a misdiagnosis and is resolved:
+the failure came from routing the composite `EagerBackend`'s
+`BackendSessionHost::with_backend_session` to `with_session_entry_guard(||
+f(self))`. The enum is not a session; forwarding to the concrete backend's
+session (as before) keeps the untracked eager path on the same accepted input
+surface. With that, B3(iii) needed no consumer policy change at all.
+
+Landed so far:
+
+* **CPU** (`007da98a7`): the eight owner impls, the dead marker and the indexed
+  pool helpers are gone, ~380 call sites migrated, three source-text contracts
+  retargeted, the allowlist down to 16 entries, workspace tests green.
+* **WebGPU** (`ad6b41720`): the operation bodies moved from
+  `impl Tensor* for WebGpuBackend` into `impl Tensor* for WebGpuExecSession<'_>`
+  (the `delegate!` invocations for the operation families became real impls),
+  the owner's `BackendSession`/`BackendCachedDot` impls and the session marker
+  deleted, and `SessionCachedDot` implemented directly on the session (WebGPU has
+  no runtime cache, so the trait defaults are what the owner's blanket impl
+  provided). Verified with and without the `webgpu` feature.
+
+**CUDA** is the remaining half, and the procedure is now known:
+
+1. move each `impl Tensor* for CudaBackend` body into
+   `impl Tensor* for CudaExecSession<'_>`, rewriting receivers to `self.backend`
+   *and* `self` passed as an argument (`structural::transpose(self, ..)`,
+   `gemm::dot_general(self, ..)`, `promotion::*(self, ..)`), which is the part a
+   naive rewrite misses;
+2. add the imports the moved bodies need in `cubecl/exec_session.rs`
+   (`dispatch`, `elementwise`, `gemm`, `permutation`, `fusion`, the promotion
+   helpers, `DType`, ...);
+3. fix the E0599 calls that were owner methods (`to_contiguous_read`,
+   `dot_general_with_conj`, ...) to the session form, and add
+   `impl SessionCachedDot for CudaExecSession<'_> {}` in place of
+   `delegate_cached!`;
+4. delete `impl BackendSession for CudaBackend`/`BackendCachedDot for CudaBackend`
+   and the marker, then retarget the CUDA source-text contracts
+   (`cuda_launch_contract`, `public_surface_contract`, `session_contract`,
+   `backend_read_contract`) that name `cubecl/mod.rs` sections.
+
+Attempted and reverted once at this point: the move alone leaves 1113 errors
+(572 E0425, 302 E0599, 201 E0433, 36 E0277) because the bodies reference the
+module scope of `mod.rs`. This half should be done where a CUDA device is
+available, because the CUDA tests are hardware-gated: here only compilation and
+the source-text contracts can be checked, not the kernels' behaviour.
+
 ## Measurement protocol
 
 Removing syntax does not by itself save time; #1926 requires measurement
