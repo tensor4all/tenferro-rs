@@ -1057,7 +1057,7 @@ fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
             "{op} must not materialize the scalar"
         );
     }
-    let pow = source_section(&mod_source, "fn pow_read(", "fn transpose(");
+    let pow = source_section(&mod_source, "fn pow_read(", "\n    fn ");
     assert!(pow.contains("launch_scalar_binary"));
     assert!(pow.contains("launch_checked_integer_scalar_binary"));
     assert!(!pow.contains("broadcast_typed"));

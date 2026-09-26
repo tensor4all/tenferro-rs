@@ -83,7 +83,6 @@ macro_rules! test_backend_impls {
             }
 
             panic_backend_methods! {
-                reshape(input: &Tensor, shape: &[usize]) -> TensorResult;
                 broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult;
                 cast(input: &Tensor, to: DType) -> TensorResult;
                 convert(input: &Tensor, to: DType) -> TensorResult;
@@ -106,7 +105,9 @@ macro_rules! test_backend_impls {
             // method and rejected borrowed views. Reproduce it explicitly rather than
             // forwarding a view, which would widen the accepted input surface.
             fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> TensorResult {
-                self.reshape(tenferro_tensor::backend::read_owned_tensor("reshape", input)?, shape)
+                                let _ = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+                    let _ = shape;
+                    panic!("reshape should not be called in this test")
             }
 
             // The previous read-half default delegated owned tensors to the one-shot

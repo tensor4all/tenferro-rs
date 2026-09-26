@@ -399,10 +399,6 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
 }
 
 impl TensorStructural for NoBroadcastMaterializationBackend {
-    fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> Result<Tensor> {
-        Err(unexpected("reshape"))
-    }
-
     fn broadcast_in_dim(
         &mut self,
         _input: &Tensor,
@@ -458,10 +454,9 @@ impl TensorStructural for NoBroadcastMaterializationBackend {
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> Result<Tensor> {
-        self.reshape(
-            tenferro_tensor::backend::read_owned_tensor("reshape", input)?,
-            shape,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+        let _ = shape;
+        panic!("reshape should not be called in this test")
     }
 
     // The previous read-half default delegated owned tensors to the one-shot

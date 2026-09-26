@@ -1,4 +1,4 @@
-use crate::{GatherConfig, ShapeMismatch, ValidationError};
+use crate::{GatherConfig, ShapeMismatch, TensorRead, ValidationError};
 
 use super::{Tensor, TypedTensor};
 
@@ -192,7 +192,7 @@ impl Tensor {
 
         let mut expanded = Vec::with_capacity(tensors.len());
         for tensor in tensors {
-            expanded.push(session.reshape(tensor, &expanded_shape)?);
+            expanded.push(session.reshape_read(TensorRead::from_tensor(tensor), &expanded_shape)?);
         }
         let refs = expanded.iter().collect::<Vec<_>>();
         session.concatenate(&refs, axis)

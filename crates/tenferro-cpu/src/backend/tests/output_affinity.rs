@@ -96,7 +96,9 @@ fn metadata_only_reshape_and_caller_owned_output_are_not_retagged() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    let reshaped = backend.reshape(&input, &[4]).unwrap();
+    let reshaped = backend
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[4]))
+        .unwrap();
     backend
         .dot_general_read_into(
             TensorRead::from_tensor(&input),

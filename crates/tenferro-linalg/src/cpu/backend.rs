@@ -357,7 +357,7 @@ impl LinalgBackend for CpuExecSession<'_> {
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
             (
-                self.reshape(b, &matrix_rhs_shape)?,
+                self.reshape_read(TensorRead::from_tensor(b), &matrix_rhs_shape)?,
                 Some(b.shape().to_vec()),
             )
         } else {
@@ -404,7 +404,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         }?;
 
         if let Some(shape) = restore_shape {
-            self.reshape(&result, &shape)
+            self.reshape_read(TensorRead::from_tensor(&result), &shape)
         } else {
             Ok(result)
         }

@@ -823,7 +823,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::Reshape { to_shape, .. } => {
                 let shape = resolve_tensor_shape_exprs(inputs, to_shape)?;
-                vec![exec.reshape(inputs[0], &shape)?]
+                vec![exec.reshape_read(TensorRead::from_tensor(inputs[0]), &shape)?]
             }
             StdTensorOp::BroadcastInDim { shape, dims } => {
                 let shape = resolve_tensor_shape_exprs(inputs, shape)?;

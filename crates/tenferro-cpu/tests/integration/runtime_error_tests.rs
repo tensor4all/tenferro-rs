@@ -4,8 +4,8 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendSessionHost, BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
     GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
-    Tensor, TensorDeviceTransfer, TensorDot, TensorIndexing, TensorRead, TensorStructural,
-    TypedTensor, ValidationError,
+    Tensor, TensorDeviceTransfer, TensorDot, TensorIndexing, TensorRead, TypedTensor,
+    ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -446,7 +446,9 @@ fn reshape_returns_error_instead_of_panicking() {
     let input = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let mut backend = CpuBackend::new();
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.reshape(&input, &[3])));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[3]))
+    }));
 
     assert!(result.is_ok(), "reshape should return Err, not panic");
     let err = result.unwrap().unwrap_err();

@@ -2535,7 +2535,6 @@ pub trait TensorStructural {
     ///
     /// struct HostDefaults;
     /// impl TensorStructural for HostDefaults {
-    ///     fn reshape(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn broadcast_in_dim(&mut self, _: &Tensor, _: &[usize], _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn transpose_read(&mut self, _: TensorRead<'_>, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn reshape_read(&mut self, _: TensorRead<'_>, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
@@ -2616,7 +2615,6 @@ pub trait TensorStructural {
     ///
     /// struct ConservativeDefaults;
     /// impl TensorStructural for ConservativeDefaults {
-    ///     fn reshape(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn broadcast_in_dim(&mut self, _: &Tensor, _: &[usize], _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn transpose_read(&mut self, _: TensorRead<'_>, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
     ///     fn reshape_read(&mut self, _: TensorRead<'_>, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
@@ -2673,7 +2671,6 @@ pub trait TensorStructural {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source

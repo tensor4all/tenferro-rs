@@ -502,12 +502,6 @@ impl TensorStructural for DefaultReadBackend {
         Ok(())
     }
 
-    fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> crate::Result<Tensor> {
-        self.calls.push("reshape");
-        self.reshape_shapes.push(_shape.to_vec());
-        Ok(marker())
-    }
-
     fn broadcast_in_dim(
         &mut self,
         _input: &Tensor,
@@ -526,7 +520,11 @@ impl TensorStructural for DefaultReadBackend {
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.reshape(crate::backend::read_owned_tensor("reshape", input)?, shape)
+        let _input = crate::backend::read_owned_tensor("reshape", input)?;
+        let _shape = shape;
+        self.calls.push("reshape");
+        self.reshape_shapes.push(_shape.to_vec());
+        Ok(marker())
     }
 
     fn broadcast_in_dim_read(

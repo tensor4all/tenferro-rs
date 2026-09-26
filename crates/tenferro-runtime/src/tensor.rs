@@ -163,7 +163,7 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn reshape(&self, shape: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.reshape(self, shape)
+        session.reshape_read(TensorRead::from_tensor(self), shape)
     }
 
     fn transpose(&self, perm: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {

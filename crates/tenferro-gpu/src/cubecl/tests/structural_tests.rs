@@ -162,7 +162,9 @@ fn test_cuda_read_entry_points_accept_borrowed_views() {
     let out = gpu.transpose_read(view(), &[1, 0]).unwrap();
     assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
 
-    let expected = cpu.reshape(&host, &[3, 2]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&host), &[3, 2]))
+        .unwrap();
     let out = gpu.reshape_read(view(), &[3, 2]).unwrap();
     assert_tensor_close(&download(&gpu, &out), &expected, 1e-12);
 
@@ -231,8 +233,12 @@ fn test_cubecl_structural_ops_match_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.reshape(&input, &[3, 2]).unwrap();
-    let gpu_out = gpu.reshape(&gpu_input, &[3, 2]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[3, 2]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&gpu_input), &[3, 2]))
+        .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -297,8 +303,12 @@ fn test_cubecl_i64_structural_ops_match_cpu() {
         .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.reshape(&input, &[3, 2]).unwrap();
-    let gpu_out = gpu.reshape(&gpu_input, &[3, 2]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[3, 2]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&gpu_input), &[3, 2]))
+        .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
     let expected = cpu.broadcast_in_dim(&scalar, &[2, 3], &[]).unwrap();
@@ -355,8 +365,12 @@ fn test_cubecl_i32_structural_ops_match_cpu() {
         .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
-    let expected = cpu.reshape(&input, &[3, 2]).unwrap();
-    let gpu_out = gpu.reshape(&gpu_input, &[3, 2]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[3, 2]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&gpu_input), &[3, 2]))
+        .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 
     let expected = cpu.broadcast_in_dim(&scalar, &[2, 3], &[]).unwrap();
@@ -398,8 +412,12 @@ fn test_cubecl_bool_reshape_round_trips() {
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
 
-    let expected = cpu.reshape(&input, &[3, 2]).unwrap();
-    let gpu_out = gpu.reshape(&gpu_input, &[3, 2]).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[3, 2]))
+        .unwrap();
+    let gpu_out = gpu
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&gpu_input), &[3, 2]))
+        .unwrap();
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 }
 

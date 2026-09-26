@@ -389,7 +389,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     impl TensorStructural for DefaultOnlyLinalgBackend {
         panic_backend_methods! {
-            reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;
             broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
             cast(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
             extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
@@ -419,10 +418,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             input: TensorRead<'_>,
             shape: &[usize],
         ) -> tenferro_tensor::Result<Tensor> {
-            self.reshape(
-                tenferro_tensor::backend::read_owned_tensor("reshape", input)?,
-                shape,
-            )
+            let _ = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+            let _ = shape;
+            panic!("reshape should not be called in this test")
         }
 
         // The previous read-half default delegated owned tensors to the one-shot

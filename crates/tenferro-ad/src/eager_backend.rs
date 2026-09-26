@@ -536,7 +536,6 @@ impl TensorStructural for RecordingBackend {
     }
 
     delegate_recording_backend_methods! {
-        fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
         fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
@@ -558,10 +557,9 @@ impl TensorStructural for RecordingBackend {
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor> {
-        self.reshape(
-            tenferro_tensor::backend::read_owned_tensor("reshape", input)?,
-            shape,
-        )
+        let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+        self.inner
+            .reshape_read(TensorRead::from_tensor(&input), shape)
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -768,7 +766,6 @@ impl TensorStructural for EagerBackend {
     delegate_tensor_backend_methods! {
         fn to_contiguous_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()>;
-        fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
         fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;

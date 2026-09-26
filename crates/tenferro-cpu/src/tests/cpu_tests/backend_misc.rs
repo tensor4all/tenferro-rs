@@ -1781,7 +1781,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorStructural for DefaultOnlyBackend {
         panic_backend_methods! {
-        reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
         cast(input: &Tensor, to: DType) -> crate::Result<Tensor>;
         extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
@@ -1813,10 +1812,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             input: TensorRead<'_>,
             shape: &[usize],
         ) -> crate::Result<Tensor> {
-            self.reshape(
-                tenferro_tensor::backend::read_owned_tensor("reshape", input)?,
-                shape,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.reshape_read(TensorRead::from_tensor(&input), shape)
+            })
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2282,7 +2282,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorStructural for DefaultOnlyExec {
         panic_backend_methods! {
-        reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
         cast(input: &Tensor, to: DType) -> crate::Result<Tensor>;
         extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
@@ -2314,10 +2313,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             input: TensorRead<'_>,
             shape: &[usize],
         ) -> crate::Result<Tensor> {
-            self.reshape(
-                tenferro_tensor::backend::read_owned_tensor("reshape", input)?,
-                shape,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.reshape_read(TensorRead::from_tensor(&input), shape)
+            })
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
