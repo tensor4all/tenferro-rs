@@ -677,38 +677,35 @@ impl TensorIndexing for DefaultReadBackend {
 }
 
 impl TensorDot for DefaultReadBackend {
-    fn dot_general(
-        &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
-        _config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        self.calls.push("dot_general");
-        self.dot_result
-            .as_ref()
-            .map(Tensor::duplicate)
-            .transpose()
-            .map(|result| result.unwrap_or_else(marker))
-    }
-
     // The previous read-half default delegated an owned pair to the one-shot
     // method and materialized views through to_contiguous_read before
-    // contracting. Reproduce that exactly.
+    // contracting. That one-shot is gone, so its body lives here and both read
+    // paths use it.
     fn dot_general_read(
         &mut self,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
+        _config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
-            _ => {
-                let lhs = self.to_contiguous_read(lhs)?;
-                let rhs = self.to_contiguous_read(rhs)?;
-                self.dot_general(&lhs, &rhs, config)
-            }
+        if lhs.as_tensor().is_some() && rhs.as_tensor().is_some() {
+            return record_dot_general(self);
         }
+        let lhs = self.to_contiguous_read(lhs)?;
+        let rhs = self.to_contiguous_read(rhs)?;
+        let _ = (&lhs, &rhs);
+        record_dot_general(self)
     }
+}
+
+/// The deleted `dot_general` one-shot body, shared by both read paths.
+fn record_dot_general(backend: &mut DefaultReadBackend) -> crate::Result<Tensor> {
+    backend.calls.push("dot_general");
+    backend
+        .dot_result
+        .as_ref()
+        .map(Tensor::duplicate)
+        .transpose()
+        .map(|result| result.unwrap_or_else(marker))
 }
 
 impl TensorFusion for DefaultReadBackend {}

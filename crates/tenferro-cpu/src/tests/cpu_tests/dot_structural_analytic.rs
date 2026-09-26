@@ -18,16 +18,18 @@ fn test_dot_general_matmul() {
     );
     let mut backend = CpuBackend::new();
     let c = backend
-        .dot_general(
-            &a,
-            &b,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
         .unwrap();
     assert_eq!(c.shape(), &[2, 4]);
     assert_eq!(get_f64(&c, &[0, 0]), 38.0);
@@ -547,16 +549,18 @@ fn test_dot_general_inner_product_returns_rank0_scalar() {
     );
     let mut backend = CpuBackend::new();
     let c = backend
-        .dot_general(
-            &a,
-            &b,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [0].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [0].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
         .unwrap();
     assert!(c.shape().is_empty());
     assert_eq!(get_f64(&c, &[]), 32.0);
@@ -570,16 +574,18 @@ fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 0], Vec::new()).unwrap());
     let mut backend = CpuBackend::new();
     let c = backend
-        .dot_general(
-            &a,
-            &b,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
         .unwrap();
 
     assert_eq!(c.shape(), &[0, 0]);
@@ -599,16 +605,18 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 3], Vec::new()).unwrap());
     let mut backend = CpuBackend::new();
     let c = backend
-        .dot_general(
-            &a,
-            &b,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
         .unwrap();
 
     assert_eq!(c.shape(), &[2, 3]);
@@ -644,16 +652,18 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
     );
     let mut backend = CpuBackend::new();
     let c = backend
-        .dot_general(
-            &a,
-            &b,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [3].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [0, 2].as_slice().into(),
-                rhs_batch_dims: [2, 3].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [3].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [0, 2].as_slice().into(),
+                    rhs_batch_dims: [2, 3].as_slice().into(),
+                },
+            )
+        })
         .unwrap();
 
     assert_eq!(c.shape(), &[2, 2, 2, 2]);

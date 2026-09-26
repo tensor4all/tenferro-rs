@@ -3,7 +3,7 @@ use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use tenferro_cpu::cpu_capabilities;
 use tenferro_tensor::{
     capability_output_dtype, BackendId, BackendSessionHost, DType, OperationCapability,
-    SupportLevel, Tensor, TensorDot, TensorElementwise, TensorRead, TensorReduction,
+    SupportLevel, Tensor, TensorElementwise, TensorRead, TensorReduction,
 };
 
 use crate::config::CompareDir;
@@ -494,10 +494,26 @@ fn assert_dot_matches(
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let expected = cpu.dot_general(&lhs, &rhs, &config).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap();
     let gpu_lhs = upload(gpu, &lhs);
     let gpu_rhs = upload(gpu, &rhs);
-    let gpu_output = gpu.dot_general(&gpu_lhs, &gpu_rhs, &config).unwrap();
+    let gpu_output = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &config,
+            )
+        })
+        .unwrap();
     let actual = download(gpu, &gpu_output);
     assert_tensor_close(&actual, &expected, tolerance(entry.dtype));
 }

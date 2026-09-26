@@ -159,7 +159,11 @@ impl TensorSessionOpsExt for Tensor {
 
     fn matmul(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let config = matmul_config_for_shapes("matmul", self.shape(), rhs.shape())?;
-        session.dot_general(self, rhs, &config)
+        session.dot_general_read(
+            TensorRead::from_tensor(self),
+            TensorRead::from_tensor(rhs),
+            &config,
+        )
     }
 
     fn reshape(&self, shape: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {

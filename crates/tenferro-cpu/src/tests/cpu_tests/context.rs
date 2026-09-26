@@ -157,9 +157,9 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
             .mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
             .unwrap();
         session
-            .dot_general(
-                &lhs,
-                &rhs,
+            .dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
                 &DotGeneralConfig {
                     lhs_contracting_dims: [0].as_slice().into(),
                     rhs_contracting_dims: [0].as_slice().into(),

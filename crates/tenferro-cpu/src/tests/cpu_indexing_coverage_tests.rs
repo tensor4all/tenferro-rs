@@ -1,6 +1,7 @@
 use num_complex::{Complex32, Complex64};
 
 use crate::{dynamic_slice, gather, pad, scatter, CpuBackend};
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, TensorIndexing};
 use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
@@ -844,7 +845,11 @@ fn cpu_exec_session_covers_dot_errors_and_reclaim_dispatch() {
             rhs_batch_dims: [].as_slice().into(),
         };
         assert!(matches!(
-            exec.dot_general(&f64_vec, &f32_vec, &dot_cfg),
+            exec.dot_general_read(
+                TensorRead::from_tensor(&f64_vec),
+                TensorRead::from_tensor(&f32_vec),
+                &dot_cfg
+            ),
             Err(crate::Error::Validation {
                 op: "dot_general",
                 source: tenferro_tensor::ValidationError::DTypeMismatch { .. },

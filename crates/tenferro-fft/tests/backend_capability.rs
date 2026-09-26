@@ -323,9 +323,6 @@ macro_rules! impl_minimal_tensor_backend {
         }
 
         impl TensorDot for $ty {
-            unreachable_backend_methods! {
-                dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> tenferro_tensor::Result<Tensor>;
-            }
         // The previous read-half default delegated an owned pair to the one-shot
         // method and materialized borrowed views through to_contiguous_read before
         // contracting. Reproduce that exactly rather than forwarding a view.
@@ -335,14 +332,15 @@ macro_rules! impl_minimal_tensor_backend {
             rhs: tenferro_tensor::TensorRead<'_>,
             config: &DotGeneralConfig,
         ) -> tenferro_tensor::Result<Tensor> {
-            match (lhs.as_tensor(), rhs.as_tensor()) {
-                (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
-                _ => {
-                    let lhs = self.to_contiguous_read(lhs)?;
-                    let rhs = self.to_contiguous_read(rhs)?;
-                    self.dot_general(&lhs, &rhs, config)
-                }
+            // The deleted one-shot was an unreachable stub in this fixture; the
+            // read half keeps the same rejection after evaluating its inputs.
+            let materialized = lhs.as_tensor().is_none() || rhs.as_tensor().is_none();
+            let _ = config;
+            if materialized {
+                let _ = self.to_contiguous_read(lhs)?;
+                let _ = self.to_contiguous_read(rhs)?;
             }
+            panic!("dot_general should not be called by this test")
         }
         }
 

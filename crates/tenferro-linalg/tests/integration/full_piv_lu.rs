@@ -1,7 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TypedTensor};
 
 use super::support;
 use tenferro_tensor::BackendSessionHost;
@@ -29,16 +29,18 @@ fn c32_data(tensor: &Tensor) -> &[Complex32] {
 
 fn matmul(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
     backend
-        .dot_general(
-            lhs,
-            rhs,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
         .unwrap()
 }
 

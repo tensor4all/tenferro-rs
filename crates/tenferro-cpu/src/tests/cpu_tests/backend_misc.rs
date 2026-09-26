@@ -1907,14 +1907,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     }
 
     impl TensorDot for DefaultOnlyBackend {
-        fn dot_general(
-            &mut self,
-            lhs: &Tensor,
-            rhs: &Tensor,
-            config: &DotGeneralConfig,
-        ) -> crate::Result<Tensor> {
-            CpuBackend::new().dot_general(lhs, rhs, config)
-        }
         // The previous read-half default delegated an owned pair to the one-shot
         // method and materialized borrowed views through to_contiguous_read before
         // contracting. Reproduce that exactly rather than forwarding a view.
@@ -1925,11 +1917,32 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             config: &DotGeneralConfig,
         ) -> crate::Result<Tensor> {
             match (lhs.as_tensor(), rhs.as_tensor()) {
-                (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+                (Some(lhs), Some(rhs)) => {
+                    let mut backend = CpuBackend::new();
+                    tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                        __s.dot_general_read(
+                            TensorRead::from_tensor(lhs),
+                            TensorRead::from_tensor(rhs),
+                            config,
+                        )
+                    })
+                }
                 _ => {
                     let lhs = self.to_contiguous_read(lhs)?;
                     let rhs = self.to_contiguous_read(rhs)?;
-                    self.dot_general(&lhs, &rhs, config)
+                    {
+                        let mut backend = CpuBackend::new();
+                        tenferro_tensor::BackendSessionHost::with_backend_session(
+                            &mut backend,
+                            |__s| {
+                                __s.dot_general_read(
+                                    TensorRead::from_tensor(&lhs),
+                                    TensorRead::from_tensor(&rhs),
+                                    config,
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -2395,14 +2408,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     }
 
     impl TensorDot for DefaultOnlyExec {
-        fn dot_general(
-            &mut self,
-            lhs: &Tensor,
-            rhs: &Tensor,
-            config: &DotGeneralConfig,
-        ) -> crate::Result<Tensor> {
-            CpuBackend::new().dot_general(lhs, rhs, config)
-        }
         // The previous read-half default delegated an owned pair to the one-shot
         // method and materialized borrowed views through to_contiguous_read before
         // contracting. Reproduce that exactly rather than forwarding a view.
@@ -2413,11 +2418,32 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             config: &DotGeneralConfig,
         ) -> crate::Result<Tensor> {
             match (lhs.as_tensor(), rhs.as_tensor()) {
-                (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+                (Some(lhs), Some(rhs)) => {
+                    let mut backend = CpuBackend::new();
+                    tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                        __s.dot_general_read(
+                            TensorRead::from_tensor(lhs),
+                            TensorRead::from_tensor(rhs),
+                            config,
+                        )
+                    })
+                }
                 _ => {
                     let lhs = self.to_contiguous_read(lhs)?;
                     let rhs = self.to_contiguous_read(rhs)?;
-                    self.dot_general(&lhs, &rhs, config)
+                    {
+                        let mut backend = CpuBackend::new();
+                        tenferro_tensor::BackendSessionHost::with_backend_session(
+                            &mut backend,
+                            |__s| {
+                                __s.dot_general_read(
+                                    TensorRead::from_tensor(&lhs),
+                                    TensorRead::from_tensor(&rhs),
+                                    config,
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }

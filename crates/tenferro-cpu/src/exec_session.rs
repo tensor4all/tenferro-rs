@@ -610,22 +610,6 @@ impl CpuExecSession<'_> {
 }
 
 impl TensorDot for CpuExecSession<'_> {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        self.execute_dot_allocated(
-            None,
-            TensorRead::from_tensor(lhs),
-            TensorRead::from_tensor(rhs),
-            config,
-            false,
-            false,
-        )
-    }
-
     fn dot_general_read(
         &mut self,
         lhs: TensorRead<'_>,

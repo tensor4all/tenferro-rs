@@ -1046,7 +1046,15 @@ fn external_provider_dot_uses_the_supplied_no_inner_executor() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    backend.dot_general(&lhs, &rhs, &config).unwrap();
+    backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     assert_eq!(installs.load(Ordering::Relaxed), 1);
 }
@@ -1117,16 +1125,18 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
     backend
-        .dot_general(
-            &lhs,
-            &rhs,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
         .unwrap();
     assert_eq!(provider_calls.load(Ordering::Relaxed), 1);
     assert_eq!(installs.load(Ordering::Relaxed), 5);

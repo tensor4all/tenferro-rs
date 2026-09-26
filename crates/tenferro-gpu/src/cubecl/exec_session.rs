@@ -509,7 +509,6 @@ delegate!(TensorReduction {
 });
 
 delegate!(TensorDot {
-    fn dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> crate::Result<Tensor>;
     fn dot_general_with_conj(
         lhs: &Tensor,
         rhs: &Tensor,

@@ -715,7 +715,6 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
     let exec_session = include_str!("../../src/exec_session.rs");
     for function in [
         "with_linalg_pool",
-        "dot_general",
         "dot_general_read",
         "dot_general_read_into",
         "dot_general_read_into_accum",
@@ -736,7 +735,6 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
     let backend = include_str!("../../src/backend.rs");
     for function in [
         "with_linalg_pool",
-        "dot_general",
         "dot_general_read",
         "dot_general_read_into",
         "dot_general_read_into_accum",

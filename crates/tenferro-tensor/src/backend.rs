@@ -2959,12 +2959,6 @@ pub trait TensorDot: TensorElementwise {
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor>;
 
     #[doc(hidden)]
     fn dot_general_read(
@@ -3022,7 +3016,11 @@ pub trait TensorDot: TensorElementwise {
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
         if !lhs_conj && !rhs_conj {
-            return self.dot_general(lhs, rhs, config);
+            return self.dot_general_read(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                config,
+            );
         }
 
         let lhs_tmp;
@@ -3039,7 +3037,11 @@ pub trait TensorDot: TensorElementwise {
         } else {
             rhs
         };
-        self.dot_general(lhs_ref, rhs_ref, config)
+        self.dot_general_read(
+            TensorRead::from_tensor(lhs_ref),
+            TensorRead::from_tensor(rhs_ref),
+            config,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3132,7 +3134,11 @@ pub trait SessionCachedDot: TensorDot {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        self.dot_general(lhs, rhs, config)
+        self.dot_general_read(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+        )
     }
 
     #[doc(hidden)]
@@ -3551,7 +3557,11 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        self.dot_general(lhs, rhs, config)
+        self.dot_general_read(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+        )
     }
 
     #[doc(hidden)]

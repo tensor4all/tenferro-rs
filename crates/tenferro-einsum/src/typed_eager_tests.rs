@@ -428,16 +428,6 @@ impl TensorIndexing for WrongDTypeBackend {
 }
 
 impl TensorDot for WrongDTypeBackend {
-    fn dot_general(
-        &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
-        _config: &DotGeneralConfig,
-    ) -> tenferro_tensor::Result<Tensor> {
-        Ok(Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
-        ))
-    }
     // The previous read-half default delegated an owned pair to the one-shot
     // method and materialized borrowed views through to_contiguous_read before
     // contracting. Reproduce that exactly rather than forwarding a view.
@@ -445,14 +435,18 @@ impl TensorDot for WrongDTypeBackend {
         &mut self,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
+        _config: &DotGeneralConfig,
     ) -> tenferro_tensor::Result<Tensor> {
         match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+            (Some(_), Some(_)) => Ok(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+            )),
             _ => {
-                let lhs = self.to_contiguous_read(lhs)?;
-                let rhs = self.to_contiguous_read(rhs)?;
-                self.dot_general(&lhs, &rhs, config)
+                let _ = self.to_contiguous_read(lhs)?;
+                let _ = self.to_contiguous_read(rhs)?;
+                Ok(Tensor::from_typed::<f64>(
+                    TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+                ))
             }
         }
     }

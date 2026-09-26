@@ -28,7 +28,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    BackendSessionHost, DType, DotGeneralConfig, Tensor, TensorDot, TensorIndexing, TensorRead,
+    BackendSessionHost, DType, DotGeneralConfig, Tensor, TensorIndexing, TensorRead,
     TensorStructural,
 };
 
@@ -98,8 +98,14 @@ fn add_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -
 }
 
 fn dot_oneshot(ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    ops.dot_general(a, b, &dot_config())
-        .expect("oneshot dot should succeed")
+    ops.with_backend_session(|__s| {
+        __s.dot_general_read(
+            TensorRead::from_tensor(a),
+            TensorRead::from_tensor(b),
+            &dot_config(),
+        )
+    })
+    .expect("oneshot dot should succeed")
 }
 
 fn dot_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {

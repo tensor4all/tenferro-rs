@@ -748,7 +748,15 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
     let b_f32 = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0f32, 4.0]).unwrap(),
     );
-    let out_f32 = backend.dot_general(&a_f32, &b_f32, &config).unwrap();
+    let out_f32 = backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&a_f32),
+                TensorRead::from_tensor(&b_f32),
+                &config,
+            )
+        })
+        .unwrap();
     assert_eq!(out_f32.shape(), &[1, 1]);
 
     let a_c32 = Tensor::from_typed::<tenferro_tensor::Complex32>(
@@ -765,7 +773,15 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
         )
         .unwrap(),
     );
-    let out_c32 = backend.dot_general(&a_c32, &b_c32, &config).unwrap();
+    let out_c32 = backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&a_c32),
+                TensorRead::from_tensor(&b_c32),
+                &config,
+            )
+        })
+        .unwrap();
     assert_eq!(out_c32.shape(), &[1, 1]);
 
     let f64_t = Tensor::from_typed::<f64>(
@@ -774,7 +790,15 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
     let f32_t = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap(),
     );
-    let err = backend.dot_general(&f64_t, &f32_t, &config).unwrap_err();
+    let err = backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&f64_t),
+                TensorRead::from_tensor(&f32_t),
+                &config,
+            )
+        })
+        .unwrap_err();
     assert!(matches!(
         err,
         crate::Error::Validation {

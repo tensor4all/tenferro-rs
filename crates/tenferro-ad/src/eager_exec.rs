@@ -821,7 +821,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::DotGeneral { config, .. } => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.dot_general(a.tensor(), b.tensor(), config)?]
+                vec![exec.dot_general_read(
+                    TensorRead::from_tensor(a.tensor()),
+                    TensorRead::from_tensor(b.tensor()),
+                    config,
+                )?]
             }
             StdTensorOp::Reshape { to_shape, .. } => {
                 let shape = resolve_tensor_shape_exprs(inputs, to_shape)?;

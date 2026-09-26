@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor};
 
 fn sample(f: &mut impl FnMut(), duration: Duration) -> (usize, Duration) {
@@ -80,9 +81,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     for _ in 0..10 {
                         out = Some(
                             session
-                                .dot_general(
-                                    out.as_ref().unwrap_or(black_box(&lhs)),
-                                    black_box(&rhs),
+                                .dot_general_read(
+                                    TensorRead::from_tensor(
+                                        out.as_ref().unwrap_or(black_box(&lhs)),
+                                    ),
+                                    TensorRead::from_tensor(black_box(&rhs)),
                                     black_box(&config),
                                 )
                                 .unwrap(),
@@ -96,9 +99,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         out = Some(
                             backend
                                 .with_backend_session(|session| {
-                                    session.dot_general(
-                                        out.as_ref().unwrap_or(black_box(&lhs)),
-                                        black_box(&rhs),
+                                    session.dot_general_read(
+                                        TensorRead::from_tensor(
+                                            out.as_ref().unwrap_or(black_box(&lhs)),
+                                        ),
+                                        TensorRead::from_tensor(black_box(&rhs)),
                                         black_box(&config),
                                     )
                                 })

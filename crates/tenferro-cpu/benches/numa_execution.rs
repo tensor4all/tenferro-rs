@@ -20,9 +20,9 @@ fn run_session_workload(backend: &mut CpuBackend, input: &Tensor) -> Tensor {
                 TensorRead::from_tensor(input),
                 TensorRead::from_tensor(input),
             )?;
-            exec.dot_general(
-                &squared,
-                input,
+            exec.dot_general_read(
+                TensorRead::from_tensor(&squared),
+                TensorRead::from_tensor(input),
                 &DotGeneralConfig {
                     lhs_contracting_dims: [1].as_slice().into(),
                     rhs_contracting_dims: [0].as_slice().into(),

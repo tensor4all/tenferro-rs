@@ -614,32 +614,6 @@ fn key_matches_spec<T: CutensorScalar>(
         && key.workspace_preference == spec.workspace_preference
 }
 
-pub(super) fn dot_general(
-    backend: &CudaBackend,
-    lhs: &Tensor,
-    rhs: &Tensor,
-    config: &DotGeneralConfig,
-) -> crate::Result<Tensor> {
-    match (lhs.dtype(), rhs.dtype()) {
-        (DType::F32, DType::F32) => {
-            let (lhs, rhs) = gemm_pair_operands::<f32>(OP, lhs, rhs)?;
-            dot_general_typed(backend, lhs, rhs, config).map(Tensor::from_typed::<f32>)
-        }
-        (DType::F64, DType::F64) => {
-            let (lhs, rhs) = gemm_pair_operands::<f64>(OP, lhs, rhs)?;
-            dot_general_typed(backend, lhs, rhs, config).map(Tensor::from_typed::<f64>)
-        }
-        (DType::C32, DType::C32) => {
-            let (lhs, rhs) = gemm_pair_operands::<Complex32>(OP, lhs, rhs)?;
-            dot_general_typed(backend, lhs, rhs, config).map(Tensor::from_typed::<Complex32>)
-        }
-        (DType::C64, DType::C64) => {
-            let (lhs, rhs) = gemm_pair_operands::<Complex64>(OP, lhs, rhs)?;
-            dot_general_typed(backend, lhs, rhs, config).map(Tensor::from_typed::<Complex64>)
-        }
-        _ => Err(dtype_mismatch(OP, lhs, rhs)),
-    }
-}
 /// The typed operands behind a same-dtype pair, or the refusal a mismatched pair reports.
 fn gemm_pair_operands<'a, T: TensorScalar>(
     op: &'static str,
@@ -1149,18 +1123,6 @@ where
         );
     }
     super::interop::scale_typed_tensor_for_op(rt, out, beta, OP, T::launch_scale_in_place)
-}
-
-fn dot_general_typed<T>(
-    backend: &CudaBackend,
-    lhs: &TypedTensor<T>,
-    rhs: &TypedTensor<T>,
-    config: &DotGeneralConfig,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: CutensorScalar,
-{
-    dot_general_typed_with_conj(backend, lhs, rhs, config, false, false)
 }
 
 fn dot_general_typed_with_conj<T>(

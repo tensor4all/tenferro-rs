@@ -69,7 +69,15 @@ fn dot_and_fusion_vec_outputs_use_the_selected_domain() {
         ],
     );
 
-    let dot = backend.dot_general(&lhs, &rhs, &config).unwrap();
+    let dot = backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap();
     let outputs = backend
         .execute_elementwise_fusion(&[&fusion_lhs, &fusion_rhs], &fusion)
         .unwrap()

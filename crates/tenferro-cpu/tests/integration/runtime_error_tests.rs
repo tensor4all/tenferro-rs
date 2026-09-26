@@ -4,8 +4,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendSessionHost, BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
     GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
-    Tensor, TensorDeviceTransfer, TensorDot, TensorIndexing, TensorRead, TypedTensor,
-    ValidationError,
+    Tensor, TensorDeviceTransfer, TensorIndexing, TensorRead, TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -357,16 +356,18 @@ fn dot_general_rejects_out_of_bounds_contracting_dim() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .dot_general(
-            &lhs,
-            &rhs,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [2].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [2].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
         .unwrap_err();
 
     assert!(matches!(

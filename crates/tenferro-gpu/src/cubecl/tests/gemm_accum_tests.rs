@@ -5,8 +5,8 @@ use num_complex::Complex64;
 use crate::DotGeneralConfig;
 use crate::Tensor;
 use tenferro_tensor::{
-    ContractionScalar, DotGeneralAccumulation, TensorDot, TensorRead, TensorView, TensorViewMut,
-    TensorWrite, TypedTensorView,
+    BackendSessionHost, ContractionScalar, DotGeneralAccumulation, TensorDot, TensorRead,
+    TensorView, TensorViewMut, TensorWrite, TypedTensorView,
 };
 
 use super::{
@@ -384,11 +384,13 @@ fn test_read_view_operands_allocating_f64() {
         .map(|i| region_get(&rhs_host, 7, &[1, 3], &[i % 3, i / 3]))
         .collect();
     let expected = cpu
-        .dot_general(
-            &tensor_f64(vec![2, 3], lhs_compact),
-            &tensor_f64(vec![3, 2], rhs_compact),
-            &matmul_config(),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&tensor_f64(vec![2, 3], lhs_compact)),
+                TensorRead::from_tensor(&tensor_f64(vec![3, 2], rhs_compact)),
+                &matmul_config(),
+            )
+        })
         .unwrap();
 
     let lhs_gpu = upload(&gpu, &tensor_f64(vec![32], lhs_host));
@@ -614,9 +616,23 @@ fn test_workspace_retirement_defers_eviction_barrier_f64() {
         let lhs_gpu = upload(&gpu, &lhs);
         let rhs_gpu = upload(&gpu, &rhs);
         let actual = gpu
-            .dot_general(&lhs_gpu, &rhs_gpu, &matmul_config())
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs_gpu),
+                    TensorRead::from_tensor(&rhs_gpu),
+                    &matmul_config(),
+                )
+            })
             .unwrap();
-        let reference = cpu.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
+        let reference = cpu
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &matmul_config(),
+                )
+            })
+            .unwrap();
         results.push((actual, reference));
     }
 

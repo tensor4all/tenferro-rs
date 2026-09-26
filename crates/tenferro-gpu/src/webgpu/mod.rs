@@ -1165,15 +1165,6 @@ impl TensorReduction for WebGpuBackend {
 }
 
 impl TensorDot for WebGpuBackend {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        gemm::dot_general(self, lhs, rhs, config)
-    }
-
     // The previous read-half default delegated an owned pair to the one-shot
     // method and materialized views through to_contiguous_read before
     // contracting. That default is inlined here so the later removal of the

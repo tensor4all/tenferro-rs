@@ -34,9 +34,7 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_gpu::cuda::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
-use tenferro_tensor::{
-    BackendSessionHost, DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorScalar,
-};
+use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TensorScalar};
 
 const SIZES: &[usize] = &[8, 64, 256];
 const BATCH: usize = 16;
@@ -64,7 +62,13 @@ where
 /// One-shot route: the operation method on the backend object.
 fn oneshot(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) {
     let out = backend
-        .dot_general(lhs, rhs, config)
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                config,
+            )
+        })
         .expect("one-shot dot_general should succeed");
     black_box(out);
 }
@@ -93,7 +97,13 @@ where
 
     // Validation outside the timed region, on both routes.
     let device_out = backend
-        .dot_general(&lhs, &rhs, &config)
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
         .expect("validation dot_general");
     backend.runtime().synchronize().expect("validation sync");
     assert_eq!(device_out.shape(), &[size, size], "{label}: output shape");

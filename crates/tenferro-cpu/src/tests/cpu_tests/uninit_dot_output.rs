@@ -16,6 +16,8 @@ use crate::provider::{
 use crate::{
     CpuDomainId, CpuPlacementGuarantee, CpuProviderBundle, ExternalCpuDomain, ResolvedCpuPlacement,
 };
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 /// Build a CPU backend that runs a custom provider bundle on one managed
@@ -234,7 +236,15 @@ fn opted_out_gemm_provider_keeps_zeroed_dot_output_values() {
     let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0]).unwrap(),
     );
-    let output = backend.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
+    let output = backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+            )
+        })
+        .unwrap();
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[17.0, 41.0, 33.0, 81.0]);
     // Without the witness the uninit path is never attempted; the zeroed path
@@ -258,7 +268,15 @@ fn opted_in_gemm_provider_unsupported_falls_back_to_zeroed_dot() {
     let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0]).unwrap(),
     );
-    let output = backend.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
+    let output = backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+            )
+        })
+        .unwrap();
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[17.0, 41.0, 33.0, 81.0]);
     // The uninit attempt fired once and was discarded; the zeroed fallback
@@ -341,8 +359,24 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
     ];
 
     for (lhs, rhs, config) in cases {
-        let uninit_output = uninit_backend.dot_general(&lhs, &rhs, &config).unwrap();
-        let zeroed_output = zeroed_backend.dot_general(&lhs, &rhs, &config).unwrap();
+        let uninit_output = uninit_backend
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+            })
+            .unwrap();
+        let zeroed_output = zeroed_backend
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+            })
+            .unwrap();
         assert_eq!(uninit_output.shape(), zeroed_output.shape());
         assert_eq!(
             uninit_output.as_slice::<f64>().unwrap(),

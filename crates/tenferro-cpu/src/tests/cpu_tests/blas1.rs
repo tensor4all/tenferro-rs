@@ -4,6 +4,8 @@ use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{MemoryKind, Placement};
 
 use super::*;
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 static MATERIALIZATION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -489,16 +491,18 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
             )
             .unwrap();
         let computed_ap = backend
-            .dot_general(
-                &a,
-                &ap,
-                &DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().into(),
-                    rhs_contracting_dims: [0].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
-                },
-            )
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&a),
+                    TensorRead::from_tensor(&ap),
+                    &DotGeneralConfig {
+                        lhs_contracting_dims: [1].as_slice().into(),
+                        rhs_contracting_dims: [0].as_slice().into(),
+                        lhs_batch_dims: [].as_slice().into(),
+                        rhs_batch_dims: [].as_slice().into(),
+                    },
+                )
+            })
             .unwrap();
         backend
             .copy_read_into(

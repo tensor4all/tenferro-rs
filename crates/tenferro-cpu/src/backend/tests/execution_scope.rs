@@ -58,7 +58,13 @@ fn shared_scope_installs_once_and_reuses_resources_across_operations() {
                                 .mul_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
                                 .unwrap();
                             assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 4.0, 9.0, 16.0]);
-                            let product = session.dot_general(&x, &x, &config).unwrap();
+                            let product = session
+                                .dot_general_read(
+                                    TensorRead::from_tensor(&x),
+                                    TensorRead::from_tensor(&x),
+                                    &config,
+                                )
+                                .unwrap();
                             assert_eq!(
                                 product.as_slice::<f64>().unwrap(),
                                 &[7.0, 10.0, 15.0, 22.0]

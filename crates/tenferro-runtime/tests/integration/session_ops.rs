@@ -1046,14 +1046,6 @@ macro_rules! test_backend_impls {
         }
 
         impl TensorDot for $ty {
-            fn dot_general(
-                &mut self,
-                _lhs: &Tensor,
-                _rhs: &Tensor,
-                _config: &DotGeneralConfig,
-            ) -> TensorResult {
-                panic!("dot_general should not be called in this test")
-            }
         // The previous read-half default delegated an owned pair to the one-shot
         // method and materialized borrowed views through to_contiguous_read before
         // contracting. Reproduce that exactly rather than forwarding a view.
@@ -1061,17 +1053,17 @@ macro_rules! test_backend_impls {
             &mut self,
             lhs: TensorRead<'_>,
             rhs: TensorRead<'_>,
-            config: &DotGeneralConfig,
+            _config: &DotGeneralConfig,
         ) -> TensorResult {
-            match (lhs.as_tensor(), rhs.as_tensor()) {
-                (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
-                _ => {
-                    let lhs = self.to_contiguous_read(lhs)?;
-                    let rhs = self.to_contiguous_read(rhs)?;
-                    self.dot_general(&lhs, &rhs, config)
+                    match (lhs.as_tensor(), rhs.as_tensor()) {
+                        (Some(_), Some(_)) => panic!("dot_general should not be called in this test"),
+                        _ => {
+                            let _ = self.to_contiguous_read(lhs)?;
+                            let _ = self.to_contiguous_read(rhs)?;
+                            panic!("dot_general should not be called in this test")
+                        }
+                    }
                 }
-            }
-        }
         }
 
         impl TensorFusion for $ty {}
@@ -1429,14 +1421,6 @@ impl TensorIndexing for WrongDTypeSessionBackend {
 }
 
 impl TensorDot for WrongDTypeSessionBackend {
-    fn dot_general(
-        &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
-        _config: &DotGeneralConfig,
-    ) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
     // The previous read-half default delegated an owned pair to the one-shot
     // method and materialized borrowed views through to_contiguous_read before
     // contracting. Reproduce that exactly rather than forwarding a view.
@@ -1444,14 +1428,14 @@ impl TensorDot for WrongDTypeSessionBackend {
         &mut self,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
+        _config: &DotGeneralConfig,
     ) -> TensorResult {
         match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+            (Some(_), Some(_)) => Ok(wrong_dtype_tensor()),
             _ => {
-                let lhs = self.to_contiguous_read(lhs)?;
-                let rhs = self.to_contiguous_read(rhs)?;
-                self.dot_general(&lhs, &rhs, config)
+                let _ = self.to_contiguous_read(lhs)?;
+                let _ = self.to_contiguous_read(rhs)?;
+                Ok(wrong_dtype_tensor())
             }
         }
     }

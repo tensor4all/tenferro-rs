@@ -6851,15 +6851,6 @@ impl TensorReduction for CudaBackend {
 }
 
 impl TensorDot for CudaBackend {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        gemm::dot_general(self, lhs, rhs, config)
-    }
-
     fn dot_general_with_conj(
         &mut self,
         lhs: &Tensor,

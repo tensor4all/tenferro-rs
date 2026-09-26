@@ -626,14 +626,6 @@ impl TensorIndexing for RecordingBackend {
 
 #[cfg(test)]
 impl TensorDot for RecordingBackend {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> TensorResult<Tensor> {
-        self.inner.dot_general(lhs, rhs, config)
-    }
     // The previous read-half default delegated an owned pair to the one-shot
     // method and materialized borrowed views through to_contiguous_read before
     // contracting. Reproduce that exactly rather than forwarding a view.
@@ -644,11 +636,19 @@ impl TensorDot for RecordingBackend {
         config: &DotGeneralConfig,
     ) -> TensorResult<Tensor> {
         match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+            (Some(lhs), Some(rhs)) => self.inner.dot_general_read(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                config,
+            ),
             _ => {
                 let lhs = self.to_contiguous_read(lhs)?;
                 let rhs = self.to_contiguous_read(rhs)?;
-                self.dot_general(&lhs, &rhs, config)
+                self.inner.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    config,
+                )
             }
         }
     }
@@ -807,7 +807,6 @@ impl TensorReduction for EagerBackend {
 
 impl TensorDot for EagerBackend {
     delegate_tensor_backend_methods! {
-        fn dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> TensorResult<Tensor>;
         fn dot_general_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, config: &DotGeneralConfig) -> TensorResult<Tensor>;
         fn dot_general_with_conj(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig, lhs_conj: bool, rhs_conj: bool) -> TensorResult<Tensor>;
     }

@@ -20,8 +20,12 @@ fn webgpu_backend_implements_tensor_backend_contract() {
         <WebGpuBackend as TensorDeviceTransfer>::upload_host_tensor;
     let _download: fn(&mut WebGpuBackend, TensorRead<'_>) -> Result<Tensor> =
         <WebGpuBackend as TensorDeviceTransfer>::download_to_host;
-    let _dot: fn(&mut WebGpuBackend, &Tensor, &Tensor, &DotGeneralConfig) -> Result<Tensor> =
-        <WebGpuBackend as TensorDot>::dot_general;
+    let _dot: fn(
+        &mut WebGpuBackend,
+        TensorRead<'_>,
+        TensorRead<'_>,
+        &DotGeneralConfig,
+    ) -> Result<Tensor> = <WebGpuBackend as TensorDot>::dot_general_read;
 }
 
 #[test]

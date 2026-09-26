@@ -603,9 +603,9 @@ fn bcgs2_append<B: BenchSession>(
 
 fn matmul<B: BenchSession>(session: &mut B, lhs: &Tensor, rhs: &Tensor) -> Result<Tensor, String> {
     session
-        .dot_general(
-            lhs,
-            rhs,
+        .dot_general_read(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
             &DotGeneralConfig {
                 lhs_contracting_dims: [1].as_slice().into(),
                 rhs_contracting_dims: [0].as_slice().into(),

@@ -3239,15 +3239,6 @@ impl TensorReduction for CpuBackend {
 }
 
 impl TensorDot for CpuBackend {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        self.run_backend_session_cached(None, move |session| session.dot_general(lhs, rhs, config))
-    }
-
     fn dot_general_read(
         &mut self,
         lhs: TensorRead<'_>,

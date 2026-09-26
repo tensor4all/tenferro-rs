@@ -57,7 +57,13 @@ impl TensorTensordotExt for Tensor {
         let config =
             crate::tensordot::dot_general_config(axes, self.shape().len(), rhs.shape().len())?;
         crate::tensordot::validate_concrete_contract_dims(self.shape(), rhs.shape(), &config)?;
-        session.dot_general(self, rhs, &config).map_err(Error::from)
+        session
+            .dot_general_read(
+                TensorRead::from_tensor(self),
+                TensorRead::from_tensor(rhs),
+                &config,
+            )
+            .map_err(Error::from)
     }
 }
 

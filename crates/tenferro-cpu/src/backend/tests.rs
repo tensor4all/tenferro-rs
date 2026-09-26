@@ -340,7 +340,15 @@ fn direct_and_cached_sessions_share_the_installed_provider_slot() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    backend.dot_general(&lhs, &rhs, &config).unwrap();
+    backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap();
     assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
 
     backend.with_backend_session(|session| {

@@ -5,12 +5,13 @@ use std::num::NonZeroUsize;
 use crate::cuda::CutensorWorkspaceStats;
 use crate::DotGeneralConfig;
 use crate::Tensor;
-use tenferro_tensor::TensorDot;
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
     tensor_f64, upload, CpuBackend, CudaBackend,
 };
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 /// Run one `rows x 64` by `64 x 63` f64 matmul on both backends.
 fn compare_rows_matmul(
@@ -28,11 +29,25 @@ fn compare_rows_matmul(
         vec![64, 63],
         (0..64 * 63).map(|i| (i % 7) as f64 * 0.2 - 0.3).collect(),
     );
-    let expected = cpu.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+            )
+        })
+        .unwrap();
     let lhs_gpu = upload(gpu, &lhs);
     let rhs_gpu = upload(gpu, &rhs);
     let actual = gpu
-        .dot_general(&lhs_gpu, &rhs_gpu, &matmul_config())
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs_gpu),
+                TensorRead::from_tensor(&rhs_gpu),
+                &matmul_config(),
+            )
+        })
         .unwrap();
     (actual, expected)
 }
@@ -41,10 +56,26 @@ fn run_dot_general_case(lhs: Tensor, rhs: Tensor, config: DotGeneralConfig, tol:
     let mut cpu = cpu_backend();
     let mut gpu = gpu_backend();
 
-    let expected = cpu.dot_general(&lhs, &rhs, &config).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap();
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
-    let actual_gpu = gpu.dot_general(&gpu_lhs, &gpu_rhs, &config).unwrap();
+    let actual_gpu = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &config,
+            )
+        })
+        .unwrap();
     let actual = download(&gpu, &actual_gpu);
 
     assert_eq!(actual.shape(), expected.shape());
@@ -63,15 +94,37 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
     let rhs_a = tensor_f32(vec![64, 64], vec![1.0; 64 * 64]);
     let lhs_b = tensor_f32(vec![65, 64], vec![1.0; 65 * 64]);
     let rhs_b = tensor_f32(vec![64, 65], vec![1.0; 64 * 65]);
-    let expected_a = cpu.dot_general(&lhs_a, &rhs_a, &matmul_config()).unwrap();
-    let expected_b = cpu.dot_general(&lhs_b, &rhs_b, &matmul_config()).unwrap();
+    let expected_a = cpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs_a),
+                TensorRead::from_tensor(&rhs_a),
+                &matmul_config(),
+            )
+        })
+        .unwrap();
+    let expected_b = cpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs_b),
+                TensorRead::from_tensor(&rhs_b),
+                &matmul_config(),
+            )
+        })
+        .unwrap();
 
     let gpu_lhs_a = upload(&gpu, &lhs_a);
     let gpu_rhs_a = upload(&gpu, &rhs_a);
     let gpu_lhs_b = upload(&gpu, &lhs_b);
     let gpu_rhs_b = upload(&gpu, &rhs_b);
     let actual_a = gpu
-        .dot_general(&gpu_lhs_a, &gpu_rhs_a, &matmul_config())
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&gpu_lhs_a),
+                TensorRead::from_tensor(&gpu_rhs_a),
+                &matmul_config(),
+            )
+        })
         .unwrap();
     assert!(
         gpu.cutensor_workspace_bytes().unwrap() > 0,
@@ -79,7 +132,13 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
     );
 
     let actual_b = gpu
-        .dot_general(&gpu_lhs_b, &gpu_rhs_b, &matmul_config())
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&gpu_lhs_b),
+                TensorRead::from_tensor(&gpu_rhs_b),
+                &matmul_config(),
+            )
+        })
         .unwrap();
     let cache_stats = gpu.cutensor_plan_cache_stats().unwrap();
     assert_eq!(cache_stats.entries, 1);
