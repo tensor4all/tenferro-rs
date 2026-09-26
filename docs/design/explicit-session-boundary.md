@@ -507,6 +507,13 @@ also what the GPU-entry decision above prescribed:
 The rename is mechanical and reviewable per function, and step 3 keeps a single
 implementation per operation, which is what B3 requires.
 
+Two caveats for the generator, from a first attempt at this shape: the method
+splitter must find each signature's opening brace by paren depth (a signature may
+contain a `where` clause or a default const), and it must strip `&mut self`
+without touching `&mut self`-like parameters of nested items. Generating the file
+and deleting the impls must be one atomic write, so a crash cannot leave the
+module in a half-moved state.
+
 ### Local gate state (mid-Phase-B)
 
 `bash scripts/check-pr-fast.sh --no-fetch --coverage-reviewed --test 'cargo test
