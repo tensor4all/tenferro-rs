@@ -326,9 +326,9 @@ fn run_supported_case(
         PrimitiveOpKind::ReduceProd => {
             assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_prod(x, axes))
         }
-        PrimitiveOpKind::ReduceMax => {
-            assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_max(x, axes))
-        }
+        PrimitiveOpKind::ReduceMax => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
+            b.with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(x), axes))
+        }),
         PrimitiveOpKind::ReduceMin => {
             assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_min(x, axes))
         }
@@ -599,7 +599,8 @@ fn run_cpu_reduction(
             cpu.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
         }
         PrimitiveOpKind::ReduceProd => cpu.reduce_prod(input, axes),
-        PrimitiveOpKind::ReduceMax => cpu.reduce_max(input, axes),
+        PrimitiveOpKind::ReduceMax => cpu
+            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes)),
         PrimitiveOpKind::ReduceMin => cpu.reduce_min(input, axes),
         _ => panic!("not a reduction smoke op: {op:?}"),
     }

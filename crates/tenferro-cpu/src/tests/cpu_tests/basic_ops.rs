@@ -1,5 +1,7 @@
 use super::*;
 use crate::sub;
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 #[test]
 fn test_zeros_ones() {
@@ -898,7 +900,9 @@ fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
     assert_eq!(get_f64(&prod, &[1]), 12.0);
     assert_eq!(get_f64(&prod, &[2]), 30.0);
 
-    let max = backend.reduce_max(&t, &[1]).unwrap();
+    let max = backend
+        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&t), &[1]))
+        .unwrap();
     assert_eq!(max.shape(), &[2]);
     assert_eq!(get_f64(&max, &[0]), 5.0);
     assert_eq!(get_f64(&max, &[1]), 6.0);

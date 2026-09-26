@@ -54,7 +54,9 @@ fn a_reduction_refuses_a_caller_owned_payload() {
         "unexpected error: {error}"
     );
     assert!(backend.reduce_prod(&values, &[0]).is_err());
-    assert!(backend.reduce_max(&values, &[0]).is_err());
+    assert!(backend
+        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&values), &[0]))
+        .is_err());
     assert!(backend.reduce_min(&values, &[0]).is_err());
 
     // The same refusals are reached through the borrowed-read entry points, which is
@@ -115,7 +117,9 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
             );
             assert_eq!(
                 backend
-                    .reduce_max(&tensor, &[0])
+                    .with_backend_session(
+                        |__s| __s.reduce_max_read(TensorRead::from_tensor(&tensor), &[0])
+                    )
                     .expect("maximum")
                     .as_slice::<$ty>()
                     .expect("slice"),
@@ -155,6 +159,8 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
 
     // The boolean scalar has no ordered reduction.
     let boolean = Tensor::from_vec_col_major(vec![2], vec![true, false]).expect("shape");
-    assert!(backend.reduce_max(&boolean, &[0]).is_err());
+    assert!(backend
+        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&boolean), &[0]))
+        .is_err());
     assert!(backend.reduce_min(&boolean, &[0]).is_err());
 }

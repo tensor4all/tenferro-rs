@@ -1123,10 +1123,6 @@ impl TensorReduction for WebGpuBackend {
         unsupported!("webgpu_reduce_prod")
     }
 
-    fn reduce_max(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reduce_max")
-    }
-
     fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
         unsupported!("webgpu_reduce_min")
     }

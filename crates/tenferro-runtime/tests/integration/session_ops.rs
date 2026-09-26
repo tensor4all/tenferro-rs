@@ -1325,7 +1325,6 @@ macro_rules! panic_reduction {
         impl TensorReduction for $ty {
             panic_backend_methods! {
                 reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-                reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
             }
 
@@ -1345,10 +1344,9 @@ macro_rules! panic_reduction {
             }
 
             fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-                self.reduce_max(
-                    tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
-                    axes,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+                let _ = axes;
+                panic!("reduce_max should not be called in this test")
             }
 
             fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
@@ -1659,7 +1657,6 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
 impl TensorReduction for WrongDTypeSessionBackend {
     panic_backend_methods! {
         reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-        reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
         reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
     }
 
@@ -1677,10 +1674,9 @@ impl TensorReduction for WrongDTypeSessionBackend {
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-        self.reduce_max(
-            tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
-            axes,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+        let _ = axes;
+        panic!("reduce_max should not be called in this test")
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {

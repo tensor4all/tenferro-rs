@@ -507,7 +507,6 @@ delegate!(TensorReduction {
     fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-    fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 });
 

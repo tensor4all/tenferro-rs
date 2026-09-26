@@ -467,10 +467,6 @@ impl TensorReduction for NoBroadcastMaterializationBackend {
         Err(unexpected("reduce_prod"))
     }
 
-    fn reduce_max(&mut self, _input: &Tensor, _axes: &[usize]) -> Result<Tensor> {
-        Err(unexpected("reduce_max"))
-    }
-
     fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> Result<Tensor> {
         Err(unexpected("reduce_min"))
     }
@@ -495,10 +491,9 @@ impl TensorReduction for NoBroadcastMaterializationBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> Result<Tensor> {
-        self.reduce_max(
-            tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
-            axes,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+        let _ = axes;
+        panic!("reduce_max should not be called in this test")
     }
 
     // The previous read-half default delegated owned tensors to the one-shot

@@ -1840,10 +1840,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             CpuBackend::new().reduce_prod(input, axes)
         }
 
-        fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-            CpuBackend::new().reduce_max(input, axes)
-        }
-
         fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
             CpuBackend::new().reduce_min(input, axes)
         }
@@ -1882,10 +1878,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             input: TensorRead<'_>,
             axes: &[usize],
         ) -> crate::Result<Tensor> {
-            CpuBackend::new().reduce_max(
-                tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
-                axes,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.reduce_max_read(TensorRead::from_tensor(&input), axes)
+            })
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2337,10 +2334,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             CpuBackend::new().reduce_prod(input, axes)
         }
 
-        fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-            CpuBackend::new().reduce_max(input, axes)
-        }
-
         fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
             CpuBackend::new().reduce_min(input, axes)
         }
@@ -2379,10 +2372,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             input: TensorRead<'_>,
             axes: &[usize],
         ) -> crate::Result<Tensor> {
-            CpuBackend::new().reduce_max(
-                tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
-                axes,
-            )
+            let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.reduce_max_read(TensorRead::from_tensor(&input), axes)
+            })
         }
 
         // The previous read-half default delegated owned tensors to the one-shot

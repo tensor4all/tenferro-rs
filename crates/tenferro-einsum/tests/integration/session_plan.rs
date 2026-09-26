@@ -387,7 +387,6 @@ macro_rules! panic_reduction {
         impl TensorReduction for $ty {
             panic_backend_methods! {
                 reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-                reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
                 reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
             }
 
@@ -411,10 +410,9 @@ macro_rules! panic_reduction {
             // The previous read-half default delegated owned tensors to the one-shot
             // method and rejected borrowed views. Reproduce it explicitly.
             fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-                self.reduce_max(
-                    tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
-                    axes,
-                )
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+                let _ = axes;
+                panic!("reduce_max should not be called in this test")
             }
 
             // The previous read-half default delegated owned tensors to the one-shot
@@ -671,10 +669,6 @@ impl TensorReduction for SessionCountingBackend {
         self.inner.reduce_prod(input, axes)
     }
 
-    fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> TensorResult {
-        self.inner.reduce_max(input, axes)
-    }
-
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> TensorResult {
         self.inner.reduce_min(input, axes)
     }
@@ -699,10 +693,9 @@ impl TensorReduction for SessionCountingBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly.
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
-        self.reduce_max(
-            tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?,
-            axes,
-        )
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+        let _ = axes;
+        panic!("reduce_max should not be called in this test")
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
