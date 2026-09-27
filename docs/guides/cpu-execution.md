@@ -5,6 +5,9 @@ limits parallelism; affinity determines which logical CPUs may execute those
 threads. On NUMA machines, setting only the count does not keep work in one
 memory-locality domain.
 
+For session versus worker-dispatch overhead and ways to amortize it, see
+[CPU Session Entry and Rayon Dispatch Cost](session-entry-cost.md).
+
 ## What a NUMA Node Means
 
 For this API, a NUMA node is an operating-system topology domain identified by

@@ -292,6 +292,9 @@ recipes) are one fetch away.
 
 Selected deep dives:
 
+- [CPU session entry and Rayon dispatch cost](docs/guides/session-entry-cost.md)
+  — measured overhead, reproducible probes, and supported ways to amortize it.
+
 - [Storage ownership](https://tensor4all.org/tenferro-rs/storage-ownership.html)
   — one physical owner, borrowed views, explicit copies/transfers, and prepared
   access boundaries.

@@ -1,0 +1,7 @@
+[package]
+name = "rayon-install-probe"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[dependencies]
+rayon = "=1.12.0"

@@ -12,6 +12,9 @@ For tensor memory layout and column-major buffers, see
 [Memory Order](memory-order.md). That is part of the tensor data model, not the
 parallelism contract.
 
+For measured session entry and Rayon worker handoff costs, batching and
+one-thread alternatives, see [CPU Session Entry and Rayon Dispatch Cost](session-entry-cost.md).
+
 ## CPU Backend Provider
 
 Provider choice, feature combinations, thread ownership, and the external

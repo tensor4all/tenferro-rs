@@ -3,6 +3,7 @@ project:
   output-dir: ../target/docs-site
   resources:
     - llms.txt
+    - performance/rayon-install-probe/*.txt
   render:
     - index.md
     - storage-ownership.md
@@ -74,6 +75,7 @@ website:
             href: guides/cpu-execution.md
           - text: "Parallelism and Caching"
             href: guides/parallelism-and-caching.md
+          - guides/session-entry-cost.md
           - guides/troubleshooting.md
       - section: "API"
         contents:

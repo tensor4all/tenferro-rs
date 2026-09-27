@@ -1,5 +1,10 @@
 # CPU Session-Open Cost Structure (eager single-op dispatch)
 
+For current usage guidance and the separate 2026-09-27 macOS Rayon dispatch
+measurements, see [CPU Session Entry and Rayon Dispatch Cost](../guides/session-entry-cost.md).
+The historical breakdown below uses different conditions and must not be
+combined with those timings.
+
 Status: measured 2026-08-13 on Linux x86-64, `CpuBackend::with_threads(1)`
 (single worker, faer), via `TENFERRO_PROFILE_CPU_SESSION` instrumentation on
 `CpuBackend::run_backend_session_cached`. Issue #1667.

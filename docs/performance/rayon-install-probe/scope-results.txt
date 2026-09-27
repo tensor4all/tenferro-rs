@@ -1,0 +1,5 @@
+available_parallelism=18; 15 batches x 10000 calls; us/call median [min,max]
+direct (0.0005833, 0.0004583, 0.0006333)
+install (26.127641699999998, 25.8593625, 26.512729200000003)
+in_place_scope_no_spawn (0.0562125, 0.0524583, 0.057425)
+in_place_scope_one_spawn (26.378870900000003, 26.174750000000003, 26.6590667)

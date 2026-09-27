@@ -62,6 +62,21 @@ final result observation. For overhead diagnosis explicitly configure and verify
 one worker separately from CPU affinity; do not change production defaults based
 on tiny-work measurements.
 
+## Amortize session entry
+
+Reuse a backend **and** group related operations inside one explicit session.
+Pool reuse alone does not remove each external worker handoff. An M5 Max
+microbenchmark measured about 26 us for an external install into 18 Rayon
+workers, while the same-pool path was negligible; these are machine-specific
+measurements, not a per-operation constant. For unavoidable tiny single calls,
+measure the one-thread backend, which executes inline. Do not reopen a backend
+inside a session or substitute an ambient global pool.
+
+Read [CPU Session Entry and Rayon Dispatch Cost](https://tensor4all.org/tenferro-rs/guides/session-entry-cost.html)
+for the conditions, historical session comparison, reproducible probes, batching,
+and direct-provider limitations. Direct faer use does not remove Rayon's
+handoff if it still enters a pool.
+
 ## Compile once, run many
 
 A traced graph is a reusable program. Build its input metadata, compile once,

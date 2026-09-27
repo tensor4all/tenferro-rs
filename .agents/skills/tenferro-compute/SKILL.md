@@ -26,7 +26,7 @@ not when changing tenferro itself.
 | --- | --- |
 | Crates, features, CPU providers, scratch crates | [crate selection](references/crate-selection.md) |
 | Tier arities and extension-trait imports | [API cheatsheet](references/api-cheatsheet.md) |
-| Backend/executor reuse and compile-once/run-many | [performance idioms](references/performance-idioms.md) |
+| Session entry cost, batching, backend/executor reuse and compile-once/run-many | [performance idioms](references/performance-idioms.md) |
 | Column-major data, einsum syntax, registration, and setup traps | [pitfalls](references/pitfalls.md) |
 
 ## Non-negotiable defaults
