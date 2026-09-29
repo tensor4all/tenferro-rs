@@ -119,7 +119,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn cholesky(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -132,7 +134,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn triangular_solve(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -147,7 +151,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn lu(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -160,7 +166,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn full_piv_lu(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -173,7 +181,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn solve(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -187,7 +197,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn svd(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -200,7 +212,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn svd_full(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -213,7 +227,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn svd_values(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -226,7 +242,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn qr(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -239,7 +257,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn rank_revealing_qr(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -253,7 +273,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn eigh(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -266,7 +288,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn eigh_values(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -279,7 +303,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn eig(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -292,7 +318,9 @@ pub trait CpuLinalgKernels: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Runtime or storage failure after committing to the operation.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when the kernel's runtime or a
+    /// host buffer fails after it committed to the operation.
     fn eig_values(
         &self,
         context: &CpuExecutionContext<'_>,

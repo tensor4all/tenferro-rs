@@ -180,6 +180,7 @@ pub mod inject;
 mod placement;
 pub mod provider;
 mod provider_capability;
+mod provider_extensions;
 mod reduction;
 mod resource_domain;
 mod runtime_adapter;

@@ -124,13 +124,12 @@ impl LinalgBackend for CpuExecSession<'_> {
                 );
             }
             ensure_host_tensor("cholesky", input)?;
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .cholesky(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             cholesky_entered(provider, context, buffers, input)
         })
@@ -156,8 +155,8 @@ impl LinalgBackend for CpuExecSession<'_> {
         };
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels.0.triangular_solve(
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels.0.triangular_solve(
                     context,
                     TensorRead::from_tensor(a).tensor_view(),
                     TensorRead::from_tensor(b).tensor_view(),
@@ -167,9 +166,9 @@ impl LinalgBackend for CpuExecSession<'_> {
                         transpose_a,
                         unit_diagonal,
                     },
-                )? {
-                    return Ok(output);
-                }
+                )?
+            {
+                return Ok(output);
             }
             triangular_solve_entered(provider, context, buffers, a, b, options)
         })
@@ -196,8 +195,8 @@ impl LinalgBackend for CpuExecSession<'_> {
         };
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels.0.triangular_solve(
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels.0.triangular_solve(
                     context,
                     a.clone().tensor_view(),
                     b.clone().tensor_view(),
@@ -207,9 +206,9 @@ impl LinalgBackend for CpuExecSession<'_> {
                         transpose_a,
                         unit_diagonal,
                     },
-                )? {
-                    return Ok(output);
-                }
+                )?
+            {
+                return Ok(output);
             }
             // Both operands must be faer-eligible for the direct path: `a`
             // reaches faer as a strided `MatRef` and `b` is gathered straight
@@ -246,13 +245,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "lu")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .lu(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             lu_entered(provider, context, buffers, input)
         })
@@ -393,13 +391,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "full_piv_lu")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .full_piv_lu(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             full_piv_lu_entered(provider, context, buffers, input)
         })
@@ -479,13 +476,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "svd")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .svd(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             svd_entered(provider, context, buffers, input)
         })
@@ -496,13 +492,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "svd_full")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .svd_full(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             svd_full_entered(provider, context, buffers, input)
         })
@@ -514,12 +509,11 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "svd_full")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.svd_full(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -536,13 +530,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "svd_values")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .svd_values(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             svd_values_entered(provider, context, buffers, input)
         })
@@ -554,12 +547,11 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "svd")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.svd(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -577,12 +569,11 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "svd_values")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.svd_values(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -599,13 +590,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "qr")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .qr(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             qr_entered(provider, context, buffers, input)
         })
@@ -617,12 +607,11 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "qr")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.qr(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -645,14 +634,14 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "rank_revealing_qr")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels.0.rank_revealing_qr(
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels.0.rank_revealing_qr(
                     context,
                     TensorRead::from_tensor(input).tensor_view(),
                     options,
-                )? {
-                    return Ok(output);
-                }
+                )?
+            {
+                return Ok(output);
             }
             rank_revealing_qr_entered(provider, context, buffers, input, options)
         })
@@ -669,14 +658,13 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "rank_revealing_qr")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels
                         .0
                         .rank_revealing_qr(context, input.clone().tensor_view(), options)?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -770,13 +758,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "eigh")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .eigh(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             eigh_entered(provider, context, buffers, input)
         })
@@ -788,12 +775,11 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "eigh")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.eigh(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -811,13 +797,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "eigh_values")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .eigh_values(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -845,12 +830,11 @@ impl LinalgBackend for CpuExecSession<'_> {
             }
             ensure_host_tensor_read("cholesky", &input)?;
             ensure_supported_linalg_dtype("cholesky", input.dtype())?;
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.cholesky(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -868,12 +852,11 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "lu")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.lu(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -891,13 +874,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "full_piv_lu")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .full_piv_lu(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -918,12 +900,11 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "eig")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.eig(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -941,12 +922,11 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "eig_values")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels.0.eig_values(context, input.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
@@ -963,13 +943,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "eigh_values")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .eigh_values(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             eigh_values_entered(provider, context, buffers, input)
         })
@@ -981,13 +960,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "eig")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .eig(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             eig_entered(provider, context, buffers, input)
         })
@@ -999,13 +977,12 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "eig_values")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels
                     .0
                     .eig_values(context, TensorRead::from_tensor(input).tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             eig_values_entered(provider, context, buffers, input)
         })
@@ -1078,14 +1055,14 @@ impl LinalgBackend for CpuExecSession<'_> {
         let provider = linalg_provider_kind(self.kind(), "solve")?;
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) = kernels.0.solve(
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) = kernels.0.solve(
                     context,
                     TensorRead::from_tensor(a).tensor_view(),
                     TensorRead::from_tensor(b).tensor_view(),
-                )? {
-                    return Ok(output);
-                }
+                )?
+            {
+                return Ok(output);
             }
             solve_entered(provider, context, buffers, a, b)
         })
@@ -1105,14 +1082,13 @@ impl LinalgBackend for CpuExecSession<'_> {
             && solve_shape_direct_eligible(a.shape(), b.shape());
         let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels {
-                if let CpuLinalgOutcome::Executed(output) =
+            if let Some(kernels) = &kernels
+                && let CpuLinalgOutcome::Executed(output) =
                     kernels
                         .0
                         .solve(context, a.clone().tensor_view(), b.clone().tensor_view())?
-                {
-                    return Ok(output);
-                }
+            {
+                return Ok(output);
             }
             if direct {
                 solve_from_views_entered(

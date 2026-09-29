@@ -73,6 +73,24 @@ ops, scalar/analytic ops, and the kernel basis above:
 
 The key rule is that public API breadth does not imply backend kernel breadth.
 
+### Injectable CPU kernels
+
+On the CPU backend the kernel basis can be replaced op by op without
+replacing the backend: `tenferro_linalg::cpu_kernels::CpuLinalgKernels`
+(installed with `install_linalg_kernels`, stored as a typed extension of the
+`CpuProviderBundle`) has one method per primitive the CPU session dispatches
+(cholesky, triangular_solve, lu, full_piv_lu, solve, svd, svd_full,
+svd_values, qr, rank_revealing_qr, eigh, eigh_values, eig, eig_values). Each
+owned and `_read` hook of `CpuExecSession` asks the installed kernels first,
+inside its single operation entry, with the entered `CpuExecutionContext`;
+a kernel returns `CpuLinalgOutcome::Unsupported` before producing anything to
+fall through to the built-in faer/LAPACK kernel. Kernels must return exactly
+the built-in outputs (order, shapes, dtypes, pivot and ordering conventions,
+trailing batch axes), so composites and AD rules are unchanged. The
+Householder family, `lu_factor`, prepared LU solves and `_into` outputs keep
+the built-in kernels. `ext/tenferro-cpu-tprims` implements this trait with
+tprims for single matrices and declines batched inputs.
+
 ## Concrete, Read, And Typed Boundary
 
 Owned dynamic tensors call the matching `LinalgBackend` owned hook. Borrowed

@@ -117,6 +117,14 @@ no permit. Executors not backed by one Rayon pool keep the defaulted
 `CpuDomainExecutor::rayon_pool` returning `None`, and such providers run
 serially there.
 
+Operation-family crates that need their own provider slot store it as a typed
+bundle extension (`CpuProviderBundleBuilder::extension`,
+`CpuProviderBundle::extension`, `CpuExecSession::provider_extension`) instead
+of a slot tenferro-cpu would have to name. tenferro-cpu does not interpret or
+validate extensions; the owning crate defines the trait and its execution
+contract, as `tenferro_linalg::cpu_kernels` does for linear algebra (same
+context, same `rayon_pool` and budget rules as the GEMM providers).
+
 A supported graph execution holds one permit and one backend session across
 Host operations, native operations, and session-capable FFI operations.
 Non-session extension runtimes are boundaries. Cache ownership follows engine
