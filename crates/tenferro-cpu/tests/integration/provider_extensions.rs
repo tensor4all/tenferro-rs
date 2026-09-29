@@ -32,13 +32,16 @@ fn extensions_are_keyed_by_type_and_the_last_install_wins() {
     );
 }
 
+/// Faer only: an explicit bundle on the BLAS kind is rejected at install
+/// because BLAS threading is not enforceable.
+#[cfg(feature = "cpu-faer")]
 #[test]
 fn a_session_sees_the_extensions_of_its_backend() {
-    let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
         .extension(Arc::new(Kernels(7)))
         .build()
         .unwrap();
-    let mut backend = CpuBackend::with_threads(1)
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
         .unwrap()
         .with_provider_bundle(bundle)
         .unwrap();
@@ -51,7 +54,7 @@ fn a_session_sees_the_extensions_of_its_backend() {
         })
         .unwrap();
     assert_eq!(seen, Some(7));
-    let mut plain = CpuBackend::with_threads(1).unwrap();
+    let mut plain = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     let none = plain
         .with_backend_session(|session| {
             with_cpu_exec_session(session, |cpu| cpu.provider_extension::<Kernels>().is_none())

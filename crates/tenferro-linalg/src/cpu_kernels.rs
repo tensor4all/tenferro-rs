@@ -24,8 +24,8 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuProviderBundle};
-//! use tenferro_linalg::cpu_kernels::{install_linalg_kernels, CpuLinalgKernels};
+//! use tenferro_cpu::{CpuBackendKind, CpuProviderBundle};
+//! use tenferro_linalg::cpu_kernels::{install_linalg_kernels, CpuLinalgKernels, CpuLinalgKernelsSlot};
 //!
 //! /// Declines everything, so the built-in kernels run.
 //! #[derive(Debug)]
@@ -34,8 +34,10 @@
 //!
 //! let builder = CpuProviderBundle::builder(CpuBackendKind::default_compiled());
 //! let bundle = install_linalg_kernels(builder, Arc::new(Nothing)).build()?;
-//! let backend = CpuBackend::new().with_provider_bundle(bundle)?;
-//! # let _ = backend;
+//! // Install with `CpuBackend::with_provider_bundle` (a faer backend; explicit
+//! // bundles on the BLAS kind are rejected because BLAS threading is not
+//! // enforceable).
+//! assert!(bundle.extension::<CpuLinalgKernelsSlot>().is_some());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 

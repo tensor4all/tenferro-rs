@@ -1,6 +1,8 @@
 //! Injected CPU linalg kernels (`tenferro_linalg::cpu_kernels`): executed
 //! kernels replace the built-in ones, declined ones fall through, errors
-//! propagate.
+//! propagate. Faer backends only: an explicit bundle on the BLAS kind is
+//! rejected at install because BLAS threading is not enforceable.
+#![cfg(feature = "cpu-faer")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -66,13 +68,10 @@ impl CpuLinalgKernels for Mock {
 }
 
 fn backend_with(mock: Arc<Mock>) -> CpuBackend {
-    let bundle = install_linalg_kernels(
-        CpuProviderBundle::builder(CpuBackendKind::default_compiled()),
-        mock,
-    )
-    .build()
-    .unwrap();
-    CpuBackend::with_threads(2)
+    let bundle = install_linalg_kernels(CpuProviderBundle::builder(CpuBackendKind::Faer), mock)
+        .build()
+        .unwrap();
+    CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer)
         .unwrap()
         .with_provider_bundle(bundle)
         .unwrap()
@@ -111,7 +110,7 @@ fn an_executed_kernel_replaces_the_builtin_one() {
 fn a_declined_kernel_falls_through_to_the_builtin_result() {
     let mock = Arc::new(Mock::default());
     let mut backend = backend_with(Arc::clone(&mock));
-    let mut plain = CpuBackend::with_threads(2).unwrap();
+    let mut plain = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let a = spd();
     let got = with_session(&mut backend, |cpu| cpu.qr(&a)).unwrap();
     let want = with_session(&mut plain, |cpu| cpu.qr(&a)).unwrap();
@@ -161,7 +160,7 @@ fn kernel_errors_propagate() {
 
 #[test]
 fn a_backend_without_kernels_is_unchanged() {
-    let mut plain = CpuBackend::with_threads(1).unwrap();
+    let mut plain = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     let l = with_session(&mut plain, |cpu| cpu.cholesky(&spd())).unwrap();
     assert!((l.as_slice::<f64>().unwrap()[0] - 2.0).abs() < 1e-12);
 }
@@ -337,16 +336,16 @@ fn call_every_hook(cpu: &mut tenferro_cpu::CpuExecSession<'_>) -> Vec<usize> {
 fn every_hooked_method_consults_the_kernels_and_falls_back() {
     let counting = Arc::new(CountingDecline::default());
     let bundle = install_linalg_kernels(
-        CpuProviderBundle::builder(CpuBackendKind::default_compiled()),
+        CpuProviderBundle::builder(CpuBackendKind::Faer),
         counting.clone(),
     )
     .build()
     .unwrap();
-    let mut with_kernels = CpuBackend::with_threads(1)
+    let mut with_kernels = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
         .unwrap()
         .with_provider_bundle(bundle)
         .unwrap();
-    let mut plain = CpuBackend::with_threads(1).unwrap();
+    let mut plain = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     let got = with_session(&mut with_kernels, call_every_hook);
     let want = with_session(&mut plain, call_every_hook);
     assert_eq!(got, want);
@@ -357,12 +356,12 @@ fn every_hooked_method_consults_the_kernels_and_falls_back() {
     );
 
     let bundle = install_linalg_kernels(
-        CpuProviderBundle::builder(CpuBackendKind::default_compiled()),
+        CpuProviderBundle::builder(CpuBackendKind::Faer),
         Arc::new(Defaults),
     )
     .build()
     .unwrap();
-    let mut defaults = CpuBackend::with_threads(1)
+    let mut defaults = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
         .unwrap()
         .with_provider_bundle(bundle)
         .unwrap();
