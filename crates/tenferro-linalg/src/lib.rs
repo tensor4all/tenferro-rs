@@ -49,6 +49,7 @@
 mod ad;
 pub mod backend;
 mod cpu;
+pub mod cpu_kernels;
 #[cfg(feature = "autodiff")]
 mod eager_composites;
 #[cfg(feature = "autodiff")]

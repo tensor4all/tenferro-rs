@@ -6,6 +6,8 @@ mod batch_route_parity;
 mod inject_dual_abi_tests;
 #[path = "integration/inject_tests.rs"]
 mod inject_tests;
+#[path = "integration/provider_extensions.rs"]
+mod provider_extensions;
 #[path = "integration/provider_feature_contract.rs"]
 mod provider_feature_contract;
 #[path = "integration/provider_pool_access.rs"]

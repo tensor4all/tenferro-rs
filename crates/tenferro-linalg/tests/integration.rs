@@ -37,6 +37,8 @@ mod inject_dual_abi_tests;
 mod inject_tests;
 #[path = "integration/linalg_internal_path_contract.rs"]
 mod linalg_internal_path_contract;
+#[path = "integration/linalg_kernels.rs"]
+mod linalg_kernels;
 #[cfg(feature = "autodiff")]
 #[path = "integration/oracle_replay.rs"]
 mod oracle_replay;

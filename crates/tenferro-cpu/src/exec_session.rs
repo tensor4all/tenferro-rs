@@ -163,6 +163,26 @@ impl CpuExecSession<'_> {
         self.backend_kind
     }
 
+    /// The provider extension of type `E` installed on this session's backend
+    /// (see [`crate::CpuProviderBundleBuilder::extension`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::BackendSessionHost;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let none = backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| cpu.provider_extension::<u32>().is_none())
+    ///         .expect("a CPU backend session")
+    /// })?;
+    /// assert!(none);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn provider_extension<E: std::any::Any + Send + Sync>(&self) -> Option<Arc<E>> {
+        self.providers.extension::<E>()
+    }
+
     /// Return the resource-domain identity selected for this session.
     #[doc(hidden)]
     pub fn domain_id(&self) -> super::CpuDomainId {
