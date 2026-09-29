@@ -165,3 +165,206 @@ fn a_backend_without_kernels_is_unchanged() {
     let l = with_session(&mut plain, |cpu| cpu.cholesky(&spd())).unwrap();
     assert!((l.as_slice::<f64>().unwrap()[0] - 2.0).abs() < 1e-12);
 }
+
+/// Declines every call and counts it.
+#[derive(Debug, Default)]
+struct CountingDecline(AtomicUsize);
+
+fn decline<T>(c: &AtomicUsize) -> tenferro_tensor::Result<CpuLinalgOutcome<T>> {
+    c.fetch_add(1, Ordering::Relaxed);
+    Ok(CpuLinalgOutcome::Unsupported(
+        CpuProviderUnsupported::RuntimeUnavailable,
+    ))
+}
+
+impl CpuLinalgKernels for CountingDecline {
+    fn cholesky(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Tensor>> {
+        decline(&self.0)
+    }
+    fn triangular_solve(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+        _: TensorView<'_>,
+        _: TriangularSolveOptions,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Tensor>> {
+        decline(&self.0)
+    }
+    fn lu(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Vec<Tensor>>> {
+        decline(&self.0)
+    }
+    fn full_piv_lu(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Vec<Tensor>>> {
+        decline(&self.0)
+    }
+    fn solve(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Tensor>> {
+        decline(&self.0)
+    }
+    fn svd(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Vec<Tensor>>> {
+        decline(&self.0)
+    }
+    fn svd_full(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Vec<Tensor>>> {
+        decline(&self.0)
+    }
+    fn svd_values(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Tensor>> {
+        decline(&self.0)
+    }
+    fn qr(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Vec<Tensor>>> {
+        decline(&self.0)
+    }
+    fn rank_revealing_qr(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+        _: tenferro_linalg::RankRevealingQrOptions,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Vec<Tensor>>> {
+        decline(&self.0)
+    }
+    fn eigh(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Vec<Tensor>>> {
+        decline(&self.0)
+    }
+    fn eigh_values(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Tensor>> {
+        decline(&self.0)
+    }
+    fn eig(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Vec<Tensor>>> {
+        decline(&self.0)
+    }
+    fn eig_values(
+        &self,
+        _: &CpuExecutionContext<'_>,
+        _: TensorView<'_>,
+    ) -> tenferro_tensor::Result<CpuLinalgOutcome<Tensor>> {
+        decline(&self.0)
+    }
+}
+
+/// Declines through the trait's default methods.
+#[derive(Debug)]
+struct Defaults;
+impl CpuLinalgKernels for Defaults {}
+
+fn r(t: &Tensor) -> TensorRead<'_> {
+    TensorRead::from_tensor(t)
+}
+
+/// Every hooked method, owned and read, on small matrices; returns the output
+/// count so results are compared across backends.
+fn call_every_hook(cpu: &mut tenferro_cpu::CpuExecSession<'_>) -> Vec<usize> {
+    let a = spd();
+    let b = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap();
+    let o = tenferro_linalg::RankRevealingQrOptions::default();
+    vec![
+        cpu.cholesky(&a).map(|_| 1).unwrap(),
+        cpu.cholesky_read(r(&a)).map(|_| 1).unwrap(),
+        cpu.triangular_solve(&a, &b, true, true, false, false)
+            .map(|_| 1)
+            .unwrap(),
+        cpu.triangular_solve_read(r(&a), r(&b), true, true, false, false)
+            .map(|_| 1)
+            .unwrap(),
+        cpu.lu(&a).unwrap().len(),
+        cpu.lu_read(r(&a)).unwrap().len(),
+        cpu.full_piv_lu(&a).unwrap().len(),
+        cpu.full_piv_lu_read(r(&a)).unwrap().len(),
+        cpu.solve(&a, &b).map(|_| 1).unwrap(),
+        cpu.solve_read(r(&a), r(&b)).map(|_| 1).unwrap(),
+        cpu.svd(&a).unwrap().len(),
+        cpu.svd_read(r(&a)).unwrap().len(),
+        cpu.svd_full(&a).unwrap().len(),
+        cpu.svd_full_read(r(&a)).unwrap().len(),
+        cpu.svd_values(&a).map(|_| 1).unwrap(),
+        cpu.svd_values_read(r(&a)).map(|_| 1).unwrap(),
+        cpu.qr(&a).unwrap().len(),
+        cpu.qr_read(r(&a)).unwrap().len(),
+        cpu.rank_revealing_qr(&a, o).unwrap().len(),
+        cpu.rank_revealing_qr_read(r(&a), o).unwrap().len(),
+        cpu.eigh(&a).unwrap().len(),
+        cpu.eigh_read(r(&a)).unwrap().len(),
+        cpu.eigh_values(&a).map(|_| 1).unwrap(),
+        cpu.eigh_values_read(r(&a)).map(|_| 1).unwrap(),
+        cpu.eig(&a).unwrap().len(),
+        cpu.eig_read(r(&a)).unwrap().len(),
+        cpu.eig_values(&a).map(|_| 1).unwrap(),
+        cpu.eig_values_read(r(&a)).map(|_| 1).unwrap(),
+    ]
+}
+
+#[test]
+fn every_hooked_method_consults_the_kernels_and_falls_back() {
+    let counting = Arc::new(CountingDecline::default());
+    let bundle = install_linalg_kernels(
+        CpuProviderBundle::builder(CpuBackendKind::default_compiled()),
+        counting.clone(),
+    )
+    .build()
+    .unwrap();
+    let mut with_kernels = CpuBackend::with_threads(1)
+        .unwrap()
+        .with_provider_bundle(bundle)
+        .unwrap();
+    let mut plain = CpuBackend::with_threads(1).unwrap();
+    let got = with_session(&mut with_kernels, call_every_hook);
+    let want = with_session(&mut plain, call_every_hook);
+    assert_eq!(got, want);
+    assert_eq!(
+        counting.0.load(Ordering::Relaxed),
+        28,
+        "each of the 28 hooks asks once"
+    );
+
+    let bundle = install_linalg_kernels(
+        CpuProviderBundle::builder(CpuBackendKind::default_compiled()),
+        Arc::new(Defaults),
+    )
+    .build()
+    .unwrap();
+    let mut defaults = CpuBackend::with_threads(1)
+        .unwrap()
+        .with_provider_bundle(bundle)
+        .unwrap();
+    assert_eq!(with_session(&mut defaults, call_every_hook), want);
+}

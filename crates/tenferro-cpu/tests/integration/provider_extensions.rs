@@ -25,6 +25,11 @@ fn extensions_are_keyed_by_type_and_the_last_install_wins() {
         .build()
         .unwrap();
     assert!(plain.extension::<Kernels>().is_none());
+    // Debug output reports how many extensions are installed, not their contents.
+    assert!(
+        format!("{bundle:?}").contains("ProviderExtensions { count: 1 }"),
+        "{bundle:?}"
+    );
 }
 
 #[test]
