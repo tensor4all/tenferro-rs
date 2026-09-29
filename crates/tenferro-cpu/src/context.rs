@@ -598,6 +598,10 @@ impl CpuDomainExecutor for CpuContext {
         let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
         self.install_if_needed(|| job.run())
     }
+
+    fn rayon_pool(&self) -> Option<&rayon::ThreadPool> {
+        self.pool.as_deref()
+    }
 }
 
 #[cfg(test)]

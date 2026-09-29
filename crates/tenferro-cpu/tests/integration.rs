@@ -8,6 +8,8 @@ mod inject_dual_abi_tests;
 mod inject_tests;
 #[path = "integration/provider_feature_contract.rs"]
 mod provider_feature_contract;
+#[path = "integration/provider_pool_access.rs"]
+mod provider_pool_access;
 #[path = "integration/runtime_error_tests.rs"]
 mod runtime_error_tests;
 #[path = "integration/static_replay.rs"]

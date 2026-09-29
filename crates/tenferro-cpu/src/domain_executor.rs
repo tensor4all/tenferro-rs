@@ -457,6 +457,26 @@ pub trait CpuDomainExecutor: Debug + Send + Sync + 'static {
     /// [`CpuDomainExecutorError::Cancellation`], or
     /// [`CpuDomainExecutorError::PanicBridge`] for executor-owned failures.
     fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError>;
+
+    /// The Rayon pool this executor runs jobs on, when it has one.
+    ///
+    /// Providers reach it through [`crate::CpuExecutionContext::rayon_pool`],
+    /// which exposes it only to contexts that own an inner parallel region.
+    /// Executors that are not backed by one Rayon pool keep the default
+    /// `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuDomainExecutor, RayonCpuDomainExecutor};
+    /// let pool = Arc::new(rayon::ThreadPoolBuilder::new().num_threads(2).build()?);
+    /// assert!(RayonCpuDomainExecutor::new(pool).rayon_pool().is_some());
+    /// # Ok::<(), rayon::ThreadPoolBuildError>(())
+    /// ```
+    fn rayon_pool(&self) -> Option<&rayon::ThreadPool> {
+        None
+    }
 }
 
 /// Adapter that executes CPU-domain jobs on one caller-owned Rayon pool.
@@ -534,6 +554,10 @@ impl CpuDomainExecutor for RayonCpuDomainExecutor {
 
     fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
         self.pool.install(|| job.run())
+    }
+
+    fn rayon_pool(&self) -> Option<&rayon::ThreadPool> {
+        Some(&self.pool)
     }
 }
 

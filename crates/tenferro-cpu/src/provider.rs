@@ -570,6 +570,47 @@ impl<'a> CpuExecutionContext<'a> {
         }
     }
 
+    /// The Rayon pool this context's inner parallel region runs on.
+    ///
+    /// `Some` exactly when the context owns an inner region: parallel mode
+    /// [`ParallelMode::Inner`], a Rayon-backed executor, and a thread budget
+    /// above one (the same gate as the faer policy). The caller is already on
+    /// a worker of this pool, so work installed or scoped on it runs in
+    /// place. A provider running its own kernels on the pool must use at most
+    /// [`CpuExecutionContext::thread_budget`] threads, which can be smaller
+    /// than the pool, and declares
+    /// [`crate::CpuThreadCountControl::PerCallUpperBound`] with
+    /// [`crate::CpuPlacementControl::EngineWorkers`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::BackendSessionHost;
+    /// let mut backend = CpuBackend::with_threads(2)?;
+    /// let workers = backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, _| {
+    ///             Ok(context.rayon_pool().map(|pool| pool.current_num_threads()))
+    ///         })
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
+    /// assert_eq!(workers, Some(2));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn rayon_pool(&self) -> Option<&'a rayon::ThreadPool> {
+        match (
+            self.parallel_mode,
+            self.domain.executor_capabilities().inner_parallelism,
+        ) {
+            (ParallelMode::Inner, CpuInnerParallelism::Rayon) if self.thread_budget().get() > 1 => {
+                self.domain.executor().rayon_pool()
+            }
+            _ => None,
+        }
+    }
+
     /// Effective native-kernel degree inside this already-entered CPU context.
     /// Non-Rayon executors and sequential/nested policy use one thread.
     ///
