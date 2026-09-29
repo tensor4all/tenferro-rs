@@ -105,6 +105,18 @@ and expose only immutable policy/accessors. This separates executor entry,
 logical `ParallelMode`, and provider worker ownership and prevents a provider
 or operation-family implementation from re-entering the executor.
 
+A context that owns an inner parallel region (`ParallelMode::Inner`, a Rayon
+executor, budget above one) also exposes that executor's pool through
+`CpuExecutionContext::rayon_pool`, gated exactly like `faer_parallelism`.
+It serves providers that schedule their own kernels, such as
+`ext/tenferro-cpu-tprims`: they declare `PerCallUpperBound` with
+`EngineWorkers`, run on the already-entered worker, and use at most
+`thread_budget()` threads of that pool. Installing on or scoping into the pool
+from its own worker runs in place, so this is not an executor entry and needs
+no permit. Executors not backed by one Rayon pool keep the defaulted
+`CpuDomainExecutor::rayon_pool` returning `None`, and such providers run
+serially there.
+
 A supported graph execution holds one permit and one backend session across
 Host operations, native operations, and session-capable FFI operations.
 Non-session extension runtimes are boundaries. Cache ownership follows engine

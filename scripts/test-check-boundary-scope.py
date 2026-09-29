@@ -112,7 +112,7 @@ use tenferro_ad::EagerTensor;
     def test_api_inventory_includes_standalone_extensions(self):
         checker = load("check-api-consistency")
         paths = {crate.path.relative_to(checker.ROOT).as_posix() for crate in checker.workspace_crates(checker.ROOT)}
-        self.assertTrue({"ext/sparse", "ext/tropical", "ext/tenferro-cpu-tblis"} <= paths)
+        self.assertTrue({"ext/sparse", "ext/tropical", "ext/tenferro-cpu-tblis", "ext/tenferro-cpu-tprims"} <= paths)
 
 
 if __name__ == "__main__":

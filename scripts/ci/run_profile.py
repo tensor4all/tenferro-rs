@@ -31,6 +31,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
         "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
         "cargo fmt --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all --check",
+        "cargo fmt --manifest-path ext/tenferro-cpu-tprims/Cargo.toml --all --check",
     ),
     "clippy": (
         f"cargo clippy --workspace --all-targets -- {_CLIPPY_FLAGS}",
@@ -39,6 +40,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets -- "
         f"{_CLIPPY_FLAGS}",
         "cargo clippy --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all-targets -- "
+        f"{_CLIPPY_FLAGS}",
+        "cargo clippy --manifest-path ext/tenferro-cpu-tprims/Cargo.toml --all-targets -- "
         f"{_CLIPPY_FLAGS}",
     ),
     "workspace-faer": (
@@ -84,6 +87,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         f"cargo test --manifest-path ext/sparse/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--features autodiff",
         f"cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml {_CARGO_TEST_PROFILE}",
+        f"cargo test --manifest-path ext/tenferro-cpu-tprims/Cargo.toml {_CARGO_TEST_PROFILE}",
         f"cargo check --manifest-path samples/kdv-pinn/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--all-targets",
         f"cargo test --manifest-path samples/cubecl-kernel/Cargo.toml {_CARGO_TEST_PROFILE} "

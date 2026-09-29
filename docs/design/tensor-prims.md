@@ -89,7 +89,9 @@ otherwise faer. Explicit constructors such as `CpuBackend::with_kind` and
 compiled into the binary. External providers can be installed through
 `CpuProviderBundleBuilder`; for example, the unpublished
 `ext/tenferro-cpu-tblis` crate replaces only the complete `dot_general`
-provider slot and falls back to the selected base provider in preferred mode.
+provider slot and falls back to the selected base provider in preferred mode;
+the unpublished `ext/tenferro-cpu-tprims` crate fills the GEMM and
+`dot_general` slots with tprims kernels run on the context's Rayon pool.
 `CpuContext` stores the CPU thread count as the single source of truth for
 tenferro-owned CPU parallelism and owns the Rayon thread pool used by
 multi-thread contexts.

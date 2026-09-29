@@ -140,7 +140,13 @@ def workspace_crates(root: pathlib.Path) -> list[CrateInfo]:
     workspace = load_toml(root / "Cargo.toml")["workspace"]
     crates: list[CrateInfo] = []
     # These extension packages intentionally own standalone workspaces.
-    members = [*workspace["members"], "ext/sparse", "ext/tropical", "ext/tenferro-cpu-tblis"]
+    members = [
+        *workspace["members"],
+        "ext/sparse",
+        "ext/tropical",
+        "ext/tenferro-cpu-tblis",
+        "ext/tenferro-cpu-tprims",
+    ]
     for member in dict.fromkeys(members):
         member_path = root / member
         manifest_path = member_path / "Cargo.toml"

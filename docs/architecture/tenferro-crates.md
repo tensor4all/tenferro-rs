@@ -71,7 +71,11 @@ unpublished `ext/tenferro-cpu-tblis` crate is the external-provider example:
 it depends on `tblis-ffi`, optionally depends on the local
 `../../third_party/t4a-tblis-src` path for `source-build`, and installs only a
 general-contraction provider. All other CPU operations remain delegated to the
-selected `tenferro-cpu` base provider.
+selected `tenferro-cpu` base provider. The unpublished
+`ext/tenferro-cpu-tprims` crate likewise depends on tprims-rs by git commit
+(and repeats the workspace strided-rs pin) and installs GEMM and
+general-contraction providers that run on the context's Rayon pool
+(`CpuExecutionContext::rayon_pool`); `tenferro-cpu` has no tprims dependency.
 
 ## III. Layering
 

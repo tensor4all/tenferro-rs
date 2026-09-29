@@ -59,7 +59,8 @@ the standard linalg extension are implemented on CPU for the supported dtype
 subset of each op. External general-contraction providers, such as the
 unpublished TBLIS example under `ext/tenferro-cpu-tblis`, can override supported
 `dot_general` contractions without replacing the compiled faer/BLAS fallback
-and linalg provider.
+and linalg provider. The unpublished `ext/tenferro-cpu-tprims` crate overrides
+the GEMM and `dot_general` slots the same way.
 
 ### CUDA/CubeCL Status
 
