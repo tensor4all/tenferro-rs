@@ -28,8 +28,12 @@
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_gpu::cuda::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TensorScalar};
+use tenferro_gpu::cuda::{
+    download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId,
+};
+use tenferro_tensor::{
+    BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TensorScalar, TensorWrite,
+};
 
 const SIZES: &[usize] = &[8, 64, 256];
 const BATCH: usize = 16;
@@ -68,9 +72,36 @@ fn session(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGe
         .expect("session dot_general should succeed");
 }
 
+/// Owned-destination session route: the same contraction written into a
+/// caller-owned device tensor.
+///
+/// This measures the raw cuTENSOR write path whose destination resolves
+/// through `write_device_ptr` (#1949), alongside the allocating read route
+/// above; the two also differ in whether the destination allocation is reused
+/// across iterations and how the result is validated.
+fn session_into(
+    backend: &mut CudaBackend,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    config: &DotGeneralConfig,
+    out: &mut Tensor,
+) {
+    backend
+        .with_backend_session(|exec| {
+            exec.dot_general_read_into(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                config,
+                TensorWrite::from_tensor(out),
+            )
+        })
+        .unwrap()
+        .expect("session dot_general_read_into should succeed");
+}
+
 fn bench_size<T>(c: &mut Criterion, label: &str, size: usize)
 where
-    T: TensorScalar + From<f32> + 'static,
+    T: TensorScalar + From<f32> + PartialEq + std::fmt::Debug + 'static,
 {
     let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let lhs = upload_tensor(backend.runtime(), &matrix::<T>(size, size)).expect("upload lhs");
@@ -111,6 +142,60 @@ where
             bench.iter(|| {
                 for _ in 0..BATCH {
                     session(&mut backend, black_box(&lhs), black_box(&rhs), &config);
+                }
+                backend.runtime().synchronize().expect("sync");
+            });
+        },
+    );
+    group.finish();
+
+    // Owned-destination route on the same operands. Validate its output
+    // against the allocating route before timing.
+    let expected = download_tensor(backend.runtime(), &device_out).expect("download reference");
+    let mut out = device_out;
+    session_into(&mut backend, &lhs, &rhs, &config, &mut out);
+    backend.runtime().synchronize().expect("validation sync");
+    let actual = download_tensor(backend.runtime(), &out).expect("download owned output");
+    assert_eq!(
+        actual.shape(),
+        expected.shape(),
+        "{label}: owned output shape"
+    );
+    assert_eq!(
+        actual.as_slice::<T>().unwrap(),
+        expected.as_slice::<T>().unwrap(),
+        "{label}: owned-destination result"
+    );
+    let mut group = c.benchmark_group(format!("route_matrix_gpu/dot_general_into_{label}"));
+    group.bench_with_input(
+        BenchmarkId::new("session/round_trip", size),
+        &size,
+        |bench, _| {
+            bench.iter(|| {
+                session_into(
+                    &mut backend,
+                    black_box(&lhs),
+                    black_box(&rhs),
+                    &config,
+                    black_box(&mut out),
+                );
+                backend.runtime().synchronize().expect("sync");
+            });
+        },
+    );
+    group.bench_with_input(
+        BenchmarkId::new("session/enqueue_batch16", size),
+        &size,
+        |bench, _| {
+            bench.iter(|| {
+                for _ in 0..BATCH {
+                    session_into(
+                        &mut backend,
+                        black_box(&lhs),
+                        black_box(&rhs),
+                        &config,
+                        black_box(&mut out),
+                    );
                 }
                 backend.runtime().synchronize().expect("sync");
             });
