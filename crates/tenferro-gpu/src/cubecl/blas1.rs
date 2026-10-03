@@ -51,7 +51,7 @@ use super::dispatch::{
     typed_view_array_arg, typed_view_mut_array_arg,
 };
 use super::error::unsupported_dtype;
-use super::gemm::typed_device_ptr;
+use super::gemm::{typed_device_ptr, write_device_ptr};
 use super::interop::{alloc_zero_output, offset_device_ptr, upload_typed_tensor};
 use super::runtime::check_cublas;
 use super::{CudaBackend, CudaRuntime};
@@ -281,7 +281,10 @@ impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
 
     fn device_ptr(&mut self, rt: &CudaRuntime, op: &'static str) -> crate::Result<*mut c_void> {
         match self {
-            Self::Owned(tensor) => typed_device_ptr(rt, tensor, op),
+            // An owned destination may already have a valid memoized address from
+            // an earlier read, so it must take the write path and its blocking
+            // `get_resource` round trip (#1949) instead of the read fast path.
+            Self::Owned(tensor) => write_device_ptr(rt, tensor, op),
             Self::View(view) => {
                 let offset = view.offset();
                 let prepared = prepared_view_mut_access(view, op)?;

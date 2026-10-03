@@ -1040,7 +1040,7 @@ where
 {
     match operand {
         WriteOperand::Owned(tensor) => Ok(ResolvedOperand {
-            ptr: typed_device_ptr(rt, tensor, OP)?,
+            ptr: write_device_ptr(rt, tensor, OP)?,
             strides: std::borrow::Cow::Borrowed(compact_strides),
             alignment: CUDA_ALLOCATION_ALIGNMENT,
         }),
@@ -1533,6 +1533,42 @@ pub(super) fn typed_device_ptr<T: TensorScalar + 'static>(
     cuda_device_ptr_from_addr(addr, op)
 }
 
+/// The device base address of an owned *destination* for a raw vendor call
+/// that writes it.
+///
+/// A queued CubeCL kernel only drops a buffer's memoized address when it
+/// *writes* the buffer (#1868). A queued *read* leaves the memo valid, so a
+/// raw vendor write resolved through the memo could be issued ahead of a read
+/// that precedes it in program order — a write-after-read window (#1949).
+/// Taking the blocking `get_resource` round trip here pushes every kernel
+/// queued on this stream onto the CUstream first, so the vendor write is
+/// ordered after them. Kernels queued on another stream are not covered by
+/// this barrier; cross-stream reader ordering is tracked separately.
+///
+/// The read-only fast path is unchanged: [`typed_device_ptr`] and
+/// [`memoized_device_addr`] still consult the memo, which is only ever
+/// resolved from a read or from this write path after the round trip. The
+/// resolved address is memoized so a later raw read can reuse it (reads need
+/// no ordering against queued reads, and any intervening queued write
+/// invalidates it).
+pub(super) fn write_device_ptr<T: TensorScalar + 'static>(
+    rt: &CudaRuntime,
+    tensor: &TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<*mut c_void> {
+    ensure_resident_on_runtime(rt, tensor, op)?;
+    let prepared = prepared_tensor_access(tensor, op)?;
+    let resource = rt
+        .client()
+        .get_resource(prepared.into_handle())
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+    let addr = resource.resource().ptr;
+    // See `CubeclBuffer::device_addr` for the address-stability invariant.
+    cubecl_buffer(tensor, op)?.memoize_device_addr(addr);
+    // The residency check above ties this raw FFI pointer to the caller's runtime/device.
+    cuda_device_ptr_from_addr(addr, op)
+}
+
 /// The device base address of `buffer` for a raw vendor call, without a
 /// blocking server round trip when it is already known.
 ///
@@ -1544,6 +1580,11 @@ pub(super) fn typed_device_ptr<T: TensorScalar + 'static>(
 /// round trip, preserving CubeCL's cross-stream alignment. A queued CubeCL
 /// write drops the memoized address (#1868), so a raw call never reads ahead
 /// of it. Borrowed views share their root buffer's memo (#1925).
+///
+/// This memoized path is for read-only operands and for fresh internal
+/// outputs, whose memo is empty. An owned *caller-provided destination* is
+/// resolved by [`write_device_ptr`], which always takes the round trip so a
+/// vendor write cannot overtake a queued CubeCL read (#1949).
 pub(super) fn memoized_device_addr(
     rt: &CudaRuntime,
     buffer: &CubeclBuffer,

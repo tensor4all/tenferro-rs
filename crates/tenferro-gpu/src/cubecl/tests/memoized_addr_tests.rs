@@ -211,6 +211,87 @@ fn every_write_binding_helper_invalidates_the_memoized_address() {
     );
 }
 
+/// Issue #1949: an owned raw-vendor *destination* must not use the memoized
+/// read fast path.
+///
+/// A queued CubeCL kernel drops a buffer's memoized address only when it
+/// *writes* the buffer (#1868). A queued *read* leaves the memo valid, so a
+/// vendor write resolved through the memo could be issued ahead of a read
+/// that precedes it in program order. Every owned write site must therefore
+/// resolve through `write_device_ptr`, which always takes the blocking
+/// `get_resource` round trip, and `write_device_ptr` itself must never read
+/// the memo.
+#[test]
+fn owned_raw_vendor_writes_use_the_round_trip_path() {
+    let gemm = include_str!("../gemm.rs");
+
+    let write_body = section_between(
+        gemm,
+        "pub(super) fn write_device_ptr<T: TensorScalar + 'static>(",
+        "\n}\n",
+    );
+    assert!(
+        write_body.contains(".get_resource("),
+        "write_device_ptr must resolve through get_resource"
+    );
+    for memoized in [
+        "cached_device_addr",
+        "memoized_device_addr",
+        "typed_device_ptr",
+    ] {
+        assert!(
+            !write_body.contains(memoized),
+            "write_device_ptr must not consult the memoized read helper: {memoized}"
+        );
+    }
+
+    let resolve_write = section_between(
+        gemm,
+        "fn resolve_write_operand",
+        "/// Resolve a strided view",
+    );
+    let (owned, _view) = resolve_write
+        .split_once("WriteOperand::View")
+        .expect("resolve_write_operand must handle views");
+    assert!(
+        owned.contains("write_device_ptr"),
+        "a cuTENSOR owned destination must resolve through write_device_ptr"
+    );
+    assert!(
+        !owned.contains("typed_device_ptr("),
+        "a cuTENSOR owned destination must not use the memoized read helper"
+    );
+
+    let blas1 = include_str!("../blas1.rs");
+    let device_ptr = section_between(
+        blas1,
+        "fn device_ptr(&mut self, rt: &CudaRuntime, op: &'static str)",
+        "\n    }\n",
+    );
+    let (owned, _view) = device_ptr
+        .split_once("Self::View")
+        .expect("WriteRef::device_ptr must handle views");
+    assert!(
+        owned.contains("write_device_ptr"),
+        "a cuBLAS owned destination must resolve through write_device_ptr"
+    );
+    assert!(
+        !owned.contains("typed_device_ptr("),
+        "a cuBLAS owned destination must not use the memoized read helper"
+    );
+}
+
+fn section_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let offset = source
+        .find(start)
+        .unwrap_or_else(|| panic!("missing section start {start:?}"));
+    let rest = &source[offset..];
+    let length = rest
+        .find(end)
+        .unwrap_or_else(|| panic!("missing section end {end:?} after {start:?}"));
+    &rest[..length]
+}
+
 /// Issue #1925: a borrowed read view shares its root buffer's memoized
 /// address instead of a blocking `get_resource` per operand, and still sees a
 /// CubeCL write queued before it.

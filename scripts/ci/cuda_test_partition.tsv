@@ -658,6 +658,7 @@ gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_signed_pad_cropping_
 gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_slice_dynamic_slice_and_pad_match_cpu
 host	tenferro-gpu	cubecl::tests::memoized_addr_tests::every_in_place_launch_helper_invalidates_the_memoized_address
 host	tenferro-gpu	cubecl::tests::memoized_addr_tests::every_write_binding_helper_invalidates_the_memoized_address
+host	tenferro-gpu	cubecl::tests::memoized_addr_tests::owned_raw_vendor_writes_use_the_round_trip_path
 gpu	tenferro-gpu	cubecl::tests::memoized_addr_tests::queued_cubecl_write_drops_the_memoized_device_address
 gpu	tenferro-gpu	cubecl::tests::memoized_addr_tests::queued_scale_write_drops_the_memoized_device_address
 gpu	tenferro-gpu	cubecl::tests::memoized_addr_tests::view_reads_share_the_root_memo_and_observe_queued_writes
