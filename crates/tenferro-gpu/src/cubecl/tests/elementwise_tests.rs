@@ -2760,3 +2760,95 @@ fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
 
     assert_eq!(err.kind(), ErrorKind::RuntimeState);
 }
+
+/// #1922: complex division must stay representable for extreme operands.
+///
+/// The textbook `|b|²` denominator would overflow (`2^600`) or underflow
+/// (`2^-600`) here; the parts kernel uses Baudin–Smith with power-of-two
+/// scaling.
+#[test]
+#[ignore = "requires CUDA"]
+fn complex_division_is_scale_robust() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut gpu = gpu_backend();
+
+    let huge = 2f64.powi(600);
+    let tiny = 2f64.powi(-600);
+    let lhs = tensor_c64(
+        vec![2],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)],
+    );
+    let rhs = tensor_c64(
+        vec![2],
+        vec![Complex64::new(huge, huge), Complex64::new(tiny, tiny)],
+    );
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_rhs = upload(&gpu, &rhs);
+    let result = gpu
+        .with_backend_session(|__s| {
+            __s.div_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let result = download(&gpu, &result);
+    let values = result.as_typed::<Complex64>().unwrap().as_slice().unwrap();
+
+    let expected_huge = 2f64.powi(-601);
+    assert!(
+        (values[0].re - expected_huge).abs() <= expected_huge * 1e-12,
+        "{:?}",
+        values[0]
+    );
+    assert!(
+        (values[0].im + expected_huge).abs() <= expected_huge * 1e-12,
+        "{:?}",
+        values[0]
+    );
+    let expected_tiny = 2f64.powi(599);
+    assert!(
+        (values[1].re - expected_tiny).abs() <= expected_tiny * 1e-12,
+        "{:?}",
+        values[1]
+    );
+    assert!(
+        (values[1].im + expected_tiny).abs() <= expected_tiny * 1e-12,
+        "{:?}",
+        values[1]
+    );
+
+    // Complex32 uses the same f32 parts path.
+    let huge32 = 2f32.powi(60);
+    let lhs32 = tensor_c32(vec![1], vec![Complex32::new(1.0, 0.0)]);
+    let rhs32 = tensor_c32(vec![1], vec![Complex32::new(huge32, huge32)]);
+    let gpu_lhs32 = upload(&gpu, &lhs32);
+    let gpu_rhs32 = upload(&gpu, &rhs32);
+    let result32 = gpu
+        .with_backend_session(|__s| {
+            __s.div_read(
+                TensorRead::from_tensor(&gpu_lhs32),
+                TensorRead::from_tensor(&gpu_rhs32),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let result32 = download(&gpu, &result32);
+    let values32 = result32
+        .as_typed::<Complex32>()
+        .unwrap()
+        .as_slice()
+        .unwrap();
+    let expected32 = 2f32.powi(-61);
+    assert!(
+        (values32[0].re - expected32).abs() <= expected32 * 1e-5,
+        "{:?}",
+        values32[0]
+    );
+    assert!(
+        (values32[0].im + expected32).abs() <= expected32 * 1e-5,
+        "{:?}",
+        values32[0]
+    );
+}

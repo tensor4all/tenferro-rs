@@ -1,6 +1,9 @@
 // INVARIANT: CubeCL's kernel DSL intentionally emits equal-expression forms
 // that are simplified by the device compiler, not by host-side Clippy.
 #![allow(clippy::eq_op)]
+// INVARIANT: the complex-division kernel keeps `x = x * y` form (Baudin–Smith
+// scaling) because compound assignment is not part of the kernel DSL subset.
+#![allow(clippy::assign_op_pattern)]
 
 use cubecl::prelude::*;
 
@@ -18,6 +21,17 @@ pub(crate) const MIXED_ADD: usize = 0;
 pub(crate) const MIXED_SUB: usize = 1;
 pub(crate) const MIXED_MUL: usize = 2;
 pub(crate) const MIXED_DIV: usize = 3;
+
+macro_rules! binary_float_kernel {
+    ($name:ident, $op:tt) => {
+        #[cube(launch_unchecked)]
+        pub fn $name<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+            if ABSOLUTE_POS < out.len() {
+                out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] $op rhs[ABSOLUTE_POS];
+            }
+        }
+    };
+}
 
 macro_rules! binary_float_complex_kernel {
     ($float_name:ident, $complex_name:ident, $op:tt) => {
@@ -185,7 +199,9 @@ axpby_strided_source_kernel!(axpby_strided_source_complex, ComplexCore);
 binary_float_complex_kernel!(add_float, add_complex, +);
 binary_float_complex_kernel!(sub_float, sub_complex, -);
 binary_float_complex_kernel!(mul_float, mul_complex, *);
-binary_float_complex_kernel!(div_float, div_complex, /);
+// Complex division uses `div_complex_parts` below: `ComplexCore`'s `/` lowers to
+// the unscaled textbook formula, which overflows/underflows for extreme operands.
+binary_float_kernel!(div_float, /);
 
 #[cube(launch_unchecked)]
 pub fn add_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
@@ -723,5 +739,120 @@ pub fn clamp_float<F: Float>(
 pub fn conj_complex<C: ComplexCore>(out: &mut Array<C>, input: &Array<C>) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].conj();
+    }
+}
+
+/// `|x|` written without the `Abs` expander, whose result type is a
+/// `WithScalar` that cannot be compared or recombined with `F`.
+#[cube]
+fn complex_div_abs<F: Float>(x: F) -> F {
+    if x < F::new(0.0f32) {
+        -x
+    } else {
+        x
+    }
+}
+
+/// `sign(x)` preserving the sign of zero, as Julia Base uses it.
+#[cube]
+fn complex_div_sign<F: Float>(x: F) -> F {
+    let mut s = F::new(1.0f32);
+    if x == F::new(0.0f32) {
+        s = x;
+    } else if x < F::new(0.0f32) {
+        s = F::new(-1.0f32);
+    }
+    s
+}
+
+/// One Baudin–Smith numerator/denominator term, ported from Julia Base
+/// `robust_cdiv2`.
+#[cube]
+fn complex_div_term<F: Float>(a: F, b: F, c: F, d: F, r: F, t: F) -> F {
+    if r != F::new(0.0f32) {
+        let br = b * r;
+        if br != F::new(0.0f32) {
+            (a + br) * t
+        } else {
+            a * t + (b * t) * r
+        }
+    } else {
+        (a + d * (b / c)) * t
+    }
+}
+
+/// Scale-robust complex division over the interleaved real/imaginary parts.
+///
+/// `out`, `lhs` and `rhs` hold the parts of `Complex<f32>` / `Complex<f64>`
+/// operands: element `i` is parts `2*i` (real) and `2*i + 1` (imaginary).
+/// Ported from Julia Base `complex.jl` (`/`, `cdiv`, `robust_cdiv1/2`,
+/// `scaling_cdiv`, `scaleargs_cdiv`) and matching the host reference
+/// `strided_basic::complex_div`.
+#[cube(launch_unchecked)]
+pub fn div_complex_parts<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+    let elements = out.len() / 2;
+    if ABSOLUTE_POS < elements {
+        let i = ABSOLUTE_POS * 2;
+        let mut a = lhs[i];
+        let mut b = lhs[i + 1];
+        let mut c = rhs[i];
+        let mut d = rhs[i + 1];
+        if complex_div_abs::<F>(c) > F::max_value() || complex_div_abs::<F>(d) > F::max_value() {
+            let a_finite = a == a && complex_div_abs::<F>(a) <= F::max_value();
+            let b_finite = b == b && complex_div_abs::<F>(b) <= F::max_value();
+            if a_finite && b_finite {
+                out[i] = F::new(0.0f32) * complex_div_sign::<F>(a) * complex_div_sign::<F>(c);
+                out[i + 1] = -F::new(0.0f32) * complex_div_sign::<F>(b) * complex_div_sign::<F>(d);
+            } else {
+                // `F::NAN` codegens to an undefined `NaN` identifier on CUDA.
+                let nan = F::new(0.0f32) / F::new(0.0f32);
+                out[i] = nan;
+                out[i + 1] = nan;
+            }
+        } else {
+            let abs_a = complex_div_abs::<F>(a);
+            let abs_b = complex_div_abs::<F>(b);
+            let abs_c = complex_div_abs::<F>(c);
+            let abs_d = complex_div_abs::<F>(d);
+            let ab = if abs_a >= abs_b { abs_a } else { abs_b };
+            let cd = if abs_c >= abs_d { abs_c } else { abs_d };
+            let half = F::new(0.5f32);
+            let two = F::new(2.0f32);
+            let half_ov = F::max_value() * half;
+            let two_un_eps = F::MIN_POSITIVE * two / F::EPSILON;
+            let mut scale = F::new(1.0f32);
+            if ab >= half_ov || ab <= two_un_eps || cd >= half_ov || cd <= two_un_eps {
+                let big = two / (F::EPSILON * F::EPSILON);
+                if ab >= half_ov {
+                    a = a * half;
+                    b = b * half;
+                    scale = scale * two;
+                } else if ab <= two_un_eps {
+                    a = a * big;
+                    b = b * big;
+                    scale = scale / big;
+                }
+                if cd >= half_ov {
+                    c = c * half;
+                    d = d * half;
+                    scale = scale * half;
+                } else if cd <= two_un_eps {
+                    c = c * big;
+                    d = d * big;
+                    scale = scale * big;
+                }
+            }
+            if complex_div_abs::<F>(d) <= complex_div_abs::<F>(c) {
+                let r = d / c;
+                let t = F::new(1.0f32) / (c + d * r);
+                out[i] = complex_div_term::<F>(a, b, c, d, r, t) * scale;
+                out[i + 1] = complex_div_term::<F>(b, -a, c, d, r, t) * scale;
+            } else {
+                let r = c / d;
+                let t = F::new(1.0f32) / (c * r + d);
+                out[i] = complex_div_term::<F>(b, a, d, c, r, t) * scale;
+                out[i + 1] = -complex_div_term::<F>(a, -b, d, c, r, t) * scale;
+            }
+        }
     }
 }

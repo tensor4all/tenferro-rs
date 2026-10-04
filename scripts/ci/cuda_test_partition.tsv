@@ -582,6 +582,7 @@ host	tenferro-gpu	cubecl::tests::device_tests::discovery_name_failure_returns_er
 host	tenferro-gpu	cubecl::tests::device_tests::discovery_of_zero_devices_returns_empty
 host	tenferro-gpu	cubecl::tests::device_tests::discovery_preserves_ordinal_order_and_is_deterministic
 host	tenferro-gpu	cubecl::tests::device_tests::unavailable_device_selection_preserves_requested_id_and_discovered_records
+gpu	tenferro-gpu	cubecl::tests::elementwise_tests::complex_division_is_scale_robust
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::elementwise_read_compact_view_chain_uses_native_kernels
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::elementwise_read_into_writes_owned_output_without_mutating_inputs
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::elementwise_read_preserves_offset_and_strided_layouts
@@ -1014,6 +1015,7 @@ host	tenferro-linalg	cpu::tests::single_entry::scoped_materialization_reclaims_t
 host	tenferro-linalg	cpu::tests::single_entry::solve_read_two_noncompact_views_enters_once
 host	tenferro-linalg	cpu::tests::single_entry::solve_read_vector_rhs_reshape_stays_inside_one_entry
 host	tenferro-linalg	cpu::tests::single_entry::triangular_solve_read_two_noncompact_views_enters_once
+host	tenferro-linalg	cpu::tlinalg_error::tests::every_variant_rebuilds_tenferros_kind_role_and_source
 host	tenferro-linalg	error::tests::invalid_workspace_keeps_typed_backend_source
 host	tenferro-linalg	error::tests::provider_status_keeps_typed_backend_source
 host	tenferro-linalg	extension::cuda_tests::session_support_admits_cuda_full_svd_and_still_rejects_the_missing_kernels
@@ -1276,5 +1278,5 @@ host	tenferro-linalg::integration	traced_extension::traced_norm_rejects_out_of_r
 host	tenferro-linalg::integration	traced_extension::traced_pinv_rejects_integer_and_bool_dtypes_before_scalar_rounding
 host	tenferro-linalg::integration	traced_extension::traced_svd_eigh_qr_cholesky_reject_integer_and_bool_dtypes_at_construction
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_solve_vector_rhs_uses_borrowed_session_reshape
-host	tenferro-linalg::packed_lu_allocation	packed_lu_routes_take_their_scratch_from_the_session_buffer_pool
+host	tenferro-linalg::cpu_linalg_allocation	cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool
 host	tenferro-linalg::prelude	prelude_calls_concrete_linalg_operation

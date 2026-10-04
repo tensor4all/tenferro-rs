@@ -153,7 +153,7 @@ use dispatch::{
     alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
     cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
     ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
-    ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor,
+    ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor, launch_binary_parts,
     launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool, launch_nullary_bool_into,
     launch_nullary_into, launch_select_bool, launch_ternary, launch_unary,
     launch_unary_bool_tensor, launch_unary_tensor, launch_unary_tensor_into,
@@ -4576,6 +4576,26 @@ impl CudaBackend {
                 }
             };
         }
+        macro_rules! binary_parts {
+            ($ty:ty, $float:ty, $lhs:expr, $rhs:expr) => {
+                dispatch::launch_binary_views_parts::<$ty, $ty, $ty, $float>(
+                    self.runtime(),
+                    $lhs,
+                    $rhs,
+                    $lhs.shape(),
+                    op.label(),
+                    // SAFETY: launch_binary_views_parts validates equal shapes,
+                    // zero-offset compact layouts and residency, and allocates an
+                    // independent output; the parts kernel guards its index domain.
+                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                        elementwise::div_complex_parts::launch_unchecked::<$float, CubeclCudaRuntime>(
+                            client, count, dim, out, lhs_arg, rhs_arg,
+                        );
+                    },
+                )
+                .map(Tensor::from_typed::<$ty>)
+            };
+        }
 
         match op {
             ElementwiseReadOp::Add => match lhs.dtype() {
@@ -4608,8 +4628,18 @@ impl CudaBackend {
             ElementwiseReadOp::Divide => match lhs.dtype() {
                 DType::F32 => dispatch_binary!(F32, f32, div_float),
                 DType::F64 => dispatch_binary!(F64, f64, div_float),
-                DType::C32 => dispatch_binary!(C32, Complex32, div_complex),
-                DType::C64 => dispatch_binary!(C64, Complex64, div_complex),
+                DType::C32 => match (&lhs, &rhs) {
+                    (TensorView::C32(lhs), TensorView::C32(rhs)) => {
+                        Some(binary_parts!(Complex32, f32, lhs, rhs))
+                    }
+                    _ => None,
+                },
+                DType::C64 => match (&lhs, &rhs) {
+                    (TensorView::C64(lhs), TensorView::C64(rhs)) => {
+                        Some(binary_parts!(Complex64, f64, lhs, rhs))
+                    }
+                    _ => None,
+                },
                 _ => None,
             },
             _ => None,

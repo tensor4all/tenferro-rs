@@ -699,6 +699,33 @@ where
     Ok(prepared.into_array_arg(len))
 }
 
+pub(crate) fn typed_view_array_arg_as<T, U>(
+    view: &TypedTensorView<'_, T, impl TensorRank>,
+    len: usize,
+    op: &'static str,
+) -> crate::Result<ArrayArg<CubeclCudaRuntime>>
+where
+    T: CubeElement + TensorScalar + Clone,
+    U: CubeElement + Clone,
+{
+    let prepared = downcast_prepared(view.prepare_device_read(op)?, op)?;
+    let requested_bytes = len.checked_mul(core::mem::size_of::<U>()).ok_or_else(|| {
+        crate::Error::invalid_argument(
+            op,
+            "length",
+            format!("reinterpreted CubeCL array length overflow for len {len}"),
+        )
+    })?;
+    let available_bytes = prepared.byte_len(op)?;
+    if requested_bytes > available_bytes {
+        return Err(crate::Error::runtime_state(op, format!(
+                "reinterpreted CubeCL array needs {requested_bytes} bytes, buffer has {available_bytes}"
+            )));
+    }
+
+    Ok(prepared.into_array_arg(len))
+}
+
 pub(crate) fn launch_unary<TIn, TOut>(
     rt: &CudaRuntime,
     input: &TypedTensor<TIn>,
@@ -895,6 +922,113 @@ where
     // with `ABSOLUTE_POS < out.len()`.
     launch(
         client,
+        cube_count_for_len(len)?,
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+    );
+    Ok(output)
+}
+
+pub(crate) fn launch_binary_parts<TLhs, TRhs, TOut, F>(
+    rt: &CudaRuntime,
+    lhs: &TypedTensor<TLhs>,
+    rhs: &TypedTensor<TRhs>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<TOut>>
+where
+    TLhs: CubeElement + TensorScalar + Clone,
+    TRhs: CubeElement + TensorScalar + Clone,
+    TOut: CubeElement + TensorScalar + Clone,
+    F: CubeElement + Clone,
+{
+    validate_raw_binary_shapes(lhs, rhs, out_shape, op)?;
+    let output = alloc_output::<TOut>(rt, out_shape)?;
+    let len = output.n_elements();
+    ensure_resident_on_runtime(rt, lhs, op)?;
+    ensure_resident_on_runtime(rt, rhs, op)?;
+    let part_len = len.checked_mul(2).ok_or_else(|| {
+        crate::Error::invalid_argument(op, "shape", "complex part length overflow")
+    })?;
+    let lhs_arg = typed_tensor_array_arg_as::<TLhs, F>(lhs, part_len, op)?;
+    let rhs_arg = typed_tensor_array_arg_as::<TRhs, F>(rhs, part_len, op)?;
+    if len == 0 {
+        return Ok(output);
+    }
+    let output_arg = typed_tensor_array_arg_as::<TOut, F>(&output, part_len, op)?;
+    launch(
+        rt.client(),
+        cube_count_for_len(len)?,
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+    );
+    Ok(output)
+}
+
+pub(crate) fn launch_binary_views_parts<TLhs, TRhs, TOut, F>(
+    rt: &CudaRuntime,
+    lhs: &TypedTensorView<'_, TLhs>,
+    rhs: &TypedTensorView<'_, TRhs>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<TOut>>
+where
+    TLhs: CubeElement + TensorScalar + Clone,
+    TRhs: CubeElement + TensorScalar + Clone,
+    TOut: CubeElement + TensorScalar + Clone,
+    F: CubeElement + Clone,
+{
+    ensure_same_shape(op, lhs.shape(), out_shape)?;
+    ensure_same_shape(op, rhs.shape(), out_shape)?;
+    for offset in [lhs.offset(), rhs.offset()] {
+        if offset != 0 {
+            return Err(crate::Error::unsupported(
+                op,
+                "native elementwise read requires a zero-offset compact view",
+            ));
+        }
+    }
+    if !lhs.is_col_major_contiguous()? || !rhs.is_col_major_contiguous()? {
+        return Err(crate::Error::unsupported(
+            op,
+            "native elementwise read requires a zero-offset compact view",
+        ));
+    }
+    let output = alloc_output::<TOut>(rt, out_shape)?;
+    let len = output.n_elements();
+    ensure_view_resident_on_runtime(rt, lhs, op)?;
+    ensure_view_resident_on_runtime(rt, rhs, op)?;
+    let part_len = len.checked_mul(2).ok_or_else(|| {
+        crate::Error::invalid_argument(op, "shape", "complex part length overflow")
+    })?;
+    let lhs_arg = typed_view_array_arg_as::<TLhs, F>(lhs, part_len, op)?;
+    let rhs_arg = typed_view_array_arg_as::<TRhs, F>(rhs, part_len, op)?;
+    if len == 0 {
+        return Ok(output);
+    }
+    let output_arg = typed_tensor_array_arg_as::<TOut, F>(&output, part_len, op)?;
+    launch(
+        rt.client(),
         cube_count_for_len(len)?,
         cube_dim_1d(),
         output_arg,

@@ -312,27 +312,27 @@ pub(super) fn div_read(
             },
         )
         .map(Tensor::from_typed::<i64>),
-        (DType::C32, DType::C32) => launch_binary(
+        (DType::C32, DType::C32) => launch_binary_parts::<Complex32, Complex32, Complex32, f32>(
             backend.runtime(),
             typed_or_unsupported::<Complex32>(lhs, op)?,
             typed_or_unsupported::<Complex32>(rhs, op)?,
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::div_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
+                elementwise::div_complex_parts::launch_unchecked::<f32, CubeclCudaRuntime>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
         )
         .map(Tensor::from_typed::<num_complex::Complex32>),
-        (DType::C64, DType::C64) => launch_binary(
+        (DType::C64, DType::C64) => launch_binary_parts::<Complex64, Complex64, Complex64, f64>(
             backend.runtime(),
             typed_or_unsupported::<Complex64>(lhs, op)?,
             typed_or_unsupported::<Complex64>(rhs, op)?,
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::div_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
+                elementwise::div_complex_parts::launch_unchecked::<f64, CubeclCudaRuntime>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
