@@ -6,3 +6,39 @@
 # on every run, and warns again when an entry becomes stale and should be
 # removed. Each entry therefore needs a tracked issue and a concrete reason so
 # that review sees why the deviation is accepted.
+
+# strided-rs 0.4.5 is published, but tenferro cannot consume it yet: the
+# tenferro-pinned tprims-rs commit d8e565a9 (196 commits behind tprims-rs
+# main) still pins strided 0.4.4, so raising the tenferro pin leaves two
+# `strided_view` instances in the `ext/tenferro-cpu-tprims` workspace. The pin
+# bump belongs to the tprims migration. Remove these entries when the
+# tenferro strided pins move to 0.4.5.
+[[exception]]
+package = "strided-traits"
+reason = "strided 0.4.5 is published but the tenferro pin stays on 0.4.4 until the tprims-rs pin chain moves; see the entry comment."
+issue = "https://github.com/tensor4all/tenferro-rs/issues/1922"
+
+[[exception]]
+package = "strided-view"
+reason = "strided 0.4.5 is published but the tenferro pin stays on 0.4.4 until the tprims-rs pin chain moves; see the entry comment."
+issue = "https://github.com/tensor4all/tenferro-rs/issues/1922"
+
+[[exception]]
+package = "strided-perm"
+reason = "strided 0.4.5 is published but the tenferro pin stays on 0.4.4 until the tprims-rs pin chain moves; see the entry comment."
+issue = "https://github.com/tensor4all/tenferro-rs/issues/1922"
+
+[[exception]]
+package = "strided-basic"
+reason = "strided 0.4.5 is published but the tenferro pin stays on 0.4.4 until the tprims-rs pin chain moves; see the entry comment."
+issue = "https://github.com/tensor4all/tenferro-rs/issues/1922"
+
+[[exception]]
+package = "strided-fused"
+reason = "strided 0.4.5 is published but the tenferro pin stays on 0.4.4 until the tprims-rs pin chain moves; see the entry comment."
+issue = "https://github.com/tensor4all/tenferro-rs/issues/1922"
+
+[[exception]]
+package = "strided-kernel"
+reason = "strided 0.4.5 is published but the tenferro pin stays on 0.4.4 until the tprims-rs pin chain moves; see the entry comment."
+issue = "https://github.com/tensor4all/tenferro-rs/issues/1922"
