@@ -295,7 +295,7 @@ fn diagonal_scatter_config() -> ScatterConfig {
 }
 
 mod backend;
-#[cfg(all(feature = "native", feature = "blas"))]
+#[cfg(any(feature = "native", feature = "blas"))]
 mod batched;
 mod dtype;
 #[cfg(feature = "native")]

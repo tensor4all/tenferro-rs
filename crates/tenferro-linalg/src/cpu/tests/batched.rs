@@ -1,12 +1,12 @@
 //! Batch x size sweeps for the tight batched CPU linalg loops (#1878).
 //!
-//! Each case runs on both CPU providers and all four linalg dtypes, and checks
-//! every matrix of the batch against a residual or reconstruction oracle, so a
-//! stride or workspace reuse error in one batch slot cannot hide behind the
-//! first matrix.
+//! Each case runs on the compiled CPU backend and all four linalg dtypes, and
+//! checks every matrix of the batch against a residual or reconstruction
+//! oracle, so a stride or workspace reuse error in one batch slot cannot hide
+//! behind the first matrix. A build compiles exactly one CPU backend, so the
+//! sweeps follow that route instead of a per-call provider matrix.
 
 use super::*;
-use tenferro_cpu::CpuBackendKind;
 
 const SIZES: [usize; 5] = [1, 2, 3, 8, 33];
 const BATCHES: [usize; 2] = [1, 3];
@@ -53,9 +53,13 @@ impl Dt {
     }
 }
 
-fn backends() -> [(CpuBackendKind, CpuBackend); 2] {
-    [CpuBackendKind::Faer, CpuBackendKind::Blas]
-        .map(|kind| (kind, CpuBackend::with_threads(1).unwrap()))
+/// The single CPU backend this crate was compiled with, tagged with its
+/// provider id for failure messages.
+fn backends() -> [(&'static str, CpuBackend); 1] {
+    [(
+        tenferro_cpu::cpu_provider_id(),
+        CpuBackend::with_threads(1).unwrap(),
+    )]
 }
 
 /// Host data of any linalg or pivot dtype, widened to `Complex64`.
@@ -245,24 +249,46 @@ fn batched_lu_solves_match_residual_oracle_across_sizes_dtypes_and_flags() {
 }
 
 #[test]
-fn batched_lu_solves_agree_across_providers() {
-    let [(_, mut faer), (_, mut blas)] = backends();
-    for dt in DTYPES {
-        for n in SIZES {
-            let batch = 3;
-            let a = dt.tensor(
-                &[n, n, batch],
-                &pivoting_matrices(n, batch, 5, dt.complex()),
-            );
-            let b = dt.tensor(&[n, 2, batch], &values(n * 2 * batch, 9, dt.complex()));
-            let lhs = with_cpu_linalg(&mut faer, |s| s.lu_factor_solve(&a, &b)).unwrap();
-            let rhs = with_cpu_linalg(&mut blas, |s| s.lu_factor_solve(&a, &b)).unwrap();
-            assert!(
-                max_diff(&data(&lhs[0]), &data(&rhs[0])) < dt.tol() * 10.0 * n as f64,
-                "{dt:?} n={n}: faer and LAPACK solutions disagree"
-            );
-            // Both providers follow the LAPACK getrf pivot convention.
-            assert_eq!(data(&lhs[2]), data(&rhs[2]), "{dt:?} n={n}: pivots differ");
+fn batched_lu_solves_keep_the_lapack_pivot_convention() {
+    // One CPU backend is compiled per build, so the fused factor/solve pair is
+    // compared against the split factor and prepared-solve calls of the same
+    // route rather than against another provider.
+    for (kind, mut backend) in backends() {
+        for dt in DTYPES {
+            for n in SIZES {
+                let batch = 3;
+                let a = dt.tensor(
+                    &[n, n, batch],
+                    &pivoting_matrices(n, batch, 5, dt.complex()),
+                );
+                let b = dt.tensor(&[n, 2, batch], &values(n * 2 * batch, 9, dt.complex()));
+                let fused = with_cpu_linalg(&mut backend, |s| s.lu_factor_solve(&a, &b)).unwrap();
+                let factors = with_cpu_linalg(&mut backend, |s| s.lu_factor(&a)).unwrap();
+                let split = with_cpu_linalg(&mut backend, |s| {
+                    s.lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+                })
+                .unwrap();
+                let scale = dt.tol() * 10.0 * n as f64;
+                assert!(
+                    max_diff(&data(&fused[0]), &data(&split)) < scale,
+                    "{kind} {dt:?} n={n}: fused and split solves disagree"
+                );
+                assert!(
+                    max_diff(&data(&fused[1]), &data(&factors[0])) < scale,
+                    "{kind} {dt:?} n={n}: fused factors differ from lu_factor"
+                );
+                // The factors carry 1-based column pivots, the LAPACK getrf
+                // convention shared by every compiled route.
+                let pivots = data(&fused[2]);
+                assert_eq!(pivots, data(&factors[1]), "{kind} {dt:?} n={n}");
+                for (row, pivot) in pivots.iter().enumerate() {
+                    let pivot = pivot.re as usize;
+                    assert!(
+                        (1..=n).contains(&pivot),
+                        "{kind} {dt:?} n={n} row {row}: pivot {pivot} is not a 1-based column index"
+                    );
+                }
+            }
         }
     }
 }

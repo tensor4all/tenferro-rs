@@ -94,63 +94,48 @@ fn public_cpu_runtime_registration_exposes_complete_preparation_capabilities() {
     );
 }
 
-#[cfg(all(feature = "native", feature = "blas"))]
+// A build compiles exactly one CPU backend, so a single backend is registered
+// under the caller's engine IDs and reports the compiled provider identity.
+#[cfg(any(feature = "native", feature = "blas"))]
 #[test]
-fn public_cpu_runtime_registration_supports_distinct_compiled_provider_kinds() {
-    let faer = CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Faer)
-        .expect("faer CPU backend");
-    let blas = CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Blas)
-        .expect("BLAS CPU backend");
+fn public_cpu_runtime_registration_uses_the_compiled_provider_under_caller_engine_ids() {
+    use tenferro_runtime::{EngineId, Runtime};
 
-    assert_ne!(faer.kind(), blas.kind());
-    let faer_registration = crate::runtime_engine_registration_with_id(
-        &faer,
-        EngineId::new("tenferro-cpu.faer.identity.v1").expect("faer engine ID"),
+    let backend = CpuBackend::with_threads(1).expect("CPU backend");
+    let primary = crate::runtime_engine_registration_with_id(
+        &backend,
+        EngineId::new("tenferro-cpu.primary.identity.v1").expect("primary engine ID"),
     )
-    .expect("faer CPU registration");
-    let blas_registration = crate::runtime_engine_registration_with_id(
-        &blas,
-        EngineId::new("tenferro-cpu.blas.identity.v1").expect("BLAS engine ID"),
+    .expect("primary CPU registration");
+    let secondary = crate::runtime_engine_registration_with_id(
+        &backend,
+        EngineId::new("tenferro-cpu.secondary.identity.v1").expect("secondary engine ID"),
     )
-    .expect("BLAS CPU registration");
+    .expect("secondary CPU registration");
+
     assert_eq!(
-        faer_registration
-            .provider_device_identity()
-            .provider_id()
-            .as_str(),
-        "tenferro.cpu.faer"
+        primary.provider_device_identity().provider_id().as_str(),
+        crate::cpu_provider_id()
     );
     assert_eq!(
-        blas_registration
-            .provider_device_identity()
-            .provider_id()
-            .as_str(),
-        "tenferro.cpu.blas"
-    );
-    assert_ne!(
-        faer_registration.provider_device_identity(),
-        blas_registration.provider_device_identity()
+        primary.provider_device_identity(),
+        secondary.provider_device_identity()
     );
 
     let mut builder = Runtime::builder();
     builder
-        .register_engine(
-            crate::runtime_engine_registration_with_id(
-                &faer,
-                EngineId::new("tenferro-cpu.faer.v1").expect("faer engine ID"),
-            )
-            .expect("faer CPU registration"),
-        )
-        .expect("register faer CPU engine");
-    builder
-        .register_engine(
-            crate::runtime_engine_registration_with_id(
-                &blas,
-                EngineId::new("tenferro-cpu.blas.v1").expect("BLAS engine ID"),
-            )
-            .expect("BLAS CPU registration"),
-        )
-        .expect("register BLAS CPU engine");
+        .register_engine(primary)
+        .expect("register primary CPU engine");
+    // One compiled provider owns one device target, so a second registration of
+    // the same provider is rejected rather than aliased.
+    let duplicate = builder.register_engine(secondary);
+    assert!(
+        matches!(
+            duplicate,
+            Err(tenferro_runtime::RuntimeConfigError::DuplicateProviderDeviceTarget { .. })
+        ),
+        "a second engine for one compiled provider must be rejected: {duplicate:?}"
+    );
     assert_eq!(
         builder
             .build()
@@ -158,7 +143,7 @@ fn public_cpu_runtime_registration_supports_distinct_compiled_provider_kinds() {
             .snapshot()
             .unwrap()
             .engine_count(),
-        2
+        1
     );
 }
 

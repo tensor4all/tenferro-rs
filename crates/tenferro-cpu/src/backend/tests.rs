@@ -612,7 +612,7 @@ fn nested_provider_session_is_rejected() {
 }
 
 #[test]
-#[cfg(all(feature = "native", feature = "blas"))]
+#[cfg(any(feature = "native", feature = "blas"))]
 fn parallel_rayon_siblings_cannot_bypass_provider_exclusion() {
     let outer = CpuBackend::with_threads(2).unwrap();
     let provider = CpuBackend::with_threads(1).unwrap();
@@ -638,7 +638,9 @@ fn parallel_rayon_siblings_cannot_bypass_provider_exclusion() {
         let outcome = completed_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("provider sibling reentry should fail without deadlocking");
-        assert_reentered(&outcome.unwrap_err());
+        // One provider is compiled per build, so the siblings contend for the
+        // same execution resource instead of re-entering distinct providers.
+        assert_worker_rejected(&outcome.unwrap_err());
     }
 }
 
