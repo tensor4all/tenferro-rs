@@ -284,3 +284,22 @@ The slowest individual test had a 9.117-second median, 1.96% of median paid
 time, below the 5% need threshold. Individual test optimization is deferred;
 shared initialization/JIT cost was not isolated by that audit. No numerical
 assertions, tolerances, or workload entries are removed.
+
+
+Post-repair production validation at main `3ede60cc30e4b48fa6cef776d28c3d93aa7e48a0`
+(run 37860294000) passed all 285 CUDA cases, three PJRT cases, and the tutorial,
+with loaded NVRTC 12.8. The first RTX 2000 Ada pod registered in 76 seconds;
+cleanup confirmed HTTP 204 deletion. The measured paid window was 409.115
+seconds at $0.24/hour (estimated $0.0272743). Runtime setup was 107 seconds.
+This validates the integrated production controller and both bootstrap repairs;
+it is not a same-hardware comparison with the A40 confirmation campaign.
+
+The custom-image publication route is held locally. An alternative experiment
+uses the existing public NVIDIA CUDA 12.8.1 runtime image, reusing only files
+that match the frozen SDK byte for byte and transferring every other file.
+The assembled SDK passed real NVRTC/CubeCL JIT-header compilation locally.
+The 12.8 SDK compressed transfer is 523,422,490 bytes rather than
+1,074,446,861 bytes; this is not yet a paid-time result. Both image arms use
+the same pruned common payload, test archives, and exact remaining SDK bytes.
+This experiment is restricted to the 12.8 host tier; production's existing
+12.6 floor must remain supported before any image change can be promoted.
