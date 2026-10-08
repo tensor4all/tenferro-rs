@@ -828,9 +828,9 @@ for node in backend.topology().nodes() {
 
 if backend.supports_placement(CpuPlacement::AllAllowed) {
     let all = backend.for_placement(CpuPlacement::AllAllowed)?;
-    println!("{:?}", all.execution_info());
+    println!("{:?}", all.placement());
 } else {
-    println!("{:?}", backend.execution_info());
+    println!("{:?}", backend.placement());
 }
         // snippet-end:cpu_execution_28
         Ok(())
@@ -841,13 +841,13 @@ if backend.supports_placement(CpuPlacement::AllAllowed) {
     // snippet source: docs/guides/cpu-execution.md:55
     fn snippet_cpu_execution_29() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:cpu_execution_29
-use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuPlacement};
+use tenferro_cpu::{CpuBackend, CpuPlacement};
 
-let coordinator = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer)?;
+let coordinator = CpuBackend::with_threads(4)?;
 if let Some(node) = coordinator.topology().nodes().first() {
     let local = coordinator.for_placement(CpuPlacement::NumaNode(node.id()))?;
     let another_handle = local.clone();
-    assert_eq!(local.resolved_placement(), another_handle.resolved_placement());
+    assert_eq!(local.placement(), another_handle.placement());
 }
         // snippet-end:cpu_execution_29
         Ok(())
@@ -859,11 +859,8 @@ if let Some(node) = coordinator.topology().nodes().first() {
     fn snippet_cpu_execution_30() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:cpu_execution_30
 let backend = tenferro_cpu::CpuBackend::new();
-let info = backend.execution_info();
-println!("kind={:?} provider={}", info.backend_kind(), info.provider_diagnostic());
-println!("mode={:?} workers={}", info.execution_mode(), info.worker_count());
-println!("topology={:?} requested={:?} resolved={:?}", info.topology(),
-    info.requested_placement(), info.resolved_placement());
+println!("provider={} workers={}", tenferro_cpu::cpu_provider_id(), backend.num_threads());
+println!("topology={:?} requested={:?}", backend.topology(), backend.placement());
         // snippet-end:cpu_execution_30
         Ok(())
     }

@@ -17,15 +17,15 @@ documentation = "https://docs.rs/tenferro-runtime"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["cpu-faer"]
+features = ["native"]
 
 [lib]
 name = "tenferro_runtime"
 
 [features]
-default = ["cpu-faer"]
-cpu-faer = ["tenferro-cpu/cpu-faer"]
-cpu-blas = ["tenferro-cpu/cpu-blas"]
+default = ["native"]
+native = ["tenferro-cpu/native"]
+blas = ["tenferro-cpu/blas"]
 blas-openblas = ["tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]
@@ -49,7 +49,7 @@ trybuild.workspace = true
 # `cargo package` and would fail because tenferro-cpu publishes after
 # tenferro-runtime, forming a publish cycle. Dev-dependencies are stripped from
 # the published manifest, so an unversioned path dev-dependency is sufficient.
-tenferro-cpu = { path = "../tenferro-cpu", default-features = false, features = ["cpu-faer"] }
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false, features = ["native"] }
 
 [[bench]]
 name = "elementwise_fusion"

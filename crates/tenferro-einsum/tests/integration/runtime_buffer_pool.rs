@@ -43,7 +43,7 @@ fn compile_nary(
 }
 
 #[test]
-fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
+fn cpu_backend_nary_einsum_leaves_no_host_pool_growth() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
@@ -59,8 +59,9 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let result1 = outputs1.remove(0);
     assert_eq!(get_f64_data(&result1), &[517.0, 766.0, 625.0, 926.0]);
 
-    let pooled_after_first = backend.buffer_pool_len().unwrap();
-    assert!(pooled_after_first > 0);
+    // The N-ary intermediates are owned by the lower library's execution
+    // workspace, so the host buffer pool retains no per-run growth.
+    let retained_after_first = backend.buffer_pool_stats().unwrap().capacity_bytes;
 
     let program2 = compile_nary(&mut compiler, &a, &b, &c);
 
@@ -68,6 +69,9 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     assert_eq!(outputs2.len(), 1);
     let result2 = outputs2.remove(0);
     assert_eq!(get_f64_data(&result2), &[517.0, 766.0, 625.0, 926.0]);
-    let pooled_after_second = backend.buffer_pool_len().unwrap();
-    assert!(pooled_after_second < pooled_after_first * 2);
+    assert_eq!(
+        backend.buffer_pool_stats().unwrap().capacity_bytes,
+        retained_after_first,
+        "repeated N-ary runs must not grow the host buffer pool"
+    );
 }

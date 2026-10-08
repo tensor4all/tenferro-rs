@@ -51,7 +51,7 @@ fn linalg_fresh_tagging_is_field_only_and_allocation_free() {
 #[test]
 fn decomposition_vectors_tag_every_fresh_output_with_the_selected_domain() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id();
     let remote = remote_domain(selected);
     let general = placed_matrix(vec![4.0, 2.0, 1.0, 3.0], remote);
     let symmetric = placed_matrix(vec![4.0, 1.0, 1.0, 3.0], remote);
@@ -77,7 +77,7 @@ fn decomposition_vectors_tag_every_fresh_output_with_the_selected_domain() {
 #[test]
 fn linalg_single_outputs_tag_the_selected_domain() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id();
     let remote = remote_domain(selected);
     let general = placed_matrix(vec![4.0, 2.0, 1.0, 3.0], remote);
     let symmetric = placed_matrix(vec![4.0, 1.0, 1.0, 3.0], remote);
@@ -98,7 +98,7 @@ fn linalg_single_outputs_tag_the_selected_domain() {
 #[test]
 fn zero_extent_solve_output_is_still_tagged_as_a_fresh_allocation() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id();
     let remote = remote_domain(selected);
     let mut a = TypedTensor::<f64>::from_vec_col_major(vec![0, 0], vec![]).unwrap();
     let mut b = TypedTensor::<f64>::from_vec_col_major(vec![0], vec![]).unwrap();
@@ -126,7 +126,7 @@ fn zero_extent_solve_output_is_still_tagged_as_a_fresh_allocation() {
 #[test]
 fn prepared_lu_composition_tags_its_final_permutation_output() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id();
     let remote = remote_domain(selected);
     let a = placed_matrix(vec![4.0, 2.0, 1.0, 3.0], remote);
     let b = placed_matrix(vec![1.0, 2.0, 3.0, 4.0], remote);

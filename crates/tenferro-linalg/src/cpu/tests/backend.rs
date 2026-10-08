@@ -210,7 +210,7 @@ fn test_svd_unsupported_dtype_returns_error() {
     assert!(with_cpu_linalg(&mut backend, |backend| backend.svd(&input)).is_err());
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 #[test]
 fn test_faer_svd_decomposition_failure_returns_error() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
@@ -224,7 +224,7 @@ fn test_faer_svd_decomposition_failure_returns_error() {
     assert!(err.to_string().contains("svd"), "unexpected error: {err}");
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 #[test]
 fn test_faer_eig_decomposition_failure_returns_error() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
@@ -264,7 +264,7 @@ fn test_eig_returns_complex_outputs_for_real_input() {
 /// `eig` on a zero-extent input returns empty complex outputs whose precision follows the input: a real
 /// input widens to the complex type of the same width. The f64 path is exercised elsewhere, so this drives
 /// the f32 and c32 arms.
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 #[test]
 fn test_faer_eig_zero_extent_returns_empty_complex_outputs_per_input_width() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
@@ -291,7 +291,7 @@ fn test_faer_eig_zero_extent_returns_empty_complex_outputs_per_input_width() {
 
 /// The faer value-only entries adapt their result into a typed accessor per precision. The existing tests
 /// drive the double-precision instantiations, so this drives the single-precision ones for both entries.
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 #[test]
 fn test_faer_value_only_entries_cover_the_single_precision_arms() {
     let mut backend = CpuBackend::with_threads(1).unwrap();

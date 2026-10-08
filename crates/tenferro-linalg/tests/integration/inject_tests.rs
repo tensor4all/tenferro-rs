@@ -1,4 +1,4 @@
-#![cfg(all(feature = "cpu-blas", feature = "provider-inject"))]
+#![cfg(all(feature = "blas", feature = "provider-inject"))]
 
 use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -8,7 +8,7 @@ use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
     LapackProviderPtrSet, ProviderAbi,
 };
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
@@ -413,7 +413,7 @@ fn provider_inject_svd_uses_registered_lapack_gesvd() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 2.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
     let outputs = backend.svd(&a).expect("provider-inject SVD should run");
 
     assert_eq!(DGESVD_CALLS.load(Ordering::SeqCst), 2);

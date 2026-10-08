@@ -17,49 +17,49 @@ documentation = "https://docs.rs/tenferro-linalg"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "cpu-faer", "cuda", "webgpu"]
+features = ["autodiff", "native", "cuda", "webgpu"]
 
 [features]
-default = ["cpu-faer"]
+default = ["native"]
 __bench_unification_semantic_ad_api = []
 autodiff = [
     "dep:computegraph",
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
-cpu-faer = [
+native = [
     "dep:faer",
     "dep:tlinalg",
-    "tenferro-ad?/cpu-faer",
-    "tenferro-cpu/cpu-faer",
+    "tenferro-ad?/native",
+    "tenferro-cpu/native",
 ]
-cpu-blas = [
+blas = [
     "dep:cblas-sys",
     "dep:lapack",
     "dep:tlinalg-blas",
-    "tenferro-ad?/cpu-blas",
-    "tenferro-cpu/cpu-blas",
+    "tenferro-ad?/blas",
+    "tenferro-cpu/blas",
 ]
 blas-openblas = [
-    "cpu-blas",
+    "blas",
     "tenferro-ad?/blas-openblas",
     "tenferro-cpu/blas-openblas",
     "tenferro-gpu?/blas-openblas",
 ]
 blas-accelerate = [
-    "cpu-blas",
+    "blas",
     "tenferro-ad?/blas-accelerate",
     "tenferro-cpu/blas-accelerate",
     "tenferro-gpu?/blas-accelerate",
 ]
 blas-mkl = [
-    "cpu-blas",
+    "blas",
     "tenferro-ad?/blas-mkl",
     "tenferro-cpu/blas-mkl",
     "tenferro-gpu?/blas-mkl",
 ]
 provider-inject = [
-    "cpu-blas",
+    "blas",
     "tenferro-cpu/provider-inject",
     "dep:cblas-inject",
     "dep:lapack-inject",
@@ -102,8 +102,8 @@ faer = { workspace = true, optional = true }
 # lives in this crate. Spelled with both a git rev and a version so that Cargo uses the rev locally
 # while a packaged manifest keeps only the version requirement, matching the workspace's
 # pre-publish staging pattern for its fork dependencies. Keep the two revs identical.
-tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "2734716b5b224a67672aef075df6eb90a6ea5ed7", version = "0.1.0", optional = true }
-tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "2734716b5b224a67672aef075df6eb90a6ea5ed7", version = "0.1.0", optional = true }
+tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "e2e6c920150b1383338fef581abeb5affc8997c4", version = "0.1.0", optional = true }
+tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "e2e6c920150b1383338fef581abeb5affc8997c4", version = "0.1.0", optional = true }
 rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }
@@ -153,7 +153,7 @@ path = "tests/prelude.rs"
 [[test]]
 name = "lapack_allocation"
 path = "tests/lapack_allocation.rs"
-required-features = ["cpu-blas"]
+required-features = ["blas"]
 
 [[test]]
 name = "cpu_linalg_allocation"

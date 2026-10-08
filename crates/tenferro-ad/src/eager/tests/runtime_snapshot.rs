@@ -65,14 +65,10 @@ fn cpu_registration_with(
     capabilities: CoreCapabilityBundle,
 ) -> EngineRegistration {
     let storage = cpu_storage_class();
-    let execution_info = backend.execution_info();
-    let provider_id = match execution_info.backend_kind() {
-        tenferro_cpu::CpuBackendKind::Faer => "tenferro.cpu.faer",
-        tenferro_cpu::CpuBackendKind::Blas => "tenferro.cpu.blas",
-    };
+    let provider_id = tenferro_cpu::cpu_provider_id();
     let provider_device_identity = ProviderDeviceIdentity::new(
         ProviderId::new(provider_id).unwrap(),
-        format!("domain:{}", execution_info.domain_id().as_u64()),
+        format!("domain:{}", backend.domain_id().as_u64()),
     )
     .unwrap();
     let metadata = EngineRegistrationMetadata::new(

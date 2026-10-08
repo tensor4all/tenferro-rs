@@ -1,5 +1,11 @@
 use crate::backend::{unsupported_dtype, CompactQrResult, LinalgBackend};
-use crate::cpu_kernels::{CpuLinalgKernelsSlot, CpuLinalgOutcome, TriangularSolveOptions};
+#[derive(Clone, Copy, Debug)]
+struct TriangularSolveOptions {
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+}
 use crate::extension::apply_qr_gauge;
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
 
@@ -8,7 +14,7 @@ use tenferro_cpu::same_variant_pair;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::BufferPool;
-use tenferro_cpu::{CpuBackendKind, CpuExecSession, CpuExecutionContext};
+use tenferro_cpu::{CpuExecSession, CpuExecutionContext};
 use tenferro_tensor::{
     validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
     MemoryKind, SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural,
@@ -108,30 +114,14 @@ impl CpuBackendLinalgAffinityExt for CpuExecSession<'_> {
 impl LinalgBackend for CpuExecSession<'_> {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         let domain = self.shared_allocation_domain();
-        let kind = self.kind();
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            let provider = linalg_provider_kind(kind, "cholesky")?;
             if tensor_uses_backend_storage(input)
                 && let Some(domain) = domain.as_deref()
             {
-                return managed_cholesky(
-                    context,
-                    buffers,
-                    TensorRead::from_tensor(input),
-                    domain,
-                    provider,
-                );
+                return managed_cholesky(context, buffers, TensorRead::from_tensor(input), domain);
             }
             ensure_host_tensor("cholesky", input)?;
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .cholesky(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            cholesky_entered(provider, context, buffers, input)
+            cholesky_entered(context, buffers, input)
         })
     }
 
@@ -146,31 +136,14 @@ impl LinalgBackend for CpuExecSession<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("triangular_solve", a)?;
         ensure_host_tensor("triangular_solve", b)?;
-        let provider = linalg_provider_kind(self.kind(), "triangular_solve")?;
         let options = TriangularSolveOptions {
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
         };
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels.0.triangular_solve(
-                    context,
-                    TensorRead::from_tensor(a).tensor_view(),
-                    TensorRead::from_tensor(b).tensor_view(),
-                    TriangularSolveOptions {
-                        left_side,
-                        lower,
-                        transpose_a,
-                        unit_diagonal,
-                    },
-                )?
-            {
-                return Ok(output);
-            }
-            triangular_solve_entered(provider, context, buffers, a, b, options)
+            triangular_solve_entered(context, buffers, a, b, options)
         })
     }
 
@@ -186,39 +159,19 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor_read("triangular_solve", &a)?;
         ensure_host_tensor_read("triangular_solve", &b)?;
         ensure_supported_linalg_dtypes("triangular_solve", a.dtype(), b.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "triangular_solve")?;
         let options = TriangularSolveOptions {
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
         };
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels.0.triangular_solve(
-                    context,
-                    a.clone().tensor_view(),
-                    b.clone().tensor_view(),
-                    TriangularSolveOptions {
-                        left_side,
-                        lower,
-                        transpose_a,
-                        unit_diagonal,
-                    },
-                )?
-            {
-                return Ok(output);
-            }
             // Both operands must be faer-eligible for the direct path: `a`
             // reaches faer as a strided `MatRef` and `b` is gathered straight
             // into the destructible right-hand side. If either is ineligible,
             // the scoped materializer below packs only what it must.
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer
-                && faer_strided_read_ok(&a)
-                && faer_rhs_read_ok(&b)
-            {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&a) && faer_rhs_read_ok(&b) {
                 return triangular_solve_faer_view_entered(
                     context,
                     buffers,
@@ -232,9 +185,7 @@ impl LinalgBackend for CpuExecSession<'_> {
                     buffers,
                     "triangular_solve",
                     b,
-                    |b, buffers| {
-                        triangular_solve_entered(provider, context, buffers, a, b, options)
-                    },
+                    |b, buffers| triangular_solve_entered(context, buffers, a, b, options),
                 )
             })
         })
@@ -242,25 +193,15 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("lu", input)?;
-        let provider = linalg_provider_kind(self.kind(), "lu")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .lu(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            lu_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| lu_entered(context, buffers, input))
     }
 
     fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("lu_factor", input)?;
-        match linalg_provider_kind(self.kind(), "lu_factor")? {
-            CpuLinalgProvider::Faer => {
-                #[cfg(feature = "cpu-faer")]
+        {
+            #[cfg(feature = "native")]
+            {
+                #[cfg(feature = "native")]
                 {
                     self.with_linalg_pool_fresh(|ctx, buffers| match input.dtype() {
                         DType::F32 => {
@@ -313,14 +254,11 @@ impl LinalgBackend for CpuExecSession<'_> {
                         }
                         _ => Err(unsupported_dtype("lu_factor", input.dtype())),
                     })
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(unsupported_provider("lu_factor", self.kind()))
                 }
             }
-            CpuLinalgProvider::Blas => {
-                #[cfg(feature = "cpu-blas")]
+            #[cfg(feature = "blas")]
+            {
+                #[cfg(feature = "blas")]
                 {
                     self.with_linalg_pool_fresh(|ctx, buffers| match input.dtype() {
                         DType::F32 => {
@@ -373,10 +311,6 @@ impl LinalgBackend for CpuExecSession<'_> {
                         }
                         _ => Err(unsupported_dtype("lu_factor", input.dtype())),
                     })
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(unsupported_provider("lu_factor", self.kind()))
                 }
             }
         }
@@ -384,18 +318,7 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("full_piv_lu", input)?;
-        let provider = linalg_provider_kind(self.kind(), "full_piv_lu")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .full_piv_lu(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            full_piv_lu_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| full_piv_lu_entered(context, buffers, input))
     }
 
     fn full_piv_lu_solve(
@@ -407,7 +330,6 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor("full_piv_lu_solve", a)?;
         ensure_host_tensor("full_piv_lu_solve", b)?;
         ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
-        let provider = linalg_provider_kind(self.kind(), "full_piv_lu_solve")?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return self.with_linalg_pool_fresh(|_, _| zeros_like_tensor(b));
         }
@@ -421,9 +343,10 @@ impl LinalgBackend for CpuExecSession<'_> {
             (b.duplicate()?, None)
         };
 
-        let result = match provider {
-            CpuLinalgProvider::Faer => {
-                #[cfg(feature = "cpu-faer")]
+        let result = {
+            #[cfg(feature = "native")]
+            {
+                #[cfg(feature = "native")]
                 {
                     self.with_linalg_pool_fresh(|ctx, buffers| {
                         same_variant_pair!(
@@ -436,13 +359,10 @@ impl LinalgBackend for CpuExecSession<'_> {
                         )
                     })
                 }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(unsupported_provider("full_piv_lu_solve", self.kind()))
-                }
             }
-            CpuLinalgProvider::Blas => {
-                #[cfg(feature = "cpu-blas")]
+            #[cfg(feature = "blas")]
+            {
+                #[cfg(feature = "blas")]
                 {
                     self.with_linalg_pool_fresh(|_, buffers| {
                         same_variant_pair!(
@@ -452,10 +372,6 @@ impl LinalgBackend for CpuExecSession<'_> {
                             unsupported_pair("full_piv_lu_solve", a, &rhs)
                         )
                     })
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(unsupported_provider("full_piv_lu_solve", self.kind()))
                 }
             }
         }?;
@@ -469,92 +385,43 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("svd", input)?;
-        let provider = linalg_provider_kind(self.kind(), "svd")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .svd(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            svd_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| svd_entered(context, buffers, input))
     }
 
     fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("svd_full", input)?;
-        let provider = linalg_provider_kind(self.kind(), "svd_full")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .svd_full(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            svd_full_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| svd_full_entered(context, buffers, input))
     }
 
     fn svd_full_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("svd_full", &input)?;
         ensure_supported_linalg_dtype("svd_full", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "svd_full")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.svd_full(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return svd_full_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "svd_full", input, |input, buffers| {
-                svd_full_entered(provider, context, buffers, input)
+                svd_full_entered(context, buffers, input)
             })
         })
     }
 
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("svd_values", input)?;
-        let provider = linalg_provider_kind(self.kind(), "svd_values")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .svd_values(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            svd_values_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| svd_values_entered(context, buffers, input))
     }
 
     fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("svd", &input)?;
         ensure_supported_linalg_dtype("svd", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "svd")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.svd(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return svd_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "svd", input, |input, buffers| {
-                svd_entered(provider, context, buffers, input)
+                svd_entered(context, buffers, input)
             })
         })
     }
@@ -562,59 +429,32 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn svd_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor_read("svd_values", &input)?;
         ensure_supported_linalg_dtype("svd_values", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "svd_values")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.svd_values(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return svd_values_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "svd_values", input, |input, buffers| {
-                svd_values_entered(provider, context, buffers, input)
+                svd_values_entered(context, buffers, input)
             })
         })
     }
 
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("qr", input)?;
-        let provider = linalg_provider_kind(self.kind(), "qr")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .qr(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            qr_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| qr_entered(context, buffers, input))
     }
 
     fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("qr", &input)?;
         ensure_supported_linalg_dtype("qr", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "qr")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.qr(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return qr_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "qr", input, |input, buffers| {
-                qr_entered(provider, context, buffers, input)
+                qr_entered(context, buffers, input)
             })
         })
     }
@@ -627,19 +467,8 @@ impl LinalgBackend for CpuExecSession<'_> {
         validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
         ensure_host_tensor("rank_revealing_qr", input)?;
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "rank_revealing_qr")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels.0.rank_revealing_qr(
-                    context,
-                    TensorRead::from_tensor(input).tensor_view(),
-                    options,
-                )?
-            {
-                return Ok(output);
-            }
-            rank_revealing_qr_entered(provider, context, buffers, input, options)
+            rank_revealing_qr_entered(context, buffers, input, options)
         })
     }
 
@@ -651,19 +480,9 @@ impl LinalgBackend for CpuExecSession<'_> {
         validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
         ensure_host_tensor_read("rank_revealing_qr", &input)?;
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "rank_revealing_qr")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels
-                        .0
-                        .rank_revealing_qr(context, input.clone().tensor_view(), options)?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return rank_revealing_qr_faer_view_entered(
                     context,
                     buffers,
@@ -675,18 +494,15 @@ impl LinalgBackend for CpuExecSession<'_> {
                 buffers,
                 "rank_revealing_qr",
                 input,
-                |input, buffers| {
-                    rank_revealing_qr_entered(provider, context, buffers, input, options)
-                },
+                |input, buffers| rank_revealing_qr_entered(context, buffers, input, options),
             )
         })
     }
 
     fn householder_qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<CompactQrResult> {
         ensure_host_tensor("householder_qr", input)?;
-        let provider = linalg_provider_kind(self.kind(), "householder_qr")?;
         self.with_linalg_pool_fresh(|context, buffers| {
-            householder_qr_entered(provider, context, buffers, input)
+            householder_qr_entered(context, buffers, input)
         })
     }
 
@@ -697,9 +513,8 @@ impl LinalgBackend for CpuExecSession<'_> {
     ) -> tenferro_tensor::Result<CompactQrResult> {
         ensure_host_tensor("householder_qr_from_factors", q)?;
         ensure_host_tensor("householder_qr_from_factors", r)?;
-        let provider = linalg_provider_kind(self.kind(), "householder_qr_from_factors")?;
         self.with_linalg_pool_fresh(|context, buffers| {
-            householder_qr_from_factors_entered(provider, context, buffers, q, r)
+            householder_qr_from_factors_entered(context, buffers, q, r)
         })
     }
 
@@ -712,9 +527,8 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor("householder_qr_append", packed)?;
         ensure_host_tensor("householder_qr_append", coeff)?;
         ensure_host_tensor("householder_qr_append", block)?;
-        let provider = linalg_provider_kind(self.kind(), "householder_qr_append")?;
         self.with_linalg_pool_fresh(|context, buffers| {
-            householder_qr_append_entered(provider, context, buffers, packed, coeff, block)
+            householder_qr_append_entered(context, buffers, packed, coeff, block)
         })
     }
 
@@ -726,9 +540,8 @@ impl LinalgBackend for CpuExecSession<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("householder_qr_r", packed)?;
         ensure_host_tensor("householder_qr_r", coeff)?;
-        let provider = linalg_provider_kind(self.kind(), "householder_qr_r")?;
         self.with_linalg_pool_fresh(|context, buffers| {
-            householder_qr_r_entered(provider, context, buffers, packed, coeff, options)
+            householder_qr_r_entered(context, buffers, packed, coeff, options)
         })
     }
 
@@ -741,48 +554,26 @@ impl LinalgBackend for CpuExecSession<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("householder_qr_q_columns", packed)?;
         ensure_host_tensor("householder_qr_q_columns", coeff)?;
-        let provider = linalg_provider_kind(self.kind(), "householder_qr_q_columns")?;
         self.with_linalg_pool_fresh(|context, buffers| {
-            householder_qr_q_columns_entered(
-                provider, context, buffers, packed, coeff, columns, options,
-            )
+            householder_qr_q_columns_entered(context, buffers, packed, coeff, columns, options)
         })
     }
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("eigh", input)?;
-        let provider = linalg_provider_kind(self.kind(), "eigh")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .eigh(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            eigh_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| eigh_entered(context, buffers, input))
     }
 
     fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("eigh", &input)?;
         ensure_supported_linalg_dtype("eigh", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "eigh")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.eigh(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return eigh_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "eigh", input, |input, buffers| {
-                eigh_entered(provider, context, buffers, input)
+                eigh_entered(context, buffers, input)
             })
         })
     }
@@ -790,54 +581,36 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn eigh_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor_read("eigh_values", &input)?;
         ensure_supported_linalg_dtype("eigh_values", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "eigh_values")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .eigh_values(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return eigh_values_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(
                 buffers,
                 "eigh_values",
                 input,
-                |input, buffers| eigh_values_entered(provider, context, buffers, input),
+                |input, buffers| eigh_values_entered(context, buffers, input),
             )
         })
     }
 
     fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let domain = self.shared_allocation_domain();
-        let kind = self.kind();
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            let provider = linalg_provider_kind(kind, "cholesky")?;
             if let Some(domain) = domain.as_deref()
                 && input.backend_family().is_some()
             {
-                return managed_cholesky(context, buffers, input, domain, provider);
+                return managed_cholesky(context, buffers, input, domain);
             }
             ensure_host_tensor_read("cholesky", &input)?;
             ensure_supported_linalg_dtype("cholesky", input.dtype())?;
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.cholesky(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return cholesky_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "cholesky", input, |input, buffers| {
-                cholesky_entered(provider, context, buffers, input)
+                cholesky_entered(context, buffers, input)
             })
         })
     }
@@ -845,21 +618,13 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("lu", &input)?;
         ensure_supported_linalg_dtype("lu", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "lu")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.lu(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return lu_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "lu", input, |input, buffers| {
-                lu_entered(provider, context, buffers, input)
+                lu_entered(context, buffers, input)
             })
         })
     }
@@ -867,25 +632,16 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn full_piv_lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("full_piv_lu", &input)?;
         ensure_supported_linalg_dtype("full_piv_lu", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "full_piv_lu")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .full_piv_lu(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return full_piv_lu_faer_view_entered(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(
                 buffers,
                 "full_piv_lu",
                 input,
-                |input, buffers| full_piv_lu_entered(provider, context, buffers, input),
+                |input, buffers| full_piv_lu_entered(context, buffers, input),
             )
         })
     }
@@ -893,21 +649,13 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn eig_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("eig", &input)?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "eig")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.eig(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return linalg::faer::eig_view(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "eig", input, |input, buffers| {
-                eig_entered(provider, context, buffers, input)
+                eig_entered(context, buffers, input)
             })
         })
     }
@@ -915,73 +663,32 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn eig_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor_read("eig_values", &input)?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "eig_values")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels.0.eig_values(context, input.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
-            #[cfg(feature = "cpu-faer")]
-            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+            #[cfg(feature = "native")]
+            if faer_strided_read_ok(&input) {
                 return linalg::faer::eig_values_view(context, buffers, input.tensor_view());
             }
             context.with_materialized_tensor_read(buffers, "eig_values", input, |input, buffers| {
-                eig_values_entered(provider, context, buffers, input)
+                eig_values_entered(context, buffers, input)
             })
         })
     }
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eigh_values", input)?;
-        let provider = linalg_provider_kind(self.kind(), "eigh_values")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .eigh_values(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            eigh_values_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| eigh_values_entered(context, buffers, input))
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("eig", input)?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "eig")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .eig(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            eig_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| eig_entered(context, buffers, input))
     }
 
     fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eig_values", input)?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "eig_values")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels
-                    .0
-                    .eig_values(context, TensorRead::from_tensor(input).tensor_view())?
-            {
-                return Ok(output);
-            }
-            eig_values_entered(provider, context, buffers, input)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| eig_values_entered(context, buffers, input))
     }
 
     fn lu_solve_prepared(
@@ -1014,12 +721,10 @@ impl LinalgBackend for CpuExecSession<'_> {
             &packed_lu::rhs_matrix_shape(a.shape(), b.shape()),
         )?;
         validate_nonsingular_u(packed_lu)?;
-        let provider = linalg_provider_kind(self.kind(), OP)?;
         // One pooled RHS copy becomes the output; the provider kernel applies
         // the stored pivots and both triangular solves per matrix in place.
         self.with_linalg_pool_fresh(|ctx, buffers| {
             packed_lu::lu_solve_prepared_entered(
-                provider,
                 ctx,
                 buffers,
                 a,
@@ -1038,9 +743,8 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor(OP, a)?;
         ensure_host_tensor(OP, b)?;
         ensure_supported_linalg_pair(OP, a, b)?;
-        let provider = linalg_provider_kind(self.kind(), OP)?;
         self.with_linalg_pool_fresh(|ctx, buffers| {
-            packed_lu::lu_factor_solve_entered(provider, ctx, buffers, a, b)
+            packed_lu::lu_factor_solve_entered(ctx, buffers, a, b)
         })
     }
 
@@ -1048,20 +752,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor("solve", a)?;
         ensure_host_tensor("solve", b)?;
         ensure_supported_linalg_pair("solve", a, b)?;
-        let provider = linalg_provider_kind(self.kind(), "solve")?;
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
-        self.with_linalg_pool_fresh(|context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) = kernels.0.solve(
-                    context,
-                    TensorRead::from_tensor(a).tensor_view(),
-                    TensorRead::from_tensor(b).tensor_view(),
-                )?
-            {
-                return Ok(output);
-            }
-            solve_entered(provider, context, buffers, a, b)
-        })
+        self.with_linalg_pool_fresh(|context, buffers| solve_entered(context, buffers, a, b))
     }
 
     fn solve_read(
@@ -1072,32 +763,16 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor_read("solve", &a)?;
         ensure_host_tensor_read("solve", &b)?;
         ensure_supported_linalg_dtypes("solve", a.dtype(), b.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "solve")?;
         let direct = !has_zero_dim(a.shape())
             && !has_zero_dim(b.shape())
             && solve_shape_direct_eligible(a.shape(), b.shape());
-        let kernels = self.provider_extension::<CpuLinalgKernelsSlot>();
         self.with_linalg_pool_fresh(move |context, buffers| {
-            if let Some(kernels) = &kernels
-                && let CpuLinalgOutcome::Executed(output) =
-                    kernels
-                        .0
-                        .solve(context, a.clone().tensor_view(), b.clone().tensor_view())?
-            {
-                return Ok(output);
-            }
             if direct {
-                solve_from_views_entered(
-                    provider,
-                    context,
-                    buffers,
-                    a.tensor_view(),
-                    b.tensor_view(),
-                )
+                solve_from_views_entered(context, buffers, a.tensor_view(), b.tensor_view())
             } else {
                 context.with_materialized_tensor_read(buffers, "solve", a, |a, buffers| {
                     context.with_materialized_tensor_read(buffers, "solve", b, |b, buffers| {
-                        solve_entered(provider, context, buffers, a, b)
+                        solve_entered(context, buffers, a, b)
                     })
                 })
             }
@@ -1115,7 +790,6 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor_read("solve_read_into", &b)?;
         ensure_host_tensor_read("solve_read_into", &out.as_read())?;
         ensure_supported_linalg_dtypes("solve_read_into", a.dtype(), b.dtype())?;
-        let provider = linalg_provider_kind(self.kind(), "solve_read_into")?;
 
         if has_zero_dim(a.shape())
             || has_zero_dim(b.shape())
@@ -1127,7 +801,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         let a = a.tensor_view();
         let b = b.tensor_view();
         self.with_linalg_pool(move |context, buffers| {
-            solve_read_into_entered(provider, context, buffers, a, b, out)
+            solve_read_into_entered(context, buffers, a, b, out)
         })
     }
 }
@@ -1173,15 +847,14 @@ fn managed_cholesky(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     domain: &dyn SharedTensorAllocationDomain,
-    provider: CpuLinalgProvider,
 ) -> tenferro_tensor::Result<Tensor> {
     let dtype = input.dtype();
     ensure_supported_linalg_dtype("cholesky", dtype)?;
     match input.tensor_view() {
-        TensorView::F32(view) => managed_cholesky_typed(context, buffers, &view, domain, provider),
-        TensorView::F64(view) => managed_cholesky_typed(context, buffers, &view, domain, provider),
-        TensorView::C32(view) => managed_cholesky_typed(context, buffers, &view, domain, provider),
-        TensorView::C64(view) => managed_cholesky_typed(context, buffers, &view, domain, provider),
+        TensorView::F32(view) => managed_cholesky_typed(context, buffers, &view, domain),
+        TensorView::F64(view) => managed_cholesky_typed(context, buffers, &view, domain),
+        TensorView::C32(view) => managed_cholesky_typed(context, buffers, &view, domain),
+        TensorView::C64(view) => managed_cholesky_typed(context, buffers, &view, domain),
         _ => Err(unsupported_dtype("cholesky", dtype)),
     }
 }
@@ -1194,7 +867,6 @@ trait ManagedCholeskyScalar: Copy + Send + Sync + TensorScalar + 'static {
         buffers: &mut BufferPool,
         data: &[Self],
         n: usize,
-        provider: CpuLinalgProvider,
     ) -> tenferro_tensor::Result<Vec<Self>>;
 
     fn take_output(output: Tensor) -> tenferro_tensor::Result<TypedTensor<Self>>;
@@ -1211,30 +883,21 @@ macro_rules! impl_managed_cholesky_scalar {
                 buffers: &mut BufferPool,
                 data: &[Self],
                 n: usize,
-                provider: CpuLinalgProvider,
             ) -> tenferro_tensor::Result<Vec<Self>> {
-                match provider {
-                    CpuLinalgProvider::Faer => {
-                        #[cfg(feature = "cpu-faer")]
+                {
+                    #[cfg(feature = "native")]
+                    {
+                        #[cfg(feature = "native")]
                         {
                             linalg::faer::cholesky_compact_data(context, buffers, data, n)
                         }
-                        #[cfg(not(feature = "cpu-faer"))]
-                        {
-                            let _ = (context, buffers, data, n);
-                            Err(unsupported_provider("cholesky", CpuBackendKind::Faer))
-                        }
                     }
-                    CpuLinalgProvider::Blas => {
-                        #[cfg(feature = "cpu-blas")]
+                    #[cfg(feature = "blas")]
+                    {
+                        #[cfg(feature = "blas")]
                         {
                             let _ = context;
                             linalg::blas::cholesky_compact_data(buffers, data, n)
-                        }
-                        #[cfg(not(feature = "cpu-blas"))]
-                        {
-                            let _ = (context, buffers, data, n);
-                            Err(unsupported_provider("cholesky", CpuBackendKind::Blas))
                         }
                     }
                 }
@@ -1271,7 +934,6 @@ fn managed_cholesky_typed<T>(
     buffers: &mut BufferPool,
     input: &tenferro_tensor::TypedTensorView<'_, T>,
     domain: &dyn SharedTensorAllocationDomain,
-    provider: CpuLinalgProvider,
 ) -> tenferro_tensor::Result<Tensor>
 where
     T: ManagedCholeskyScalar,
@@ -1280,7 +942,7 @@ where
     let values = if n == 0 {
         Vec::new()
     } else {
-        input.with_host_read(|read| T::factor(context, buffers, read, n, provider))??
+        input.with_host_read(|read| T::factor(context, buffers, read, n))??
     };
     let mut typed = T::take_output(domain.allocate(T::DTYPE, &[n, n])?)?;
     write_managed_cholesky_output(&mut typed, domain.id(), &values)?;
@@ -1388,22 +1050,6 @@ fn write_managed_cholesky_output<T: TensorScalar + Copy + Send + Sync + 'static>
         write.copy_from_slice(values);
         Ok(())
     })?
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CpuLinalgProvider {
-    Faer,
-    Blas,
-}
-
-fn linalg_provider_kind(
-    kind: CpuBackendKind,
-    _op: &'static str,
-) -> tenferro_tensor::Result<CpuLinalgProvider> {
-    match kind {
-        CpuBackendKind::Faer => Ok(CpuLinalgProvider::Faer),
-        CpuBackendKind::Blas => Ok(CpuLinalgProvider::Blas),
-    }
 }
 
 /// The typed host tensor behind `input`, or this file's standard refusal.
@@ -1523,16 +1169,16 @@ fn ensure_host_tensor_view(
 }
 
 fn triangular_solve_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: &Tensor,
     b: &Tensor,
     options: TriangularSolveOptions,
 ) -> tenferro_tensor::Result<Tensor> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 same_variant_pair!(
                     a,
@@ -1552,17 +1198,10 @@ fn triangular_solve_entered(
                     unsupported_pair("triangular_solve", a, b)
                 )
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, a, b, options);
-                Err(unsupported_provider(
-                    "triangular_solve",
-                    CpuBackendKind::Faer,
-                ))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 same_variant_pair!(
@@ -1582,20 +1221,11 @@ fn triangular_solve_entered(
                     unsupported_pair("triangular_solve", a, b)
                 )
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, a, b, options);
-                Err(unsupported_provider(
-                    "triangular_solve",
-                    CpuBackendKind::Blas,
-                ))
-            }
         }
     }
 }
 
 fn solve_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: &Tensor,
@@ -1614,9 +1244,10 @@ fn solve_entered(
         (b.duplicate()?, None)
     };
 
-    let result = match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    let result = {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 same_variant_pair!(
                     a,
@@ -1625,14 +1256,10 @@ fn solve_entered(
                     unsupported_pair("solve", a, &rhs)
                 )
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, a, &rhs);
-                Err(unsupported_provider("solve", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 same_variant_pair!(
@@ -1641,11 +1268,6 @@ fn solve_entered(
                     |a, b| { linalg::blas::solve(buffers, a, b, false) },
                     unsupported_pair("solve", a, &rhs)
                 )
-            }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, a, &rhs);
-                Err(unsupported_provider("solve", CpuBackendKind::Blas))
             }
         }
     }?;
@@ -1658,15 +1280,15 @@ fn solve_entered(
 }
 
 fn solve_from_views_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: TensorView<'_>,
     b: TensorView<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match (a, b) {
                     (TensorView::F32(a), TensorView::F32(b)) => {
@@ -1692,14 +1314,10 @@ fn solve_from_views_entered(
                     )),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, a, b);
-                Err(unsupported_provider("solve", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match (a, b) {
@@ -1726,17 +1344,11 @@ fn solve_from_views_entered(
                     )),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, a, b);
-                Err(unsupported_provider("solve", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn solve_read_into_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: TensorView<'_>,
@@ -1744,9 +1356,10 @@ fn solve_read_into_entered(
     out: TensorWrite<'_>,
 ) -> tenferro_tensor::Result<()> {
     let out = tensor_write_view(out);
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match (a, b, out) {
                     (TensorView::F32(a), TensorView::F32(b), TensorViewMut::F32(mut out)) => {
@@ -1768,17 +1381,10 @@ fn solve_read_into_entered(
                     )),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, a, b, out);
-                Err(unsupported_provider(
-                    "solve_read_into",
-                    CpuBackendKind::Faer,
-                ))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match (a, b, out) {
@@ -1800,14 +1406,6 @@ fn solve_read_into_entered(
                         "destination dtype does not match the solve inputs",
                     )),
                 }
-            }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, a, b, out);
-                Err(unsupported_provider(
-                    "solve_read_into",
-                    CpuBackendKind::Blas,
-                ))
             }
         }
     }
@@ -1842,14 +1440,14 @@ fn write_view_operand<T: TensorScalar>(tensor: &mut Tensor) -> &mut TypedTensor<
 }
 
 fn cholesky_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => linalg::faer::cholesky(
@@ -1887,14 +1485,10 @@ fn cholesky_entered(
                     _ => Err(unsupported_dtype("cholesky", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("cholesky", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -1929,24 +1523,19 @@ fn cholesky_entered(
                     _ => Err(unsupported_dtype("cholesky", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("cholesky", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn lu_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => linalg::faer::lu(
@@ -1994,14 +1583,10 @@ fn lu_entered(
                     _ => Err(unsupported_dtype("lu", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("lu", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -2046,24 +1631,19 @@ fn lu_entered(
                     _ => Err(unsupported_dtype("lu", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("lu", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn full_piv_lu_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => linalg::faer::full_piv_lu(
@@ -2101,14 +1681,10 @@ fn full_piv_lu_entered(
                     _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("full_piv_lu", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -2143,24 +1719,19 @@ fn full_piv_lu_entered(
                     _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("full_piv_lu", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn svd_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => linalg::faer::svd(
@@ -2198,14 +1769,10 @@ fn svd_entered(
                     _ => Err(unsupported_dtype("svd", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("svd", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -2238,24 +1805,19 @@ fn svd_entered(
                     _ => Err(unsupported_dtype("svd", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("svd", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn svd_full_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => linalg::faer::svd_full(
@@ -2293,14 +1855,10 @@ fn svd_full_entered(
                     _ => Err(unsupported_dtype("svd_full", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("svd_full", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -2335,24 +1893,19 @@ fn svd_full_entered(
                     _ => Err(unsupported_dtype("svd_full", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("svd_full", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn svd_values_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => {
@@ -2382,14 +1935,10 @@ fn svd_values_entered(
                     _ => Err(unsupported_dtype("svd_values", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("svd_values", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -2424,24 +1973,19 @@ fn svd_values_entered(
                     _ => Err(unsupported_dtype("svd_values", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("svd_values", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn qr_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => linalg::faer::qr(
@@ -2489,14 +2033,10 @@ fn qr_entered(
                     _ => Err(unsupported_dtype("qr", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("qr", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -2541,17 +2081,11 @@ fn qr_entered(
                     _ => Err(unsupported_dtype("qr", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("qr", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn rank_revealing_qr_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
@@ -2569,9 +2103,10 @@ fn rank_revealing_qr_entered(
             })
         }};
     }
-    let mut outputs = match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    let mut outputs = {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => map_result!(
@@ -2627,17 +2162,10 @@ fn rank_revealing_qr_entered(
                     _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input, options);
-                Err(unsupported_provider(
-                    "rank_revealing_qr",
-                    CpuBackendKind::Faer,
-                ))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -2668,14 +2196,6 @@ fn rank_revealing_qr_entered(
                     _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input, options);
-                Err(unsupported_provider(
-                    "rank_revealing_qr",
-                    CpuBackendKind::Blas,
-                ))
-            }
         }
     }?;
     apply_qr_gauge(options.gauge, &mut outputs[..2])?;
@@ -2683,14 +2203,14 @@ fn rank_revealing_qr_entered(
 }
 
 fn householder_qr_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<CompactQrResult> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 macro_rules! factor {
                     ($tensor:expr, $variant:ident) => {{
@@ -2730,14 +2250,10 @@ fn householder_qr_entered(
                     _ => Err(unsupported_dtype("householder_qr", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("householder_qr", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 macro_rules! factor {
@@ -2777,17 +2293,11 @@ fn householder_qr_entered(
                     _ => Err(unsupported_dtype("householder_qr", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("householder_qr", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn householder_qr_from_factors_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     q: &Tensor,
@@ -2800,8 +2310,9 @@ fn householder_qr_from_factors_entered(
             r.dtype(),
         ));
     }
-    if provider == CpuLinalgProvider::Faer {
-        #[cfg(feature = "cpu-faer")]
+    #[cfg(feature = "native")]
+    {
+        #[cfg(feature = "native")]
         {
             macro_rules! import {
                 ($q:expr, $r:expr, $variant:ident) => {{
@@ -2829,16 +2340,11 @@ fn householder_qr_from_factors_entered(
                     let (q_t, r_t) = qr_import_operands::<Complex64>(q, r)?;
                     import!(q_t, r_t, C64)
                 }
-                _ => return Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
+                _ => Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
             }
         }
-        #[cfg(not(feature = "cpu-faer"))]
-        return Err(unsupported_provider(
-            "householder_qr_from_factors",
-            CpuBackendKind::Faer,
-        ));
     }
-    #[cfg(feature = "cpu-blas")]
+    #[cfg(feature = "blas")]
     {
         let _ = context;
         macro_rules! import {
@@ -2870,18 +2376,9 @@ fn householder_qr_from_factors_entered(
             _ => Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
         }
     }
-    #[cfg(not(feature = "cpu-blas"))]
-    {
-        let _ = (context, buffers, q, r);
-        Err(unsupported_provider(
-            "householder_qr_from_factors",
-            CpuBackendKind::Blas,
-        ))
-    }
 }
 
 fn householder_qr_append_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     packed: &Tensor,
@@ -2895,8 +2392,9 @@ fn householder_qr_append_entered(
             block.dtype(),
         ));
     }
-    if provider == CpuLinalgProvider::Faer {
-        #[cfg(feature = "cpu-faer")]
+    #[cfg(feature = "native")]
+    {
+        #[cfg(feature = "native")]
         {
             macro_rules! append {
                 ($packed:expr, $coeff:expr, $block:expr, $variant:ident) => {{
@@ -2929,16 +2427,11 @@ fn householder_qr_append_entered(
 
                     append!(p, c, b, C64)
                 }
-                _ => return Err(unsupported_dtype("householder_qr_append", packed.dtype())),
+                _ => Err(unsupported_dtype("householder_qr_append", packed.dtype())),
             }
         }
-        #[cfg(not(feature = "cpu-faer"))]
-        return Err(unsupported_provider(
-            "householder_qr_append",
-            CpuBackendKind::Faer,
-        ));
     }
-    #[cfg(feature = "cpu-blas")]
+    #[cfg(feature = "blas")]
     {
         let _ = context;
         macro_rules! append {
@@ -2975,18 +2468,9 @@ fn householder_qr_append_entered(
             _ => Err(unsupported_dtype("householder_qr_append", packed.dtype())),
         }
     }
-    #[cfg(not(feature = "cpu-blas"))]
-    {
-        let _ = (context, buffers, packed, coeff, block);
-        Err(unsupported_provider(
-            "householder_qr_append",
-            CpuBackendKind::Blas,
-        ))
-    }
 }
 
 fn householder_qr_r_entered(
-    provider: CpuLinalgProvider,
     _context: &CpuExecutionContext<'_>,
     _buffers: &mut BufferPool,
     packed: &Tensor,
@@ -2994,8 +2478,9 @@ fn householder_qr_r_entered(
     options: crate::QrOptions,
 ) -> tenferro_tensor::Result<Tensor> {
     let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
-    if provider == CpuLinalgProvider::Faer {
-        #[cfg(feature = "cpu-faer")]
+    #[cfg(feature = "native")]
+    {
+        #[cfg(feature = "native")]
         return same_variant_pair!(
             packed,
             coeff,
@@ -3006,13 +2491,8 @@ fn householder_qr_r_entered(
                 coeff.dtype(),
             ))
         );
-        #[cfg(not(feature = "cpu-faer"))]
-        return Err(unsupported_provider(
-            "householder_qr_r",
-            CpuBackendKind::Faer,
-        ));
     }
-    #[cfg(feature = "cpu-blas")]
+    #[cfg(feature = "blas")]
     {
         same_variant_pair!(
             packed,
@@ -3025,18 +2505,9 @@ fn householder_qr_r_entered(
             ))
         )
     }
-    #[cfg(not(feature = "cpu-blas"))]
-    {
-        let _ = (_context, packed, coeff, options);
-        Err(unsupported_provider(
-            "householder_qr_r",
-            CpuBackendKind::Blas,
-        ))
-    }
 }
 
 fn householder_qr_q_columns_entered(
-    provider: CpuLinalgProvider,
     _context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     packed: &Tensor,
@@ -3045,8 +2516,9 @@ fn householder_qr_q_columns_entered(
     options: crate::QrOptions,
 ) -> tenferro_tensor::Result<Tensor> {
     let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
-    if provider == CpuLinalgProvider::Faer {
-        #[cfg(feature = "cpu-faer")]
+    #[cfg(feature = "native")]
+    {
+        #[cfg(feature = "native")]
         return match (packed.dtype(), coeff.dtype()) {
             (DType::F32, DType::F32) => {
                 let (p, c) = q_columns_operands::<f32>(packed, coeff)?;
@@ -3106,13 +2578,8 @@ fn householder_qr_q_columns_entered(
                 coeff.dtype(),
             )),
         };
-        #[cfg(not(feature = "cpu-faer"))]
-        return Err(unsupported_provider(
-            "householder_qr_q_columns",
-            CpuBackendKind::Faer,
-        ));
     }
-    #[cfg(feature = "cpu-blas")]
+    #[cfg(feature = "blas")]
     {
         macro_rules! columns {
             ($packed:expr, $coeff:expr, $variant:ident) => {
@@ -3151,25 +2618,17 @@ fn householder_qr_q_columns_entered(
             )),
         }
     }
-    #[cfg(not(feature = "cpu-blas"))]
-    {
-        let _ = (_context, packed, coeff, columns, options);
-        Err(unsupported_provider(
-            "householder_qr_q_columns",
-            CpuBackendKind::Blas,
-        ))
-    }
 }
 
 fn eigh_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => linalg::faer::eigh(
@@ -3207,14 +2666,10 @@ fn eigh_entered(
                     _ => Err(unsupported_dtype("eigh", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("eigh", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -3247,24 +2702,19 @@ fn eigh_entered(
                     _ => Err(unsupported_dtype("eigh", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("eigh", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn eigh_values_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => {
@@ -3298,14 +2748,10 @@ fn eigh_values_entered(
                     _ => Err(unsupported_dtype("eigh_values", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("eigh_values", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 match input.dtype() {
@@ -3340,82 +2786,59 @@ fn eigh_values_entered(
                     _ => Err(unsupported_dtype("eigh_values", input.dtype())),
                 }
             }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("eigh_values", CpuBackendKind::Blas))
-            }
         }
     }
 }
 
 fn eig_values_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 linalg::faer::eig_values(context, buffers, input)
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("eig_values", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 linalg::blas::eig_values(buffers, input)
-            }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("eig_values", CpuBackendKind::Blas))
             }
         }
     }
 }
 
 fn eig_entered(
-    provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    match provider {
-        CpuLinalgProvider::Faer => {
-            #[cfg(feature = "cpu-faer")]
+    {
+        #[cfg(feature = "native")]
+        {
+            #[cfg(feature = "native")]
             {
                 linalg::faer::eig(context, buffers, input)
             }
-            #[cfg(not(feature = "cpu-faer"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("eig", CpuBackendKind::Faer))
-            }
         }
-        CpuLinalgProvider::Blas => {
-            #[cfg(feature = "cpu-blas")]
+        #[cfg(feature = "blas")]
+        {
+            #[cfg(feature = "blas")]
             {
                 let _ = context;
                 linalg::blas::eig(buffers, input)
-            }
-            #[cfg(not(feature = "cpu-blas"))]
-            {
-                let _ = (context, buffers, input);
-                Err(unsupported_provider("eig", CpuBackendKind::Blas))
             }
         }
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn faer_strided_read_ok(input: &TensorRead<'_>) -> bool {
     match input {
         TensorRead::Tensor(tensor) => match tensor.dtype() {
@@ -3450,7 +2873,7 @@ fn faer_strided_read_ok(input: &TensorRead<'_>) -> bool {
 /// The RHS is copied element by element, so strides may be arbitrary; only host
 /// placement, the matrix rank every provider requires, and a supported dtype
 /// matter.
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn faer_rhs_read_ok(input: &TensorRead<'_>) -> bool {
     if input.backend_family().is_some() {
         return false;
@@ -3464,7 +2887,7 @@ fn faer_rhs_read_ok(input: &TensorRead<'_>) -> bool {
     )
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn rank_revealing_qr_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3494,7 +2917,7 @@ fn rank_revealing_qr_faer_view_entered(
     Ok(outputs)
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn triangular_solve_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3536,7 +2959,7 @@ fn triangular_solve_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn svd_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3555,7 +2978,7 @@ fn svd_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn svd_full_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3574,7 +2997,7 @@ fn svd_full_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn svd_values_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3597,7 +3020,7 @@ fn svd_values_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn qr_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3624,7 +3047,7 @@ fn qr_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn eigh_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3643,7 +3066,7 @@ fn eigh_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn eigh_values_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3666,7 +3089,7 @@ fn eigh_values_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn cholesky_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3689,7 +3112,7 @@ fn cholesky_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn lu_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3716,7 +3139,7 @@ fn lu_faer_view_entered(
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn full_piv_lu_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -4054,17 +3477,6 @@ fn square_matrix_dim(op: &'static str, shape: &[usize]) -> tenferro_tensor::Resu
         return Err(Error::shape_mismatch(op, vec![rows], vec![cols]));
     }
     Ok(rows)
-}
-
-// Used only by feature-disabled provider branches, so default feature builds
-// may not compile a direct call site.
-#[allow(dead_code)]
-fn unsupported_provider(op: &'static str, kind: CpuBackendKind) -> Error {
-    Error::invalid_argument(
-        op,
-        "provider",
-        format!("CPU linalg provider {kind:?} is not compiled in"),
-    )
 }
 
 fn unsupported_pair(

@@ -12,7 +12,7 @@
 //! host clears outstanding accounting at the end of a session, and replenishes on unwind
 //! (`CpuBackend::with_execution_resources`), so nothing here has to be tidy on an error path.
 
-#![cfg(feature = "cpu-blas")]
+#![cfg(feature = "blas")]
 
 use core::mem::MaybeUninit;
 

@@ -551,8 +551,8 @@ fn faer_routes_hand_whole_batches_to_tlinalg() {
         "Faer routes should hand the whole batch to tlinalg instead of looping per matrix"
     );
     assert!(
-        source.contains("execution(ctx, Op::"),
-        "Faer routes should resolve one lane plan per batched provider call"
+        source.contains("parallel_from(ctx)"),
+        "Faer routes should hand one parallelism token to each batched tlinalg call"
     );
 }
 
@@ -605,7 +605,7 @@ fn cpu_solve_read_into_reaches_direct_write_for_eligible_outputs() {
     );
 
     assert!(
-        solve_read_into.contains("solve_read_into_entered(provider, context, buffers, a, b, out)"),
+        solve_read_into.contains("solve_read_into_entered(context, buffers, a, b, out)"),
         "eligible solve_read_into should reach the direct in-place solver"
     );
     assert_eq!(

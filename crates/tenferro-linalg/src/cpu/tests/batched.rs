@@ -55,7 +55,7 @@ impl Dt {
 
 fn backends() -> [(CpuBackendKind, CpuBackend); 2] {
     [CpuBackendKind::Faer, CpuBackendKind::Blas]
-        .map(|kind| (kind, CpuBackend::with_threads_and_kind(1, kind).unwrap()))
+        .map(|kind| (kind, CpuBackend::with_threads(1).unwrap()))
 }
 
 /// Host data of any linalg or pivot dtype, widened to `Complex64`.

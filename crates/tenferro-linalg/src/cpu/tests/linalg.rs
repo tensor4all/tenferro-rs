@@ -11,13 +11,9 @@ fn assert_c32_close(actual: Complex32, expected: Complex32) {
     );
 }
 
-fn compiled_linalg_provider_kinds() -> Vec<tenferro_cpu::CpuBackendKind> {
-    vec![
-        #[cfg(feature = "cpu-faer")]
-        tenferro_cpu::CpuBackendKind::Faer,
-        #[cfg(feature = "cpu-blas")]
-        tenferro_cpu::CpuBackendKind::Blas,
-    ]
+/// The compile-time CPU backend this build selected.
+fn compiled_linalg_providers() -> Vec<&'static str> {
+    vec![tenferro_cpu::cpu_provider_id()]
 }
 
 #[test]
@@ -27,8 +23,8 @@ fn solve_read_accepts_owned_and_strided_inputs_for_compiled_providers() {
     let a_storage = vec![-1.0, 3.0, -1.0, 1.0, -1.0, -1.0, 0.0, -1.0, 2.0];
     let b_storage = vec![-1.0, 7.0, -1.0, 4.0];
 
-    for kind in compiled_linalg_provider_kinds() {
-        let mut backend = CpuBackend::with_kind(kind).unwrap();
+    for _provider in compiled_linalg_providers() {
+        let mut backend = CpuBackend::with_threads(1).unwrap();
         with_cpu_linalg(&mut backend, |backend| {
             let owned = backend
                 .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
@@ -65,8 +61,8 @@ fn solve_read_into_writes_owned_and_padded_column_major_outputs() {
     let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
 
-    for kind in compiled_linalg_provider_kinds() {
-        let mut backend = CpuBackend::with_kind(kind).unwrap();
+    for _provider in compiled_linalg_providers() {
+        let mut backend = CpuBackend::with_threads(1).unwrap();
         with_cpu_linalg(&mut backend, |backend| {
             let mut owned = Tensor::from_vec_col_major([2, 1], vec![-9.0_f64; 2]).unwrap();
             backend
@@ -105,8 +101,8 @@ fn solve_read_into_rejects_bad_destination_before_mutation() {
     let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
 
-    for kind in compiled_linalg_provider_kinds() {
-        let mut backend = CpuBackend::with_kind(kind).unwrap();
+    for _provider in compiled_linalg_providers() {
+        let mut backend = CpuBackend::with_threads(1).unwrap();
         with_cpu_linalg(&mut backend, |backend| {
             let mut out = Tensor::from_vec_col_major([3, 1], vec![-23.0_f64; 3]).unwrap();
             let error = backend
@@ -310,8 +306,8 @@ fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
 #[test]
 fn solve_accepts_tiny_nonzero_real_and_complex_pivots_for_compiled_providers() {
     // What: ordinary and prepared solve treat scaling as units, not as an implicit rank cutoff.
-    for kind in compiled_linalg_provider_kinds() {
-        let mut backend = CpuBackend::with_kind(kind).unwrap();
+    for _provider in compiled_linalg_providers() {
+        let mut backend = CpuBackend::with_threads(1).unwrap();
         with_cpu_linalg(&mut backend, |backend| {
             let scale = 2.0_f32.powi(-80);
             let a = Tensor::from_vec_col_major([2, 2], vec![scale, 0.0, 0.0, 2.0 * scale]).unwrap();
@@ -407,8 +403,8 @@ fn triangular_solve_read_accepts_owned_and_strided_inputs_for_compiled_providers
     let a_storage = vec![-1.0, 2.0, -1.0, 0.0, -1.0, -1.0, 1.0, -1.0, 3.0];
     let b_storage = vec![-1.0, 5.0, -1.0, 6.0];
 
-    for kind in compiled_linalg_provider_kinds() {
-        let mut backend = CpuBackend::with_kind(kind).unwrap();
+    for _provider in compiled_linalg_providers() {
+        let mut backend = CpuBackend::with_threads(1).unwrap();
         with_cpu_linalg(&mut backend, |backend| {
             let owned = backend
                 .triangular_solve_read(
@@ -1051,8 +1047,8 @@ macro_rules! real_rotation_eig_residual_test {
                 .unwrap(),
             );
 
-            for kind in compiled_linalg_provider_kinds() {
-                let mut backend = CpuBackend::with_threads_and_kind(1, kind).unwrap();
+            for _provider in compiled_linalg_providers() {
+                let mut backend = CpuBackend::with_threads(1).unwrap();
                 let outputs = with_cpu_linalg(&mut backend, |backend| backend.eig(&input)).unwrap();
                 let mut residual_squared = 0.0_f64;
                 let mut vector_squared = 0.0_f64;
@@ -1072,7 +1068,7 @@ macro_rules! real_rotation_eig_residual_test {
 
                 assert!(
                     relative_residual.is_finite() && relative_residual <= $tol,
-                    "{kind:?} relative AV-VD residual {relative_residual:e} exceeds {}",
+                    "{_provider} relative AV-VD residual {relative_residual:e} exceeds {}",
                     $tol
                 );
             }

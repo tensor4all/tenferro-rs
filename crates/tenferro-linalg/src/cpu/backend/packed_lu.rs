@@ -6,17 +6,11 @@
 //! per-matrix tensor, permutation vector, or triangular-solve intermediate is
 //! materialized.
 
-#[cfg(any(not(feature = "cpu-faer"), not(feature = "cpu-blas")))]
-use super::unsupported_provider;
-use super::{
-    batched_vector_rhs_shape_of, checked_product, has_zero_dim, square_matrix_dim,
-    CpuLinalgProvider,
-};
-#[cfg(any(not(feature = "cpu-faer"), not(feature = "cpu-blas")))]
-use tenferro_cpu::CpuBackendKind;
-
+#[cfg(any(not(feature = "native"), not(feature = "blas")))]
 #[allow(unused_imports)]
 use super::linalg;
+#[cfg(any(not(feature = "native"), not(feature = "blas")))]
+use super::{batched_vector_rhs_shape_of, checked_product, has_zero_dim, square_matrix_dim};
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
@@ -27,7 +21,6 @@ pub(super) trait CpuPackedLu: TensorScalar + PoolScalar + Copy {
     /// Solve `op(A) X = B` in place for every batch from packed factors.
     #[allow(clippy::too_many_arguments)]
     fn prepared_solve(
-        provider: CpuLinalgProvider,
         ctx: &CpuExecutionContext<'_>,
         op: &'static str,
         n: usize,
@@ -42,7 +35,6 @@ pub(super) trait CpuPackedLu: TensorScalar + PoolScalar + Copy {
     /// Factor `A` in place and solve `A X = B` for every batch.
     #[allow(clippy::too_many_arguments)]
     fn factor_solve(
-        provider: CpuLinalgProvider,
         ctx: &CpuExecutionContext<'_>,
         op: &'static str,
         n: usize,
@@ -58,7 +50,6 @@ macro_rules! impl_cpu_packed_lu {
         $(
             impl CpuPackedLu for $scalar {
                 fn prepared_solve(
-                    provider: CpuLinalgProvider,
                     ctx: &CpuExecutionContext<'_>,
                     op: &'static str,
                     n: usize,
@@ -70,9 +61,10 @@ macro_rules! impl_cpu_packed_lu {
                     conjugate_a: bool,
                 ) -> tenferro_tensor::Result<()> {
                     let _ = (op, &ctx, &packed_lu, &pivots, &output, n, nrhs, transpose_a, conjugate_a);
-                    match provider {
-                        CpuLinalgProvider::Faer => {
-                            #[cfg(feature = "cpu-faer")]
+                    {
+#[cfg(feature = "native")]
+{
+                            #[cfg(feature = "native")]
                             {
                                 crate::cpu::tlinalg::solve_prepared_batch::<$scalar>(
                                     ctx,
@@ -86,13 +78,11 @@ macro_rules! impl_cpu_packed_lu {
                                     conjugate_a,
                                 )
                             }
-                            #[cfg(not(feature = "cpu-faer"))]
-                            {
-                                Err(unsupported_provider(op, CpuBackendKind::Faer))
-                            }
+
                         }
-                        CpuLinalgProvider::Blas => {
-                            #[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
+{
+                            #[cfg(feature = "blas")]
                             {
                                 crate::cpu::tlinalg_blas::solve_prepared_batch::<$scalar>(
                                     ctx,
@@ -106,16 +96,12 @@ macro_rules! impl_cpu_packed_lu {
                                     conjugate_a,
                                 )
                             }
-                            #[cfg(not(feature = "cpu-blas"))]
-                            {
-                                Err(unsupported_provider(op, CpuBackendKind::Blas))
-                            }
+
                         }
-                    }
+}
                 }
 
                 fn factor_solve(
-                    provider: CpuLinalgProvider,
                     ctx: &CpuExecutionContext<'_>,
                     op: &'static str,
                     n: usize,
@@ -125,9 +111,10 @@ macro_rules! impl_cpu_packed_lu {
                     output: &mut [Self],
                 ) -> tenferro_tensor::Result<()> {
                     let _ = (op, &ctx, &packed_lu, &pivots, &output, n, nrhs);
-                    match provider {
-                        CpuLinalgProvider::Faer => {
-                            #[cfg(feature = "cpu-faer")]
+                    {
+#[cfg(feature = "native")]
+{
+                            #[cfg(feature = "native")]
                             {
                                 crate::cpu::tlinalg::factor_solve_batch::<$scalar>(
                                     ctx,
@@ -139,13 +126,11 @@ macro_rules! impl_cpu_packed_lu {
                                     output,
                                 )
                             }
-                            #[cfg(not(feature = "cpu-faer"))]
-                            {
-                                Err(unsupported_provider(op, CpuBackendKind::Faer))
-                            }
+
                         }
-                        CpuLinalgProvider::Blas => {
-                            #[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
+{
+                            #[cfg(feature = "blas")]
                             {
                                 crate::cpu::tlinalg_blas::factor_solve_batch::<$scalar>(
                                     ctx,
@@ -157,12 +142,9 @@ macro_rules! impl_cpu_packed_lu {
                                     output,
                                 )
                             }
-                            #[cfg(not(feature = "cpu-blas"))]
-                            {
-                                Err(unsupported_provider(op, CpuBackendKind::Blas))
-                            }
+
                         }
-                    }
+}
                 }
             }
         )*
@@ -213,7 +195,6 @@ pub(super) fn rhs_matrix_shape(a_shape: &[usize], b_shape: &[usize]) -> Vec<usiz
 /// `Error::Internal` if the precondition above does not hold.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
-    provider: CpuLinalgProvider,
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a_shape: &[usize],
@@ -232,7 +213,6 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
     };
     let mut output = pooled_output(buffers, b)?;
     T::prepared_solve(
-        provider,
         ctx,
         OP,
         n,
@@ -257,7 +237,6 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
 /// `Error::Extension` with `crate::Error::Singular` for an exactly singular
 /// matrix when the RHS is nonempty.
 pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
-    provider: CpuLinalgProvider,
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
@@ -293,16 +272,7 @@ pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
     let mut pivot_data = <i32 as PoolScalar>::pool_acquire_zeroed(buffers, pivot_len);
     let mut output = pooled_output(buffers, b)?;
     if !has_zero_dim(a.shape()) {
-        T::factor_solve(
-            provider,
-            ctx,
-            OP,
-            n,
-            nrhs,
-            &mut lu_data,
-            &mut pivot_data,
-            &mut output,
-        )?;
+        T::factor_solve(ctx, OP, n, nrhs, &mut lu_data, &mut pivot_data, &mut output)?;
     }
     Ok((
         tensor_like(b.shape().to_vec(), output, b)?,
@@ -320,7 +290,6 @@ pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
 /// [`lu_solve_prepared_typed`].
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lu_solve_prepared_entered(
-    provider: CpuLinalgProvider,
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: &Tensor,
@@ -342,7 +311,6 @@ pub(super) fn lu_solve_prepared_entered(
             let lu = packed_lu.as_typed::<$scalar>().ok_or_else(inconsistent)?;
             let rhs = b.as_typed::<$scalar>().ok_or_else(inconsistent)?;
             lu_solve_prepared_typed(
-                provider,
                 ctx,
                 buffers,
                 a.shape(),
@@ -371,7 +339,6 @@ pub(super) fn lu_solve_prepared_entered(
 /// Returns an unsupported-dtype error for a non-linalg dtype, and the typed
 /// errors of [`lu_factor_solve_typed`].
 pub(super) fn lu_factor_solve_entered(
-    provider: CpuLinalgProvider,
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: &Tensor,
@@ -383,7 +350,7 @@ pub(super) fn lu_factor_solve_entered(
         ($scalar:ty) => {{
             let a = a.as_typed::<$scalar>().ok_or_else(inconsistent)?;
             let b = b.as_typed::<$scalar>().ok_or_else(inconsistent)?;
-            let (x, lu, pivots) = lu_factor_solve_typed(provider, ctx, buffers, a, b)?;
+            let (x, lu, pivots) = lu_factor_solve_typed(ctx, buffers, a, b)?;
             Ok(vec![
                 Tensor::from_typed::<$scalar>(x),
                 Tensor::from_typed::<$scalar>(lu),

@@ -6,7 +6,7 @@ fn payload(error: &TensorError) -> Option<&crate::Error> {
     error.source().and_then(|source| source.downcast_ref())
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 #[test]
 fn every_variant_rebuilds_tenferros_kind_role_and_source() {
     use super::map_error;
@@ -79,7 +79,7 @@ fn every_variant_rebuilds_tenferros_kind_role_and_source() {
     assert!(error.to_string().contains("different batches"));
 }
 
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 #[test]
 fn every_blas_variant_rebuilds_tenferros_kind_role_and_source() {
     use super::map_blas_error;

@@ -28,7 +28,7 @@
 //!
 //! | Feature | Enables |
 //! |---|---|
-//! | `cpu-faer` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
+//! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager surface (`EagerSessionEinsumExt`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
 //! | `webgpu` | WebGPU/Metal execution through `tenferro-gpu` (a subset of operations). |
@@ -83,6 +83,7 @@ mod binary_dot;
 mod builder;
 mod cache;
 mod concrete;
+mod cpu_concrete;
 mod eager;
 #[cfg(feature = "autodiff")]
 mod eager_ad;

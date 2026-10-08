@@ -606,9 +606,9 @@ impl BackendSession for WebGpuExecSession<'_> {
 }
 
 impl BackendSessionHost for WebGpuBackend {
-    fn with_backend_session<R: Send>(
+    fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         let mut session = WebGpuExecSession { backend: self };
         // The portable in-session guard rejects nested entry before `f` runs;

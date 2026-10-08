@@ -7,7 +7,7 @@ use std::time::Instant;
 use num_complex::Complex64;
 use serde::Serialize;
 use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor};
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBackendKind, CpuExecSession};
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_linalg::{EagerSessionLinalgExt, HouseholderQr, QrGauge, QrOptions, TensorLinalgExt};
 use tenferro_tensor::{BackendSessionHost, Tensor};
 
@@ -46,7 +46,7 @@ impl BenchDType {
 
 #[derive(Debug)]
 struct Config {
-    backend: CpuBackendKind,
+    backend: &'static str,
     lane: Lane,
     dtype: BenchDType,
     rows: usize,
@@ -98,10 +98,7 @@ fn main() {
     .unwrap_or_else(|error| panic!("benchmark failed: {error}"));
     let (reconstruction_relative_error, orthogonality_relative_error) =
         errors(&q, &r, &accumulated, config.dtype).unwrap();
-    let backend = match config.backend {
-        CpuBackendKind::Faer => "faer",
-        CpuBackendKind::Blas => "blas",
-    };
+    let backend = config.backend;
     let record = Record {
         schema: "tenferro.householder-qr-small-appends.v1",
         git_commit: config.git_commit.clone(),
@@ -151,8 +148,7 @@ fn parse_args() -> Result<Config, String> {
         match args[index].as_str() {
             "--backend" => {
                 backend = Some(match value.as_str() {
-                    "faer" => CpuBackendKind::Faer,
-                    "blas" => CpuBackendKind::Blas,
+                    "faer" | "blas" | "native" => tenferro_cpu::cpu_provider_id(),
                     _ => return Err(format!("unknown backend {value:?}")),
                 })
             }
@@ -276,8 +272,7 @@ fn run_concrete(
     initial: &Tensor,
     blocks: &[Tensor],
 ) -> Result<(Vec<f64>, Tensor, Tensor), String> {
-    let mut backend =
-        CpuBackend::with_threads_and_kind(1, config.backend).map_err(|error| error.to_string())?;
+    let mut backend = CpuBackend::with_threads(1).map_err(|error| error.to_string())?;
     backend
         .with_backend_session(|session| {
             with_cpu_exec_session(session, |session| {
@@ -389,7 +384,7 @@ fn run_fresh_session(
     initial: &Tensor,
     blocks: &[Tensor],
 ) -> Result<(Vec<f64>, Tensor, Tensor), String> {
-    let mut backend = CpuBackend::with_threads_and_kind(1, config.backend).map_err(to_string)?;
+    let mut backend = CpuBackend::with_threads(1).map_err(to_string)?;
     let total = config.warmups + config.repetitions;
     let mut timings = Vec::with_capacity(config.repetitions);
     for iteration in 0..total {
@@ -457,10 +452,8 @@ fn run_eager(
     initial: Tensor,
     blocks: Vec<Tensor>,
 ) -> Result<(Vec<f64>, Tensor, Tensor), String> {
-    let runtime = EagerRuntime::with_cpu_backend(
-        CpuBackend::with_threads_and_kind(1, config.backend).map_err(to_string)?,
-    )
-    .map_err(to_string)?;
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).map_err(to_string)?)
+        .map_err(to_string)?;
     let initial = EagerTensor::from_tensor_in(initial, Arc::clone(&runtime)).map_err(to_string)?;
     let blocks = blocks
         .into_iter()

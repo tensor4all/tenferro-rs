@@ -290,7 +290,7 @@ fn domain_bound_backend_preserves_host_owned_and_read_cholesky() {
 fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
     let domain = FakeDomain::new();
     let mut backend = backend(&domain);
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id();
 
     with_cpu_linalg(&mut backend, |backend| {
         macro_rules! check_real {

@@ -1,4 +1,4 @@
-#![cfg(all(feature = "cpu-blas", feature = "provider-inject"))]
+#![cfg(all(feature = "blas", feature = "provider-inject"))]
 
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

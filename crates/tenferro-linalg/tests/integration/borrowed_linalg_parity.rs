@@ -6,32 +6,22 @@
 //! borrowed contract itself: the same result as the owned call, an untouched
 //! source, and a typed refusal for dtypes the provider never sees.
 
-#![cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
+#![cfg(any(feature = "native", feature = "blas"))]
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{TensorLinalgExt, TensorReadLinalgExt};
 use tenferro_tensor::{
     BackendSessionHost, DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView,
     TypedTensor,
 };
 
-/// Every CPU linalg provider compiled into this build.
+/// The compile-time CPU linalg provider this build selected.
 fn providers() -> Vec<(&'static str, CpuBackend)> {
-    const KINDS: &[(&str, CpuBackendKind)] = &[
-        #[cfg(feature = "cpu-faer")]
-        ("faer", CpuBackendKind::Faer),
-        #[cfg(feature = "cpu-blas")]
-        ("blas", CpuBackendKind::Blas),
-    ];
-    KINDS
-        .iter()
-        .map(|&(name, kind)| {
-            let backend = CpuBackend::with_threads_and_kind(1, kind)
-                .unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
-            (name, backend)
-        })
-        .collect()
+    let name = tenferro_cpu::cpu_provider_id();
+    let backend =
+        CpuBackend::with_threads(1).unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
+    vec![(name, backend)]
 }
 
 /// A non-symmetric matrix with distinct real eigenvalues, so the spectrum is
@@ -304,7 +294,7 @@ fn borrowed_eigvals_rejects_unsupported_dtypes_before_provider_entry() {
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 #[test]
 fn faer_eig_view_path_does_not_pool_an_input_copy() {
     // Same shape, same outputs, two eligibility stories: a compact owned read
@@ -317,8 +307,7 @@ fn faer_eig_view_path_does_not_pool_an_input_copy() {
         TypedTensor::from_vec_col_major(vec![n, n], sample_real(n)).unwrap(),
     );
 
-    let mut view_host =
-        CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).expect("faer CPU backend");
+    let mut view_host = CpuBackend::with_threads(1).expect("faer CPU backend");
     view_host
         .with_backend_session(|session| {
             TensorRead::from_tensor(&owned)
@@ -328,8 +317,7 @@ fn faer_eig_view_path_does_not_pool_an_input_copy() {
         .unwrap();
     let view_stats = view_host.buffer_pool_stats().unwrap();
 
-    let mut packed_host =
-        CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).expect("faer CPU backend");
+    let mut packed_host = CpuBackend::with_threads(1).expect("faer CPU backend");
     packed_host
         .with_backend_session(|session| {
             let reversed = base

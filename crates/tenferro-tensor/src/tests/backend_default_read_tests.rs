@@ -742,9 +742,9 @@ impl BackendCachedDot for DefaultReadBackend {}
 impl BackendSession for DefaultReadBackend {}
 
 impl BackendSessionHost for DefaultReadBackend {
-    fn with_backend_session<R: Send>(
+    fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn crate::BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn crate::BackendSession) -> R,
     ) -> Result<R, crate::SessionEntryError> {
         crate::with_session_entry_guard("test backend", || f(self))
     }

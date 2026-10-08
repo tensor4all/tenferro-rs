@@ -17,18 +17,18 @@ documentation = "https://docs.rs/tenferro-ad"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["cpu-faer", "cuda", "webgpu"]
+features = ["native", "cuda", "webgpu"]
 
 [lib]
 name = "tenferro_ad"
 
 [features]
-default = ["cpu-faer"]
-cpu-faer = [
-    "tenferro-cpu/cpu-faer",
+default = ["native"]
+native = [
+    "tenferro-cpu/native",
 ]
-cpu-blas = [
-    "tenferro-cpu/cpu-blas",
+blas = [
+    "tenferro-cpu/blas",
 ]
 blas-openblas = [
     "tenferro-cpu/blas-openblas",
@@ -51,6 +51,7 @@ tenferro-cpu = { path = "../tenferro-cpu", version = "0.7.1", default-features =
 tenferro-gpu = { path = "../tenferro-gpu", version = "0.7.1", default-features = false, optional = true }
 computegraph.workspace = true
 lru.workspace = true
+rayon.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true

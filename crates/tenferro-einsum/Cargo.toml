@@ -17,31 +17,35 @@ documentation = "https://docs.rs/tenferro-einsum"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "cpu-faer", "cuda", "webgpu"]
+features = ["autodiff", "native", "cuda", "webgpu"]
 
 [features]
-default = ["cpu-faer"]
+default = ["native"]
 autodiff = [
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
-cpu-faer = [
-    "tenferro-ad?/cpu-faer",
-    "tenferro-cpu/cpu-faer",
+native = [
+    "tenferro-ad?/native",
+    "tenferro-cpu/native",
 ]
-cpu-blas = [
-    "tenferro-ad?/cpu-blas",
-    "tenferro-cpu/cpu-blas",
+blas = [
+    "tenferro-ad?/blas",
+    "tenferro-cpu/blas",
+    "dep:cpueinsum-blas",
 ]
 blas-openblas = [
+    "blas",
     "tenferro-ad?/blas-openblas",
     "tenferro-cpu/blas-openblas",
 ]
 blas-accelerate = [
+    "blas",
     "tenferro-ad?/blas-accelerate",
     "tenferro-cpu/blas-accelerate",
 ]
 blas-mkl = [
+    "blas",
     "tenferro-ad?/blas-mkl",
     "tenferro-cpu/blas-mkl",
 ]
@@ -71,6 +75,9 @@ tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-ma
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.7.1", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.1", default-features = false }
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.7.1", default-features = false }
+tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.7.1" }
+cpueinsum.workspace = true
+cpueinsum-blas = { workspace = true, optional = true }
 tenferro-gpu = { path = "../tenferro-gpu", version = "0.7.1", default-features = false, optional = true }
 computegraph.workspace = true
 lru.workspace = true

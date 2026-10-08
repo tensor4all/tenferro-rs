@@ -1,19 +1,23 @@
 //! Adapter from tenferro's CPU session to the extracted LAPACK/BLAS provider (`tlinalg-blas`).
 //!
-//! The host keeps policy, exactly as on the faer route: the batch strategy is admitted here, and
-//! the provider is called once for the whole batch. Unlike the faer adapter there are no lanes and
-//! no parallelism token: the vendor owns threading inside every call, so tenferro never fans out
-//! around it and `tlinalg-blas` loops over the batch serially. Pooled scratch reaches the provider
-//! through [`super::tlinalg_workspace::TlinalgWorkspace`].
+//! The provider owns batch execution, scratch requirements and vendor calls.
+//! Vendor/application configuration owns threading. Tenferro supplies pooled
+//! storage through [`super::tlinalg_workspace::TlinalgWorkspace`], not lane policy.
+//!
+//! Unlike the faer adapter, this one passes no parallelism token, because
+//! `tlinalg-blas` has none to take: its batch loop is serial and the vendor call
+//! inside it owns its own threading, so a Rayon fan-out around it would fight the
+//! vendor's pool. Tenferro places the call on the coordinator thread and gives
+//! the provider only pooled scratch; the caller-affinity guard has already
+//! narrowed that thread's mask.
 
-#![cfg(feature = "cpu-blas")]
+#![cfg(feature = "blas")]
 
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::CpuExecutionContext;
 use tlinalg_blas::lu::{lu_factor, lu_factor_solve, lu_solve_prepared};
 use tlinalg_blas::{LapackScalar, Op};
 
-use super::linalg::blas::check_packed_lu_batch_strategy;
 use super::tlinalg_error::map_blas_error;
 use super::tlinalg_workspace::TlinalgWorkspace;
 
@@ -24,7 +28,7 @@ pub(crate) fn workspace(pool: &mut BufferPool) -> TlinalgWorkspace<'_> {
 
 /// Factor `batch` compact `m x n` matrices in place.
 pub(crate) fn factor_batch<T: LapackScalar>(
-    ctx: &CpuExecutionContext<'_>,
+    _ctx: &CpuExecutionContext<'_>,
     op: Op,
     m: usize,
     n: usize,
@@ -32,14 +36,13 @@ pub(crate) fn factor_batch<T: LapackScalar>(
     pivots: &mut [i32],
     parity: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    check_packed_lu_batch_strategy(ctx, op.as_str(), parity.len())?;
     lu_factor(op, m, n, lu, pivots, parity).map_err(|error| map_blas_error(op, error))
 }
 
 /// Solve `op(A) X = B` for `batch` compact systems from packed factors.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn solve_prepared_batch<T: LapackScalar>(
-    ctx: &CpuExecutionContext<'_>,
+    _ctx: &CpuExecutionContext<'_>,
     op: Op,
     n: usize,
     nrhs: usize,
@@ -49,8 +52,6 @@ pub(crate) fn solve_prepared_batch<T: LapackScalar>(
     transpose_a: bool,
     conjugate_a: bool,
 ) -> tenferro_tensor::Result<()> {
-    let batch = pivots.len().checked_div(n).unwrap_or(0);
-    check_packed_lu_batch_strategy(ctx, op.as_str(), batch)?;
     lu_solve_prepared(
         op,
         n,
@@ -66,7 +67,7 @@ pub(crate) fn solve_prepared_batch<T: LapackScalar>(
 
 /// Factor and solve `A X = B` for `batch` compact systems, keeping the packed factors.
 pub(crate) fn factor_solve_batch<T: LapackScalar>(
-    ctx: &CpuExecutionContext<'_>,
+    _ctx: &CpuExecutionContext<'_>,
     op: Op,
     n: usize,
     nrhs: usize,
@@ -74,8 +75,6 @@ pub(crate) fn factor_solve_batch<T: LapackScalar>(
     pivots: &mut [i32],
     output: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    let batch = pivots.len().checked_div(n).unwrap_or(0);
-    check_packed_lu_batch_strategy(ctx, op.as_str(), batch)?;
     lu_factor_solve(op, n, nrhs, packed_lu, pivots, output)
         .map_err(|error| map_blas_error(op, error))
 }

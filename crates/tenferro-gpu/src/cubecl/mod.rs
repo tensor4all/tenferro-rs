@@ -12,7 +12,7 @@
 //! tenferro-gpu = { version = "...", features = ["cuda"] }
 //! ```
 //!
-//! You must also enable a CPU backend (`cpu-faer` or `cpu-blas`); the CubeCL backend
+//! You must also enable a CPU backend (`native` or `blas`); the CubeCL backend
 //! complements the CPU path but does not replace it.
 //!
 //! # Prerequisites

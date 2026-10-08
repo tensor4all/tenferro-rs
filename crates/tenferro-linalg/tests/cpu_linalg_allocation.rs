@@ -14,13 +14,13 @@
 //! indicative only: the balance also subtracts frees of memory that was allocated before the
 //! window was armed, so it is not a peak-memory measurement.
 
-#![cfg(feature = "cpu-faer")]
+#![cfg(feature = "native")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBackendKind};
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_linalg::{LinalgBackend, RankRevealingQrOptions, TensorLinalgExt};
 use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TypedTensor};
 
@@ -103,12 +103,12 @@ fn measure(operation: impl FnOnce()) -> AllocationReport {
 }
 
 fn faer_backend() -> CpuBackend {
-    CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).expect("faer CPU backend")
+    CpuBackend::with_threads(1).expect("faer CPU backend")
 }
 
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 fn blas_backend() -> CpuBackend {
-    CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).expect("BLAS CPU backend")
+    CpuBackend::with_threads(1).expect("BLAS CPU backend")
 }
 
 fn sample_real(n: usize) -> Vec<f64> {
@@ -360,7 +360,7 @@ fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
         },
     );
 
-    #[cfg(feature = "cpu-blas")]
+    #[cfg(feature = "blas")]
     {
         let mut blas = blas_backend();
         let packed = blas
@@ -507,7 +507,7 @@ fn check_remaining_families(host: &mut CpuBackend, kind: &str, failures: &mut Ve
 fn remaining_linalg_families_keep_their_steady_state_allocation_counts() {
     let mut failures = Vec::new();
     check_remaining_families(&mut faer_backend(), "faer", &mut failures);
-    #[cfg(feature = "cpu-blas")]
+    #[cfg(feature = "blas")]
     check_remaining_families(&mut blas_backend(), "blas", &mut failures);
     assert!(
         failures.is_empty(),

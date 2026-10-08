@@ -3873,16 +3873,16 @@ pub trait BackendSessionHost: BackendRuntimeCache {
     /// for a mismatched execution scope or executor declaration,
     /// [`SessionEntryError::ResourcePoisoned`] for poisoned admission state, and
     /// [`SessionEntryError::Executor`] when the executor cannot be entered.
-    fn with_backend_session<R: Send>(
+    fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, SessionEntryError>;
 
     #[doc(hidden)]
-    fn with_backend_session_cached<R: Send>(
+    fn with_backend_session_cached<R>(
         &mut self,
         _cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, SessionEntryError> {
         self.with_backend_session(f)
     }

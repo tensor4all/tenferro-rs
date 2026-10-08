@@ -511,9 +511,9 @@ impl TensorDeviceTransfer for RecordingBackend {
 impl BackendCachedDot for RecordingBackend {}
 #[cfg(test)]
 impl BackendSessionHost for RecordingBackend {
-    fn with_backend_session<R: Send>(
+    fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.sessions.fetch_add(1, Ordering::Relaxed);
         Ok(f(self))
@@ -527,9 +527,9 @@ impl BackendRuntimeCache for EagerBackend {
 }
 
 impl BackendSessionHost for EagerBackend {
-    fn with_backend_session<R: Send>(
+    fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         // Hand the caller the *concrete* backend's session. The composite enum
         // is not a session: its read halves deliberately reproduce the

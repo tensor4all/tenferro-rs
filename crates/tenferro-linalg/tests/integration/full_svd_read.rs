@@ -2,14 +2,14 @@
 //!
 //! One public call must behave the same on every compiled CPU provider, so the
 //! numeric tests select each provider explicitly instead of relying on the
-//! default selection: a build with both `cpu-faer` and `cpu-blas` exercises the
+//! default selection: a build with both `native` and `blas` exercises the
 //! same assertions twice. Only the pool-ownership witness is faer-specific,
 //! because packing at the provider boundary is what it measures.
 
-#![cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
+#![cfg(any(feature = "native", feature = "blas"))]
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{TensorLinalgExt, TensorReadLinalgExt, TypedTensorLinalgExt};
 use tenferro_tensor::{
     BackendSessionHost, DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView,
@@ -18,25 +18,15 @@ use tenferro_tensor::{
 
 /// Every CPU linalg provider compiled into this build.
 fn providers() -> Vec<(&'static str, CpuBackend)> {
-    const KINDS: &[(&str, CpuBackendKind)] = &[
-        #[cfg(feature = "cpu-faer")]
-        ("faer", CpuBackendKind::Faer),
-        #[cfg(feature = "cpu-blas")]
-        ("blas", CpuBackendKind::Blas),
-    ];
-    KINDS
-        .iter()
-        .map(|&(name, kind)| {
-            let backend = CpuBackend::with_threads_and_kind(1, kind)
-                .unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
-            (name, backend)
-        })
-        .collect()
+    let name = tenferro_cpu::cpu_provider_id();
+    let backend =
+        CpuBackend::with_threads(1).unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
+    vec![(name, backend)]
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn faer_backend() -> CpuBackend {
-    CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).expect("faer CPU backend")
+    CpuBackend::with_threads(1).expect("faer CPU backend")
 }
 
 /// Deterministic, well-scaled column-major test data with no repeated singular
@@ -450,7 +440,7 @@ fn full_svd_read_rejects_unsupported_dtypes_before_provider_entry() {
     }
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 #[test]
 fn faer_view_path_does_not_pool_an_input_copy() {
     // Same shape, same outputs, two eligibility stories. A compact owned read

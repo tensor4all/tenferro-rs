@@ -730,9 +730,9 @@ impl BackendSession for CudaExecSession<'_> {
 }
 
 impl BackendSessionHost for CudaBackend {
-    fn with_backend_session<R: Send>(
+    fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         let mut session = CudaExecSession {
             backend: self,

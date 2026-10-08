@@ -457,20 +457,10 @@ fn eager_borrowed_compact_qr_append_import_and_ad() {
 
 /// Every CPU linalg provider compiled into this build.
 fn full_q_providers() -> Vec<(&'static str, CpuBackend)> {
-    const KINDS: &[(&str, tenferro_cpu::CpuBackendKind)] = &[
-        #[cfg(feature = "cpu-faer")]
-        ("faer", tenferro_cpu::CpuBackendKind::Faer),
-        #[cfg(feature = "cpu-blas")]
-        ("blas", tenferro_cpu::CpuBackendKind::Blas),
-    ];
-    KINDS
-        .iter()
-        .map(|&(name, kind)| {
-            let backend = CpuBackend::with_threads_and_kind(1, kind)
-                .unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
-            (name, backend)
-        })
-        .collect()
+    let name = tenferro_cpu::cpu_provider_id();
+    let backend =
+        CpuBackend::with_threads(1).unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
+    vec![(name, backend)]
 }
 
 /// A tall, full-column-rank sample whose complement is two-dimensional.

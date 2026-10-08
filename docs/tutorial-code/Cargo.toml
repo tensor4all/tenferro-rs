@@ -6,23 +6,23 @@ license.workspace = true
 publish = false
 
 [features]
-default = ["cpu-faer", "xla-pjrt", "doc-snippets"]
-cpu-faer = [
-    "tenferro-ad/cpu-faer",
-    "tenferro-cpu/cpu-faer",
-    "tenferro-linalg/cpu-faer",
+default = ["native", "xla-pjrt", "doc-snippets"]
+native = [
+    "tenferro-ad/native",
+    "tenferro-cpu/native",
+    "tenferro-linalg/native",
     "dep:tenferro-tensor",
 ]
-# cpu-blas selects tenferro's BLAS/LAPACK-backed operation path. The direct
+# blas selects tenferro's BLAS/LAPACK-backed operation path. The direct
 # cblas-sys and lapack dependencies are the downstream interop surface for
 # issue #1602: they make the native entry points callable from tutorial code.
 # The native provider library itself is supplied either by a provider feature
 # such as blas-openblas below, or by the build environment (e.g. CI links the
 # system OpenBLAS through RUSTFLAGS).
-cpu-blas = [
-    "tenferro-ad/cpu-blas",
-    "tenferro-cpu/cpu-blas",
-    "tenferro-linalg/cpu-blas",
+blas = [
+    "tenferro-ad/blas",
+    "tenferro-cpu/blas",
+    "tenferro-linalg/blas",
     "dep:tenferro-tensor",
     "dep:cblas-sys",
     "dep:lapack",
@@ -35,7 +35,7 @@ cpu-blas = [
 # empty rlib would be pruned from the final link together with its native
 # library metadata.
 blas-openblas = [
-    "cpu-blas",
+    "blas",
     "tenferro-cpu/blas-openblas",
     "dep:openblas-src",
 ]
@@ -86,12 +86,12 @@ path = "src/bin/typed_tensor_non_ad.rs"
 [[bin]]
 name = "faer_interop"
 path = "src/bin/faer_interop.rs"
-required-features = ["cpu-faer"]
+required-features = ["native"]
 
 [[bin]]
 name = "blas_interop"
 path = "src/bin/blas_interop.rs"
-required-features = ["cpu-blas"]
+required-features = ["blas"]
 
 [[bin]]
 name = "storage_element_access"
