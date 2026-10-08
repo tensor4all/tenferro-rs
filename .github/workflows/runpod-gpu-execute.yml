@@ -691,9 +691,11 @@ jobs:
           cuda_tree_has_runtime_libs "${cuda_path}"
           cutensor_path="${TENFERRO_CI_CACHE_ROOT}/cutensor-${CUTENSOR_VERSION}/lib/libcutensor.so.2"
           test -e "$cutensor_path"
-          echo "CUDA_PATH=${cuda_path}" >> "${GITHUB_ENV}"
-          echo "LD_LIBRARY_PATH=${cuda_path}/lib64:$(dirname "$cutensor_path"):${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
-          echo "TENFERRO_CUTENSOR_PATH=${cutensor_path}" >> "${GITHUB_ENV}"
+          {
+            echo "CUDA_PATH=${cuda_path}"
+            echo "LD_LIBRARY_PATH=${cuda_path}/lib64:$(dirname "$cutensor_path"):${LD_LIBRARY_PATH:-}"
+            echo "TENFERRO_CUTENSOR_PATH=${cutensor_path}"
+          } >> "${GITHUB_ENV}"
 
       - name: Verify loaded NVRTC version
         timeout-minutes: 1
