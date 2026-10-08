@@ -211,3 +211,12 @@ The CI profile measures this CI workload, not release kernel performance.
 All six passed and their pods were deleted. Confirmation applies to the
 frozen comparison above. Post-merge production execution remains required
 because its workflow integration is newer than the experimental controller.
+
+PR review found that hosted preparation called both installers even after
+restoring valid caches. Preparation now verifies the cuTENSOR shared library,
+SDK completion marker and vendor libraries, and compiles the CubeCL headers
+with real NVRTC before reusing a restored SDK. Only a missing or incomplete
+tree is installed. Fixture coverage confirms a warm cache invokes no
+installer and missing cuTENSOR, SDK marker, vendor library or header repairs
+only the affected tree. This changes hosted preparation, not the frozen SVD
+comparison or the paid workload.

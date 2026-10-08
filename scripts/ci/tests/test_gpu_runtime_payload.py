@@ -20,11 +20,14 @@ class RuntimePayloadTests(unittest.TestCase):
             scripts.mkdir(parents=True)
             (scripts / 'install_cutensor.sh').write_text('''#!/bin/bash
 set -eu
+printf "cutensor\\n" >> "$FIXTURE_INSTALL_LOG"
 mkdir -p "$2/lib"
 printf cutensor > "$2/lib/libcutensor.so.2"
 ''')
             (scripts / 'install_cuda_runtime_tree.sh').write_text('''#!/bin/bash
 set -eu
+printf "cuda-%s\\n" "$1" >> "$FIXTURE_INSTALL_LOG"
+rm -rf "$2"
 mkdir -p "$2/targets/x86_64-linux/lib" "$2/targets/x86_64-linux/include"
 ln -s targets/x86_64-linux/lib "$2/lib64"
 ln -s targets/x86_64-linux/include "$2/include"
@@ -60,7 +63,8 @@ else:
                 path.chmod(0o755)
             environment = dict(os.environ, PATH=f'{binaries}:{os.environ["PATH"]}',
                                TENFERRO_CI_CACHE_ROOT=str(root / 'cache'),
-                               CUTENSOR_VERSION='2.6.0.4', JAX_CUDA12_PJRT_VERSION='0.10.2',
+                               CUTENSOR_VERSION='2.6.0.4', FIXTURE_INSTALL_LOG=str(root / 'install.log'),
+                               JAX_CUDA12_PJRT_VERSION='0.10.2',
                                NVIDIA_CUDNN_CU12_VERSION='9.23.2.1',
                                NVIDIA_CUDA_NVCC_CU12_VERSION='12.9.86')
             result = subprocess.run(['bash', str(ROOT / 'scripts/ci/prepare_gpu_execution_payload.sh')],
@@ -112,6 +116,32 @@ else:
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((receiver / 'installed').exists())
+
+            install_log = root / 'install.log'
+            self.assertEqual(install_log.read_text().splitlines(),
+                             ['cutensor', 'cuda-12.6', 'cuda-12.8'])
+            # Reusing a complete restored tree must not invoke either installer.
+            # Missing markers, libraries, and headers rebuild only the bad tier.
+            scenarios = [
+                ('warm', None, []),
+                ('cutensor-miss', 'cutensor-2.6.0.4/lib/libcutensor.so.2', ['cutensor']),
+                ('marker-miss', 'cuda-runtime-12.6/.seed-complete', ['cuda-12.6']),
+                ('library-miss', 'cuda-runtime-12.8/lib64/libcublas.so.12', ['cuda-12.8']),
+                ('header-miss', 'cuda-runtime-12.8/include/cuda_runtime.h', ['cuda-12.8']),
+            ]
+            for name, missing, expected_installs in scenarios:
+                with self.subTest(cache_state=name):
+                    install_log.write_text('')
+                    if missing:
+                        (root / 'cache' / missing).unlink()
+                    work = root / name
+                    work.mkdir()
+                    shutil.copytree(scripts, work / 'scripts/ci')
+                    result = subprocess.run(
+                        ['bash', str(ROOT / 'scripts/ci/prepare_gpu_execution_payload.sh')],
+                        cwd=work, env=environment, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(install_log.read_text().splitlines(), expected_installs)
 
     def test_preparation_is_a_required_read_only_hosted_prerequisite(self):
         parent = (ROOT / '.github/workflows/runpod-gpu-test.yml').read_text()

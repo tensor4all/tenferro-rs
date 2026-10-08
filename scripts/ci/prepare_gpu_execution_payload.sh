@@ -5,18 +5,30 @@ payload="$PWD/runtime-payload"
 mkdir -p "$payload/bin" "$payload/wheels" "$payload/opt/tenferro-ci" "$payload/usr/local"
 cp "$(rustup which cargo)" "$payload/bin/cargo"
 cp "$(command -v cargo-nextest)" "$payload/bin/cargo-nextest"
-bash scripts/ci/install_cutensor.sh "$CUTENSOR_VERSION" "$TENFERRO_CI_CACHE_ROOT/cutensor-$CUTENSOR_VERSION"
+cutensor_root="$TENFERRO_CI_CACHE_ROOT/cutensor-$CUTENSOR_VERSION"
+if [ ! -s "$cutensor_root/lib/libcutensor.so.2" ]; then
+  bash scripts/ci/install_cutensor.sh "$CUTENSOR_VERSION" "$cutensor_root"
+fi
+test -s "$cutensor_root/lib/libcutensor.so.2"
 cp -a "$TENFERRO_CI_CACHE_ROOT/cutensor-$CUTENSOR_VERSION" "$payload/opt/tenferro-ci/"
 python3 -m pip download --only-binary=:all: --no-deps --python-version 312 --platform manylinux_2_27_x86_64 --platform manylinux2014_x86_64 --implementation cp --abi cp312 \
   --dest "$payload/wheels" "jax-cuda12-pjrt==$JAX_CUDA12_PJRT_VERSION" \
   "nvidia-cudnn-cu12==$NVIDIA_CUDNN_CU12_VERSION" "nvidia-cuda-nvcc-cu12==$NVIDIA_CUDA_NVCC_CU12_VERSION"
+cuda_tree_ready() {
+  local root="$1" lib
+  test -f "$root/.seed-complete" || return 1
+  for lib in nvrtc cublas cusolver cusparse; do
+    local candidates=("$root"/lib64/lib"${lib}".so*)
+    test -s "${candidates[0]}" || return 1
+  done
+  python3 scripts/ci/check_cuda_headers.py --cuda-root "$root"
+}
 for runtime in 12.6 12.8; do
   sdk_root="$TENFERRO_CI_CACHE_ROOT/cuda-runtime-$runtime"
-  bash scripts/ci/install_cuda_runtime_tree.sh "$runtime" "$sdk_root"
-  for lib in nvrtc cublas cusolver cusparse; do
-    compgen -G "$sdk_root/lib64/lib${lib}.so*" >/dev/null
-  done
-  python3 scripts/ci/check_cuda_headers.py --cuda-root "$sdk_root"
+  if ! cuda_tree_ready "$sdk_root"; then
+    bash scripts/ci/install_cuda_runtime_tree.sh "$runtime" "$sdk_root"
+    cuda_tree_ready "$sdk_root"
+  fi
   transfer="$PWD/runtime-sdk-$runtime"
   mkdir -p "$transfer"
   tar --zstd -cf "$transfer/sdk.tar.zst" -C "$sdk_root" .
