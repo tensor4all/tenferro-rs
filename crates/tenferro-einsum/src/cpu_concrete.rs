@@ -104,6 +104,7 @@ pub(crate) fn execute(
     execute_cached(session, inputs, tree, None)
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) fn execute_cached(
     session: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
@@ -147,13 +148,25 @@ pub(crate) fn execute_cached(
         })
     })
 }
+#[cfg(not(any(feature = "native", feature = "blas")))]
+pub(crate) fn execute_cached(
+    _session: &mut dyn BackendSession,
+    _inputs: &[TensorRead<'_>],
+    _tree: &ContractionTree,
+    _cache: Option<&Cache>,
+) -> Option<tenferro_tensor::Result<Tensor>> {
+    // No compiled CPU numerical backend: let the caller take its own route.
+    None
+}
 
+#[cfg(any(feature = "native", feature = "blas"))]
 struct Execution<'a, 'pool> {
     exec: &'a cpueinsum::Exec<'pool>,
     workspaces: &'a tenferro_cpu::ContractionWorkspaces,
     max_retained_bytes: usize,
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 fn run<T: Scalar>(
     execution: &Execution<'_, '_>,
     tree: &ContractionTree,
@@ -178,6 +191,7 @@ fn run<T: Scalar>(
     Ok(Tensor::from_typed(output))
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 fn run_into<T: Scalar>(
     execution: &Execution<'_, '_>,
     tree: &ContractionTree,
@@ -303,6 +317,7 @@ pub(crate) fn supports(session: &mut dyn BackendSession, inputs: &[TensorRead<'_
         && with_cpu_exec_session(session, |_| ()).is_some()
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) fn execute_into(
     session: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
@@ -358,6 +373,19 @@ pub(crate) fn execute_into(
         }
         dispatch!(F32 => f32, F64 => f64, C32 => tenferro_tensor::Complex<f32>, C64 => tenferro_tensor::Complex<f64>)
     })).ok_or_else(|| tenferro_tensor::Error::runtime_state("CPU einsum", "CPU session required"))?
+}
+#[cfg(not(any(feature = "native", feature = "blas")))]
+pub(crate) fn execute_into(
+    _session: &mut dyn BackendSession,
+    _inputs: &[TensorRead<'_>],
+    _tree: &ContractionTree,
+    _cache: Option<&Cache>,
+    _out: TensorWrite<'_>,
+) -> tenferro_tensor::Result<()> {
+    Err(tenferro_tensor::Error::unsupported(
+        "CPU einsum",
+        "this build selects no CPU numerical backend",
+    ))
 }
 
 #[cfg(test)]

@@ -181,12 +181,14 @@ struct Key {
     lhs_conj: bool,
     rhs_conj: bool,
 }
+#[cfg(any(feature = "native", feature = "blas"))]
 struct CachedBinary {
     key: Key,
     config: DotGeneralConfig,
     plan: Box<dyn Any + Send + Sync>,
 }
 #[derive(Default)]
+#[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) struct BinaryCache {
     slots: Vec<Option<CachedBinary>>,
     hits: u64,
@@ -194,6 +196,7 @@ pub(crate) struct BinaryCache {
     evictions: u64,
     clears: u64,
 }
+#[cfg(any(feature = "native", feature = "blas"))]
 impl fmt::Debug for BinaryCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BinaryCache")
@@ -201,6 +204,7 @@ impl fmt::Debug for BinaryCache {
             .finish()
     }
 }
+#[cfg(any(feature = "native", feature = "blas"))]
 impl BinaryCache {
     pub(crate) fn clear(&mut self) {
         self.slots.clear();
@@ -344,6 +348,7 @@ pub(crate) fn validate_host_output(op: &'static str, out: &TensorWrite<'_>) -> c
     crate::validate_cpu_host_write(op, "output", out)
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 fn key<T: Scalar>(
     lhs: &TypedTensorView<'_, T>,
     rhs: &TypedTensorView<'_, T>,
@@ -360,6 +365,7 @@ fn key<T: Scalar>(
     }
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 fn initialized<T: Scalar>(
     exec: &Exec<'_>,
@@ -412,6 +418,7 @@ fn initialized<T: Scalar>(
         })
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 fn fresh<T: Scalar>(
     exec: &Exec<'_>,
@@ -460,6 +467,7 @@ fn fresh<T: Scalar>(
         })
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_fresh(
     exec: &Exec<'_>,
@@ -497,6 +505,7 @@ fn writable_view<'a>(out: TensorWrite<'a>, op: &'static str) -> crate::Result<Te
     })
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_into(
     exec: &Exec<'_>,
@@ -582,4 +591,59 @@ mod retention_tests {
         assert!(unwind.is_err());
         assert_eq!(resources.workspace().retained_bytes(), 0);
     }
+}
+
+/// The typed refusal of every numerical route in a no-backend build.
+#[cfg(not(any(feature = "native", feature = "blas")))]
+pub(crate) fn no_backend(op: &'static str) -> crate::Error {
+    crate::Error::unsupported(
+        op,
+        "this build selects no CPU numerical backend; enable the `native` or `blas` feature",
+    )
+}
+
+/// Plan cache placeholder for a no-backend build.
+#[cfg(not(any(feature = "native", feature = "blas")))]
+#[derive(Debug, Default)]
+pub(crate) struct BinaryCache;
+
+#[cfg(not(any(feature = "native", feature = "blas")))]
+impl BinaryCache {
+    pub(crate) fn clear(&mut self) {}
+    pub(crate) fn stats(&self) -> tenferro_tensor::CacheStats {
+        tenferro_tensor::CacheStats::default()
+    }
+    pub(crate) fn set_capacity(&mut self, _capacity: usize) {}
+}
+
+#[cfg(not(any(feature = "native", feature = "blas")))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dot_fresh(
+    _exec: &Exec<'_>,
+    _buffers: &mut BufferPool,
+    _cache: &mut crate::gemm::GemmAnalysisCache,
+    _slot: Option<usize>,
+    _lhs: TensorRead<'_>,
+    _rhs: TensorRead<'_>,
+    _config: &DotGeneralConfig,
+    _accumulation: DotGeneralAccumulation,
+    _shape: Vec<usize>,
+) -> crate::Result<Tensor> {
+    Err(no_backend("dot_general"))
+}
+
+#[cfg(not(any(feature = "native", feature = "blas")))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dot_into(
+    _exec: &Exec<'_>,
+    _buffers: &mut BufferPool,
+    _cache: &mut crate::gemm::GemmAnalysisCache,
+    _slot: Option<usize>,
+    _lhs: TensorRead<'_>,
+    _rhs: TensorRead<'_>,
+    _config: &DotGeneralConfig,
+    _accumulation: DotGeneralAccumulation,
+    _out: TensorWrite<'_>,
+) -> crate::Result<()> {
+    Err(no_backend("dot_general"))
 }

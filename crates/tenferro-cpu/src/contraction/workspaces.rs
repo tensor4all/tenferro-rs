@@ -54,8 +54,9 @@ impl ContractionWorkspaces {
     ///
     /// # Errors
     ///
-    /// Returns a typed backend error when the store is already borrowed by a
-    /// concurrent or recursive execution, or when the caller's operation fails.
+    /// Returns [`tenferro_tensor::Error::BackendSource`] when the store is already
+    /// borrowed by a concurrent or recursive execution, and otherwise returns the
+    /// error produced by `op`.
     pub fn with_scratch<T: cpueinsum::Scalar, R>(
         &self,
         len: usize,

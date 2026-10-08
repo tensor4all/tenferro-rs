@@ -10,6 +10,7 @@ default = ["native", "xla-pjrt", "doc-snippets"]
 native = [
     "tenferro-ad/native",
     "tenferro-cpu/native",
+    "tenferro-einsum/native",
     "tenferro-linalg/native",
     "dep:tenferro-tensor",
 ]
@@ -22,6 +23,7 @@ native = [
 blas = [
     "tenferro-ad/blas",
     "tenferro-cpu/blas",
+    "tenferro-einsum/blas",
     "tenferro-linalg/blas",
     "dep:tenferro-tensor",
     "dep:cblas-sys",
@@ -37,6 +39,7 @@ blas = [
 blas-openblas = [
     "blas",
     "tenferro-cpu/blas-openblas",
+    "tenferro-einsum/blas-openblas",
     "dep:openblas-src",
 ]
 xla-pjrt = ["tenferro-xla/pjrt"]

@@ -870,7 +870,6 @@ fn fallible_backend_construction_preserves_topology_error_category() {
 #[test]
 fn explicit_placement_reports_engine_construction_error_when_unsupported() {
     let error = CpuBackend::builder()
-        .unwrap()
         .threads(1)
         .unwrap()
         .build()
@@ -908,4 +907,66 @@ fn elementwise_into_fallback_returns_its_staged_result_to_the_pool() {
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[11.0, 22.0, 33.0, 44.0]);
     assert_eq!(buffers.len(), 1, "the staged result must be reclaimed");
+}
+
+#[test]
+fn builder_selects_a_tenferro_owned_engine_and_cache_controls_stay_bounded() {
+    let allowed = crate::process_cpu_affinity()
+        .unwrap_or_else(|| crate::CpuSet::singleton(crate::CpuId::new(0)));
+    let cpus = crate::CpuSet::singleton(allowed.as_slice()[0]);
+
+    let mut backend = CpuBackend::builder()
+        .cpus(cpus)
+        .threads(1)
+        .unwrap()
+        .worker_stack(1 << 20)
+        .unwrap()
+        .buffer_limit(0)
+        .build()
+        .unwrap();
+    assert_eq!(backend.num_threads(), 1);
+    assert_eq!(backend.buffer_pool_limit_bytes(), 0);
+    assert_eq!(backend.placement(), CpuPlacement::Auto);
+
+    // A prepared contraction populates the plan cache; the cache controls report
+    // and release it without touching the engine's retained buffers.
+    let a = Tensor::from_vec_col_major(vec![4, 4], (0..16).map(|i| i as f64).collect::<Vec<_>>())
+        .unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+    let mut cache = gemm::GemmAnalysisCache::with_capacity(2);
+    assert_eq!(cache.capacity(), 2);
+    backend
+        .with_backend_session_cached(&mut cache, |session| {
+            session.dot_general_cached(Some(0), &a, &a, &config)
+        })
+        .unwrap()
+        .unwrap();
+    let populated = tenferro_tensor::RuntimeCacheControl::stats(&cache);
+    assert!(populated.entries >= 1, "{populated:?}");
+    assert!(populated.misses >= 1, "{populated:?}");
+
+    cache.set_capacity(0);
+    assert_eq!(cache.capacity(), 0);
+    let evicted = tenferro_tensor::RuntimeCacheControl::stats(&cache);
+    assert!(evicted.evictions >= 1, "{evicted:?}");
+    tenferro_tensor::RuntimeCacheControl::clear(&mut cache);
+    let cleared = tenferro_tensor::RuntimeCacheControl::stats(&cache);
+    assert_eq!(cleared.entries, 0);
+    assert_eq!(cleared.clears, 1);
+
+    // The owner-level controls stay consistent on a one-thread build.
+    assert!(backend.reset_buffer_pool().is_ok());
+    assert!(backend.runtime_cache_stats().is_ok());
+    assert!(backend.clear_runtime_caches().is_ok());
+}
+
+#[test]
+fn builder_rejects_a_zero_thread_count_and_a_tiny_worker_stack() {
+    assert!(CpuBackend::builder().threads(0).is_err());
+    assert!(CpuBackend::builder().worker_stack(1 << 10).is_err());
 }

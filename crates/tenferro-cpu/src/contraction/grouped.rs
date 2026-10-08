@@ -1,10 +1,12 @@
 //! Initialized grouped outputs; offsets are relative to compact logical buffers.
 
 use super::{
-    BufferPool, ContractionScalar, Exec, PlanConfig, Scalar, TensorRead, TensorView, TensorViewMut,
+    BufferPool, ContractionScalar, Exec, PlanConfig, TensorRead, TensorView, TensorViewMut,
     TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
 use crate::contraction::LowerContractionError;
+#[cfg(any(feature = "native", feature = "blas"))]
+use crate::contraction::Scalar;
 use cpueinsum::tprims_contract::api::Op;
 #[cfg(feature = "native")]
 use cpueinsum::GroupedPlan;
@@ -22,6 +24,7 @@ struct Entry {
     plan: Box<dyn Any + Send + Sync>,
 }
 #[derive(Default)]
+#[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) struct GroupCache {
     slots: Vec<Option<Entry>>,
     hits: u64,
@@ -29,6 +32,7 @@ pub(crate) struct GroupCache {
     evictions: u64,
     clears: u64,
 }
+#[cfg(any(feature = "native", feature = "blas"))]
 impl fmt::Debug for GroupCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GroupCache")
@@ -36,6 +40,7 @@ impl fmt::Debug for GroupCache {
             .finish()
     }
 }
+#[cfg(any(feature = "native", feature = "blas"))]
 impl GroupCache {
     pub(crate) fn clear(&mut self) {
         self.slots.clear();
@@ -73,6 +78,7 @@ impl GroupCache {
         self.slots.truncate(capacity);
         self.slots.shrink_to(capacity);
     }
+    #[cfg(any(feature = "native", feature = "blas"))]
     fn with_plan<T: Scalar, R>(
         &mut self,
         slot: Option<usize>,
@@ -160,6 +166,7 @@ fn range(shape: &[usize], offset: isize) -> crate::Result<std::ops::Range<usize>
         .ok_or_else(|| crate::Error::runtime_state(OP, "compact buffer span overflow"))?;
     Ok(start..end)
 }
+#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 fn typed<T: Scalar>(
     exec: &Exec<'_>,
@@ -214,6 +221,7 @@ fn typed<T: Scalar>(
             result
         })
 }
+#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute(
     exec: &Exec<'_>,
@@ -245,4 +253,33 @@ pub(crate) fn execute(
         } };
     }
     dispatch!(F32, F64, C32, C64)
+}
+
+/// Plan cache placeholder for a no-backend build.
+#[cfg(not(any(feature = "native", feature = "blas")))]
+#[derive(Debug, Default)]
+pub(crate) struct GroupCache;
+
+#[cfg(not(any(feature = "native", feature = "blas")))]
+impl GroupCache {
+    pub(crate) fn clear(&mut self) {}
+    pub(crate) fn stats(&self) -> tenferro_tensor::CacheStats {
+        tenferro_tensor::CacheStats::default()
+    }
+    pub(crate) fn set_capacity(&mut self, _capacity: usize) {}
+}
+
+#[cfg(not(any(feature = "native", feature = "blas")))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute(
+    _exec: &Exec<'_>,
+    _buffers: &mut BufferPool,
+    _cache: &mut crate::gemm::GemmAnalysisCache,
+    _slot: Option<usize>,
+    _lhs: TensorRead<'_>,
+    _rhs: TensorRead<'_>,
+    _config: &GroupedGemmConfig<'_>,
+    _out: TensorWrite<'_>,
+) -> crate::Result<()> {
+    Err(crate::contraction::no_backend(OP))
 }

@@ -128,8 +128,11 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
-#[cfg(not(any(feature = "native", feature = "blas")))]
-compile_error!("enable exactly one CPU backend: native or blas");
+// A build with neither backend compiles: the CPU numerical routes report a
+// typed `Unsupported` instead. `native` is the default feature, so a normal
+// dependency always gets a backend, and selecting `blas` alone is the supported
+// alternative. This keeps any subset of the stack compilable, which is what
+// consumers that select a backend crate by crate rely on.
 #[cfg(all(feature = "native", feature = "blas"))]
 compile_error!("native and blas are mutually exclusive; use --no-default-features for blas");
 
@@ -206,6 +209,10 @@ pub fn cpu_provider_id() -> &'static str {
     #[cfg(feature = "blas")]
     {
         "tenferro.cpu.blas"
+    }
+    #[cfg(all(not(feature = "native"), not(feature = "blas")))]
+    {
+        "tenferro.cpu.none"
     }
 }
 

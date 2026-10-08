@@ -85,27 +85,44 @@ pub(crate) struct CallerAffinityGuard {
 
 impl CallerAffinityGuard {
     pub(crate) fn enter(cpus: Option<&CpuSet>) -> Result<Self, CpuAffinityError> {
-        let mut guard = Self {
-            previous: None,
-            _caller: std::marker::PhantomData,
-        };
-        let Some(cpus) = cpus else { return Ok(guard) };
-        let previous = process_cpu_affinity().ok_or(CpuAffinityError::VerificationUnavailable)?;
-        // A selected domain may narrow the caller's mask, never widen it.
-        let target = previous
-            .intersection(cpus)
-            .ok_or(CpuAffinityError::EmptyMask)?;
-        if previous == target {
-            return Ok(guard);
-        }
-        guard.previous = Some(previous);
-        let observed = SystemThreadAffinity.confine_current(&target)?;
-        if observed != target {
-            return Err(CpuAffinityError::Verification {
-                observed: observed.as_slice().to_vec(),
+        let Some(cpus) = cpus else {
+            return Ok(Self {
+                previous: None,
+                _caller: std::marker::PhantomData,
             });
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
+            // Without process-affinity support the caller's mask cannot be
+            // confined, so a constrained entry is a typed unsupported error
+            // rather than an unverified run.
+            let _ = cpus;
+            Err(CpuAffinityError::UnsupportedPlatform)
         }
-        Ok(guard)
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let previous =
+                process_cpu_affinity().ok_or(CpuAffinityError::VerificationUnavailable)?;
+            // A selected domain may narrow the caller's mask, never widen it.
+            let target = previous
+                .intersection(cpus)
+                .ok_or(CpuAffinityError::EmptyMask)?;
+            let mut guard = Self {
+                previous: None,
+                _caller: std::marker::PhantomData,
+            };
+            if previous == target {
+                return Ok(guard);
+            }
+            guard.previous = Some(previous);
+            let observed = SystemThreadAffinity.confine_current(&target)?;
+            if observed != target {
+                return Err(CpuAffinityError::Verification {
+                    observed: observed.as_slice().to_vec(),
+                });
+            }
+            Ok(guard)
+        }
     }
 
     fn restore(&mut self) -> Result<(), CpuAffinityError> {
