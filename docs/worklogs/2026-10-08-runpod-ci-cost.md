@@ -82,3 +82,9 @@ the seeded tree passed real NVRTC compilation without a GPU. This validates
 header completeness for the fixture, not full vendor-library GPU execution
 or the final production payload size. The full local PR gate passed before
 this package-list correction; recheck the affected helpers afterward.
+
+For the official CUDA 12.8 NVRTC/cudart/CRT/CCCL/header fixture, the old
+dereferencing copy used 503,706,320 logical bytes versus 239,597,400 for
+the seeded tree. This demonstrates fixture payload reduction only; it excludes
+cuBLAS/cuSOLVER/cuSPARSE and does not establish full cache size or paid-time
+savings.

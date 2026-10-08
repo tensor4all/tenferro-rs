@@ -216,6 +216,13 @@ keeps PTX compatible with older drivers while retaining all hardware-supported
 CubeCL features on the newer tier. Before tests, the runner logs both versions
 and rejects runtimes below 12.6 or NVRTC newer than the driver.
 
+Runtime tree caches contain CUDA JIT headers (including CRT and CCCL) and
+shared runtime libraries. Soname links and the `include`/`lib64` aliases remain
+links to one physical copy. Compiler binaries, static libraries and driver
+stubs are excluded. The main-only publisher prepares both supported runtime
+tiers; consumers restore the same versioned format and retain installation
+on a miss. A tree is marked complete only after its library links resolve.
+
 ## Recovery
 
 Maintainers recover a PR by number with:
