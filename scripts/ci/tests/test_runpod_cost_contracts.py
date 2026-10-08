@@ -326,6 +326,18 @@ class TelemetryTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", blocks[2])
         self.assertNotIn("runpod_cost", blocks[2])
 
+    def test_called_cleanup_read_permissions_are_granted_by_caller(self) -> None:
+        caller = job(text(PARENT), "gpu-execution")
+        cleanup = job(text(CHILD), "cleanup-runpod")
+        self.assertIn("      actions: read", cleanup)
+        # Reusable workflows cannot elevate permissions above the caller.
+        # An explicit block must retain checks/contents needed by other jobs.
+        permissions = re.search(r"    permissions:\n((?:      [^\n]+\n)+)", caller)
+        self.assertIsNotNone(permissions, "GPU caller must grant cleanup's actions: read")
+        scopes = dict(re.findall(r"      (\S+): (\S+)", permissions.group(1)))
+        self.assertEqual(scopes, {"checks": "read", "contents": "read", "actions": "read"})
+        self.assertNotIn("actions: write", job(text(CHILD), "run-gpu-tests"))
+
     def test_stage_report_runs_only_after_confirmed_deletion(self) -> None:
         child = text(CHILD)
         cleanup = job(child, "cleanup-runpod")

@@ -761,7 +761,7 @@ class WorkflowContractTests(unittest.TestCase):
         permissions = top[top.index("permissions:") :]
         permissions = permissions[: permissions.index("\n\n")]
         self.assertNotIn("write", permissions)
-        # The only extra job scope is actions: read for artifact lookup.
+        # Extra Actions scope stays read-only for artifact lookup and hosted cleanup.
         for match in re.finditer(r"(?m)^      actions: (\S+)$", text):
             self.assertEqual(match.group(1), "read")
 

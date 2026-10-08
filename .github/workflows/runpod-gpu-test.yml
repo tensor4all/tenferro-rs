@@ -786,6 +786,12 @@ jobs:
   gpu-execution:
     name: Paid GPU lifecycle
     needs: [authorize, runpod-contract, pre-runpod-gate, cuda-archive, gpu-runtime]
+    # The hosted cleanup reads job timestamps after deletion. A reusable
+    # workflow cannot request permissions absent from this caller's ceiling.
+    permissions:
+      checks: read
+      contents: read
+      actions: read
     # Deliberately no `if` here. A skipped caller job never passes its `with:`
     # block and the called workflow's jobs are scheduled regardless, so the paid
     # workflow decides for itself in `Decide whether the paid path runs` (it
