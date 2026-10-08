@@ -23,6 +23,9 @@ set -eu
 printf "cutensor\\n" >> "$FIXTURE_INSTALL_LOG"
 mkdir -p "$2/lib"
 printf cutensor > "$2/lib/libcutensor.so.2"
+printf unused-static > "$2/lib/libcutensor_static.a"
+printf unused-multi-gpu > "$2/lib/libcutensorMg.so.2"
+printf unused-mpi > "$2/lib/libcutensorMp.so.2"
 ''')
             (scripts / 'install_cuda_runtime_tree.sh').write_text('''#!/bin/bash
 set -eu
@@ -90,6 +93,9 @@ else:
             self.assertEqual(len(list((common / 'wheels').glob('*.whl'))), 3)
             self.assertEqual((common / 'opt/tenferro-ci/cutensor-2.6.0.4/lib/libcutensor.so.2').read_text(),
                              'cutensor')
+            self.assertEqual(sorted(p.name for p in
+                (common / 'opt/tenferro-ci/cutensor-2.6.0.4/lib').iterdir()), ['libcutensor.so.2'])
+            self.assertTrue((root / 'cache/cutensor-2.6.0.4/lib/libcutensor_static.a').is_file())
             self.assertFalse((common / 'cuda-12.6').exists())
             self.assertFalse((common / 'cuda-12.8').exists())
             receiver = root / 'receiver'

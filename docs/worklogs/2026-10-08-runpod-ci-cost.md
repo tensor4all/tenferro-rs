@@ -246,3 +246,41 @@ cleanup (HTTP 204). The follow-up restores that installer before registration
 and guards its order after checksum verification. Full production validation
 remains pending this repair; no failed sample is included in the frozen
 24.24% comparison.
+
+
+## Follow-up transfer and setup controls
+
+Runtime setup accounted for 41 of 636.124217 paid seconds in the complete
+native-image A40 pilot, exceeding the predeclared 5% need threshold. The next
+transfer candidate omits only cuTENSOR static archives and its independent
+multi-GPU/MPI providers. The single-GPU shared library and symlinks remain
+unchanged; the hosted source cache is preserved. With the frozen runtime
+artifacts from run 37855580181, common compressed bytes fell from
+1,567,514,494 to 1,196,745,934. Including the selected 12.8 SDK
+(1,074,446,861 bytes), required runtime transfer is 14.0338% smaller and passes
+the predeclared 5% byte gate. This is a byte-count result, not a paid-time
+speedup; full GPU correctness validation of this candidate remains pending.
+The preserved shared library SHA-256 is
+`224d65152fe5bc5d61e00d15081d6f78b16bc6961b1650579e0a82489b9dcdbc`.
+
+The hosted setup watchdog uses a 900-second deadline from the accepted pod's
+start timestamp. It confirms deletion on deadline or setup failure, disarms
+only when the real CUDA test step starts, and leaves the mandatory cleanup
+path independent. Local tests cover stalled setup, queued/skipped jobs,
+progress outages, malformed start metadata, deletion retries/failures, and
+healthy disarm. Live healthy-start and stalled-setup trials are still pending;
+hosted queue delay and permanent provider deletion failures remain limitations.
+
+A dependency-preloaded image was built and validated locally with the pinned
+runner, actual NVRTC 12.6/12.8 JIT header compilation, and cuTENSOR loading.
+Publication requires the shared human-only registry handoff. No image switch
+is included here: a larger cold pull can regress paid time, so promotion needs
+three complete fresh A40 baseline/candidate pairs, at least 10% median paid-time
+reduction, no paired regression, and within-arm max/min <=1.5, with the full
+numerical workload and confirmed deletion in every run.
+
+The low-priority test audit reused all three successful candidate-run logs.
+The slowest individual test had a 9.117-second median, 1.96% of median paid
+time, below the 5% need threshold. Individual test optimization is deferred;
+shared initialization/JIT cost was not isolated by that audit. No numerical
+assertions, tolerances, or workload entries are removed.

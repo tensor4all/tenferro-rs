@@ -254,7 +254,9 @@ Pre-registration NVRTC compile/load/launch validation remains mandatory.
 After registration the GPU selects the driver-compatible SDK (12.8 for the
 full capability tier), transfers only that SDK and the common payload,
 verifies checksums and required libraries, and runs the complete archives.
-Cargo/nextest and PJRT wheels are staged; no Rust toolchain installation or
+The common payload retains the single-GPU `libcutensor.so*` ABI and its
+symlinks, omitting static archives and the independent multi-GPU/MPI libraries.
+The hosted cuTENSOR cache is preserved. Cargo/nextest and PJRT wheels are staged; no Rust toolchain installation or
 PJRT package download occurs on the accepted GPU. Preparation failures block
 allocation and fail the required GPU gate. SDK and cuTENSOR paid-side cache
 hits are reported as unknown because those dependencies are now host-staged;
