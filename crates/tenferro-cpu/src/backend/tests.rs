@@ -28,6 +28,8 @@ pub(super) fn with_cpu_session<R: Send>(
 }
 
 /// Assert that `error` is the typed CPU reentry rejection.
+// The tests that use these two helpers need the native worker path.
+#[cfg_attr(not(feature = "native"), allow(dead_code))]
 fn assert_reentered(error: &crate::Error) {
     assert!(
         matches!(
@@ -42,6 +44,7 @@ fn assert_reentered(error: &crate::Error) {
     );
 }
 
+#[cfg_attr(not(feature = "native"), allow(dead_code))]
 fn assert_worker_rejected(error: &crate::Error) {
     assert!(
         matches!(

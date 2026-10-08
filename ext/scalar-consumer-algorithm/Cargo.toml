@@ -9,8 +9,18 @@ description = "Algorithm role of the external-scalar consumer (not published)."
 [lib]
 name = "tenferro_scalar_consumer_algorithm"
 
+# The CPU backend is a compile-time choice; this consumer forwards it instead of
+# forcing `native`, so a `blas` workspace build does not collide with it.
+[features]
+default = ["native"]
+native = ["tenferro-ad/native", "tenferro-runtime/native"]
+blas = ["tenferro-ad/blas", "tenferro-runtime/blas"]
+blas-openblas = ["tenferro-ad/blas-openblas", "tenferro-runtime/blas-openblas"]
+blas-accelerate = ["tenferro-ad/blas-accelerate", "tenferro-runtime/blas-accelerate"]
+blas-mkl = ["tenferro-ad/blas-mkl", "tenferro-runtime/blas-mkl"]
+
 [dependencies]
-tenferro-ad = { path = "../../crates/tenferro-ad" }
-tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
+tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
 [dev-dependencies]
-tenferro-tensor = { path = "../../crates/tenferro-tensor" }
+tenferro-tensor = { path = "../../crates/tenferro-tensor", default-features = false }

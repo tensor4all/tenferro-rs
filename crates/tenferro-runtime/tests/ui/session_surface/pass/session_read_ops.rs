@@ -17,17 +17,15 @@ fn dot_config() -> DotGeneralConfig {
     }
 }
 
-fn main() {
+#[test]
+fn session_read_ops() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
     let (total, dot) = backend
         .with_backend_session(|session| {
-            let sum = session.add_read(
-                TensorRead::from_tensor(&a),
-                TensorRead::from_tensor(&b),
-            )?;
+            let sum = session.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))?;
             let total = session.reduce_sum_read(TensorRead::from_tensor(&sum), &[0])?;
             let dot = session.dot_general_read(
                 TensorRead::from_tensor(&a),
@@ -35,7 +33,8 @@ fn main() {
                 &dot_config(),
             )?;
             Ok::<_, tenferro_tensor::Error>((total, dot))
-        }).unwrap()
+        })
+        .unwrap()
         .unwrap();
 
     assert_eq!(total.as_slice::<f64>().unwrap(), &[10.0]);

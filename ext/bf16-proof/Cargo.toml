@@ -9,10 +9,20 @@ description = "Standard bfloat16 through the external-scalar boundary (not publi
 [lib]
 name = "tenferro_bf16_proof"
 
+# The CPU backend is a compile-time choice; this consumer forwards it instead of
+# forcing `native`, so a `blas` workspace build does not collide with it.
+[features]
+default = ["native"]
+native = ["tenferro-cpu/native", "tenferro-runtime/native"]
+blas = ["tenferro-cpu/blas", "tenferro-runtime/blas"]
+blas-openblas = ["tenferro-cpu/blas-openblas", "tenferro-runtime/blas-openblas"]
+blas-accelerate = ["tenferro-cpu/blas-accelerate", "tenferro-runtime/blas-accelerate"]
+blas-mkl = ["tenferro-cpu/blas-mkl", "tenferro-runtime/blas-mkl"]
+
 [dependencies]
 half = { workspace = true }
 tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }
-tenferro-cpu = { path = "../../crates/tenferro-cpu" }
+tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
-tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
 tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops" }

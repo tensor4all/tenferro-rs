@@ -9,10 +9,20 @@ description = "External-scalar proof crate for tenferro scalar composition (not 
 [lib]
 name = "tenferro_df64_proof"
 
+# The CPU backend is a compile-time choice; this consumer forwards it instead of
+# forcing `native`, so a `blas` workspace build does not collide with it.
+[features]
+default = ["native"]
+native = ["tenferro-cpu/native", "tenferro-ad/native", "tenferro-runtime/native"]
+blas = ["tenferro-cpu/blas", "tenferro-ad/blas", "tenferro-runtime/blas"]
+blas-openblas = ["tenferro-cpu/blas-openblas", "tenferro-ad/blas-openblas", "tenferro-runtime/blas-openblas"]
+blas-accelerate = ["tenferro-cpu/blas-accelerate", "tenferro-ad/blas-accelerate", "tenferro-runtime/blas-accelerate"]
+blas-mkl = ["tenferro-cpu/blas-mkl", "tenferro-ad/blas-mkl", "tenferro-runtime/blas-mkl"]
+
 [dependencies]
 tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }
-tenferro-cpu = { path = "../../crates/tenferro-cpu" }
+tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
-tenferro-ad = { path = "../../crates/tenferro-ad" }
-tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
+tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
 tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops" }

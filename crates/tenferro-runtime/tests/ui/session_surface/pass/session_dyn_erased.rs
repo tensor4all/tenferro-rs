@@ -17,13 +17,15 @@ fn add_twice(
     session.add_read(TensorRead::from_tensor(&first), TensorRead::from_tensor(b))
 }
 
-fn main() {
+#[test]
+fn session_dyn_erased() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
     let out = backend
-        .with_backend_session(|session| add_twice(session, &a, &b)).unwrap()
+        .with_backend_session(|session| add_twice(session, &a, &b))
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[7.0, 10.0]);
