@@ -27,7 +27,7 @@ cargo run --manifest-path docs/tutorial-code/Cargo.toml --features blas-openblas
 
 Both binaries assert their numerical results, so a wrong layout or leading
 dimension fails the run. In CI the BLAS binary is additionally run against the
-system OpenBLAS (`cpu-blas` with the native library linked through
+system OpenBLAS (`blas` with the native library linked through
 `RUSTFLAGS`) so that native symbol linkage is verified without rebuilding
 OpenBLAS from source.
 
@@ -83,8 +83,8 @@ the threading environment exactly as if tenferro were not involved.
 
 ### Provider features
 
-For faer, the default `cpu-faer` feature is enough; faer has no system
-dependency. For BLAS/LAPACK, enable `cpu-blas` plus **exactly one** provider
+For faer, the default `native` feature is enough; faer has no system
+dependency. For BLAS/LAPACK, enable `blas` plus **exactly one** provider
 feature on the tenferro crates:
 
 | Provider | tenferro feature | Library |
@@ -94,9 +94,9 @@ feature on the tenferro crates:
 | Intel MKL | `blas-mkl` | Intel oneAPI MKL |
 
 ```toml
-# The working downstream combination used by docs/tutorial-code (cpu-blas
+# The working downstream combination used by docs/tutorial-code (blas
 # already implies the cblas-sys + lapack direct dependencies).
-tenferro-cpu = { path = "crates/tenferro-cpu", default-features = false, features = ["cpu-blas", "blas-openblas"] }
+tenferro-cpu = { path = "crates/tenferro-cpu", default-features = false, features = ["blas", "blas-openblas"] }
 cblas-sys = "0.1"
 lapack = "0.20"
 openblas-src = "0.10"
@@ -108,11 +108,11 @@ library target is empty, so it must be linked explicitly for cargo to forward
 the native library. tenferro-cpu does the same for `blas-src`/`lapack-src`
 internally. If you link a system OpenBLAS yourself instead (for example with
 `RUSTFLAGS='-l dylib=openblas -l dylib=lapack'`), you do not need the
-`blas-openblas` feature or `openblas-src` at all — just `cpu-blas`.
+`blas-openblas` feature or `openblas-src` at all — just `blas`.
 
 The provider features are additive, but the native provider crates reject
 simultaneous selections at build time, so never enable two of them together.
-`cpu-blas` without a provider feature compiles tenferro but does not link any
+`blas` without a provider feature compiles tenferro but does not link any
 native library; you must supply the symbols yourself (for example CI links the
 system OpenBLAS with `RUSTFLAGS='-l dylib=openblas -l dylib=lapack'`).
 
@@ -560,7 +560,7 @@ The example runs in the GPU CI lane (through `cuda_tutorial`) and on its own:
 
 ```console
 cargo run --manifest-path docs/tutorial-code/Cargo.toml \
-  --no-default-features --features cuda,cpu-faer --bin cuda_vendor_interop
+  --no-default-features --features cuda,native --bin cuda_vendor_interop
 ```
 
 ### Dependency contract

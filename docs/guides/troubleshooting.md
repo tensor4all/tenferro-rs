@@ -151,16 +151,16 @@ See [Memory Order](memory-order.md).
 
 ## CPU Backend Feature Selection
 
-At least one CPU fallback/linalg backend feature must be enabled. `cpu-faer`
-is the default, and `cpu-blas` can be enabled by itself or together with
-`cpu-faer`:
+At least one CPU fallback/linalg backend feature must be enabled. `native`
+is the default, and `blas` can be enabled by itself or together with
+`native`:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", features = ["cpu-blas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", features = ["blas"] }
 ```
 
-`cpu-blas` is the generic CBLAS/LAPACK backend. If the build should select a
+`blas` is the generic CBLAS/LAPACK backend. If the build should select a
 concrete provider from Cargo features, enable exactly one of `blas-openblas`,
 `blas-accelerate`, or `blas-mkl` on the CPU-using tenferro crates:
 
@@ -176,15 +176,10 @@ ambiguous BLAS/LAPACK provider set. Use `OPENBLAS_LIB_DIR` for non-standard
 OpenBLAS installs, and `MKLROOT` or `MKL_LIB_DIR` for non-standard MKL installs
 when the provider build scripts need a library path.
 
-TBLIS is not a `tenferro-cpu` feature. The in-repository
-`ext/tenferro-cpu-tblis` crate is an unpublished external-provider example for
-overriding only the general `dot_general` provider slot. Keep `cpu-faer` or
-`cpu-blas` enabled for the complete CPU backend and install the TBLIS provider
-through `CpuProviderBundleBuilder` when experimenting with that route.
-
-`CpuBackend::new()` selects the compiled default provider: BLAS when `cpu-blas`
-is compiled, otherwise faer. Use `CpuBackend::with_kind(CpuBackendKind::Faer)`
-when faer should handle provider-backed kernels in a build that includes faer.
-See
+The CPU numerical provider is chosen at compile time, not per backend handle:
+a `native` build uses faer-backed tlinalg and cpueinsum, and a `blas` build adds
+the cpueinsum-blas and tlinalg-blas adapters while keeping the native path
+available. Enable exactly one of `native` (the default) and `blas`; enabling
+both, or neither, is a compile-time error. See
 [Parallelism and Caching](parallelism-and-caching.md) for thread-count and
 cache-retention controls.

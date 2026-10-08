@@ -11,7 +11,7 @@ it.
 
 | Backend | Device | Hard requirements | Cargo feature | Threading and synchronization | Good fit |
 | --- | --- | --- | --- | --- | --- |
-| CPU | Host CPUs | At least one CPU provider; `cpu-faer` is the default | `tenferro-cpu` `cpu-faer` or `cpu-blas` | `CpuBackend` admits an operation to its selected domain. faer and native kernels use that domain; CPU calls return synchronously. | Controlled CPU and NUMA execution, dense linalg, and host pipelines |
+| CPU | Host CPUs | At least one CPU provider; `native` is the default | `tenferro-cpu` `native` or `blas` | `CpuBackend` admits an operation to its selected domain. faer and native kernels use that domain; CPU calls return synchronously. | Controlled CPU and NUMA execution, dense linalg, and host pipelines |
 | CUDA | NVIDIA GPU | CUDA runtime plus the NVIDIA library stack required by the operation, including cuBLAS/cuSOLVER/cuTENSOR where applicable; missing libraries are typed errors | `tenferro-gpu` `cuda` | The CUDA runtime owns the stream and device work. Eager launches are asynchronous until an explicit synchronize, download, or host inspection. | NVIDIA production workloads and CUDA library-backed dense operations |
 | WebGPU | A WebGPU adapter/device and queue | A working wgpu/WebGPU implementation; coverage is experimental and operation-specific | `tenferro-gpu` `webgpu` | wgpu owns the device queue. Submissions are asynchronous; queue synchronization or download establishes a host-visible boundary. | Portable GPU experiments and Apple shared CPU/Metal paths |
 | XLA/PJRT | A PJRT addressable device | A PJRT plugin shared library; the `pjrt` loader returns a typed error when it is absent or invalid | `tenferro-xla` `pjrt` | The PJRT plugin owns device execution and intra-op scheduling. tenferro controls lowering and invocation, not the plugin's worker pool. | Static traced programs and deployments already using XLA plugins |
@@ -56,31 +56,37 @@ tenferro's per-operation thread-count control.
 
 | Provider family | Required library | Cargo feature | Thread ownership and scope | Guidance |
 | --- | --- | --- | --- | --- |
-| faer | None beyond the Rust dependencies | `cpu-faer` | tenferro-managed `CpuDomainExecutor` and Rayon pool; budget is per selected CPU domain | Default choice when placement, reproducibility, and predictable nesting matter |
-| OpenBLAS | OpenBLAS and its CBLAS/LAPACK entry points | `cpu-blas`, `blas-openblas` | OpenBLAS-owned pool; settings such as `OPENBLAS_NUM_THREADS` are provider/process-wide | Use for peak BLAS/LAPACK throughput; use `CpuPlacement::Auto` and avoid outer oversubscription |
-| Intel MKL | MKL and its BLAS/LAPACK entry points | `cpu-blas`, `blas-mkl` | MKL-owned pool; `MKL_NUM_THREADS` and related OpenMP settings are provider/process-wide | Use when the deployment already standardizes on MKL; tenferro confines its own workers to the domain CPU set but cannot bound the provider's fan-out |
-| Apple Accelerate | Apple Accelerate BLAS/LAPACK | `cpu-blas`, `blas-accelerate` | Accelerate-owned pool; `VECLIB_MAXIMUM_THREADS` is provider/process-wide | Use for Apple-native deployments; explicit NUMA placement is not a tenferro guarantee |
+| faer / cpueinsum / tprims / tlinalg | None beyond the Rust dependencies | `native` | tenferro-owned Rayon pool; the budget is per selected CPU domain | Default choice when placement, reproducibility, and predictable nesting matter |
+| OpenBLAS | OpenBLAS and its CBLAS/LAPACK entry points | `blas`, `blas-openblas` | OpenBLAS-owned pool; settings such as `OPENBLAS_NUM_THREADS` are provider/process-wide | Use for peak BLAS/LAPACK throughput; use `CpuPlacement::Auto` and avoid outer oversubscription |
+| Intel MKL | MKL and its BLAS/LAPACK entry points | `blas`, `blas-mkl` | MKL-owned pool; `MKL_NUM_THREADS` and related OpenMP settings are provider/process-wide | Use when the deployment already standardizes on MKL; tenferro confines its own workers to the domain CPU set but cannot bound the provider's fan-out |
+| Apple Accelerate | Apple Accelerate BLAS/LAPACK | `blas`, `blas-accelerate` | Accelerate-owned pool; `VECLIB_MAXIMUM_THREADS` is provider/process-wide | Use for Apple-native deployments; explicit NUMA placement is not a tenferro guarantee |
 | BLIS | BLIS | Planned in [#1334](https://github.com/tensor4all/tenferro-rs/issues/1334) | Provider-owned; the final scope and controls are not part of the current API | Do not rely on a BLIS feature until the planned provider contract lands |
-| TBLIS external provider | TBLIS source or a separately supplied library | External example in [#1493](https://github.com/tensor4all/tenferro-rs/issues/1493) | The provider bundle owns the TBLIS call policy; the example clamps its call to one thread and restores the setting | A `dot_general` provider example, not a complete dense backend; other operations delegate to the default provider |
 
-The CPU provider kind is selected per backend when both base provider kinds are
-compiled:
+The CPU backend is selected at compile time, not per backend handle:
+`native` is the default and `blas` adds the vendor adapters. Both expose the
+same tenferro-owned placement API, so a build chooses the numerical provider
+and the application only chooses a thread count and CPU set:
 
 <!-- snippet-source: crates/tenferro-cpu/examples/choosing_cpu_provider.rs -->
 ```rust
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::{CpuBackend, CpuId, CpuSet};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let faer = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer)?;
-    let blas = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Blas)?;
-    assert_eq!(faer.kind(), CpuBackendKind::Faer);
-    assert_eq!(blas.kind(), CpuBackendKind::Blas);
+    // The CPU backend is chosen at compile time: `native` (the default) or
+    // `blas`. Both expose the same tenferro-owned placement API.
+    let default_backend = CpuBackend::new();
+    let pinned = CpuBackend::builder()
+        .cpus(CpuSet::new([CpuId::new(0)])?)
+        .threads(1)?
+        .build()?;
+    assert!(default_backend.num_threads() >= 1);
+    assert_eq!(pinned.num_threads(), 1);
     Ok(())
 }
 ```
 <!-- end-snippet-source -->
 
-This requires both `cpu-faer` and `cpu-blas` in the resolved Cargo feature
+This requires both `native` and `blas` in the resolved Cargo feature
 set. It does not make OpenBLAS and MKL independently selectable at runtime:
 the concrete external BLAS implementation is selected by the process's build
 and linked library configuration. Its worker environment remains a
@@ -123,8 +129,8 @@ changing the user-facing decision structure.
 
 | Backend/family | Control tier | Outer/inner parallelism and nesting | Worker, stream, or queue owner and scope | Managed or ExternalManaged | Synchronization | Storage and event domain | Unsupported behavior and dtype/op coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| CPU/faer and native kernels | Tenferro-managed | Both: engine-owned outer fan-out and context-selected inner kernels; nested child fan-out is sequential | `CpuDomainExecutor` and Rayon pool owned per CPU domain/backend coordinator | `Managed` for the default pinned faer path; `ExternalManaged` only when the caller supplies a domain executor | Direct CPU operations complete before return | Host storage classes; the current CPU runtime uses an immediate event domain | Typed unsupported errors; see [CPU execution](cpu-execution.md) and [linear algebra](linear-algebra.md) |
-| CPU/BLAS or LAPACK | Provider-owned | Tenferro may own outer work, while BLAS/LAPACK owns inner work; nesting is not fully controllable | Linked provider pool and environment; usually process-wide | `ExternalManaged`/provider-default exclusive; no tenferro affinity proof | Provider call returns before the synchronous CPU API returns; worker synchronization is provider-owned | Host storage classes; CPU event domain | Unsupported placement and provider operations are errors, not faer fallback; see [CPU execution](cpu-execution.md) |
+| CPU/native kernels | Tenferro-managed | The lower library owns lanes and nesting inside the one parallelism token tenferro passes | tenferro-owned Rayon pool, one engine per resolved CPU placement | Always `Managed`; tenferro never borrows an application pool | Direct CPU operations complete before return | Host storage classes; the current CPU runtime uses an immediate event domain | Typed unsupported errors; see [CPU execution](cpu-execution.md) and [linear algebra](linear-algebra.md) |
+| CPU/BLAS or LAPACK | Vendor-owned inner parallelism | The vendor owns its own worker team; tenferro neither bounds nor schedules it | Linked provider pool and environment; usually process-wide | The tenferro engine is still `Managed`; the vendor call itself is called from the coordinator thread | Provider call returns before the synchronous CPU API returns; worker synchronization is vendor-owned | Host storage classes; CPU event domain | Unsupported operations are typed errors; `blas` keeps a native fallback for declined small steps; see [CPU execution](cpu-execution.md) |
 | CUDA | Backend and NVIDIA-library managed | Device kernels use provider-selected grid/stream parallelism; host-side nesting is limited to explicit backend submissions | CUDA runtime stream, handles, and backend plan caches owned by the CUDA runtime/backend instance | GPU runtime managed; CPU `ExternalManaged` labels do not describe CUDA worker ownership | Launches may be asynchronous; synchronize, download, or host inspection is the boundary | CUDA device storage and CUDA stream/event domain | Unsupported CUDA operation or dtype, and missing NVIDIA library, return typed errors; see [GPU coverage](devices-and-gpu.md) |
 | WebGPU | Queue/provider managed | Device parallelism is inside the submitted shader; independent work may share the queue, with no tenferro CPU-style nested budget | wgpu device and queue owned by the WebGPU runtime/backend | GPU runtime managed; no CPU NUMA contract | Queue submission is asynchronous; explicit runtime synchronization or download makes results host-visible | WebGPU storage and queue/event domain | Unsupported operation or dtype returns an error; no implicit CPU fallback; see [GPU coverage](devices-and-gpu.md) |
 | XLA/PJRT | Plugin-managed | XLA decides intra-op decomposition; tenferro does not add a second hidden inner pool | PJRT plugin owns its client, device, streams, and worker scope | Plugin-managed; not a tenferro CPU `Managed` or `ExternalManaged` domain | PJRT execution and transfers define the host-visible boundary | PJRT device buffers and plugin event domain | Unsupported lowering, dtype, shape, or missing plugin is rejected; see [XLA subset](xla.md) |
@@ -166,21 +172,25 @@ backend case; the caller-selected helper avoids an ID collision:
 
 <!-- snippet-source: crates/tenferro-cpu/examples/multiple_cpu_engines.rs -->
 ```rust
-use tenferro_cpu::{runtime_engine_registration_with_id, CpuBackend, CpuBackendKind};
+use tenferro_cpu::{runtime_engine_registration_with_id, CpuBackend, CpuId, CpuSet};
 use tenferro_runtime::{EngineId, Runtime};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let primary = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer)?;
-    let secondary = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Blas)?;
+    let cpus = CpuSet::new([CpuId::new(0)])?;
+    let primary = CpuBackend::builder()
+        .cpus(cpus.clone())
+        .threads(1)?
+        .build()?;
+    let secondary = CpuBackend::builder().cpus(cpus).threads(1)?.build()?;
 
     let mut builder = Runtime::builder();
     builder.register_engine(runtime_engine_registration_with_id(
         &primary,
-        EngineId::new("example.cpu.faer.v1")?,
+        EngineId::new("example.cpu.primary.v1")?,
     )?)?;
     builder.register_engine(runtime_engine_registration_with_id(
         &secondary,
-        EngineId::new("example.cpu.blas.v1")?,
+        EngineId::new("example.cpu.secondary.v1")?,
     )?)?;
     let runtime = builder.build()?;
     assert_eq!(runtime.snapshot()?.engine_count(), 2);
@@ -189,7 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 <!-- end-snippet-source -->
 
-Compile this example with both `cpu-faer` and `cpu-blas`. If the second
+Compile this example with both `native` and `blas`. If the second
 backend uses OpenBLAS, MKL, or Accelerate, its library and thread settings are
 still process-wide provider settings. Separate processes are required when
 the application needs mutually incompatible external BLAS installations or

@@ -564,7 +564,7 @@ was demonstrated on the highest-density CPU file that can be verified locally,
 - Six call sites (the `full_piv_lu_solve`, `triangular_solve`, and `solve` paths
   for the faer and blas providers) were converted: **102 lines deleted net**, with
   `cargo test -p tenferro-linalg` passing (127 + 163 + 1 + 144 tests) and the
-  `cpu-blas` feature path still compiling.
+  `blas` feature path still compiling.
 - What this buys is not only the deletion: a call site no longer names the
   variants, so it does not change again when the value type stops being a closed
   enum. That is why this happens before the representation change.
@@ -1239,7 +1239,7 @@ that are clean on this host are:
 | `-p tenferro-einsum --features cuda` and `webgpu` | clean |
 | `-p tenferro-fft --features cuda` and `webgpu` | clean |
 | `-p tenferro-xla --features pjrt` | clean |
-| `-p tenferro-cpu --features cpu-faer` | clean |
+| `-p tenferro-cpu` (default `native`) | clean |
 | `--all-features` on any of these | not applicable: it pulls `accelerate-src`, an Apple-only framework, on every platform this branch can reach |
 | the whole workspace with one crate's GPU feature (`--features tenferro-linalg/cuda`) | fails in `tenferro-einsum`, pre-existing and unrelated to this branch |
 | `--no-default-features` | intended failure: the crates that need a backend reject it with `compile_error!` ("enable at least one CPU backend"); `tenferro-tensor-core`, `tenferro-internal-cpu-kernels`, `tenferro-df64-proof`, and the consumer crates build clean |
@@ -1417,8 +1417,8 @@ What Step 5 still has to do, now that nothing outside depends on the variants:
 3. Rewrite the `impl_tensor_scalar!` seam (five `Tensor::$variant` uses) to
    `Tensor::from_core(tensor.core)` for construction and `tensor.as_typed::<T>()` for the matches. It is
    not the only seam: the per-scalar dispatch macros in `tenferro-cpu` (`gemm`, `provider`),
-   `tenferro-internal-cpu-kernels` (`dispatch_read_real_complex_scalar!`) and `ext/tenferro-cpu-tblis`
-   reach `Tensor::$owned`/`$variant`/`$real_variant` through a macro parameter, which a name-based search
+   `tenferro-internal-cpu-kernels` (`dispatch_read_real_complex_scalar!`) and the lower
+   numerical adapters reach `Tensor::$owned`/`$variant`/`$real_variant` through a macro parameter, which a name-based search
    cannot see. Those arms become the same bind-guard-rebind shape the readable sites already use.
 4. Rewrite the `Tensor` impls, whose ~277 variant mentions are the dtype-independent readers
    (`shape`, `strides`, `placement`, `layout_linear_offset`, `is_col_major_contiguous`, the placement

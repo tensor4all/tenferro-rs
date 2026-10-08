@@ -6,6 +6,15 @@
 
 ## Status
 
+> **Superseded for CPU resources by #2004.** The CPU parts of this document -
+> the pluggable `CpuDomainExecutor`, `CpuProviderBundle`, runtime provider
+> selection, external/caller-managed domains, `CpuBatchPolicy`, and host lane
+> planning - were removed by the CPU boundary integration. The CPU provider is
+> now compile-time (`native` or `blas`), every engine is tenferro-owned, session
+> entry is admission-only, and lane selection belongs to cpueinsum/tlinalg. See
+> [cpu-backend-execution.md](cpu-backend-execution.md). The GPU, XLA, and
+> process-boundary sections still describe current architecture.
+
 The umbrella architecture is accepted for child planning and governed by the
 execution-engine umbrella plan. This document records the agreed design
 direction and invariants; it does not freeze exact public signatures or serve

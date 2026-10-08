@@ -66,17 +66,14 @@ and native-link provider prepared for a future, separate crates.io release.
 Until that package is released, the root workspace excludes it and does not
 publish any crate that depends on it.
 
-`tenferro-cpu` does not depend on `tblis-ffi` or `t4a-tblis-src`. The
-unpublished `ext/tenferro-cpu-tblis` crate is the external-provider example:
-it depends on `tblis-ffi`, optionally depends on the local
-`../../third_party/t4a-tblis-src` path for `source-build`, and installs only a
-general-contraction provider. All other CPU operations remain delegated to the
-selected `tenferro-cpu` base provider. The unpublished
-`ext/tenferro-cpu-tprims` crate likewise depends on tprims-rs by git commit
-(and repeats the workspace strided-rs pin) and installs GEMM and
-general-contraction providers that run on the context's Rayon pool
-(`CpuExecutionContext::rayon_pool`); `tenferro-cpu` has no tprims or linalg
-dependency. `tenferro-linalg` takes its built-in CPU kernels from the extracted
+`tenferro-cpu` does not depend on `tblis-ffi` or `t4a-tblis-src`, and it has no
+tprims or linalg dependency of its own. CPU `dot_general`, grouped GEMM, and
+N-ary concrete einsum delegate to `cpueinsum` (which uses tprims internally),
+and CPU linalg delegates to the extracted `tlinalg`/`tlinalg-blas` crates.
+The former external-provider example crates (`ext/tenferro-cpu-tblis`,
+`ext/tenferro-cpu-tprims`) and `third_party/t4a-tblis-src` were removed by
+#2004 with the runtime provider machinery.
+`tenferro-linalg` takes its built-in CPU kernels from the extracted
 `tlinalg` (faer) and `tlinalg-blas` (LAPACK/BLAS) crates of the tlinalg-rs
 workspace, pinned by git revision.
 
@@ -162,6 +159,7 @@ tenferro-ad               -> tenferro-runtime, tenferro-internal-ops,
 
 tenferro-einsum           -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu,
+                              tenferro-cpu-basic,
                               tenferro-internal-extension-macros
 tenferro-linalg           -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu,

@@ -557,36 +557,13 @@ keep vendor-specific strided-batch binding work optional. All-batch elementwise
 contractions are classified before generic GEMM lowering, not lowered to a loop
 of 1x1 GEMMs.
 
-**Implemented mapping (#1938 session phase).** `CpuBatchPolicy` (a
-`CpuBatchStrategy` plus `CpuBatchThresholds`) lives in `tenferro-cpu`, by
-maintainer decision, rather than in the neutral config types; CUDA has no
-policy yet. The backend default is `CpuBackend::with_batch_policy`; the scoped
-override is `tenferro_cpu::with_batch_policy(session, policy, f)`, which sets
-the policy through the CPU visitor, runs `f` on the caller's own session (so a
-wrapping session keeps its overrides), and restores the previous policy on
-return, error and unwind. A per-operation choice is a scope around one call;
-nesting gives per-operation > scoped > default. The effective policy travels
-on `CpuOperationEntry` and `CpuExecutionContext` and is read per execution, so
-a policy or provider change needs no prepared-strategy invalidation. The three
-thresholds default to the constants they replace: `vendor_batch_max_item_dim`
-16 (the BLAS grouped cutoff, now carried to the provider as
-`CpuVendorBatch::Allowed`), `outer_min_items` 2 and `outer_min_items_per_lane`
-1. Routes: grouped GEMM supports all five strategies (a forced `OuterParallel`
-inside an entered session fans out over the context's own lanes); strided
-batched contractions support all five (a forced `OuterParallel` splits the
-batch over the entered context's lanes, and is a typed error when the context
-cannot fan out, the output items overlap, or the provider runs its own threads);
-faer packed LU/solve supports all but `WholeBatchVendor`, while the LAPACK
-packed-LU loop accepts only `Auto` and `ProviderItems` and rejects the other
-forced strategies with a typed error: each `?getrf`/`?getrs` threads itself, so
-tenferro can neither make it sequential nor run several in lanes (#1884). The strided path now
-reaches the existing `cblas_?gemm_batch` binding through `WholeBatchVendor`;
-`Auto` keeps per-item GEMM there, because the bounded performance pass measured
-the vendor call 1.8x/3.8x slower for 8^3/16^3 items on OpenBLAS 0.3.32 at 1T.
-A contraction whose axes are all batch axes is executed as an elementwise
-product (with conjugation and alpha/beta) before GEMM lowering. Forced routes
-that conflict with a provider's declaration (for example `Sequential` with the
-built-in BLAS) are typed errors, not overrides.
+**Superseded by #2004.** The host `CpuBatchPolicy` / `CpuBatchStrategy` /
+`CpuBatchThresholds` vocabulary described here was removed once cpueinsum gained
+its grouped plan form: lane selection and vendor batching now belong to
+cpueinsum and tlinalg, and tenferro passes one parallelism token (the selected
+pool with a budget, or `Sequential`).
+
+
 
 **`Auto` inside an entered session (#1898 follow-up).** A multi-threaded
 session no longer runs every `Auto` batch serially. When the entered Inner

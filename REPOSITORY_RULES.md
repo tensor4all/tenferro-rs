@@ -602,8 +602,8 @@ Tests follow implementation ownership.
   | Gather | `strided-kernel` (`ErasedGatherPlan`) |
   | Additive scatter | `strided-kernel` (`ErasedScatterPlan`) |
   | Fixed-window dynamic slice/update | `strided-kernel` (`ErasedDynamicSlicePlan`, `ErasedDynamicUpdateSlicePlan`) |
-  | GEMM (`dot_general`) | faer (`cpu-faer`) or BLAS (`cpu-blas`) |
-  | Linalg (`svd`, `qr`, `cholesky`, `eigh`, `solve`) | faer (`cpu-faer`) or LAPACK (`cpu-blas`) |
+  | GEMM (`dot_general`) | faer (`native`) or BLAS (`blas`) |
+  | Linalg (`svd`, `qr`, `cholesky`, `eigh`, `solve`) | faer (`native`) or LAPACK (`blas`) |
 
 - The ownership and overlap boundary is:
 
@@ -662,17 +662,18 @@ Tests follow implementation ownership.
   sizes, is filed upstream with a strided-level reproduction
   ([strided-rs#269](https://github.com/tensor4all/strided-rs/issues/269)), not
   accepted as a tenferro baseline.
-- CPU provider features are additive. At least one of `cpu-faer` or `cpu-blas`
-  is enabled; both together must compile. `CpuBackend` owns runtime provider
-  selection: `CpuBackend::new()` picks the default compiled provider
-  (BLAS/LAPACK when `cpu-blas` is compiled, otherwise `cpu-faer`); explicit
-  constructors or application configuration select another compiled provider.
+- The CPU provider is selected at compile time. Exactly one of `native` (the
+  default) or `blas` is enabled; enabling both, or neither, is a
+  `compile_error!`. There is no runtime provider kind, provider bundle, kernel
+  slot, or per-handle provider selection. `blas` is a compiled adapter, not a
+  vendor-only execution world, and keeps the native path for declined steps.
 - Tensor-sized CPU kernels run through the repository CPU threading policy.
   `strided-kernel` is compiled with its `parallel` feature for elementwise,
-  reduction, and structural materialization kernels. CPU contraction providers
-  receive their policy from the owning `CpuExecutionContext`; Faer uses
-  `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` for bounded
-  multi-thread contexts.
+  reduction, and structural materialization kernels. CPU contraction and
+  linalg call the lower numerical libraries (cpueinsum/tprims, tlinalg,
+  tlinalg-blas) with one parallelism token from the owning
+  `CpuExecutionContext`: `Sequential`, or the selected pool with a thread
+  budget. The lower library owns lane selection within that budget.
 - A tensor-sized CPU operation that remains a dedicated sequential loop
   because no strided-kernel/backend-native parallel primitive fits keeps a
   nearby source comment naming that rationale. Undocumented serial loops must

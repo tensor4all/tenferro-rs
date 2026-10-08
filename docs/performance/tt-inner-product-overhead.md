@@ -25,7 +25,7 @@ inner-product overhead in `tenferro-rs`, compared with ITensors.jl.
     tenferro-owned Rayon pool entry.
 - `tenferro-cpu/benches/openblas_direct_overhead.rs`
   - Measures direct `cblas_zgemm` calls for the same small pairwise shapes.
-  - Requires the `cpu-blas` feature and is intended for `blas-openblas` runs.
+  - Requires the `blas` feature and is intended for `blas-openblas` runs.
 - `scripts/bench-itensors-pairwise-contraction.jl`
   - Measures the matching ITensors.jl pairwise contractions.
 - `scripts/bench-pairwise-contraction.sh`
@@ -155,7 +155,7 @@ small `chi`. At `chi <= 4`, the BLAS kernels take less than 0.4 us for the
 two-GEMM `site_update`, while tenferro takes about 15-20 us. OpenBLAS itself is
 therefore not the bottleneck.
 
-After bypassing `rayon::ThreadPool::install` for the `cpu-blas` GEMM and LAPACK
+After bypassing `rayon::ThreadPool::install` for the `blas` GEMM and LAPACK
 paths, the same `site_update` benchmark improves substantially:
 
 | chi | direct OpenBLAS 2x zgemm | tenferro OpenBLAS normal | tenferro OpenBLAS cached |
@@ -304,14 +304,14 @@ This preserves Rayon pool semantics, but it is expensive for tiny GEMMs.
   though the cache was dropped immediately after the call.
 - The internal GEMM analysis cache key now uses `SmallVec` for common small
   ranks and dimension lists. This reduces heap allocation in cached paths.
-- For the `cpu-blas` backend, `dot_general`, `dot_general_read`, and
+- For the `blas` backend, `dot_general`, `dot_general_read`, and
   `dot_general_with_conj` run the GEMM body directly on the caller thread with
   the backend `BufferPool` and GEMM analysis cache, instead of routing through
   `rayon::ThreadPool::install`.
-- For the `cpu-blas` backend, LAPACK-backed linalg methods now use the same
+- For the `blas` backend, LAPACK-backed linalg methods now use the same
   caller-thread pool wrapper. This covers `cholesky`, `triangular_solve`, `lu`,
   `full_piv_lu`, `full_piv_lu_solve`, `svd`, `qr`, `eigh`, and `eig`. The
-  `cpu-faer` backend uses `CpuContext::install`; one-thread contexts pass
+  `native` backend uses `CpuContext::install`; one-thread contexts pass
   `Par::Seq`, and multi-thread contexts pass explicit `Par::rayon(n)` using the
   configured context degree.
 - The BLAS conjugation path now detects row-contiguous conjugated operands before

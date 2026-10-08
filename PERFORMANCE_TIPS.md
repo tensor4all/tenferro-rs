@@ -472,9 +472,9 @@ Audit hints:
   own thread team, and those threads inherit the creating worker's mask, so a
   one-CPU worker mask silently confines the provider's entire team to one CPU
   (measured: 3-20x slower dgemm/LU paths at four threads). Keep the domain's CPU
-  set authoritative: `CpuExecutorAffinity::TenferroDomainVerified` asserts the
-  verified domain set, and narrowing a single worker's mask back to one CPU is
-  not an approved placement policy. Provider thread counts remain controlled by
+  set authoritative: the engine verifies the domain set at construction, and
+  narrowing a single worker's mask back to one CPU is not an approved placement
+  policy. Provider thread counts remain controlled by
   the provider variables named below, not by worker affinity.
 - Entered worker pools reserve `DEFAULT_WORKER_STACK_BYTES` (16 MiB) per worker
   rather than the `std::thread` default of 2 MiB, because provider kernels recurse
@@ -489,17 +489,13 @@ Audit hints:
 - Use `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` from the
   configured `CpuContext` degree for multi-thread contexts. Do not derive the
   policy from an ambient Rayon pool during plan or session setup.
-- Tenferro-owned outer fan-out goes through `CpuExecutionContext::with_outer_lanes`
-  or the engine's `submit_outer`, never a bare `rayon::scope`, so lanes carry
-  the fan-out fact; a provider whose declared parallelism is an independent
-  runtime (the default for external BLAS/LAPACK) is rejected before any lane
-  runs. No placement promise is made for threads a provider creates. The one
-  provider-owned fan-out is the batched `tlinalg` linalg provider: the host
-  resolves its lane plan from the effective batch policy and hands it the
-  context's own pool and budget, and its lanes never call back into tenferro.
-- Batched work follows the effective `CpuBatchPolicy` (per-operation scope >
-  scoped override > backend default). Thresholds are policy values, not
-  hard-coded constants; a forced strategy never overrides a safety rule.
+- tenferro does not own an outer fan-out: lane selection for batched and
+  grouped work belongs to cpueinsum, tlinalg, and tlinalg-blas, which receive
+  one parallelism token (the selected pool with a budget, or `Sequential`) and
+  never call back into tenferro from a lane. No placement promise is made for
+  threads a vendor creates.
+- Vendor BLAS/LAPACK is called from the coordinator thread; tenferro bounds
+  only the token it passes to its own lower libraries.
 - Tensor-sized strided CPU kernels that are not provider-owned also run inside
   `CpuContext::install(...)`, so Rayon-backed `strided-kernel` work uses the
   backend's owned pool. BLAS/LAPACK provider-owned threading remains

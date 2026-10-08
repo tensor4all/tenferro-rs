@@ -72,26 +72,21 @@ does not support. Higher layers must not silently fall back across devices.
 
 ## CPU Backend
 
-`tenferro_cpu::CpuBackend` is present when at least one CPU provider feature is enabled.
-CPU provider features are additive:
+`tenferro_cpu::CpuBackend` is present when exactly one CPU provider feature is enabled:
 
-- `cpu-faer` for faer-backed GEMM/linalg,
-- `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg.
+- `native` (the default) for faer-backed GEMM/linalg plus cpueinsum/tprims,
+- `blas` for the same stack with the `cpueinsum-blas`/`tlinalg-blas` adapters.
 
 CPU execution uses the split strided-rs families: shared traversal and light
 host operations come from `strided-basic`, ordinary dtype-dispatch kernels from
 `strided-kernel`, and runtime-DAG fusion from `strided-fused`. faer or
-BLAS/LAPACK provide GEMM and linalg. `CpuBackend` stores the runtime
-base-provider selection for an individual backend instance. `CpuBackend::new()`
-chooses the compiled default provider: BLAS if `cpu-blas` is compiled,
-otherwise faer. Explicit constructors such as `CpuBackend::with_kind` and
-`CpuBackend::with_threads_and_kind` can select any complete base provider
-compiled into the binary. External providers can be installed through
-`CpuProviderBundleBuilder`; for example, the unpublished
-`ext/tenferro-cpu-tblis` crate replaces only the complete `dot_general`
-provider slot and falls back to the selected base provider in preferred mode;
-the unpublished `ext/tenferro-cpu-tprims` crate fills the GEMM and
-`dot_general` slots with tprims kernels run on the context's Rayon pool.
+BLAS/LAPACK provide GEMM and linalg. Selection is compile-time only: there is
+no per-handle provider kind, provider bundle, or kernel slot.
+`CpuBackend::new()` and `CpuBackend::with_threads(n)` use the compiled stack,
+and `CpuBackend::builder()` selects placement, thread count, worker stack, and
+buffer limit. CPU `dot_general` and grouped GEMM go to cpueinsum prepared plans
+and CPU linalg to tlinalg / tlinalg-blas; tenferro keeps tensor semantics,
+placement, and validation.
 `CpuContext` stores the CPU thread count as the single source of truth for
 tenferro-owned CPU parallelism and owns the Rayon thread pool used by
 multi-thread contexts.

@@ -43,7 +43,7 @@ process-visible CPU count when the variable is unset.
 RAYON_NUM_THREADS=4 cargo run --release
 ```
 
-For `cpu-faer`, tenferro passes the `CpuContext` thread count to faer-backed
+For `native`, tenferro passes the `CpuContext` thread count to faer-backed
 kernels. A one-thread context uses sequential faer execution; a multi-thread
 context uses faer's Rayon parallelism with the requested thread count.
 The external TBLIS provider example clamps TBLIS calls to one thread while it
@@ -70,8 +70,8 @@ workers remain provider-owned and may fan out independently.
 | Elementwise and analytic ops | Shared typed paths use `strided-basic`, ordinary dtype dispatch uses `strided-kernel`, and erased fused replay uses `strided-fused`; all use the already-entered context's native policy. Rayon-capable `Inner` may use the selected executor; all other modes above are sequential. |
 | Reductions | sum/product erased replay and typed max/min reductions use the same selected native policy and never ambient Rayon. Upstream strided plan coverage determines whether a specific multi-axis reduction shape can actually partition work. |
 | View materialization, transpose/permute, broadcast, convert, and diagonal extraction | Strided copy/map kernels use the same selected native policy; layout fallback and linalg input materialization are included. |
-| `dot_general` through `cpu-faer` | faer receives `Par::rayon(n)` only for `Inner` execution whose selected executor advertises Rayon and whose validated budget is greater than one; otherwise it receives `Par::Seq`. Downstream direct faer calls can obtain the same scoped value through `FaerParallelismExt::with_faer_parallelism`, without exposing tenferro's executor. |
-| GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
+| `dot_general` through `native` | faer receives `Par::rayon(n)` only for `Inner` execution whose selected executor advertises Rayon and whose validated budget is greater than one; otherwise it receives `Par::Seq`. Downstream direct faer calls can obtain the same scoped value through `FaerParallelismExt::with_faer_parallelism`, without exposing tenferro's executor. |
+| GEMM and linalg through `blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
 | Supported `dot_general` contractions through an external TBLIS provider | The example provider clamps TBLIS to one thread per call; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider in preferred mode. |
 | Indexed gather/scatter and dynamic slice/update | These delegate to strided erased plans with an explicit `ExecContext` derived from `CpuExecutionContext`; upstream strided plan coverage determines whether a specific indexed plan can actually partition work. |
 | Slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside the selected executor entry, and source comments mark the intentional sequential path. |
@@ -117,7 +117,7 @@ download device data.
 
 ## BLAS And LAPACK Threads
 
-For `cpu-blas`, `CpuBackend::with_threads(n)` controls tenferro-native work, but
+For `blas`, `CpuBackend::with_threads(n)` controls tenferro-native work, but
 the linked BLAS/LAPACK provider has its own thread controls. Set provider thread
 variables before process start when appropriate:
 
@@ -137,29 +137,20 @@ uses `OPENBLAS_NUM_THREADS`; Intel MKL uses `MKL_NUM_THREADS`; Accelerate uses
 installs commonly need `OPENBLAS_LIB_DIR`; non-standard MKL installs commonly
 need `MKLROOT` or `MKL_LIB_DIR`.
 
-These variables limit thread counts; they do not let tenferro verify or enforce
-provider worker affinity. External BLAS therefore supports only
-`CpuPlacement::Auto` and executes under an exclusive coordinator permit. Use
-the faer backend when tenferro-managed NUMA placement is required.
+These variables limit vendor thread counts; they do not let tenferro verify or
+enforce vendor worker affinity. tenferro guarantees only the calling thread's
+mask, and because placement never widens that mask, a caller already pinned to
+one CPU also confines a newly created vendor team. NUMA placement is a
+tenferro-owned engine property and is available in both compiled
+configurations.
 
-Custom CPU provider bundles declare count and placement separately through
-their provider traits. Bundle installation validates those declarations
-against every registered domain, including lazily constructible managed NUMA
-domains. `CpuBackend::from_external_managed_domains_with_provider_bundle`
-performs external-domain registry construction and this validation atomically.
-The provider bundle currently covers the `dot_general` family; linalg provider
-selection remains separate. The current built-in BLAS adapter does not apply
-and restore a genuinely local setter per call, so the ordinary
-external-managed constructor rejects that strict standard BLAS bundle.
-OpenBLAS's `openblas_set_num_threads_local` does not change this conclusion:
-despite its name, it applies a process-global count and returns the old value
-for restoration, so concurrent threads can observe the temporary setting.
-Applications can use the custom-bundle constructor with an adapter that
-declares and enforces suitable controls. Parallel OpenBLAS remains available
-only through provider-owned, process-exclusive compatibility execution; it is
-not a strict per-call thread-budget guarantee.
+There is one CPU resource contract for both compiled providers: tenferro passes
+`Sequential` or the selected pool with a thread budget to the lower numerical
+library (cpueinsum, tprims, tlinalg, tlinalg-blas), and the lower library
+decides its own lanes within that budget. Vendor-internal parallelism is
+outside tenferro's resource contract.
 
-A provider declaring `BinaryClampToOne` must select its single-threaded mode
+An adaptation that needs to clamp a vendor's mode to one thread
 for every finite domain budget. It must never select provider-controlled auto
 mode inside such a call; inability to guarantee that requires the conservative
 `GlobalOrUncontrolled` declaration.
