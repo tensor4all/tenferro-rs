@@ -220,3 +220,16 @@ tree is installed. Fixture coverage confirms a warm cache invokes no
 installer and missing cuTENSOR, SDK marker, vendor library or header repairs
 only the affected tree. This changes hosted preparation, not the frozen SVD
 comparison or the paid workload.
+
+## Post-merge runtime integration follow-up
+
+PR #2043 merged as ac1d2b341be84d6dfce1989d1e5d935ff55dba60 after
+all required checks passed. Manual production verification 37834194980
+and main-triggered deliveries failed workflow startup before any job or
+GPU allocation. Static review identified a permission ceiling mismatch:
+the reusable cleanup requests actions: read for its post-deletion timing
+report, while its caller grants only checks/contents read. A regression
+contract rejects that original configuration. The prepared correction
+explicitly grants checks/contents/actions read on the calling job; all
+permissions stay read-only. A successful trusted-main run after this fix
+is still required; the frozen 24.24% SVD comparison is unchanged.
