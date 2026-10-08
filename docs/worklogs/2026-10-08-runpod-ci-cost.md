@@ -233,3 +233,16 @@ contract rejects that original configuration. The prepared correction
 explicitly grants checks/contents/actions read on the calling job; all
 permissions stay read-only. A successful trusted-main run after this fix
 is still required; the frozen 24.24% SVD comparison is unchanged.
+
+The permission repair merged in PR #2045 as
+485179bc995c97bf177fd18cef0af47e39cf2312. Production run
+37855580181 passed hosted preparation but could not register the minimal-image
+runner. Its startup omitted the verified runner's dependency installer, unlike
+the measured experiment controller. The exact image and runner abort locally
+without ICU; invoking the supplied installer makes Runner.Listener report
+2.337.0 successfully. The failed production run was cancelled; pod
+xyborcbk0z0uwr was deleted by provisioning, and 5sz9fl50lgu4yt by mandatory
+cleanup (HTTP 204). The follow-up restores that installer before registration
+and guards its order after checksum verification. Full production validation
+remains pending this repair; no failed sample is included in the frozen
+24.24% comparison.
