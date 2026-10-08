@@ -174,3 +174,40 @@ after every upload succeeds, so failed preparation cannot expose a ready
 prefix. The root header checker also compiled the official 12.6 and 12.8
 package fixtures with real NVRTC. These checks do not replace the pending
 full paid-time campaign or post-merge production GPU validation.
+
+Campaign 4 freezes controller 65cdbb82473642bbf5d53b9d23bc2321858d25ce
+with the same sources, GPU, SDK, workload and acceptance conditions. It
+allows up to three create-only attempts for the exact no-instances HTTP
+500 before any pod exists; any paid-pod failure still invalidates the
+whole campaign. This addresses zero-cost capacity failures without
+replacing failed paid samples. Baselines 37821964329, 37825246097 and
+37826624024 passed the complete workload and deletion in 510.722024,
+614.272320 and 622.580076 seconds. Candidates 37823114735 and
+37824191820 passed in 465.357591 and 456.052088 seconds; final candidate
+37828044819 passed in 469.472534 seconds, with complete workload and
+confirmed deletion. The complete campaign passed: median paid time fell
+from 614.272320 to 465.357591 seconds (24.2425%), all three pairs were
+nonregressing, and both arms stayed within the declared max/min <=1.5
+noise bound. This is evidence for the SVD oracle under identical staged
+runtime conditions, not an isolated measurement of staging/image savings. Prepared common-plus-selected-SDK artifact sizes differ
+by only 10,300 bytes between arms, so larger candidate payloads do not
+explain the observed transfer-time difference.
+
+Reproduction conditions: profile ci, one nextest test thread, 200 seconds
+per case, 285 CUDA cases, three PJRT cases and tutorial; six fresh A40
+pods at $0.59/hour in B,C,C,B,B,C order, CUDA compute/JIT caches cleared
+before each test run, and actual NVRTC 12.8 verified. Logs retain hardware,
+CPU affinity, per-case results and deletion timestamps. Source 3f10f960's
+tree is identical to the original compiled baseline 20b04's tree
+(5d87d309d93e7e47435e557771060ca817b2aec4); candidate source is 2605c46f.
+The CI profile measures this CI workload, not release kernel performance.
+
+| Pair | Baseline paid seconds | Candidate paid seconds |
+|---|---:|---:|
+| 1 | [510.722024](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37821964329) | [465.357591](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37823114735) |
+| 2 | [614.272320](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37825246097) | [456.052088](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37824191820) |
+| 3 | [622.580076](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37826624024) | [469.472534](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37828044819) |
+
+All six passed and their pods were deleted. Confirmation applies to the
+frozen comparison above. Post-merge production execution remains required
+because its workflow integration is newer than the experimental controller.
