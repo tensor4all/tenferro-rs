@@ -1,6 +1,7 @@
 #![cfg(feature = "cuda")]
 
 // Run with: cargo test --features cuda -- --ignored
+use super::full_svd_host_checks::assert_isometric;
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_gpu::{
@@ -1915,22 +1916,6 @@ fn real_values(tensor: &Tensor) -> Vec<f64> {
             .collect(),
         DType::F64 => tensor.as_slice::<f64>().unwrap().to_vec(),
         other => panic!("singular values must be real, got {other:?}"),
-    }
-}
-
-/// `matrix^H matrix == I` for a `rows x cols` column-major matrix.
-fn assert_isometric(matrix: &[Complex64], rows: usize, cols: usize, tol: f64, label: &str) {
-    for left in 0..cols {
-        for right in 0..cols {
-            let inner: Complex64 = (0..rows)
-                .map(|row| matrix[row + left * rows].conj() * matrix[row + right * rows])
-                .sum();
-            let expected = if left == right { 1.0 } else { 0.0 };
-            assert!(
-                (inner - Complex64::new(expected, 0.0)).norm() < tol,
-                "{label}: column pair ({left}, {right}) inner product {inner} is not {expected}"
-            );
-        }
     }
 }
 

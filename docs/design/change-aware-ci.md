@@ -177,6 +177,17 @@ requested tier, is rejected before the external runner starts. The created pod
 ID is still forwarded to the trusted startup-failure cleanup path so rejection
 cannot leave a paid pod running.
 
+After confirmed pod deletion, the hosted cleanup job emits a best-effort JSON
+artifact with the tested ref, archive/cuTENSOR/CUDA cache-hit observations and
+estimated paid cost by stage. The paid window uses the pod's start timestamp
+through confirmed deletion and its adjusted hourly price, with list-price
+fallback. Startup/queue, test-job setup and execution, and cleanup/queue remain
+visible; unassigned overhead reconciles the stage totals to the paid window.
+Missing cache outputs remain unknown. Failed workloads retain their failure
+conclusion. Reporting and artifact upload are bounded, nonblocking, and run
+after deletion so they cannot extend this pod's paid lifetime. Rejected
+provisioning attempts and storage charges are separate from this estimate.
+
 The CUDA/PJRT test archive key is content-addressed across source, manifests,
 tests, lockfile, workflow, and RunPod configuration. It excludes branch, ref,
 and commit identity, allowing equivalent automatic and recovery runs to reuse

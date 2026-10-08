@@ -310,6 +310,8 @@ class TelemetryTests(unittest.TestCase):
                 "name: Checkout trusted RunPod cost report",
                 "name: Report RunPod paid time and estimated cost",
                 "name: Delete RunPod pod",
+                "name: Report paid GPU CI cost by stage",
+                "name: Save paid GPU CI cost record",
             ],
         )
         for block in blocks[:2]:
@@ -317,6 +319,18 @@ class TelemetryTests(unittest.TestCase):
         self.assertIn("python3 scripts/ci/runpod_cost.py", blocks[1])
         self.assertNotIn("continue-on-error", blocks[2])
         self.assertNotIn("runpod_cost", blocks[2])
+
+    def test_stage_report_runs_only_after_confirmed_deletion(self) -> None:
+        child = text(CHILD)
+        cleanup = job(child, "cleanup-runpod")
+        self.assertLess(cleanup.index("name: Delete RunPod pod"), cleanup.index("name: Report paid GPU CI cost by stage"))
+        self.assertIn("actions: read", cleanup)
+        for name in ("Report paid GPU CI cost by stage", "Save paid GPU CI cost record"):
+            block = step(child, name)
+            self.assertIn("continue-on-error: true", block)
+            self.assertIn("steps.delete_pod.outputs.deleted_at != ''", block)
+        deletion = step(child, "Delete RunPod pod")
+        self.assertLess(deletion.index("Failed to delete RunPod pod"), deletion.index("echo \"deleted_at="))
 
 
 class RunnerPinCheckWorkflowTests(unittest.TestCase):
