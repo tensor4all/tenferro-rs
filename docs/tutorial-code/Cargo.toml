@@ -7,6 +7,12 @@ publish = false
 
 [features]
 default = ["native", "xla-pjrt", "doc-snippets"]
+# Deprecated alias for the previous spelling. The GPU and cache-publish lanes
+# execute their workflow file from the default branch, which still passes
+# `cpu-faer` to this manifest while checking out the pull-request revision, so
+# the alias keeps those lanes buildable until the renamed spellings are on the
+# default branch. Remove it then (#2004).
+cpu-faer = ["native"]
 native = [
     "tenferro-ad/native",
     "tenferro-cpu/native",
