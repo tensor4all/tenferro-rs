@@ -187,6 +187,16 @@ does not compile Rust (PJRT plugin wheels remain a runtime download). The
 CUDA tutorial uses the workspace `ci` profile and is archived from `target/ci`,
 so it does not create a separate release-profile rebuild.
 
+On a pod archive-cache miss, the three compressed archives travel as five
+balanced, uncompressed Actions artifacts, enabling download-artifact's five
+concurrent artifact downloads. The trusted workflow embeds the transport shell
+steps so recovery of older tested refs does not depend on new helper files.
+The pod reconstructs the archive files and verifies their hosted SHA-256 sums
+before testing. Download retains a four-minute bound and one bounded retry;
+reconstruction has a one-minute bound. Transfer through verification is recorded
+in the job summary. A separate single artifact remains available for hosted
+cross-run reuse; the cache content key and restore-only ownership are unchanged.
+
 The archive is compiled with cudarc's CUDA 12.8 binding set, while CubeCL JITs
 PTX on the external runner. RunPod therefore accepts CUDA 12.4-or-newer hosts
 and chooses NVRTC after reading the assigned host's driver API: NVRTC 12.4 for

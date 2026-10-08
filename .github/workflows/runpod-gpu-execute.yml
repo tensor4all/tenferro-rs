@@ -490,6 +490,15 @@ jobs:
             tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
           key: ${{ inputs.archive_cache_key }}
 
+      - name: Start archive transfer timing
+        if: steps.cuda_archive_restore.outputs.cache-hit != 'true'
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          rm -rf archive-transfer
+          mkdir archive-transfer
+          date +%s > archive-transfer-start
+
       # A stalled artifact download usually stalls on one connection; one
       # bounded retry is cheaper than waiting it out (typical: 33 s).
       - name: Download CUDA/PJRT test archives
@@ -499,16 +508,38 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ inputs.archive_artifact_name }}
-          path: tenferro-rs
+          # download-artifact v8 downloads matching artifacts five at a time.
+          pattern: ${{ inputs.archive_artifact_name }}-transfer-part*
+          merge-multiple: true
+          path: archive-transfer
 
       - name: Retry CUDA/PJRT test archive download
         if: steps.cuda_archive_restore.outputs.cache-hit != 'true' && steps.archive_download.outcome != 'success'
         timeout-minutes: 4
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ inputs.archive_artifact_name }}
-          path: tenferro-rs
+          # download-artifact v8 downloads matching artifacts five at a time.
+          pattern: ${{ inputs.archive_artifact_name }}-transfer-part*
+          merge-multiple: true
+          path: archive-transfer
+
+      - name: Reconstruct and verify archive transfer
+        if: steps.cuda_archive_restore.outputs.cache-hit != 'true'
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          cd archive-transfer
+          # Require all five parts even when a download action matched none.
+          for part in 00 01 02 03 04; do
+            test -s "archives.part${part}"
+          done
+          cat archives.part00 archives.part01 archives.part02 archives.part03 archives.part04 | tar -xf - -C ../tenferro-rs
+          cd ../tenferro-rs
+          sha256sum --check ../archive-transfer/archives.sha256
+          elapsed=$(( $(date +%s) - $(cat ../archive-transfer-start) ))
+          echo "Archive transfer, reconstruction and verification: ${elapsed}s"
+          echo "Archive transfer, reconstruction and verification: ${elapsed}s" >> "${GITHUB_STEP_SUMMARY}"
+          rm -rf ../archive-transfer ../archive-transfer-start
 
       - name: Log CUDA/PJRT archive source
         timeout-minutes: 1
