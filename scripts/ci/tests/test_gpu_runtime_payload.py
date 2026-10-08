@@ -165,3 +165,10 @@ else:
         for bundle in ('common', 'cuda12.6', 'cuda12.8'):
             for part in range(5):
                 self.assertIn(f'-{bundle}-part{part:02}', prep)
+
+    def test_minimal_image_installs_verified_runner_dependencies_before_registration(self):
+        child = (ROOT / '.github/workflows/runpod-gpu-execute.yml').read_text()
+        startup = step_script(child, 'Provision cheapest compatible RunPod pod')
+        self.assertLess(startup.index('sha256sum -c'), startup.index('./bin/installdependencies.sh'))
+        self.assertLess(startup.index('./bin/installdependencies.sh'),
+                        startup.index('./run.sh --jitconfig'))

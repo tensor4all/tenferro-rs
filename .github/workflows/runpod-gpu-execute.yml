@@ -373,6 +373,10 @@ jobs:
 
           tar xzf "${RUNNER_TARBALL}"
 
+          # Minimal CUDA images lack the ICU/runtime libraries required by
+          # Runner.Listener. Install from the verified runner distribution.
+          ./bin/installdependencies.sh
+
           ./run.sh --jitconfig "${RUNNER_JIT_CONFIG}"
           EOS
 
