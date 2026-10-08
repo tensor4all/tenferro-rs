@@ -116,14 +116,10 @@ pub fn runtime_engine_registration_with_id(
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
     let allocation_domain = backend.allocation_domain();
-    let execution_info = backend.execution_info();
-    let provider_id = match execution_info.backend_kind() {
-        crate::CpuBackendKind::Faer => "tenferro.cpu.faer",
-        crate::CpuBackendKind::Blas => "tenferro.cpu.blas",
-    };
+    let provider_id = crate::cpu_provider_id();
     let provider_device_identity = ProviderDeviceIdentity::new(
         ProviderId::new(provider_id)?,
-        format!("domain:{}", execution_info.domain_id().as_u64()),
+        format!("domain:{}", backend.engine.domain().id().as_u64()),
     )?;
     let ingress = InputIngressContract::new(
         InputPlacementContract::new(move |placement, candidate| {

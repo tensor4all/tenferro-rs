@@ -543,7 +543,7 @@ fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
     assert!((actual.im - expected.im).abs() < 1.0e-5);
 }
 
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 #[test]
 fn test_dot_general_read_blas_negative_stride_view_falls_back() {
     let lhs_source =
@@ -561,7 +561,7 @@ fn test_dot_general_read_blas_negative_stride_view_falls_back() {
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
+    let mut backend = CpuBackend::new();
 
     let out = tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |session| {
         session.dot_general_read(

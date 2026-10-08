@@ -1,72 +1,22 @@
-#![cfg(all(feature = "cpu-blas", feature = "provider-inject"))]
+#![cfg(all(feature = "blas", feature = "provider-inject"))]
 
 use std::ffi::{c_char, c_void};
-use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::Once;
 
 use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
     LapackProviderPtrSet, ProviderAbi,
 };
-use tenferro_cpu::{
-    discover_cpu_topology, CpuBackend, CpuBackendError, CpuBackendKind, CpuDomainExecutor,
-    CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuProviderBundle,
-    CpuProviderBundleInstallError, CpuProviderDomainError, CpuProviderSlot, ExternalCpuDomain,
-    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
-};
-use tenferro_tensor::{
-    BackendSessionHost, CpuDomainId, DotGeneralConfig, Tensor, TensorRead, TypedTensor,
-};
+use tenferro_cpu::CpuBackend;
+use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TypedTensor};
 
 static REGISTER_ONCE: Once = Once::new();
-static TEST_LOCK: Mutex<()> = Mutex::new(());
 static DGEMM_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGESC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETRF_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETRS_CALLS: AtomicUsize = AtomicUsize::new(0);
-
-#[derive(Debug)]
-struct InlineExternalExecutor;
-
-impl CpuDomainExecutor for InlineExternalExecutor {
-    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
-        CpuDomainExecutorCapabilities {
-            worker_count: NonZeroUsize::new(1).unwrap(),
-            outer_parallelism: false,
-            inner_parallelism: CpuInnerParallelism::None,
-            reentrancy: CpuExecutorReentrancy::Rejected,
-            affinity: CpuExecutorAffinity::CallerDeclaredUnverified,
-            shutdown: CpuExecutorShutdown::CallerOwned,
-        }
-    }
-
-    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
-        for index in 0..jobs.len() {
-            jobs.run(index)?;
-        }
-        Ok(())
-    }
-
-    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
-        job.run()
-    }
-}
-
-fn all_allowed_external_domain(id: CpuDomainId) -> ExternalCpuDomain {
-    let topology = discover_cpu_topology().expect("test host should expose CPU topology");
-    ExternalCpuDomain::new(
-        id,
-        ResolvedCpuPlacement::AllAllowed {
-            cpus: topology.allowed_cpus().clone(),
-        },
-        Arc::new(InlineExternalExecutor),
-        NonZeroUsize::new(1).unwrap(),
-    )
-    .unwrap()
-}
 
 fn register_test_ptrs_once() {
     REGISTER_ONCE.call_once(|| unsafe {
@@ -218,45 +168,8 @@ unsafe extern "C" fn test_dgetrs(
 }
 
 #[test]
-fn external_managed_constructor_validates_blas_or_custom_bundle_atomically() {
-    let standard_error = CpuBackend::from_external_managed_domains(
-        CpuDomainId::new(40),
-        [all_allowed_external_domain(CpuDomainId::new(40))],
-    )
-    .unwrap_err();
-    let CpuBackendError::Tensor(tensor_error) = &standard_error else {
-        panic!("uncontrolled standard BLAS should retain the tensor error wrapper");
-    };
-    let install_error = std::error::Error::source(tensor_error)
-        .and_then(|source| source.downcast_ref::<CpuProviderBundleInstallError>())
-        .expect("standard BLAS rejection should retain the typed install source");
-    assert!(matches!(
-        install_error,
-        CpuProviderBundleInstallError::IncompatibleDomain {
-            domain_id,
-            provider: CpuProviderSlot::Gemm,
-            source: CpuProviderDomainError::ThreadCountNotEnforceable { .. },
-        } if *domain_id == CpuDomainId::new(40)
-    ));
-
-    // This fixture uses the native provider only as a controlled capability
-    // descriptor. Applications can supply their own provider implementations
-    // through the same public constructor even when BLAS is the compiled kind.
-    let controlled = CpuProviderBundle::builder(CpuBackendKind::Faer)
-        .build()
-        .unwrap();
-    let backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
-        CpuDomainId::new(41),
-        [all_allowed_external_domain(CpuDomainId::new(41))],
-        controlled.clone(),
-    )
-    .unwrap();
-    assert!(backend.provider_bundle().shares_identity_with(&controlled));
-}
-
-#[test]
 fn provider_inject_dot_general_uses_registered_blas() {
-    let _guard = TEST_LOCK
+    let _guard = crate::PROVIDER_INJECT_TEST_LOCK
         .lock()
         .expect("provider-inject test lock poisoned");
     register_test_ptrs_once();
@@ -269,8 +182,7 @@ fn provider_inject_dot_general_uses_registered_blas() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
-    assert_eq!(backend.kind(), CpuBackendKind::Blas);
+    let mut backend = CpuBackend::with_threads(1).unwrap();
     let c = backend
         .with_backend_session(|session| {
             session.dot_general_read(
@@ -298,7 +210,7 @@ fn provider_inject_dot_general_uses_registered_blas() {
 
 #[test]
 fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
-    let _guard = TEST_LOCK
+    let _guard = crate::PROVIDER_INJECT_TEST_LOCK
         .lock()
         .expect("provider-inject test lock poisoned");
     register_test_ptrs_once();
@@ -311,7 +223,7 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
         TypedTensor::from_vec_col_major(vec![1, 2], vec![3.0, 4.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
     let c = backend
         .with_backend_session(|session| {
             session.dot_general_read(
@@ -339,7 +251,7 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
 
 #[test]
 fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
-    let _guard = TEST_LOCK
+    let _guard = crate::PROVIDER_INJECT_TEST_LOCK
         .lock()
         .expect("provider-inject test lock poisoned");
     register_test_ptrs_once();
@@ -350,7 +262,7 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
         TypedTensor::from_vec_col_major(vec![2, 1, 2], vec![3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
     let c = backend
         .with_backend_session(|session| {
             session.dot_general_read(

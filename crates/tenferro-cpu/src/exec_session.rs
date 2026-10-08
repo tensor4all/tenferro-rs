@@ -14,8 +14,7 @@ use tenferro_tensor::{
 
 use super::backend::{elementwise_read_into_fallback_with_pool, tag_fresh_output, FreshCpuOutput};
 use super::indexed_plan_cache::IndexedPlanCache;
-use super::provider::{CpuExecutionContext, CpuOperationEntry, CpuProviderOutcome};
-use super::CpuProviderBundle;
+use super::provider::{CpuExecutionContext, CpuOperationEntry};
 use super::{
     analytic, copy_tensor_read_into, elementwise, gemm, indexing,
     materialize_tensor_read_in_domain, reduction, structural,
@@ -29,12 +28,11 @@ pub(super) struct CpuExecSessionMarker;
 #[doc(hidden)]
 pub struct CpuExecSession<'a> {
     pub(crate) entry: CpuOperationEntry<'a>,
+    pub(crate) context: Option<&'a crate::CpuContext>,
     pub(crate) entered: Option<CpuExecutionContext<'a>>,
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
     pub(crate) indexed_plan_cache: &'a mut IndexedPlanCache,
-    pub(crate) providers: &'a CpuProviderBundle,
-    pub(crate) backend_kind: super::CpuBackendKind,
     pub(crate) allocation_domain: Option<&'a Arc<dyn SharedTensorAllocationDomain>>,
 }
 
@@ -157,32 +155,6 @@ fn flatten_compact_read(
 }
 
 impl CpuExecSession<'_> {
-    /// Return the provider selected by the owning CPU backend.
-    #[doc(hidden)]
-    pub fn kind(&self) -> super::CpuBackendKind {
-        self.backend_kind
-    }
-
-    /// The provider extension of type `E` installed on this session's backend
-    /// (see [`crate::CpuProviderBundleBuilder::extension`]).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
-    /// use tenferro_tensor::BackendSessionHost;
-    /// let mut backend = CpuBackend::with_threads(1)?;
-    /// let none = backend.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |cpu| cpu.provider_extension::<u32>().is_none())
-    ///         .expect("a CPU backend session")
-    /// })?;
-    /// assert!(none);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn provider_extension<E: std::any::Any + Send + Sync>(&self) -> Option<Arc<E>> {
-        self.providers.extension::<E>()
-    }
-
     /// Return the resource-domain identity selected for this session.
     #[doc(hidden)]
     pub fn domain_id(&self) -> super::CpuDomainId {
@@ -195,30 +167,58 @@ impl CpuExecSession<'_> {
         self.allocation_domain.cloned()
     }
 
-    /// Replace this session's effective batch policy, returning the previous one.
-    pub(crate) fn replace_batch_policy(
-        &mut self,
-        policy: crate::CpuBatchPolicy,
-    ) -> crate::CpuBatchPolicy {
-        let previous = self.entry.batch_policy();
-        self.set_batch_policy(policy);
-        previous
-    }
-
-    fn set_batch_policy(&mut self, policy: crate::CpuBatchPolicy) {
-        self.entry = self.entry.with_batch_policy(policy);
-        self.entered = self
-            .entered
-            .map(|context| context.with_batch_policy(policy));
-    }
-
-    /// Run a CPU-owned linalg kernel inside this already-entered session.
+    /// Borrow CPU-owned linalg resources on the caller thread.
+    ///
+    /// The numerical kernel chooses its own execution through the borrowed
+    /// context; this resource callback itself is never submitted to a pool.
     #[doc(hidden)]
-    pub fn with_linalg_pool<R: Send>(
+    pub fn with_linalg_pool<R>(
         &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R>,
     ) -> crate::Result<R> {
-        self.run_native_with_context(op)
+        let buffers = &mut *self.buffers;
+        if let Some(context) = self.entered {
+            return op(&context, buffers);
+        }
+        let mode = self.entry.preferred_engine_mode();
+        self.entry.enter(mode, |context| op(context, buffers))
+    }
+
+    /// Borrow retained contraction execution resources on the caller thread.
+    /// Numerical scheduling is performed by the lower-library operation.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_cpu::{CpuBackend, with_cpu_exec_session};
+    /// use tenferro_tensor::BackendSessionHost;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let len = backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| cpu.with_contraction_exec(|_, buffers, workspaces| {
+    ///         workspaces.with_scratch::<f64, _>(4, buffers.max_retained_capacity_bytes(), |scratch| Ok(scratch.len()))
+    ///     })).unwrap()
+    /// })??;
+    /// assert_eq!(len, 4);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn with_contraction_exec<R>(
+        &mut self,
+        op: impl FnOnce(
+            &cpueinsum::Exec<'_>,
+            &mut BufferPool,
+            &crate::ContractionWorkspaces,
+        ) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        let context = self.context.ok_or_else(|| {
+            crate::Error::unsupported(
+                "CPU contraction resources",
+                "owned execution resources are required",
+            )
+        })?;
+        let _retention =
+            context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
+        let exec = context.contraction_exec(self.entry.thread_budget().get())?;
+        op(&exec, self.buffers, context.contraction_workspaces())
     }
 
     fn run_native<R: Send>(
@@ -230,11 +230,9 @@ impl CpuExecSession<'_> {
             return context.with_native_parallelism(|| op(buffers));
         }
         let mode = self.entry.preferred_engine_mode();
-        self.entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| op(buffers))
-            })
-            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+        self.entry.enter(mode, |context| {
+            context.with_native_parallelism(|| op(buffers))
+        })
     }
 
     fn run_native_fresh<R: FreshCpuOutput + Send>(
@@ -250,18 +248,16 @@ impl CpuExecSession<'_> {
             });
         }
         let mode = self.entry.preferred_engine_mode();
-        self.entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| {
-                    let mut output = op(buffers)?;
-                    output.tag_fresh(context.domain_id());
-                    Ok(output)
-                })
+        self.entry.enter(mode, |context| {
+            context.with_native_parallelism(|| {
+                let mut output = op(buffers)?;
+                output.tag_fresh(context.domain_id());
+                Ok(output)
             })
-            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+        })
     }
 
-    #[cfg(feature = "cpu-faer")]
+    #[cfg(feature = "native")]
     pub(crate) fn with_faer_parallelism(
         &mut self,
         callback: impl FnOnce(faer::Par) -> crate::Result<()> + Send,
@@ -278,11 +274,9 @@ impl CpuExecSession<'_> {
             return context.with_native_parallelism(|| op(&context, buffers));
         }
         let mode = self.entry.preferred_engine_mode();
-        self.entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| op(context, buffers))
-            })
-            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+        self.entry.enter(mode, |context| {
+            context.with_native_parallelism(|| op(context, buffers))
+        })
     }
 
     fn run_native_fresh_with_context<R: FreshCpuOutput + Send>(
@@ -298,15 +292,13 @@ impl CpuExecSession<'_> {
             });
         }
         let mode = self.entry.preferred_engine_mode();
-        self.entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| {
-                    let mut output = op(context, buffers)?;
-                    output.tag_fresh(context.domain_id());
-                    Ok(output)
-                })
+        self.entry.enter(mode, |context| {
+            context.with_native_parallelism(|| {
+                let mut output = op(context, buffers)?;
+                output.tag_fresh(context.domain_id());
+                Ok(output)
             })
-            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+        })
     }
 
     fn run_native_fresh_with_indexed_context<R: FreshCpuOutput + Send>(
@@ -328,15 +320,13 @@ impl CpuExecSession<'_> {
             });
         }
         let mode = self.entry.preferred_engine_mode();
-        self.entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| {
-                    let mut output = op(context, buffers, indexed_plan_cache)?;
-                    output.tag_fresh(context.domain_id());
-                    Ok(output)
-                })
+        self.entry.enter(mode, |context| {
+            context.with_native_parallelism(|| {
+                let mut output = op(context, buffers, indexed_plan_cache)?;
+                output.tag_fresh(context.domain_id());
+                Ok(output)
             })
-            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+        })
     }
 }
 
@@ -578,63 +568,38 @@ impl CpuExecSession<'_> {
             config,
             "dot_general",
         )?;
-        self.providers.preflight_dot_general(&self.entry)?;
         let accumulation = DotGeneralAccumulation {
             lhs_conj,
             rhs_conj,
             alpha: ContractionScalar::one(dtype)?,
             beta: ContractionScalar::zero(dtype)?,
         };
-
-        // Uninitialized fast path: beta == 0 here by construction, so the
-        // dot output is fully overwritten. Take it only when the GEMM
-        // provider is the guaranteed consumer (no general-contraction
-        // provider) and exposes the full-overwrite witness. Operand packing
-        // draws on the session pool while the destination is its own
-        // checkout; an unsupported plan falls back below.
-        let providers = self.providers;
-        let runtime = providers.dot_general();
-        if runtime.general.is_none() && runtime.gemm.uninit_provider().is_some() {
-            let mut output = crate::dot_runtime::UninitTensor::acquire(
-                self.buffers,
-                dtype,
-                output_shape.clone(),
-            )?;
-            let outcome = runtime.execute_dot_into_uninit(
-                providers.inner(),
-                &self.entry,
-                self.entered.as_ref(),
+        if matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
+            let context = self.context.ok_or_else(|| {
+                crate::Error::unsupported(
+                    "dot_general",
+                    "CPU contraction requires owned execution resources",
+                )
+            })?;
+            let _retention =
+                context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
+            let exec = context.contraction_exec(self.entry.thread_budget().get())?;
+            let mut output = crate::contraction::dot_fresh(
+                &exec,
                 self.buffers,
                 self.gemm_analysis_cache,
                 cache_slot,
-                &lhs,
-                &rhs,
+                lhs,
+                rhs,
                 config,
                 accumulation,
-                &output_shape,
-                output.as_uninit_bytes_mut(),
-            );
-            match outcome {
-                Ok(CpuProviderOutcome::Executed) => {
-                    // SAFETY: the GEMM provider's unsafe impl guarantees every
-                    // destination element is initialized before `Executed`.
-                    let mut output = unsafe { output.assume_init()? };
-                    tag_fresh_output(&mut output, self.entry.domain_id());
-                    return Ok(output);
-                }
-                Ok(CpuProviderOutcome::Unsupported(_)) => {
-                    // Discard the uninit checkout; fall back to the zeroed path.
-                }
-                Err(error) => return Err(error),
-            }
+                output_shape,
+            )?;
+            tag_fresh_output(&mut output, self.entry.domain_id());
+            return Ok(output);
         }
-
         let mut output = allocate_dot_output(self.buffers, dtype, output_shape)?;
-        self.providers.execute_dot_general_into_scoped(
-            &self.entry,
-            self.entered.as_ref(),
-            self.buffers,
-            self.gemm_analysis_cache,
+        self.dot_general_read_into_accum_cached(
             cache_slot,
             lhs,
             rhs,
@@ -676,18 +641,7 @@ impl TensorDot for CpuExecSession<'_> {
         accumulation: DotGeneralAccumulation,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        self.providers.execute_dot_general_into_scoped(
-            &self.entry,
-            self.entered.as_ref(),
-            self.buffers,
-            self.gemm_analysis_cache,
-            None,
-            lhs,
-            rhs,
-            config,
-            accumulation,
-            out,
-        )
+        self.dot_general_read_into_accum_cached(None, lhs, rhs, config, accumulation, out)
     }
 
     fn dot_general_with_conj(
@@ -755,31 +709,62 @@ impl SessionCachedDot for CpuExecSession<'_> {
         accumulation: DotGeneralAccumulation,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        self.providers.execute_dot_general_into_scoped(
-            &self.entry,
-            self.entered.as_ref(),
-            self.buffers,
-            self.gemm_analysis_cache,
-            cache_slot,
-            lhs,
-            rhs,
-            config,
-            accumulation,
-            out,
-        )
+        if matches!(
+            lhs.dtype(),
+            DType::F32 | DType::F64 | DType::C32 | DType::C64
+        ) {
+            let context = self.context.ok_or_else(|| {
+                crate::Error::unsupported(
+                    "dot_general",
+                    "CPU contraction requires owned execution resources",
+                )
+            })?;
+            let _retention =
+                context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
+            let exec = context.contraction_exec(self.entry.thread_budget().get())?;
+            return crate::contraction::dot_into(
+                &exec,
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                lhs,
+                rhs,
+                config,
+                accumulation,
+                out,
+            );
+        }
+        // Only floating and complex contractions have a CPU numerical route;
+        // integer and Bool operands are rejected before the output is touched.
+        Err(crate::Error::unsupported_dtype(
+            "dot_general",
+            lhs.dtype(),
+            crate::cpu_contraction_unsupported_dtype_message(lhs.dtype()),
+        ))
     }
 
     fn grouped_gemm_cached(
         &mut self,
-        _cache_slot: Option<usize>,
+        cache_slot: Option<usize>,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &GroupedGemmConfig<'_>,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        self.providers.execute_grouped_gemm_scoped(
-            &self.entry,
-            self.entered.as_ref(),
+        let context = self.context.ok_or_else(|| {
+            crate::Error::unsupported(
+                "grouped_gemm",
+                "CPU contraction requires owned execution resources",
+            )
+        })?;
+        let _retention =
+            context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
+        let exec = context.contraction_exec(self.entry.thread_budget().get())?;
+        crate::contraction::grouped::execute(
+            &exec,
+            self.buffers,
+            self.gemm_analysis_cache,
+            cache_slot,
             lhs,
             rhs,
             config,

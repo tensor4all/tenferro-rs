@@ -1,17 +1,14 @@
+// The provider-pointer registry is process-global, so every test that
+// registers or observes an injected CBLAS/LAPACK symbol serializes on this lock.
+#[cfg(all(feature = "blas", feature = "provider-inject"))]
+pub(crate) static PROVIDER_INJECT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[path = "integration/backend_capability_contracts.rs"]
 mod backend_capability_contracts;
-#[path = "integration/batch_route_parity.rs"]
-mod batch_route_parity;
 #[path = "integration/inject_dual_abi_tests.rs"]
 mod inject_dual_abi_tests;
 #[path = "integration/inject_tests.rs"]
 mod inject_tests;
-#[path = "integration/provider_extensions.rs"]
-mod provider_extensions;
-#[path = "integration/provider_feature_contract.rs"]
-mod provider_feature_contract;
-#[path = "integration/provider_pool_access.rs"]
-mod provider_pool_access;
 #[path = "integration/runtime_error_tests.rs"]
 mod runtime_error_tests;
 #[path = "integration/static_replay.rs"]

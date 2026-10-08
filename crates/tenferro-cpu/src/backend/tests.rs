@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 use tenferro_tensor::DotGeneralConfig;
 
@@ -6,11 +5,9 @@ use super::*;
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, SessionEntryError};
 
-mod batch_policy;
 mod execution_scope;
-mod external_managed;
 mod output_affinity;
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 mod provider_session;
 
 /// Run `f` on the CPU execution session of one fresh backend session entry.
@@ -38,6 +35,23 @@ fn assert_reentered(error: &crate::Error) {
             crate::Error::SessionEntry {
                 source: SessionEntryError::Reentered {
                     backend: CPU_BACKEND
+                }
+            }
+        ),
+        "{error}"
+    );
+}
+
+fn assert_worker_rejected(error: &crate::Error) {
+    assert!(
+        matches!(
+            error,
+            crate::Error::SessionEntry {
+                source: SessionEntryError::Reentered {
+                    backend: CPU_BACKEND
+                } | SessionEntryError::Contended {
+                    backend: CPU_BACKEND,
+                    ..
                 }
             }
         ),
@@ -128,30 +142,6 @@ fn fresh_tagging_is_field_only_and_has_no_dynamic_lookup_or_metadata_clone() {
         assert!(
             !tagging.contains(forbidden),
             "fresh CPU tagging must not contain `{forbidden}`"
-        );
-    }
-}
-
-#[test]
-fn provider_bundle_installation_validates_lazy_numa_domains_at_the_source_boundary() {
-    let backend = include_str!("../backend.rs");
-    let validation = backend
-        .split_once("fn validate_provider_bundle_for_domains")
-        .expect("backend should centralize provider/domain validation")
-        .1
-        .split_once("pub fn allocation_domain")
-        .expect("allocation-domain API should follow provider validation")
-        .0;
-
-    for required in [
-        "CpuEngineRegistry::ManagedLazy",
-        "topology.nodes()",
-        "node_domain_ids",
-        "CpuProviderDomainContract::CooperativeCpuSet",
-    ] {
-        assert!(
-            validation.contains(required),
-            "lazy managed provider validation must retain `{required}`"
         );
     }
 }
@@ -285,11 +275,23 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
     assert!(include_str!("../blas1.rs").contains("strided_kernel::axpby_accum"));
 }
 
+// The shared native-participant fixture lives in the broad unit suite, which
+// `provider-inject` excludes (its symbols are registered by the integration
+// fixture instead).
+#[cfg(not(feature = "provider-inject"))]
 #[test]
-fn direct_native_scope_uses_the_selected_rayon_budget() {
+fn explicit_native_operation_uses_the_selected_rayon_budget() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
+    let caller = std::thread::current().id();
     let participants = with_cpu_session(&mut backend, |cpu| {
-        cpu.with_linalg_pool(|_, _| Ok(crate::provider::tests::run_unscoped_native_map(true)))
+        cpu.with_linalg_pool(|context, _| {
+            assert_eq!(std::thread::current().id(), caller);
+            context.with_native_parallelism(|| {
+                Ok(crate::tests::native_participants::run_unscoped_native_map(
+                    true,
+                ))
+            })
+        })
     })
     .unwrap();
 
@@ -298,100 +300,25 @@ fn direct_native_scope_uses_the_selected_rayon_budget() {
 }
 
 #[test]
-fn default_backend_kind_prefers_blas_when_compiled() {
-    let backend = CpuBackend::new();
-
-    #[cfg(feature = "cpu-blas")]
-    assert_eq!(backend.kind(), CpuBackendKind::Blas);
-    #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
-    assert_eq!(backend.kind(), CpuBackendKind::Faer);
-}
-
-#[test]
-fn provider_bundle_is_installed_at_construction_and_shared_by_clones() {
-    let bundle = crate::dot_runtime::CpuProviderBundle::builder(CpuBackendKind::Faer)
-        .build()
-        .unwrap();
-    let backend = CpuBackend::new()
-        .with_provider_bundle(bundle.clone())
-        .unwrap();
-    let cloned = backend.clone();
-
-    assert!(Arc::ptr_eq(backend.provider_bundle.inner(), bundle.inner()));
-    assert!(Arc::ptr_eq(cloned.provider_bundle.inner(), bundle.inner()));
-}
-
-#[test]
-fn provider_bundle_custom_builder_rejects_missing_mandatory_slots() {
-    let error = crate::dot_runtime::CpuProviderBundle::custom_builder()
-        .build()
-        .unwrap_err();
-    assert!(error.to_string().contains("GEMM"));
-    assert!(error.to_string().contains("layout"));
-}
-
-#[derive(Debug)]
-struct CountingGeneralProvider {
-    calls: Arc<AtomicUsize>,
-}
-
-impl crate::provider::CpuGeneralContractionProvider for CountingGeneralProvider {
-    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
-        crate::provider_capability::engine_worker_capabilities()
+fn workspace_contention_does_not_partially_clear_buffers_or_change_limits() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let engine = Arc::clone(&backend.engine);
+    {
+        let mut resources = engine.resources.lock().unwrap();
+        <f64 as PoolScalar>::pool_release(&mut resources.buffers, Vec::with_capacity(16));
     }
-
-    fn dot_general(
-        &self,
-        _context: &crate::provider::CpuExecutionContext<'_>,
-        _request: crate::provider::CpuDotGeneralRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
-        self.calls.fetch_add(1, AtomicOrdering::Relaxed);
-        Ok(crate::provider::CpuProviderOutcome::Executed)
-    }
-}
-
-#[test]
-fn direct_and_cached_sessions_share_the_installed_provider_slot() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
-        .prefer_general_contraction_provider(Arc::new(CountingGeneralProvider {
-            calls: Arc::clone(&calls),
-        }))
-        .build()
+    let before = backend.buffer_pool_len().unwrap();
+    let limit = backend.buffer_pool_limit_bytes();
+    let _workspace = engine
+        .context
+        .as_ref()
+        .contraction_workspaces()
+        .lock()
         .unwrap();
-    let mut backend = CpuBackend::with_threads(1)
-        .unwrap()
-        .with_provider_bundle(bundle)
-        .unwrap();
-    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
-    };
-
-    backend
-        .with_backend_session(|__s| {
-            __s.dot_general_read(
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_tensor(&rhs),
-                &config,
-            )
-        })
-        .unwrap()
-        .unwrap();
-    assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
-
-    backend
-        .with_backend_session(|session| {
-            session
-                .dot_general_cached(None, &lhs, &rhs, &config)
-                .unwrap();
-        })
-        .unwrap();
-    assert_eq!(calls.load(AtomicOrdering::Relaxed), 2);
+    assert!(backend.reset_buffer_pool().is_err());
+    assert!(backend.set_buffer_pool_limit_bytes(0).is_err());
+    assert_eq!(backend.buffer_pool_len().unwrap(), before);
+    assert_eq!(backend.buffer_pool_limit_bytes(), limit);
 }
 
 #[test]
@@ -416,90 +343,6 @@ fn public_buffer_pool_controls_report_poisoned_engine_resources() {
         assert!(error.to_string().contains("poison"));
     }
     assert_eq!(backend.buffer_pool_limit_bytes(), original_limit);
-}
-
-#[test]
-fn public_buffer_pool_controls_report_poisoned_engine_registry() {
-    let backend = CpuBackend::new();
-    let shared = Arc::clone(&backend.shared);
-    let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        let CpuEngineRegistry::ManagedLazy(registry) = &shared.engines else {
-            panic!("default backend should use the managed engine registry");
-        };
-        let _engines = registry.node_engines.lock().unwrap();
-        panic!("poison CPU engine registry for regression test");
-    }));
-    assert!(poison.is_err());
-
-    let error = backend.buffer_pool_len().unwrap_err();
-    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
-    assert!(error.to_string().contains("engine registry lock poisoned"));
-}
-
-#[test]
-fn explicit_backend_kind_constructor_records_selection() {
-    let backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
-
-    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
-}
-
-#[derive(Debug)]
-struct IdentityTestGemmProvider;
-
-impl crate::provider::CpuGemmProvider for IdentityTestGemmProvider {
-    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
-        crate::provider_capability::engine_worker_capabilities()
-    }
-
-    fn gemm(
-        &self,
-        _context: &crate::CpuExecutionContext<'_>,
-        _request: crate::provider::CpuGemmRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
-        Ok(crate::provider::CpuProviderOutcome::Unsupported(
-            crate::provider::CpuProviderUnsupported::RuntimeUnavailable,
-        ))
-    }
-
-    fn strided_batched_gemm(
-        &self,
-        _context: &crate::CpuExecutionContext<'_>,
-        _request: crate::provider::CpuGemmRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
-        Ok(crate::provider::CpuProviderOutcome::Unsupported(
-            crate::provider::CpuProviderUnsupported::RuntimeUnavailable,
-        ))
-    }
-
-    fn grouped_gemm(
-        &self,
-        _context: &crate::CpuExecutionContext<'_>,
-        _request: crate::provider::CpuGroupedGemmRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
-        Ok(crate::provider::CpuProviderOutcome::Unsupported(
-            crate::provider::CpuProviderUnsupported::RuntimeUnavailable,
-        ))
-    }
-}
-
-#[test]
-fn cpu_runtime_identity_changes_when_provider_bundle_changes() {
-    let backend = CpuBackend::new();
-    let replacement = backend
-        .clone()
-        .with_provider_bundle(
-            CpuProviderBundle::builder(backend.kind())
-                .gemm_provider(Arc::new(IdentityTestGemmProvider))
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    assert_eq!(
-        backend.runtime_identity(),
-        backend.clone().runtime_identity()
-    );
-    assert_ne!(backend.runtime_identity(), replacement.runtime_identity());
 }
 
 #[test]
@@ -539,79 +382,9 @@ fn cpu_backend_can_be_bound_to_a_shared_allocation_domain() {
 }
 
 #[test]
-#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
-fn placement_handle_clones_share_coordinator_engine_and_resources() {
-    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
-    let mut placed = backend.for_placement(CpuPlacement::AllAllowed).unwrap();
-    let clone = placed.clone();
-
-    assert_ne!(backend.runtime_identity(), placed.runtime_identity());
-    assert_eq!(placed.runtime_identity(), clone.runtime_identity());
-    assert_eq!(
-        placed.coordinator_id_for_test(),
-        clone.coordinator_id_for_test()
-    );
-    assert_eq!(placed.placement(), CpuPlacement::AllAllowed);
-    assert!(matches!(
-        placed.resolved_placement(),
-        Some(ResolvedCpuPlacement::AllAllowed { .. })
-    ));
-    with_cpu_session(&mut placed, |cpu| {
-        cpu.with_linalg_pool(|_, pool| {
-            <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
-            Ok(())
-        })
-    })
-    .unwrap();
-    assert_eq!(clone.buffer_pool_len().unwrap(), 1);
-}
-
-#[test]
-#[cfg(feature = "cpu-faer")]
-fn placement_capabilities_follow_public_backend_kind() {
-    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
-    assert!(backend.supports_placement(CpuPlacement::Auto));
-    assert_eq!(
-        backend.supports_placement(CpuPlacement::AllAllowed),
-        cfg!(any(target_os = "linux", target_os = "android"))
-    );
-    assert!(!backend.topology().allowed_cpus().is_empty());
-}
-
-#[test]
-fn execution_info_exposes_stable_kind_and_placement_contract() {
-    let backend = CpuBackend::new();
-    let info = backend.execution_info();
-
-    assert_eq!(info.backend_kind(), backend.kind());
-    assert_eq!(info.requested_placement(), CpuPlacement::Auto);
-    assert_eq!(info.resolved_placement(), backend.resolved_placement());
-    assert_eq!(info.topology(), backend.topology());
-    assert_eq!(info.worker_count(), backend.num_threads());
-    #[cfg(feature = "cpu-blas")]
-    assert_eq!(
-        info.execution_mode(),
-        CpuExecutionMode::ProviderDefaultExclusive
-    );
-    #[cfg(all(
-        not(feature = "cpu-blas"),
-        feature = "cpu-faer",
-        any(target_os = "linux", target_os = "android")
-    ))]
-    assert_eq!(info.execution_mode(), CpuExecutionMode::Managed);
-    #[cfg(all(
-        not(feature = "cpu-blas"),
-        feature = "cpu-faer",
-        not(any(target_os = "linux", target_os = "android"))
-    ))]
-    assert_eq!(info.execution_mode(), CpuExecutionMode::Compatibility);
-    assert!(!info.provider_diagnostic().is_empty());
-}
-
-#[test]
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 fn single_thread_blas_session_reuses_context_with_sequential_policy() {
-    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
     backend
         .with_backend_session(|session| {
             crate::with_cpu_exec_session(session, |cpu| {
@@ -630,38 +403,9 @@ fn single_thread_blas_session_reuses_context_with_sequential_policy() {
 }
 
 #[test]
-#[cfg(feature = "cpu-blas")]
-fn blas_auto_is_provider_exclusive_and_explicit_placement_is_rejected() {
-    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
-
-    assert!(backend.for_placement(CpuPlacement::AllAllowed).is_err());
-    assert!(!backend.supports_placement(CpuPlacement::AllAllowed));
-    assert!(backend.resolved_placement().is_none());
-}
-
-#[test]
-#[cfg(feature = "cpu-blas")]
-fn independently_constructed_backends_share_global_provider_exclusion() {
-    let first = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
-    let second = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
-
-    let _permit = first.shared.arbiter.acquire_provider_exclusive().unwrap();
-    let second_arbiter = second.shared.arbiter.clone();
-    let blocked = std::thread::spawn(move || {
-        second_arbiter
-            .try_acquire_provider_exclusive()
-            .unwrap()
-            .is_none()
-    })
-    .join()
-    .unwrap();
-    assert!(blocked);
-}
-
-#[test]
-#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "android")))]
 fn direct_nested_clone_install_is_rejected_in_a_managed_scope() {
-    let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let backend = CpuBackend::with_threads(2).unwrap();
     let nested = backend.clone();
     let mut inner_ran = false;
 
@@ -674,10 +418,10 @@ fn direct_nested_clone_install_is_rejected_in_a_managed_scope() {
 }
 
 #[test]
-#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "android")))]
 fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
-    let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
-    let middle = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let outer = CpuBackend::with_threads(2).unwrap();
+    let middle = CpuBackend::with_threads(2).unwrap();
 
     let nested_result = outer.install(|| middle.install(|| 11_u32)).unwrap();
 
@@ -685,7 +429,7 @@ fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
     let outer = CpuBackend::from_context(Arc::new(CpuContext::with_threads(2).unwrap()));
     let middle = CpuBackend::from_context(Arc::new(CpuContext::with_threads(2).unwrap()));
@@ -700,13 +444,13 @@ fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
         })
         .unwrap();
 
-    assert_reentered(&sibling_outcome.unwrap_err());
+    assert_worker_rejected(&sibling_outcome.unwrap_err());
 }
 
 #[test]
-#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "android")))]
 fn stolen_rayon_child_task_backend_reentry_is_rejected() {
-    let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let outer = CpuBackend::with_threads(2).unwrap();
     let nested = outer.clone();
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
@@ -727,13 +471,13 @@ fn stolen_rayon_child_task_backend_reentry_is_rejected() {
     let outcome = completed_rx
         .recv_timeout(Duration::from_secs(2))
         .expect("parallel child reentry should fail without deadlocking");
-    assert_reentered(&outcome.unwrap_err());
+    assert_worker_rejected(&outcome.unwrap_err());
 }
 
 #[test]
-#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "android")))]
 fn parallel_rayon_sibling_backend_reentry_is_rejected() {
-    let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let outer = CpuBackend::with_threads(2).unwrap();
     let first = outer.clone();
     let second = outer.clone();
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
@@ -756,12 +500,12 @@ fn parallel_rayon_sibling_backend_reentry_is_rejected() {
         let outcome = completed_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("parallel sibling reentry should fail without deadlocking");
-        assert_reentered(&outcome.unwrap_err());
+        assert_worker_rejected(&outcome.unwrap_err());
     }
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn shared_context_work_is_not_mistaken_for_backend_reentry() {
     let context = Arc::new(CpuContext::with_threads(2).unwrap());
     let backend = CpuBackend::from_context(Arc::clone(&context));
@@ -783,13 +527,13 @@ fn shared_context_work_is_not_mistaken_for_backend_reentry() {
 
     // Work on the shared context's pool is still inside the backend's
     // execution, so it cannot bypass backend exclusion.
-    assert_reentered(&outcome.unwrap_err());
+    assert_worker_rejected(&outcome.unwrap_err());
 }
 
 #[test]
-#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "android")))]
 fn shared_execution_scope_is_cleared_after_panic() {
-    let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let backend = CpuBackend::with_threads(2).unwrap();
 
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = backend.install(|| panic!("forced nested execution panic"));
@@ -800,9 +544,9 @@ fn shared_execution_scope_is_cleared_after_panic() {
 }
 
 #[test]
-#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "android")))]
 fn nested_clone_tensor_operation_is_rejected_in_a_managed_scope() {
-    let mut backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let mut backend = CpuBackend::with_threads(2).unwrap();
     let mut nested = backend.clone();
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
@@ -838,9 +582,9 @@ fn nested_clone_tensor_operation_is_rejected_in_a_managed_scope() {
 }
 
 #[test]
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 fn nested_provider_session_is_rejected() {
-    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
     let mut nested = backend.clone();
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
@@ -865,10 +609,10 @@ fn nested_provider_session_is_rejected() {
 }
 
 #[test]
-#[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
+#[cfg(all(feature = "native", feature = "blas"))]
 fn parallel_rayon_siblings_cannot_bypass_provider_exclusion() {
-    let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
-    let provider = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+    let outer = CpuBackend::with_threads(2).unwrap();
+    let provider = CpuBackend::with_threads(1).unwrap();
     let first = provider.clone();
     let second = provider;
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
@@ -892,100 +636,6 @@ fn parallel_rayon_siblings_cannot_bypass_provider_exclusion() {
             .recv_timeout(Duration::from_secs(2))
             .expect("provider sibling reentry should fail without deadlocking");
         assert_reentered(&outcome.unwrap_err());
-    }
-}
-
-#[test]
-#[cfg(feature = "cpu-blas")]
-fn explicit_blas_backend_kind_constructor_records_selection() {
-    let backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
-
-    assert_eq!(backend.kind(), CpuBackendKind::Blas);
-}
-
-#[test]
-fn with_threads_and_kind_records_selection_and_validates_threads() {
-    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::default_compiled()).unwrap();
-    assert_eq!(backend.num_threads(), 1);
-    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
-
-    let err = match CpuBackend::with_threads_and_kind(0, CpuBackendKind::default_compiled()) {
-        Ok(_) => panic!("expected invalid thread count to fail"),
-        Err(err) => err,
-    };
-    assert!(matches!(
-        err,
-        CpuBackendError::Tensor(crate::Error::Validation {
-            op: "CpuBackend::with_threads_and_kind",
-            ..
-        })
-    ));
-}
-
-#[test]
-#[cfg(not(feature = "cpu-blas"))]
-fn unavailable_blas_backend_kind_reports_config_errors() {
-    let err = match CpuBackend::with_kind(CpuBackendKind::Blas) {
-        Ok(_) => panic!("expected unavailable BLAS backend to fail"),
-        Err(err) => err,
-    };
-    assert!(matches!(
-        err,
-        CpuBackendError::Tensor(crate::Error::Validation {
-            op: "CpuBackend::with_kind",
-            ..
-        })
-    ));
-
-    let mut backend = CpuBackend::compatibility(
-        Arc::new(CpuContext::with_threads(1).unwrap()),
-        crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
-        CpuBackendKind::Blas,
-    );
-    let retained = with_cpu_session(&mut backend, |cpu| {
-        cpu.with_linalg_pool(|_, pool| {
-            <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
-            Ok(pool.len())
-        })
-    })
-    .unwrap();
-    assert_eq!(retained, 1);
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
-
-    let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: [0].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
-    };
-    let mut cache = gemm::GemmAnalysisCache::default();
-
-    for result in [
-        backend
-            .with_backend_session_cached(&mut cache, |__s| {
-                __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
-            })
-            .unwrap(),
-        backend
-            .with_backend_session_cached(&mut cache, |__s| {
-                __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, false, true)
-            })
-            .unwrap(),
-        backend
-            .with_backend_session(|__s| {
-                __s.dot_general_read(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
-                    &config,
-                )
-            })
-            .unwrap(),
-    ] {
-        let err = result.unwrap_err();
-        assert_eq!(err.kind(), tenferro_tensor::ErrorKind::Unsupported);
-        assert!(err.to_string().contains("GEMM"));
     }
 }
 
@@ -1161,7 +811,6 @@ fn backend_error_keeps_placement_failure_typed() {
         "CpuBackend::try_new",
         CpuPlacementError::TopologyDiscovery {
             requested: CpuPlacement::Auto,
-            backend: CpuBackendKind::Faer,
             source: CpuTopologyError::InvalidCpuList {
                 list: "bad".to_owned(),
                 reason: "test failure",
@@ -1172,7 +821,6 @@ fn backend_error_keeps_placement_failure_typed() {
         error.placement_error(),
         Some(CpuPlacementError::TopologyDiscovery {
             requested: CpuPlacement::Auto,
-            backend: CpuBackendKind::Faer,
             source: CpuTopologyError::InvalidCpuList { .. },
         })
     ));
@@ -1184,7 +832,6 @@ fn placement_error_conversion_uses_runtime_state_for_environment_failures() {
         "CpuBackend::try_new",
         CpuPlacementError::ManagedAffinityUnavailable {
             requested: CpuPlacement::AllAllowed,
-            backend: CpuBackendKind::Faer,
         },
     );
 
@@ -1197,71 +844,39 @@ fn placement_error_conversion_uses_runtime_state_for_environment_failures() {
 }
 
 #[test]
-fn placement_error_conversion_keeps_unsupported_affinity_distinct() {
-    let error = CpuBackendError::placement(
-        "CpuBackend::with_placement",
-        CpuPlacementError::ExternalProviderAffinityUnmanaged {
-            requested: CpuPlacement::AllAllowed,
-            backend: CpuBackendKind::Blas,
-        },
-    );
-
-    let error: crate::Error = error.into();
-    assert_eq!(error.kind(), crate::ErrorKind::Unsupported);
-    assert!(std::error::Error::source(&error).is_some());
-}
-
-#[test]
 fn fallible_backend_construction_preserves_topology_error_category() {
     let source = CpuTopologyError::InvalidCpuList {
         list: "not-a-cpu".to_owned(),
         reason: "component is not a CPU number",
     };
 
-    let error = resolve_discovered_topology(CpuBackendKind::Faer, Err(source)).unwrap_err();
+    let error = resolve_discovered_topology(Err(source)).unwrap_err();
     match error {
         CpuPlacementError::TopologyDiscovery {
             requested: CpuPlacement::Auto,
-            backend: CpuBackendKind::Faer,
             source: CpuTopologyError::InvalidCpuList { list, .. },
         } => assert_eq!(list, "not-a-cpu"),
         other => panic!("unexpected placement error: {other:?}"),
     }
 }
 
-#[test]
-#[cfg(feature = "cpu-faer")]
-fn unavailable_affinity_auto_placement_reuses_compatibility_engine() {
-    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
-
-    let placed = backend
-        .for_placement_with_affinity(CpuPlacement::Auto, false)
-        .unwrap();
-
-    assert_eq!(
-        placed.execution_info().execution_mode(),
-        CpuExecutionMode::Compatibility
-    );
-    assert_eq!(placed.context_id_for_test(), backend.context_id_for_test());
-}
-
 #[cfg(all(
-    feature = "cpu-faer",
+    feature = "native",
     not(any(target_os = "linux", target_os = "android"))
 ))]
 #[test]
-fn explicit_managed_affinity_reports_engine_construction_error_when_unsupported() {
-    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
-
-    let error = backend
-        .for_placement_with_affinity(CpuPlacement::AllAllowed, true)
+fn explicit_placement_reports_engine_construction_error_when_unsupported() {
+    let error = CpuBackend::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .build()
         .unwrap_err();
 
     assert!(matches!(
         error,
-        CpuPlacementError::EngineConstruction {
-            requested: CpuPlacement::AllAllowed,
-            backend: CpuBackendKind::Faer,
+        CpuBackendError::Placement {
+            source: CpuPlacementError::EngineConstruction { .. },
             ..
         }
     ));

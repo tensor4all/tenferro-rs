@@ -1,8 +1,7 @@
-#![cfg(all(feature = "cpu-blas", feature = "provider-inject"))]
+#![cfg(all(feature = "blas", feature = "provider-inject"))]
 
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
 
 use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
@@ -10,8 +9,6 @@ use tenferro_cpu::inject::{
 };
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TypedTensor};
-
-static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 // --- GEMM ILP64 counters and fake ----------------------------------------
 
@@ -187,7 +184,9 @@ unsafe extern "C" fn test_dorgqr_ilp64(
 
 #[test]
 fn ilp64_gemm_provider_reaches_lp64_consumer() {
-    let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+    let _guard = crate::PROVIDER_INJECT_TEST_LOCK
+        .lock()
+        .expect("test lock poisoned");
 
     if !DGEMM_ILP64_REGISTERED.swap(true, Ordering::SeqCst) {
         unsafe {
@@ -241,7 +240,9 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
 
 #[test]
 fn blas_gemm_null_pointer_error() {
-    let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+    let _guard = crate::PROVIDER_INJECT_TEST_LOCK
+        .lock()
+        .expect("test lock poisoned");
 
     let err = unsafe {
         register_blas_gemm_provider_ptrs(
@@ -264,7 +265,9 @@ fn blas_gemm_null_pointer_error() {
 
 #[test]
 fn lapack_null_pointer_error() {
-    let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+    let _guard = crate::PROVIDER_INJECT_TEST_LOCK
+        .lock()
+        .expect("test lock poisoned");
 
     let err = unsafe {
         register_lapack_provider_ptrs(

@@ -17,18 +17,18 @@ documentation = "https://docs.rs/tenferro-cpu"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["cpu-faer"]
+features = ["native"]
 
 [lib]
 name = "tenferro_cpu"
 
 [features]
-default = ["cpu-faer"]
-cpu-faer = ["dep:faer"]
-cpu-blas = ["dep:cblas-sys", "dep:lapack"]
+default = ["native"]
+native = ["dep:faer"]
+blas = ["dep:cpueinsum-blas", "dep:cblas-sys", "dep:lapack"]
 # Each supported provider exports CBLAS; no separate Netlib CBLAS build is needed.
-provider-src = ["cpu-blas", "dep:blas-src", "dep:lapack-src"]
-provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
+provider-src = ["blas", "dep:blas-src", "dep:lapack-src"]
+provider-inject = ["blas", "dep:cblas-inject", "dep:lapack-inject"]
 blas-openblas = [
     "provider-src",
     "blas-src/openblas",
@@ -52,6 +52,8 @@ tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.7.1" }
 tenferro-cpu-fused = { path = "../tenferro-cpu-fused", version = "0.7.1" }
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.1" }
+cpueinsum.workspace = true
+cpueinsum-blas = { workspace = true, optional = true }
 libm.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
@@ -94,7 +96,7 @@ harness = false
 [[bench]]
 name = "openblas_direct_overhead"
 harness = false
-required-features = ["cpu-blas"]
+required-features = ["blas"]
 
 [[bench]]
 name = "grouped_gemm"
@@ -103,16 +105,6 @@ harness = false
 [[bench]]
 name = "route_matrix"
 harness = false
-
-[[bench]]
-name = "strided_batch_route"
-harness = false
-required-features = ["cpu-blas"]
-
-[[bench]]
-name = "numa_execution"
-harness = false
-required-features = ["cpu-faer"]
 
 [[test]]
 name = "integration"
@@ -129,8 +121,4 @@ path = "tests/blas1_pool_aliasing.rs"
 [[test]]
 name = "install_allocation_tests"
 path = "tests/install_allocation_tests/main.rs"
-required-features = ["cpu-faer"]
-
-[[test]]
-name = "provider_boundary_allocation_tests"
-path = "tests/provider_boundary_allocation_tests/main.rs"
+required-features = ["native"]

@@ -1,5 +1,60 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn caller_affinity_restores_after_normal_return_error_and_unwind() {
+    let previous = process_cpu_affinity().unwrap();
+    let target = CpuSet::new([previous.as_slice()[0]]).unwrap();
+    let guard = CallerAffinityGuard::enter(Some(&target)).unwrap();
+    assert_eq!(process_cpu_affinity().unwrap(), target);
+    guard.finish().unwrap();
+    assert_eq!(process_cpu_affinity().unwrap(), previous);
+
+    let error = (|| -> Result<(), CpuAffinityError> {
+        let _guard = CallerAffinityGuard::enter(Some(&target))?;
+        assert_eq!(process_cpu_affinity().unwrap(), target);
+        Err(CpuAffinityError::EmptyMask)
+    })()
+    .unwrap_err();
+    assert!(matches!(error, CpuAffinityError::EmptyMask));
+    assert_eq!(process_cpu_affinity().unwrap(), previous);
+
+    let panic = std::panic::catch_unwind(|| {
+        let _guard = CallerAffinityGuard::enter(Some(&target)).unwrap();
+        assert_eq!(process_cpu_affinity().unwrap(), target);
+        panic!("exercise caller affinity unwind");
+    });
+    assert!(panic.is_err());
+    assert_eq!(process_cpu_affinity().unwrap(), previous);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn caller_affinity_intersects_without_widening_and_rejects_disjoint_masks() {
+    let previous = process_cpu_affinity().unwrap();
+    if previous.len() < 2 {
+        return;
+    }
+    let target = CpuSet::new([previous.as_slice()[0]]).unwrap();
+    let disjoint = CpuSet::new([previous.as_slice()[1]]).unwrap();
+    let outer = CallerAffinityGuard::enter(Some(&target)).unwrap();
+    let inner = CallerAffinityGuard::enter(Some(&previous)).unwrap();
+    assert!(inner.previous.is_none());
+    assert_eq!(process_cpu_affinity().unwrap(), target);
+    inner.finish().unwrap();
+    assert!(matches!(
+        CallerAffinityGuard::enter(Some(&disjoint)),
+        Err(CpuAffinityError::EmptyMask)
+    ));
+    assert_eq!(process_cpu_affinity().unwrap(), target);
+    let wildcard = CallerAffinityGuard::enter(None).unwrap();
+    assert!(wildcard.previous.is_none());
+    wildcard.finish().unwrap();
+    assert_eq!(process_cpu_affinity().unwrap(), target);
+    outer.finish().unwrap();
+    assert_eq!(process_cpu_affinity().unwrap(), previous);
+}
+
 #[test]
 fn count_affinity_mask_bits_returns_none_for_zero_masks() {
     assert_eq!(count_affinity_mask_bits(&[]), None);

@@ -4,17 +4,16 @@ use std::sync::{Arc, Mutex};
 use crate::buffer_pool::BufferPool;
 use crate::gemm::GemmAnalysisCache;
 use crate::indexed_plan_cache::IndexedPlanCache;
+use crate::placement::ResolvedCpuPlacement;
 use crate::resource_domain::CpuResourceDomain;
-use crate::{
-    CpuContext, CpuContextError, CpuDomainExecutor, CpuDomainId, CpuDomainOwnership,
-    ExternalCpuDomain, ResolvedCpuPlacement,
-};
+use crate::{CpuContext, CpuContextError, CpuDomainId, CpuSet};
 
 #[derive(Debug)]
 pub(crate) struct EngineResources {
     pub(crate) buffers: BufferPool,
     pub(crate) gemm_analysis_cache: GemmAnalysisCache,
     pub(crate) indexed_plan_cache: IndexedPlanCache,
+    pub(crate) runtime_clears: u64,
 }
 
 impl EngineResources {
@@ -23,18 +22,24 @@ impl EngineResources {
             buffers: BufferPool::with_max_retained_capacity_bytes(buffer_limit),
             gemm_analysis_cache: GemmAnalysisCache::default(),
             indexed_plan_cache: IndexedPlanCache::default(),
+            runtime_clears: 0,
         }
     }
 }
 
+/// One tenferro-owned CPU execution engine.
+///
+/// tenferro uses only pools it builds, so the engine always owns its context;
+/// there is no borrowed or externally managed executor.
 #[derive(Debug)]
 pub(crate) struct CpuEngine {
     domain: CpuResourceDomain,
+    pub(crate) context: Arc<CpuContext>,
     pub(crate) resources: Mutex<EngineResources>,
 }
 
 impl CpuEngine {
-    pub(crate) fn new_managed(
+    pub(crate) fn new(
         id: CpuDomainId,
         placement: ResolvedCpuPlacement,
         thread_budget: usize,
@@ -44,12 +49,14 @@ impl CpuEngine {
         let thread_budget =
             NonZeroUsize::new(worker_count).ok_or(CpuContextError::InvalidThreadCount)?;
         let context = CpuContext::with_pinned_cpus(placement.cpus().clone(), worker_count)?;
-        Ok(Self::from_managed_context(
+        let caller_cpus = caller_affinity_for(&placement);
+        Ok(Self::from_context(
             id,
             placement,
             Arc::new(context),
             thread_budget,
             buffer_limit,
+            caller_cpus,
         ))
     }
 
@@ -57,41 +64,19 @@ impl CpuEngine {
         id: CpuDomainId,
         placement: ResolvedCpuPlacement,
         context: Arc<CpuContext>,
-        buffer_limit: usize,
-    ) -> Self {
-        let capabilities = context.capabilities();
-        Self::from_managed_context(
-            id,
-            placement,
-            context,
-            capabilities.worker_count,
-            buffer_limit,
-        )
-    }
-
-    fn from_managed_context(
-        id: CpuDomainId,
-        placement: ResolvedCpuPlacement,
-        context: Arc<CpuContext>,
         thread_budget: NonZeroUsize,
         buffer_limit: usize,
+        caller_cpus: Option<CpuSet>,
     ) -> Self {
-        let executor: Arc<dyn CpuDomainExecutor> = context.clone();
         Self {
             domain: CpuResourceDomain::new(
                 id,
                 placement,
-                executor,
+                Arc::clone(&context),
                 thread_budget,
-                CpuDomainOwnership::Managed,
+                caller_cpus,
             ),
-            resources: Mutex::new(EngineResources::new(buffer_limit)),
-        }
-    }
-
-    pub(crate) fn from_external(domain: ExternalCpuDomain, buffer_limit: usize) -> Self {
-        Self {
-            domain: domain.into(),
+            context,
             resources: Mutex::new(EngineResources::new(buffer_limit)),
         }
     }
@@ -100,10 +85,19 @@ impl CpuEngine {
         &self.domain
     }
 
-    pub(crate) fn placement(&self) -> Option<&ResolvedCpuPlacement> {
+    pub(crate) fn placement(&self) -> &ResolvedCpuPlacement {
         self.domain.placement()
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+/// Caller-affinity target of a resolved placement: `None` for the wildcard
+/// all-allowed set, the node's CPUs for an explicit node placement.
+pub(crate) fn caller_affinity_for(placement: &ResolvedCpuPlacement) -> Option<CpuSet> {
+    match placement {
+        ResolvedCpuPlacement::NumaNode { cpus, .. } => Some(cpus.clone()),
+        ResolvedCpuPlacement::AllAllowed { .. } => None,
+    }
+}

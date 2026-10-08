@@ -1,19 +1,16 @@
 use super::*;
-use crate::{CpuBackendKind, CpuId, CpuSet, CpuTopology, NumaNodeId};
+use crate::{CpuId, CpuSet, CpuTopology, NumaNodeId};
 
 #[test]
-fn faer_resolves_auto_and_explicit_managed_placements() {
+fn auto_and_explicit_managed_placements_resolve() {
     let topology = two_node_fixture();
 
     assert!(matches!(
-        resolve_placement_with_affinity(CpuBackendKind::Faer, CpuPlacement::Auto, &topology, true,)
-            .unwrap(),
+        resolve_placement_with_affinity(CpuPlacement::Auto, &topology, true).unwrap(),
         ResolvedCpuExecution::Managed(ResolvedCpuPlacement::AllAllowed { .. })
     ));
     assert!(matches!(
-        resolve_placement_with_affinity(
-            CpuBackendKind::Faer,
-            CpuPlacement::NumaNode(NumaNodeId::new(7)),
+        resolve_placement_with_affinity(CpuPlacement::NumaNode(NumaNodeId::new(7)),
             &topology,
             true,
         )
@@ -24,33 +21,10 @@ fn faer_resolves_auto_and_explicit_managed_placements() {
 }
 
 #[test]
-fn explicit_external_provider_placement_never_falls_back() {
-    let topology = two_node_fixture();
-    assert!(matches!(
-        resolve_placement(
-            CpuBackendKind::Blas,
-            CpuPlacement::NumaNode(NumaNodeId::new(2)),
-            &topology,
-        ),
-        Err(CpuPlacementError::ExternalProviderAffinityUnmanaged { .. })
-    ));
-    assert!(matches!(
-        resolve_placement(CpuBackendKind::Blas, CpuPlacement::AllAllowed, &topology),
-        Err(CpuPlacementError::ExternalProviderAffinityUnmanaged { .. })
-    ));
-    assert_eq!(
-        resolve_placement(CpuBackendKind::Blas, CpuPlacement::Auto, &topology).unwrap(),
-        ResolvedCpuExecution::ProviderDefaultExclusive,
-    );
-}
-
-#[test]
 fn explicit_unknown_node_is_an_error_without_fallback() {
     let topology = two_node_fixture();
     assert!(matches!(
-        resolve_placement_with_affinity(
-            CpuBackendKind::Faer,
-            CpuPlacement::NumaNode(NumaNodeId::new(9)),
+        resolve_placement_with_affinity(CpuPlacement::NumaNode(NumaNodeId::new(9)),
             &topology,
             true,
         ),
@@ -64,7 +38,6 @@ fn explicit_node_requires_discovered_numa_domains() {
     let topology = CpuTopology::from_discovered(cpu_set([4, 5]), []).unwrap();
     assert!(matches!(
         resolve_placement_with_affinity(
-            CpuBackendKind::Faer,
             CpuPlacement::NumaNode(NumaNodeId::new(0)),
             &topology,
             true,
@@ -78,38 +51,13 @@ fn unavailable_managed_affinity_keeps_auto_compatible_and_rejects_explicit_place
     let topology = two_node_fixture();
 
     assert_eq!(
-        resolve_placement_with_affinity(
-            CpuBackendKind::Faer,
-            CpuPlacement::Auto,
-            &topology,
-            false,
-        )
-        .unwrap(),
+        resolve_placement_with_affinity(CpuPlacement::Auto, &topology, false,).unwrap(),
         ResolvedCpuExecution::Compatibility
     );
     assert!(matches!(
-        resolve_placement_with_affinity(
-            CpuBackendKind::Faer,
-            CpuPlacement::AllAllowed,
-            &topology,
-            false,
-        ),
+        resolve_placement_with_affinity(CpuPlacement::AllAllowed, &topology, false,),
         Err(CpuPlacementError::ManagedAffinityUnavailable { .. })
     ));
-}
-
-#[test]
-fn unregistered_external_placement_error_preserves_the_request() {
-    let requested = CpuPlacement::NumaNode(NumaNodeId::new(12));
-    let error = CpuPlacementError::UnregisteredExternalPlacement { requested };
-
-    assert!(matches!(
-        &error,
-        CpuPlacementError::UnregisteredExternalPlacement {
-            requested: actual
-        } if *actual == requested
-    ));
-    assert!(error.to_string().contains("12"));
 }
 
 fn two_node_fixture() -> CpuTopology {

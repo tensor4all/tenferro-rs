@@ -1,7 +1,7 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use thiserror::Error;
@@ -21,29 +21,18 @@ impl ResourceOwner {
 thread_local! {
     static THREAD_OWNER: ResourceOwner = ResourceOwner::fresh();
     static EXECUTION_OWNER: Cell<Option<ResourceOwner>> = const { Cell::new(None) };
-    static WORKER_EXECUTION_SCOPE: RefCell<Option<Arc<ExecutionScopeState>>> = const { RefCell::new(None) };
 }
 
 pub(crate) fn has_active_execution() -> bool {
     EXECUTION_OWNER.with(Cell::get).is_some()
-        || WORKER_EXECUTION_SCOPE.with(|scope| {
-            scope
-                .borrow()
-                .as_ref()
-                .is_some_and(|scope| scope.has_active_owner())
-        })
 }
 
 /// Return a fresh owner for a top-level CPU execution, or `None` when another
-/// CPU backend execution is already active on this thread or managed Rayon
-/// scope. Nested entry could violate CPU or provider exclusivity, so callers
-/// report it as a typed reentry error before running any user callback.
+/// CPU backend execution is already active on this thread. Nested entry could
+/// violate CPU exclusivity, so callers report it as a typed reentry error
+/// before running any user callback.
 pub(crate) fn fresh_execution_owner() -> Option<ResourceOwner> {
     (!has_active_execution()).then(ResourceOwner::fresh)
-}
-
-pub(crate) fn current_execution_owner() -> Option<ResourceOwner> {
-    EXECUTION_OWNER.with(Cell::get)
 }
 
 pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() -> R) -> R {
@@ -60,89 +49,6 @@ pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() ->
     op()
 }
 
-pub(crate) fn register_worker_execution_scope(scope: Arc<ExecutionScopeState>) {
-    WORKER_EXECUTION_SCOPE.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        // INVARIANT: each owned Rayon worker is a dedicated thread whose start
-        // hook runs once; replacing a live scope would mix context ownership.
-        debug_assert!(slot.is_none());
-        *slot = Some(scope);
-    });
-}
-
-pub(crate) fn worker_execution_scope_matches(scope: &Arc<ExecutionScopeState>) -> bool {
-    WORKER_EXECUTION_SCOPE.with(|current| {
-        current
-            .borrow()
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, scope))
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn worker_execution_scope_registered() -> bool {
-    WORKER_EXECUTION_SCOPE.with(|scope| scope.borrow().is_some())
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct ExecutionScopeState {
-    active: Mutex<ExecutionOwnerState>,
-}
-
-#[derive(Debug, Default)]
-struct ExecutionOwnerState {
-    owner: Option<ResourceOwner>,
-    depth: usize,
-}
-
-impl ExecutionScopeState {
-    pub(crate) fn enter(&self, owner: ResourceOwner) -> ExecutionScopeGuard<'_> {
-        let mut active = self
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match active.owner {
-            None => {
-                active.owner = Some(owner);
-                active.depth = 1;
-            }
-            Some(current) if current == owner => active.depth += 1,
-            Some(current) => panic!(
-                "CPU execution owner invariant violated: active {current:?}, requested {owner:?}"
-            ),
-        }
-        ExecutionScopeGuard { scope: self, owner }
-    }
-
-    fn has_active_owner(&self) -> bool {
-        self.active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .owner
-            .is_some()
-    }
-}
-
-pub(crate) struct ExecutionScopeGuard<'a> {
-    scope: &'a ExecutionScopeState,
-    owner: ResourceOwner,
-}
-
-impl Drop for ExecutionScopeGuard<'_> {
-    fn drop(&mut self) {
-        let mut active = self
-            .scope
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        debug_assert_eq!(active.owner, Some(self.owner));
-        active.depth -= 1;
-        if active.depth == 0 {
-            active.owner = None;
-        }
-    }
-}
-
 #[cfg(test)]
 fn request_owner() -> ResourceOwner {
     EXECUTION_OWNER
@@ -156,18 +62,18 @@ pub(crate) enum ResourceArbiterError {
     StatePoisoned,
     #[error("CPU resource arbiter request IDs are exhausted")]
     RequestIdExhausted,
+    #[error("CPU resources are busy; a Rayon worker must not wait for an owner")]
+    Contended,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ResourceRequest {
     CpuSet(CpuSet),
-    ProviderExclusive,
 }
 
 impl ResourceRequest {
     fn conflicts_with(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::ProviderExclusive, _) | (_, Self::ProviderExclusive) => true,
             (Self::CpuSet(left), Self::CpuSet(right)) => left.overlaps(right),
         }
     }
@@ -232,20 +138,6 @@ impl ResourceArbiter {
         self.try_acquire_request(ResourceRequest::CpuSet(cpus))
     }
 
-    #[cfg(test)]
-    pub(crate) fn acquire_provider_exclusive(
-        &self,
-    ) -> Result<ResourcePermit, ResourceArbiterError> {
-        self.acquire_request(ResourceRequest::ProviderExclusive, request_owner())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn try_acquire_provider_exclusive(
-        &self,
-    ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
-        self.try_acquire_request(ResourceRequest::ProviderExclusive)
-    }
-
     /// Wait in FIFO order for `cpus`. Contention with another owner is waited
     /// out; only poisoned arbiter state is reported.
     pub(crate) fn acquire_waiting(
@@ -256,25 +148,27 @@ impl ResourceArbiter {
         self.acquire_request_waiting(ResourceRequest::CpuSet(cpus), owner)
     }
 
-    pub(crate) fn acquire_provider_exclusive_waiting(
-        &self,
-        owner: ResourceOwner,
-    ) -> Result<ResourcePermit, ResourceArbiterError> {
-        self.acquire_request_waiting(ResourceRequest::ProviderExclusive, owner)
-    }
-
     fn acquire_request_waiting(
         &self,
         request: ResourceRequest,
         owner: ResourceOwner,
     ) -> Result<ResourcePermit, ResourceArbiterError> {
+        // A foreign/global pool child may be joined by the permit's owner.
+        // Rayon does not expose ancestry: never park a worker behind that owner.
+        if rayon::current_thread_index().is_some() {
+            return self
+                .try_acquire_request_with_owner(request, owner)?
+                .ok_or(ResourceArbiterError::Contended);
+        }
         loop {
             match self.acquire_request(request.clone(), owner) {
                 Ok(permit) => return Ok(permit),
                 // Poison means a thread panicked inside arbiter bookkeeping, so
                 // the active/waiter lists cannot be trusted; report it.
-                Err(ResourceArbiterError::StatePoisoned) => {
-                    return Err(ResourceArbiterError::StatePoisoned);
+                Err(
+                    error @ (ResourceArbiterError::StatePoisoned | ResourceArbiterError::Contended),
+                ) => {
+                    return Err(error);
                 }
                 // Exhaustion is waitable: once every permit and waiter drains,
                 // request ids restart from zero.
@@ -385,12 +279,19 @@ impl ResourceArbiter {
         &self,
         request: ResourceRequest,
     ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
+        self.try_acquire_request_with_owner(request, request_owner())
+    }
+
+    fn try_acquire_request_with_owner(
+        &self,
+        request: ResourceRequest,
+        owner: ResourceOwner,
+    ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
         let mut state = self
             .inner
             .state
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
-        let owner = request_owner();
         let reentrant = state.active.iter().any(|active| active.owner == owner);
         let conflicts_with_active = state
             .active
@@ -458,7 +359,6 @@ impl ResourceArbiter {
 
 enum ResourcePermitKind {
     Arbitrated { inner: Arc<ArbiterInner>, id: u64 },
-    CallerManaged { active: Arc<AtomicBool> },
 }
 
 pub(crate) struct ResourcePermit {
@@ -468,20 +368,6 @@ pub(crate) struct ResourcePermit {
 }
 
 impl ResourcePermit {
-    /// Claim a caller-managed domain's active-entry flag, or return `None`
-    /// when an execution of that domain is already active. Caller-managed
-    /// domains have no queue to wait in.
-    pub(crate) fn caller_managed(active: Arc<AtomicBool>, owner: ResourceOwner) -> Option<Self> {
-        active
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()?;
-        Some(Self {
-            kind: ResourcePermitKind::CallerManaged { active },
-            owner,
-            reentrant: false,
-        })
-    }
-
     pub(crate) fn is_reentrant(&self) -> bool {
         self.reentrant
     }
@@ -496,9 +382,6 @@ impl fmt::Debug for ResourcePermit {
         let mut permit = f.debug_struct("ResourcePermit");
         match &self.kind {
             ResourcePermitKind::Arbitrated { id, .. } => permit.field("id", id),
-            ResourcePermitKind::CallerManaged { .. } => {
-                permit.field("admission", &"caller-managed")
-            }
         };
         permit.finish_non_exhaustive()
     }
@@ -520,9 +403,6 @@ impl Drop for ResourcePermit {
                 // are both empty), so the waiter list cannot tell whether a thread is
                 // parked. Skipping here would risk stranding that recovery waiter.
                 inner.changed.notify_all();
-            }
-            ResourcePermitKind::CallerManaged { active } => {
-                active.store(false, Ordering::Release);
             }
         }
     }

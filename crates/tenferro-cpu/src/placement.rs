@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{CpuBackendKind, CpuContextError, CpuSet, CpuTopology, CpuTopologyError, NumaNodeId};
+use crate::{CpuContextError, CpuSet, CpuTopology, CpuTopologyError, NumaNodeId};
 
 /// Typed failure raised while constructing a CPU execution engine.
 ///
@@ -12,7 +12,7 @@ use crate::{CpuBackendKind, CpuContextError, CpuSet, CpuTopology, CpuTopologyErr
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::{CpuEngineConstructionError, CpuContextError};
+/// use tenferro_cpu::{CpuContextError, CpuEngineConstructionError};
 /// use std::error::Error;
 ///
 /// let error = CpuEngineConstructionError::Context(CpuContextError::InvalidThreadCount);
@@ -28,7 +28,7 @@ pub enum CpuEngineConstructionError {
     Tensor(#[source] tenferro_tensor::Error),
 }
 
-/// Requested CPU execution placement.
+/// Requested CPU placement.
 ///
 /// `AllAllowed` means all logical CPUs permitted by the process affinity mask,
 /// not every CPU installed in the host.
@@ -43,16 +43,16 @@ pub enum CpuEngineConstructionError {
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CpuPlacement {
-    /// Let the selected provider choose its compatible default policy.
+    /// Resolve the default placement for this platform.
     #[default]
     Auto,
-    /// Restrict managed tenferro/faer execution to one usable OS NUMA node.
+    /// Restrict tenferro-owned execution to one usable OS NUMA node.
     NumaNode(NumaNodeId),
     /// Use the complete CPU set permitted to the process.
     AllAllowed,
 }
 
-/// Concrete CPU placement resolved for a managed domain or declared by an external domain.
+/// Concrete CPU placement resolved for a tenferro-owned engine.
 ///
 /// # Examples
 ///
@@ -71,18 +71,18 @@ pub enum ResolvedCpuPlacement {
     NumaNode {
         /// The sparse OS NUMA node ID.
         id: NumaNodeId,
-        /// The logical CPUs resolved or declared for the node.
+        /// The logical CPUs resolved for the node.
         cpus: CpuSet,
     },
-    /// A resolved or declared complete process-affinity CPU set.
+    /// A resolved complete process-affinity CPU set.
     AllAllowed {
-        /// Logical CPUs resolved or declared as process-permitted.
+        /// Logical CPUs resolved as process-permitted.
         cpus: CpuSet,
     },
 }
 
 impl ResolvedCpuPlacement {
-    /// Return the concrete logical CPU set resolved or declared for this placement.
+    /// Return the concrete logical CPU set resolved for this placement.
     ///
     /// # Examples
     ///
@@ -123,100 +123,63 @@ impl ResolvedCpuPlacement {
     }
 }
 
-/// Failure to resolve a CPU placement for the selected public provider kind.
+/// Failure to resolve a CPU placement on this process topology.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::{CpuBackendKind, CpuPlacement, CpuPlacementError};
+/// use tenferro_cpu::{CpuPlacement, CpuPlacementError, NumaNodeId};
 ///
-/// let error = CpuPlacementError::ExternalProviderAffinityUnmanaged {
-///     requested: CpuPlacement::AllAllowed,
-///     backend: CpuBackendKind::Blas,
+/// let error = CpuPlacementError::NumaDiscoveryUnavailable {
+///     requested: CpuPlacement::NumaNode(NumaNodeId::new(1)),
 /// };
-/// assert!(error.to_string().contains("affinity"));
+/// assert!(error.to_string().contains("NUMA"));
 /// ```
 #[derive(Debug, Error)]
 pub enum CpuPlacementError {
     /// Process-visible topology discovery failed before placement resolution.
-    #[error("cannot resolve {requested:?} for {backend:?}: topology discovery failed: {source}")]
+    #[error("cannot resolve {requested:?}: topology discovery failed: {source}")]
     TopologyDiscovery {
         /// The placement requested by the caller.
         requested: CpuPlacement,
-        /// The selected public backend kind.
-        backend: CpuBackendKind,
         /// The preserved topology failure category.
         #[source]
         source: CpuTopologyError,
     },
     /// The current platform cannot construct verified pinned worker pools.
-    #[error(
-        "cannot resolve {requested:?} for {backend:?}: managed worker affinity is unavailable"
-    )]
+    #[error("cannot resolve {requested:?}: managed worker affinity is unavailable")]
     ManagedAffinityUnavailable {
         /// The explicit placement requested by the caller.
         requested: CpuPlacement,
-        /// The selected public backend kind.
-        backend: CpuBackendKind,
     },
     /// NUMA-node placement was requested but OS NUMA discovery was unavailable.
-    #[error("cannot resolve {requested:?} for {backend:?}: NUMA discovery is unavailable")]
+    #[error("cannot resolve {requested:?}: NUMA discovery is unavailable")]
     NumaDiscoveryUnavailable {
         /// The placement requested by the caller.
         requested: CpuPlacement,
-        /// The selected public backend kind.
-        backend: CpuBackendKind,
     },
     /// The requested OS NUMA node has no usable CPUs in this process.
-    #[error("cannot resolve {requested:?} for {backend:?}: NUMA node {node} is unavailable")]
+    #[error("cannot resolve {requested:?}: NUMA node {node} is unavailable")]
     UnknownNumaNode {
         /// The placement requested by the caller.
         requested: CpuPlacement,
-        /// The selected public backend kind.
-        backend: CpuBackendKind,
         /// The unknown or process-unavailable OS node ID.
         node: NumaNodeId,
     },
-    /// An external provider owns worker affinity, so explicit placement is unsafe.
-    #[error(
-        "cannot resolve {requested:?} for {backend:?}: external provider worker affinity is unmanaged"
-    )]
-    ExternalProviderAffinityUnmanaged {
-        /// The explicit placement requested by the caller.
-        requested: CpuPlacement,
-        /// The selected public backend kind.
-        backend: CpuBackendKind,
-    },
-    /// An externally managed coordinator has no domain for the explicit placement.
-    #[error("externally managed CPU coordinator has no registered domain for {requested:?}")]
-    UnregisteredExternalPlacement {
-        /// The explicit registry-only placement request.
-        requested: CpuPlacement,
-    },
-    /// An externally managed coordinator has no domain with the requested ID.
-    #[error("externally managed CPU coordinator has no registered domain {domain:?}")]
-    UnregisteredExternalDomain {
-        /// Missing caller-stable domain identity.
-        domain: crate::CpuDomainId,
-    },
     /// A pinned engine could not be built for an otherwise valid placement.
-    #[error("cannot resolve {requested:?} for {backend:?}: engine construction failed: {source}")]
+    #[error("cannot resolve {requested:?}: engine construction failed: {source}")]
     EngineConstruction {
         /// The placement requested by the caller.
         requested: CpuPlacement,
-        /// The selected public backend kind.
-        backend: CpuBackendKind,
         /// Typed worker-pool construction or affinity failure.
         #[source]
         source: CpuEngineConstructionError,
     },
     /// The placement state reached an impossible internal compatibility mode.
-    #[error("cannot resolve {requested:?} for {backend:?}: {message}")]
+    #[error("cannot resolve {requested:?}: {message}")]
     InternalState {
         /// The placement requested by the caller.
         requested: CpuPlacement,
-        /// The selected public backend kind.
-        backend: CpuBackendKind,
         /// Stable internal-state diagnostic.
         message: &'static str,
     },
@@ -226,18 +189,13 @@ pub enum CpuPlacementError {
 pub(crate) enum ResolvedCpuExecution {
     Compatibility,
     Managed(ResolvedCpuPlacement),
-    ExternalManaged(ResolvedCpuPlacement),
-    ExternalCallerManaged,
-    ProviderDefaultExclusive,
 }
 
 pub(crate) fn resolve_placement(
-    backend: CpuBackendKind,
     requested: CpuPlacement,
     topology: &CpuTopology,
 ) -> Result<ResolvedCpuExecution, CpuPlacementError> {
     resolve_placement_with_affinity(
-        backend,
         requested,
         topology,
         cfg!(any(target_os = "linux", target_os = "android")),
@@ -245,25 +203,15 @@ pub(crate) fn resolve_placement(
 }
 
 pub(crate) fn resolve_placement_with_affinity(
-    backend: CpuBackendKind,
     requested: CpuPlacement,
     topology: &CpuTopology,
     managed_affinity_available: bool,
 ) -> Result<ResolvedCpuExecution, CpuPlacementError> {
-    if backend == CpuBackendKind::Blas {
-        return match requested {
-            CpuPlacement::Auto => Ok(ResolvedCpuExecution::ProviderDefaultExclusive),
-            CpuPlacement::NumaNode(_) | CpuPlacement::AllAllowed => {
-                Err(CpuPlacementError::ExternalProviderAffinityUnmanaged { requested, backend })
-            }
-        };
-    }
-
     if !managed_affinity_available {
         return match requested {
             CpuPlacement::Auto => Ok(ResolvedCpuExecution::Compatibility),
             CpuPlacement::NumaNode(_) | CpuPlacement::AllAllowed => {
-                Err(CpuPlacementError::ManagedAffinityUnavailable { requested, backend })
+                Err(CpuPlacementError::ManagedAffinityUnavailable { requested })
             }
         };
     }
@@ -274,15 +222,11 @@ pub(crate) fn resolve_placement_with_affinity(
         },
         CpuPlacement::NumaNode(node) => {
             if !topology.has_numa_nodes() {
-                return Err(CpuPlacementError::NumaDiscoveryUnavailable { requested, backend });
+                return Err(CpuPlacementError::NumaDiscoveryUnavailable { requested });
             }
             let cpus = topology
                 .node(node)
-                .ok_or(CpuPlacementError::UnknownNumaNode {
-                    requested,
-                    backend,
-                    node,
-                })?;
+                .ok_or(CpuPlacementError::UnknownNumaNode { requested, node })?;
             ResolvedCpuPlacement::NumaNode {
                 id: node,
                 cpus: cpus.cpus().clone(),

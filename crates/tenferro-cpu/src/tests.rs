@@ -7,9 +7,7 @@ use std::{ffi::OsString, sync::MutexGuard};
 
 use num_complex::{Complex32, Complex64};
 
-#[cfg(feature = "cpu-blas")]
-use crate::CpuBackendKind;
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 use crate::FaerParallelismExt;
 use crate::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
@@ -18,7 +16,7 @@ use crate::{
     transpose, tril, triu, with_cpu_exec_session, CpuBackend, CpuContext, CpuExecSession, Error,
 };
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, ContractionScalar,
@@ -70,7 +68,7 @@ fn with_cpu_exec_session_checks_exact_marker_and_scopes_borrow() {
     assert_eq!(value, 17);
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 #[test]
 fn faer_parallelism_capability_runs_inside_a_cpu_session() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
@@ -282,6 +280,56 @@ fn grouped_gemm_reference_c32(
             out[out_idx] = alpha * acc + beta * out[out_idx];
         }
     }
+}
+
+#[test]
+fn grouped_gemm_distinct_nonzero_offsets_preserve_output_holes() {
+    let lhs = Tensor::from_vec_col_major(vec![11], (0..11).map(|x| x as f64).collect()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![13], (3..16).map(|x| x as f64).collect()).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(4, 1, 2, 2, 2, 1),
+        GroupedGemmJob::new(12, 7, 9, 2, 2, 1),
+    ];
+    let config = GroupedGemmConfig::new(
+        &jobs,
+        DotGeneralAccumulation {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::F64(2.0),
+            beta: ContractionScalar::F64(0.5),
+        },
+    );
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
+    // Run twice through the same immutable prepared plan, with initialized gaps.
+    for _ in 0..2 {
+        let mut out = Tensor::from_vec_col_major(vec![19], vec![11.0_f64; 19]).unwrap();
+        backend
+            .with_backend_session_cached(&mut cache, |session| {
+                session.grouped_gemm_cached(
+                    Some(0),
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                    TensorWrite::from_tensor(&mut out),
+                )
+            })
+            .unwrap()
+            .unwrap();
+        let mut expected = vec![11.0; 19];
+        expected[4..6].copy_from_slice(&[51.5, 73.5]);
+        // rhs at offset 9 is [12, 13], not its index values [9, 10].
+        expected[12..14].copy_from_slice(&[407.5, 457.5]);
+        assert_eq!(out.as_slice::<f64>().unwrap(), expected);
+    }
+    let stats = tenferro_tensor::RuntimeCacheControl::stats(&cache);
+    assert_eq!(stats.entries, 1);
+    assert_eq!((stats.hits, stats.misses), (1, 1));
+    assert!(stats.retained_bytes > 0);
+    tenferro_tensor::RuntimeCacheControl::clear(&mut cache);
+    let cleared = tenferro_tensor::RuntimeCacheControl::stats(&cache);
+    assert_eq!(cleared.entries, 0);
+    assert_eq!(cleared.clears, 1);
 }
 
 #[test]
@@ -755,10 +803,7 @@ mod indexing;
 mod indexing_coverage;
 #[path = "tests/cpu_tests/managed_copy_boundaries.rs"]
 mod managed_copy_boundaries;
-#[cfg(feature = "cpu-faer")]
-#[path = "tests/cpu_tests/uninit_dot_output.rs"]
-mod uninit_dot_output;
-
+#[cfg(feature = "native")]
 /// The analytic read view carries one arm per preset scalar, and the read entry for `pow` takes it for both
 /// operands. The owned-tensor tests reach the floating arms only, so this drives every dtype, including the
 /// boolean arm, whose analytic view is a unit marker and is therefore refused.
@@ -839,4 +884,100 @@ fn analytic_read_view_covers_every_preset_scalar() {
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         }
     ));
+}
+
+/// Shared fixture: run one large native map through the session's parallelism.
+#[cfg(test)]
+pub(crate) mod native_participants {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::thread::ThreadId;
+    use std::time::Duration;
+
+    const LARGE_NATIVE_TEST_LEN: usize = 1 << 17;
+
+    #[derive(Default)]
+    pub(crate) struct NativeParticipants {
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+        thread_ids: Mutex<Vec<ThreadId>>,
+        require_two: bool,
+        rendezvous_released: AtomicBool,
+        rendezvous_lock: Mutex<()>,
+        rendezvous: Condvar,
+    }
+
+    impl NativeParticipants {
+        fn requiring_two() -> Self {
+            Self {
+                require_two: true,
+                ..Self::default()
+            }
+        }
+
+        fn observe(&self) {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active.fetch_max(active, Ordering::SeqCst);
+            {
+                let id = std::thread::current().id();
+                let mut ids = self.thread_ids.lock().unwrap();
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            if self.require_two && !self.rendezvous_released.load(Ordering::Acquire) {
+                let guard = self.rendezvous_lock.lock().unwrap();
+                if active >= 2 {
+                    self.rendezvous_released.store(true, Ordering::Release);
+                    self.rendezvous.notify_all();
+                } else if !self.rendezvous_released.load(Ordering::Acquire) {
+                    let _guard = self
+                        .rendezvous
+                        .wait_timeout_while(guard, Duration::from_secs(2), |_| {
+                            !self.rendezvous_released.load(Ordering::Acquire)
+                        })
+                        .unwrap();
+                }
+            }
+            for _ in 0..32 {
+                std::hint::spin_loop();
+            }
+            self.active.fetch_sub(1, Ordering::SeqCst);
+        }
+
+        pub(crate) fn max_active(&self) -> usize {
+            self.max_active.load(Ordering::SeqCst)
+        }
+
+        pub(crate) fn thread_count(&self) -> usize {
+            self.thread_ids.lock().unwrap().len()
+        }
+    }
+
+    pub(crate) fn run_unscoped_native_map(require_two: bool) -> Arc<NativeParticipants> {
+        let source = strided_kernel::StridedArray::<f64>::from_fn_col_major(
+            &[LARGE_NATIVE_TEST_LEN],
+            |index| index[0] as f64,
+        );
+        let mut destination =
+            strided_kernel::StridedArray::<f64>::col_major(&[LARGE_NATIVE_TEST_LEN]);
+        let participants = Arc::new(if require_two {
+            NativeParticipants::requiring_two()
+        } else {
+            NativeParticipants::default()
+        });
+        let observed = Arc::clone(&participants);
+        strided_kernel::map_into(&mut destination.view_mut(), &source.view(), |value| {
+            observed.observe();
+            value + 1.0
+        })
+        .unwrap();
+        let output = destination.into_data();
+        assert_eq!(output[0], 1.0);
+        assert_eq!(
+            output[LARGE_NATIVE_TEST_LEN - 1],
+            LARGE_NATIVE_TEST_LEN as f64
+        );
+        participants
+    }
 }
