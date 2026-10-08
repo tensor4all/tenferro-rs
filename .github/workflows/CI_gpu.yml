@@ -220,7 +220,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --profile ci --manifest-path docs/tutorial-code/Cargo.toml \
-            --no-default-features --features cuda,cpu-faer --bin cuda_tutorial
+            --no-default-features --features cuda,native --bin cuda_tutorial
           tar --zstd -cf "${CUDA_TUTORIAL_ARCHIVE}" -C target/ci cuda_tutorial
       - name: Verify CUDA/PJRT test archives
         env:

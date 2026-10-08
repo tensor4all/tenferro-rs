@@ -95,6 +95,12 @@
 //! requires_cached_dot(&mut backend);
 //! ```
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// With neither backend the numerical routes are unreachable by design, so the
+// implementation they would call is dead code in that configuration only.
+#![cfg_attr(
+    all(not(feature = "native"), not(feature = "blas")),
+    allow(dead_code, unused_imports)
+)]
 // `provider-inject` unit tests deliberately omit the broad default-backend
 // suite below because no fixture has registered its FFI symbols. That makes
 // private helpers referenced only by the broad suite appear unused in this one
