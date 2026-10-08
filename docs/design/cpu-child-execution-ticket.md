@@ -1,6 +1,9 @@
 # CPU child-execution ticket (borrowed) — design
 
-Status: draft for review (not implemented).
+Status: implemented in this branch (revision after the post-review). The
+reentrancy requirement is enforced atomically in the arbiter, the issuing
+thread's own recursion still reports `Reentered`, and each child session owns its
+N-ary scratch store.
 
 ## Problem
 
@@ -157,10 +160,15 @@ compile-fail fixtures cover storing the handle.
    (`SessionEntryError::Reentered`), exactly like ordinary backend recursion.
 2. Workers may hold child sessions while the issuing execution is active: that is
    the point of the ticket.
-3. A child session may not issue its own ticket in this change; grandchildren use
-   the same root ticket.
-4. The ticket's lifetime is the issuing callback (`for<'exec>` above), so it cannot
-   be stored or returned.
+3. A child session may derive its own handle (`child_execution()` is available on
+   any session), so grandchildren carry the same root owner. The issuing thread's
+   recursion rule still applies to every descendant.
+4. The handle borrows the issuing session, so it cannot be stored or returned.
+   `backend()` hands out an owned `CpuBackend`; that clone cannot be lifetime
+   checked, so it is validated at entry: the arbiter admits a descendant only
+   while the carried owner still holds its request (atomic reentrancy check) and
+   only off the thread that already holds an execution. A stale or same-thread
+   handle reports `SessionEntryError::Reentered` and never runs the callback.
 5. A pooled "stolen" callback that lands on a thread where an execution of the same
    owner is already active is **rejected** as `Reentered`; such a callback must use
    the session it was handed instead of entering again. Scheduler composition
@@ -171,9 +179,10 @@ compile-fail fixtures cover storing the handle.
 
 - No owned/reference-counted ticket for detached work. If that is ever needed it
   is a separate design (it cannot be enforced by lifetimes).
-- No change to the arbiter policy, to `CpuThreadExecution`/`with_execution_scope`
-  (that remains the same-thread nesting mechanism), or to the engine resource
-  layout.
+- No change to the arbiter policy beyond the atomic reentrancy requirement, and
+  none to `CpuThreadExecution`/`with_execution_scope` (that remains the
+  same-thread nesting mechanism). The engine resource layout does change:
+  `EngineResources` gains an optional own N-ary store.
 - No consumer-side ambient inheritance: consumers must thread the ticket
   explicitly. The legacy global-default convenience surface stays for
   non-parallel callers.
@@ -200,10 +209,13 @@ compile-fail fixtures cover storing the handle.
    ticket.
 3. Existing tests: a foreign owner still gets `Contended`; the recursive-entry and
    `SharedScope` semantics are unchanged.
-4. Compile-fail fixtures: a ticket moved into `std::thread::spawn`, and a ticket
-   stored/returned so that it would outlive the callback while the backend stays
-   alive. A passing scoped, concurrent-use fixture plus a `Sync` assertion cover
-   the positive side.
+4. The five tests in `crates/tenferro-cpu/tests/child_execution.rs` cover the
+   positive scoped use, the deterministic simultaneous-children scratch lease
+   (channel-synchronized, bounded), the same-thread rejection with a
+   callback-not-run assertion, the typed stale-handle rejection, child-scratch
+   panic recovery, and a `Sync`/`Debug` assertion. No compile-fail fixture is
+   included: the borrow already rejects the common escapes, and the owned backend
+   escape is caught at entry as described above.
 5. A test that the child's own resources are accounted to the child, not the
    parent — stating the actual contract: the buffer limit is a retained-capacity
    ceiling for that pool, and the caches keep their defaults. The entirety of
@@ -228,6 +240,9 @@ Decision (taken with the maintainer): express child entry through the existing
 audited entry, so the boundary count does not grow — the handle-derivation shape
 in the API section above. An audit negative test for an unauthorized caller stays
 part of the change.
+
+The new type is re-exported next to `CpuExecSession` under the same
+`#[doc(hidden)]` gate for now; its rustdoc examples document the supported use.
 
 ## Deliberately not doing
 

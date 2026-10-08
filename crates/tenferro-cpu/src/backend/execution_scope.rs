@@ -229,9 +229,28 @@ impl CpuBackend {
         if let Some(shared) = shared {
             return Ok(shared);
         }
-        let owner = fresh_execution_owner().ok_or(SessionEntryError::Reentered {
-            backend: CPU_BACKEND,
-        })?;
+        // A child execution handle carries the issuing execution's owner, so its
+        // sessions are admitted reentrant (no waiting on the issuing
+        // reservation). An ordinary handle still takes a fresh owner and reports
+        // the same reentry error as before when one is already active here.
+        // A child handle carries the issuing execution's owner. Admission still
+        // rejects an entry from the thread that already holds an execution, which
+        // keeps the ordinary same-thread recursion rule; and the arbiter requires
+        // that owner to still hold its request, so a handle that outlived its
+        // execution is rejected rather than admitted as a fresh owner.
+        let owner = match self.inherited_owner {
+            Some(owner) => {
+                if has_active_execution() {
+                    return Err(SessionEntryError::Reentered {
+                        backend: CPU_BACKEND,
+                    });
+                }
+                owner
+            }
+            None => fresh_execution_owner().ok_or(SessionEntryError::Reentered {
+                backend: CPU_BACKEND,
+            })?,
+        };
         Ok(ExecutionAdmission::Standalone(
             self.acquire_execution_permit(owner)?,
         ))

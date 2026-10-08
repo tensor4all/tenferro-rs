@@ -119,6 +119,11 @@ name = "blas1_pool_aliasing"
 path = "tests/blas1_pool_aliasing.rs"
 
 [[test]]
+name = "child_execution"
+path = "tests/child_execution.rs"
+required-features = ["native"]
+
+[[test]]
 name = "install_allocation_tests"
 path = "tests/install_allocation_tests/main.rs"
 required-features = ["native"]

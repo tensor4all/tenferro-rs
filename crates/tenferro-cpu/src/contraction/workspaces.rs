@@ -27,6 +27,27 @@ pub struct ContractionWorkspaces {
     entries: Mutex<HashMap<TypeId, Entry>>,
 }
 
+/// Reports how many typed scratch entries this owner retains and their bytes,
+/// without exposing the payloads; the engine's own `Debug` needs it.
+impl std::fmt::Debug for ContractionWorkspaces {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.entries.try_lock() {
+            Ok(entries) => f
+                .debug_struct("ContractionWorkspaces")
+                .field("entries", &entries.len())
+                .field(
+                    "bytes",
+                    &entries.values().map(|entry| entry.bytes).sum::<usize>(),
+                )
+                .finish(),
+            Err(_) => f
+                .debug_struct("ContractionWorkspaces")
+                .field("entries", &"borrowed")
+                .finish(),
+        }
+    }
+}
+
 impl ContractionWorkspaces {
     pub(crate) fn lock(&self) -> crate::Result<WorkspaceLease<'_>> {
         self.entries

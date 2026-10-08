@@ -528,6 +528,10 @@ pub struct CpuBackend {
     resolved: ResolvedCpuExecution,
     pub(crate) engine: Arc<CpuEngine>,
     allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
+    /// Owner this handle's sessions are admitted under. `None` acquires a fresh
+    /// owner; a child execution handle carries the issuing execution's owner so
+    /// its sessions are admitted reentrant instead of parking on a conflict.
+    inherited_owner: Option<crate::arbiter::ResourceOwner>,
 }
 
 /// Opaque identity for one CPU backend executable witness.
@@ -853,6 +857,7 @@ impl CpuBackend {
                     indexed_plan_cache_limits: Mutex::new(DEFAULT_INDEXED_PLAN_CACHE_LIMITS),
                 }),
                 runtime_identity: CpuRuntimeIdentity::fresh(),
+                inherited_owner: None,
                 requested: CpuPlacement::Auto,
                 resolved,
                 engine,
@@ -885,6 +890,7 @@ impl CpuBackend {
                 indexed_plan_cache_limits: Mutex::new(DEFAULT_INDEXED_PLAN_CACHE_LIMITS),
             }),
             runtime_identity: CpuRuntimeIdentity::fresh(),
+            inherited_owner: None,
             requested: CpuPlacement::Auto,
             resolved: ResolvedCpuExecution::Managed(engine.placement().clone()),
             engine,
@@ -946,6 +952,7 @@ impl CpuBackend {
                 indexed_plan_cache_limits: Mutex::new(DEFAULT_INDEXED_PLAN_CACHE_LIMITS),
             }),
             runtime_identity: CpuRuntimeIdentity::fresh(),
+            inherited_owner: None,
             requested: CpuPlacement::Auto,
             resolved,
             engine: base_engine,
@@ -1202,6 +1209,7 @@ impl CpuBackend {
         let engine = self.shared.managed_engine_for(&placement, requested)?;
         Ok(Self {
             runtime_identity: CpuRuntimeIdentity::fresh(),
+            inherited_owner: None,
             shared: Arc::clone(&self.shared),
             requested,
             resolved,
@@ -1663,8 +1671,12 @@ impl CpuBackend {
         op: impl FnOnce(&mut EngineResources) -> R,
     ) -> R {
         if permit.is_reentrant() {
-            let mut resources =
-                EngineResources::new(self.shared.buffer_limit.load(Ordering::Relaxed));
+            // A reentrant child owns its execution resources, including its
+            // N-ary contraction scratch, so concurrent children never share one
+            // scratch lease.
+            let mut resources = EngineResources::for_child_execution(
+                self.shared.buffer_limit.load(Ordering::Relaxed),
+            );
             return op(&mut resources);
         }
         // INVARIANT: this lock is poisoned only by a session callback that
@@ -1694,17 +1706,28 @@ impl CpuBackend {
                 resource: "the CPU resource arbiter",
             },
         };
+        // A descendant entry (a handle that carries an owner) must join that
+        // owner's active request: never waiting, and never admitted as a fresh
+        // independent owner. An ordinary entry keeps the existing FIFO wait.
+        let acquire = |cpus: CpuSet| -> Result<ResourcePermit, SessionEntryError> {
+            if self.inherited_owner.is_some() {
+                return self
+                    .shared
+                    .arbiter
+                    .try_acquire_reentrant(cpus, owner)
+                    .map_err(arbiter_poisoned)?
+                    .ok_or(SessionEntryError::Reentered {
+                        backend: CPU_BACKEND,
+                    });
+            }
+            self.shared
+                .arbiter
+                .acquire_waiting(cpus, owner)
+                .map_err(arbiter_poisoned)
+        };
         match &self.resolved {
-            ResolvedCpuExecution::Managed(placement) => self
-                .shared
-                .arbiter
-                .acquire_waiting(placement.cpus().clone(), owner)
-                .map_err(arbiter_poisoned),
-            _ => self
-                .shared
-                .arbiter
-                .acquire_waiting(self.shared.topology.allowed_cpus().clone(), owner)
-                .map_err(arbiter_poisoned),
+            ResolvedCpuExecution::Managed(placement) => acquire(placement.cpus().clone()),
+            _ => acquire(self.shared.topology.allowed_cpus().clone()),
         }
     }
 }
@@ -1714,6 +1737,19 @@ impl BackendRuntimeCache for CpuBackend {
 }
 
 impl CpuBackend {
+    /// Derive a handle whose sessions are admitted under `owner`.
+    ///
+    /// The handle shares this backend's engine, arbiter and witness, so a
+    /// descendant execution is admitted reentrant (it never waits for the
+    /// issuing execution's reservation) while an unrelated owner still
+    /// conflicts exactly as before.
+    pub(crate) fn with_inherited_owner(&self, owner: crate::arbiter::ResourceOwner) -> Self {
+        Self {
+            inherited_owner: Some(owner),
+            ..self.clone()
+        }
+    }
+
     /// Bind this backend handle to a shared-allocation domain.
     ///
     /// Host-only CPU behavior is unchanged. Operation crates can use the domain
@@ -1800,7 +1836,12 @@ impl CpuBackend {
                     buffers: buffers.get_mut(),
                     gemm_analysis_cache: cache,
                     indexed_plan_cache: &mut resources.indexed_plan_cache,
+                    nary: resources
+                        .nary
+                        .as_ref()
+                        .unwrap_or_else(|| self.engine.context.contraction_workspaces()),
                     allocation_domain: self.allocation_domain.as_ref(),
+                    child_backend: self.with_inherited_owner(owner),
                 };
                 record_cpu_session_profile(
                     "with_backend_session_cached.session_construct",

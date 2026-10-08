@@ -125,6 +125,16 @@ impl ResourceArbiter {
         GLOBAL.get_or_init(Self::new).clone()
     }
 
+    /// Acquire a descendant entry: only while `owner` still holds an active
+    /// request, never waiting and never taking a fresh owner.
+    pub(crate) fn try_acquire_reentrant(
+        &self,
+        cpus: CpuSet,
+        owner: ResourceOwner,
+    ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
+        self.try_acquire_request_with_owner(ResourceRequest::CpuSet(cpus), owner, true)
+    }
+
     #[cfg(test)]
     pub(crate) fn acquire(&self, cpus: CpuSet) -> Result<ResourcePermit, ResourceArbiterError> {
         self.acquire_request(ResourceRequest::CpuSet(cpus), request_owner())
@@ -157,7 +167,7 @@ impl ResourceArbiter {
         // Rayon does not expose ancestry: never park a worker behind that owner.
         if rayon::current_thread_index().is_some() {
             return self
-                .try_acquire_request_with_owner(request, owner)?
+                .try_acquire_request_with_owner(request, owner, false)?
                 .ok_or(ResourceArbiterError::Contended);
         }
         loop {
@@ -279,13 +289,14 @@ impl ResourceArbiter {
         &self,
         request: ResourceRequest,
     ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
-        self.try_acquire_request_with_owner(request, request_owner())
+        self.try_acquire_request_with_owner(request, request_owner(), false)
     }
 
     fn try_acquire_request_with_owner(
         &self,
         request: ResourceRequest,
         owner: ResourceOwner,
+        require_reentrant: bool,
     ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
         let mut state = self
             .inner
@@ -293,6 +304,12 @@ impl ResourceArbiter {
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
         let reentrant = state.active.iter().any(|active| active.owner == owner);
+        // A descendant entry must join an existing request of the same owner; it
+        // must never be admitted as a fresh independent owner, which the atomic
+        // check here prevents even if the issuing request is released meanwhile.
+        if require_reentrant && !reentrant {
+            return Ok(None);
+        }
         let conflicts_with_active = state
             .active
             .iter()
