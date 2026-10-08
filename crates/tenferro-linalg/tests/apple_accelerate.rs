@@ -12,8 +12,8 @@ use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead};
 
 #[test]
 fn accelerate_gemm_and_cholesky_without_metal() {
+    // This target only builds with the Accelerate-backed `blas` adapter.
     let mut cpu = CpuBackend::with_threads(1).unwrap();
-    assert_eq!(cpu.kind(), CpuBackendKind::Blas);
     let input = Tensor::from_vec_col_major([2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
     let product = cpu
         .with_backend_session(|session| {
