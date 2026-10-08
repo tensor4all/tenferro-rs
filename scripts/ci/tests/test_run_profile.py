@@ -44,8 +44,6 @@ class RunProfileTests(unittest.TestCase):
         for relative in (
             "ext/tropical/Cargo.toml",
             "ext/sparse/Cargo.toml",
-            "ext/tenferro-cpu-tblis/Cargo.toml",
-            "ext/tenferro-cpu-tprims/Cargo.toml",
             "samples/kdv-pinn/Cargo.toml",
         ):
             manifest = tomllib.loads((ROOT / relative).read_text())
@@ -67,13 +65,13 @@ class RunProfileTests(unittest.TestCase):
             (
                 "cargo-nextest nextest run --workspace --cargo-profile ci "
                 "--no-default-features "
-                "--features cpu-blas --no-fail-fast",
+                "--features blas --no-fail-fast",
                 "cargo test --doc --workspace --profile ci --no-default-features "
-                "--features cpu-blas",
+                "--features blas",
                 # Issue #1602: downstream BLAS interop example linked against
                 # the system OpenBLAS/LAPACK via the profile RUSTFLAGS.
                 "cargo run -p tenferro-tutorial-code --profile ci "
-                "--no-default-features --features cpu-blas --bin blas_interop",
+                "--no-default-features --features blas --bin blas_interop",
             ),
         )
 
@@ -84,8 +82,6 @@ class RunProfileTests(unittest.TestCase):
                 "cargo fmt --all --check",
                 "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
                 "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
-                "cargo fmt --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all --check",
-                "cargo fmt --manifest-path ext/tenferro-cpu-tprims/Cargo.toml --all --check",
             ),
         )
 
@@ -100,12 +96,6 @@ class RunProfileTests(unittest.TestCase):
                 "-D clippy::missing_panics_doc",
                 "cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets "
                 "-- -D warnings -D clippy::missing_errors_doc "
-                "-D clippy::missing_panics_doc",
-                "cargo clippy --manifest-path ext/tenferro-cpu-tblis/Cargo.toml "
-                "--all-targets -- -D warnings -D clippy::missing_errors_doc "
-                "-D clippy::missing_panics_doc",
-                "cargo clippy --manifest-path ext/tenferro-cpu-tprims/Cargo.toml "
-                "--all-targets -- -D warnings -D clippy::missing_errors_doc "
                 "-D clippy::missing_panics_doc",
             ),
         )
@@ -131,12 +121,12 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(targets, ["apple_context", "apple_cpu", "webgpu_metal_fft", "apple_accelerate"])
         self.assertNotIn("--workspace", args)
         self.assertNotIn("--doc", args)
-        self.assertNotIn("cpu-faer", commands[0])
+        self.assertNotIn("native", commands[0])
         cpu_manifest = tomllib.loads((ROOT / "crates/tenferro-cpu/Cargo.toml").read_text())
         self.assertNotIn("cblas-src", cpu_manifest["dependencies"])
         linalg_features = tomllib.loads((ROOT / "crates/tenferro-linalg/Cargo.toml").read_text())["features"]
         for provider in ("blas-accelerate", "blas-openblas", "blas-mkl"):
-            self.assertIn("cpu-blas", linalg_features[provider])
+            self.assertIn("blas", linalg_features[provider])
         self.assertIn("tenferro-ad?/webgpu", linalg_features["webgpu"])
         with patch.dict("os.environ", {}, clear=True), patch(
             "scripts.ci.run_profile.subprocess.run"
@@ -199,18 +189,18 @@ class RunProfileTests(unittest.TestCase):
         commands = commands_for("docs")
         self.assertIn(
             "cargo run -p tenferro-tutorial-code --profile ci "
-            "--no-default-features --features cpu-faer --bin faer_interop",
+            "--no-default-features --features native --bin faer_interop",
             commands,
         )
         self.assertIn(
             "RUSTFLAGS='-l dylib=openblas -l dylib=lapack' "
             "cargo run -p tenferro-tutorial-code --profile ci "
-            "--no-default-features --features cpu-blas --bin blas_interop",
+            "--no-default-features --features blas --bin blas_interop",
             commands,
         )
         self.assertLess(
             commands.index("cargo run -p tenferro-tutorial-code --profile ci "
-                           "--no-default-features --features cpu-faer "
+                           "--no-default-features --features native "
                            "--bin faer_interop"),
             commands.index("bash scripts/build_docs_site.sh"),
         )
@@ -219,7 +209,7 @@ class RunProfileTests(unittest.TestCase):
         commands = commands_for("docs")
         command = (
             "cargo check -p tenferro-tutorial-code --profile ci "
-            "--no-default-features --features cuda,cpu-faer "
+            "--no-default-features --features cuda,native "
             "--bin custom_cuda_kernels"
         )
 

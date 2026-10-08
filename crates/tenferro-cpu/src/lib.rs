@@ -95,6 +95,12 @@
 //! requires_cached_dot(&mut backend);
 //! ```
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// With neither backend the numerical routes are unreachable by design, so the
+// implementation they would call is dead code in that configuration only.
+#![cfg_attr(
+    all(not(feature = "native"), not(feature = "blas")),
+    allow(dead_code, unused_imports)
+)]
 // `provider-inject` unit tests deliberately omit the broad default-backend
 // suite below because no fixture has registered its FFI symbols. That makes
 // private helpers referenced only by the broad suite appear unused in this one
@@ -128,11 +134,16 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
-#[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
-compile_error!("enable at least one CPU backend: cpu-faer or cpu-blas");
+// A build with neither backend compiles: the CPU numerical routes report a
+// typed `Unsupported` instead. `native` is the default feature, so a normal
+// dependency always gets a backend, and selecting `blas` alone is the supported
+// alternative. This keeps any subset of the stack compilable, which is what
+// consumers that select a backend crate by crate rely on.
+#[cfg(all(feature = "native", feature = "blas"))]
+compile_error!("native and blas are mutually exclusive; use --no-default-features for blas");
 
-#[cfg(all(feature = "provider-inject", not(feature = "cpu-blas")))]
-compile_error!("provider-inject requires cpu-blas");
+#[cfg(all(feature = "provider-inject", not(feature = "blas")))]
+compile_error!("provider-inject requires blas");
 
 #[cfg(any(
     all(feature = "blas-openblas", feature = "blas-accelerate"),
@@ -154,7 +165,6 @@ compile_error!(
 compile_error!("provider-inject cannot be combined with explicit BLAS provider features");
 
 pub mod affinity;
-mod affinity_policy;
 mod analytic;
 mod arbiter;
 pub mod backend;
@@ -163,15 +173,16 @@ pub(crate) mod buffer_pool {
     pub use tenferro_cpu_basic::buffer_pool::*;
 }
 mod capability;
-pub mod context;
-mod domain_executor;
+mod context;
 mod dot_runtime;
 pub(crate) use tenferro_cpu_basic::PooledUninitOutput;
 pub(crate) use tenferro_cpu_basic::{erased_raw_strided_ref, erased_raw_strided_uninit_mut};
 pub(crate) use tenferro_internal_cpu_kernels::elementwise;
-mod batch_policy;
+mod contraction;
 mod engine;
 mod exec_session;
+#[doc(hidden)]
+pub use contraction::ContractionWorkspaces;
 mod gemm;
 mod indexed_plan_cache;
 mod indexing;
@@ -179,8 +190,6 @@ mod indexing;
 pub mod inject;
 mod placement;
 pub mod provider;
-mod provider_capability;
-mod provider_extensions;
 mod reduction;
 mod resource_domain;
 mod runtime_adapter;
@@ -195,6 +204,23 @@ use strided_kernel::StridedArray;
 
 use crate::buffer_pool::BufferPool;
 pub(crate) use tenferro_tensor::*;
+
+/// Stable provider identity of the compile-time-selected CPU backend.
+#[doc(hidden)]
+pub fn cpu_provider_id() -> &'static str {
+    #[cfg(feature = "native")]
+    {
+        "tenferro.cpu.faer"
+    }
+    #[cfg(feature = "blas")]
+    {
+        "tenferro.cpu.blas"
+    }
+    #[cfg(all(not(feature = "native"), not(feature = "blas")))]
+    {
+        "tenferro.cpu.none"
+    }
+}
 
 pub(crate) fn cpu_contraction_unsupported_dtype_message(dtype: DType) -> String {
     let remedy = matches!(dtype, DType::I32 | DType::I64)
@@ -217,30 +243,20 @@ extern crate lapack_src as _;
 pub use affinity::{
     available_parallelism, process_cpu_affinity, process_cpu_affinity_count, CpuAffinityError,
 };
-pub use affinity_policy::{
-    resolve_cpu_affinity, resolve_cpu_affinity_with_override, CpuAffinityInput,
-    CpuAffinityInputError, CpuAffinityPolicy, CpuAffinityResolutionError, CpuAffinitySelection,
-    CpuAffinitySelectionReason,
-};
 pub use backend::execution_scope::{current_cpu_execution, CpuThreadExecution};
-pub use backend::{
-    CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
-    CpuRuntimeIdentity, ExternalCpuDomainRegistryError,
-};
-pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
+pub use backend::{CpuBackend, CpuBackendError, CpuRuntimeIdentity};
 
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
-pub use context::{CpuContext, CpuContextError, DEFAULT_WORKER_STACK_BYTES};
-pub use domain_executor::{
-    CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, RayonCpuDomainExecutor,
-    ScopedCpuJob, ScopedCpuJobs,
-};
-pub use dot_runtime::{
-    CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
-    CpuProviderBundleInstallError, CpuProviderSlot, GeneralContractionPolicy,
-};
+pub use context::DEFAULT_WORKER_STACK_BYTES;
+// `CpuContext` is the engine's own resource holder. It stays reachable for the
+// crate's benchmarks, but it is not part of the supported CPU API: placement
+// goes through `CpuBackend::builder()`, and lower libraries see
+// `CpuExecutionContext`.
+#[doc(hidden)]
+pub use context::{CpuContext, CpuContextError};
+#[doc(hidden)]
+pub use dot_runtime::{validate_cpu_host_read, validate_cpu_host_write};
 #[doc(hidden)]
 pub use exec_session::CpuExecSession;
 pub use indexed_plan_cache::IndexedPlanCacheLimits;
@@ -248,13 +264,6 @@ pub use placement::{
     CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
 };
 pub use provider::{CpuExecutionContext, ParallelMode};
-pub use provider_capability::{
-    CpuPlacementControl, CpuProviderDomainError, CpuProviderExecutionCapabilities,
-    CpuThreadCountControl,
-};
-pub use resource_domain::{
-    CpuAdmissionMode, CpuDomainOwnership, ExternalCpuDomain, ExternalCpuDomainError,
-};
 pub use runtime_adapter::{
     runtime_engine_id, runtime_engine_registration, runtime_engine_registration_with_id,
     runtime_hardware_class,
@@ -300,13 +309,13 @@ where
 ///
 /// The `faer::Par` value is scoped to the callback and is derived from the
 /// session's managed thread budget and nesting policy. A non-CPU session, or a
-/// CPU session built without `cpu-faer`, returns a typed unsupported error.
+/// CPU session built without `native`, returns a typed unsupported error.
 /// `Par::Seq` remains the portable choice for direct calls outside a session.
 ///
 /// # Examples
 ///
 /// ```rust
-/// # #[cfg(feature = "cpu-faer")]
+/// # #[cfg(feature = "native")]
 /// # fn example() -> tenferro_tensor::Result<()> {
 /// use tenferro_cpu::{CpuBackend, FaerParallelismExt};
 /// use tenferro_tensor::BackendSessionHost;
@@ -322,8 +331,8 @@ where
 /// # }
 /// # fn main() {}
 /// ```
-#[cfg(feature = "cpu-faer")]
-#[cfg_attr(docsrs, doc(cfg(feature = "cpu-faer")))]
+#[cfg(feature = "native")]
+#[cfg_attr(docsrs, doc(cfg(feature = "native")))]
 pub trait FaerParallelismExt {
     /// Run a scoped callback with this session's faer parallelism policy.
     ///
@@ -335,7 +344,7 @@ pub trait FaerParallelismExt {
     /// # Examples
     ///
     /// ```rust
-    /// # #[cfg(feature = "cpu-faer")]
+    /// # #[cfg(feature = "native")]
     /// # fn example(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_tensor::Result<()> {
     /// use tenferro_cpu::FaerParallelismExt;
     /// session.with_faer_parallelism(|parallel| {
@@ -351,7 +360,7 @@ pub trait FaerParallelismExt {
     ) -> tenferro_tensor::Result<()>;
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 impl<S> FaerParallelismExt for S
 where
     S: tenferro_tensor::BackendSession + ?Sized,
@@ -447,7 +456,7 @@ pub(crate) fn cpu_negative_integer_exponent(op: &'static str, dtype: DType) -> c
 }
 
 pub(crate) use tenferro_cpu_basic::{
-    cpu_backend_buffer_error, typed_host_data, typed_view, typed_view_from_view, ConjElem,
+    cpu_backend_buffer_error, typed_host_data, typed_view, typed_view_from_view,
 };
 pub(crate) fn materialize_tensor_read_in_domain(
     buffers: &mut BufferPool,

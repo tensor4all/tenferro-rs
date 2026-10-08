@@ -273,7 +273,7 @@ class HandoffScriptTests(unittest.TestCase):
         self.assertEqual(self.log_lines(self.worktree), [])
 
     def test_multiple_approvals_are_forwarded_verbatim(self) -> None:
-        approvals = {"tenferro-internal-cpu-kernels", "t4a-tblis-src"}
+        approvals = {"tenferro-internal-cpu-kernels", "t4a-example-src"}
         output = Path(self._directory.name) / "multi.sh"
         RELEASE.generate_handoff_script(self.VERSION, approvals, output, root=self.worktree)
         returncode, _output = self.run_handoff(self.worktree, output, b"y\n", tty=True)
@@ -281,9 +281,9 @@ class HandoffScriptTests(unittest.TestCase):
         self.assertEqual(
             self.log_lines(self.worktree),
             [
-                f"{self.VERSION} --approve-new-package t4a-tblis-src "
+                f"{self.VERSION} --approve-new-package t4a-example-src "
                 "--approve-new-package tenferro-internal-cpu-kernels",
-                f"{self.VERSION} --approve-new-package t4a-tblis-src "
+                f"{self.VERSION} --approve-new-package t4a-example-src "
                 "--approve-new-package tenferro-internal-cpu-kernels --execute",
             ],
         )

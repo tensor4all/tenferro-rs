@@ -530,7 +530,7 @@ def check_package_metadata(root_text: str, errors: list[str]) -> None:
     ):
         errors.append("docs/tutorial-code must remain publish = false")
 
-    for extension in ("tropical", "sparse", "tenferro-cpu-tblis", "tenferro-cpu-tprims"):
+    for extension in ("tropical", "sparse"):
         extension_manifest = ROOT / "ext" / extension / "Cargo.toml"
         if "publish = false" not in section(
             extension_manifest.read_text(encoding="utf-8"), "package"

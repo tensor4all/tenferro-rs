@@ -1,194 +1,115 @@
 # CPU Backend Execution Contract
 
 `CpuBackend` is a cloneable handle to a shared coordinator. The coordinator
-owns process-visible topology, lazily constructed fixed engines, overlap-aware
-execution arbitration, and engine-local buffer and GEMM-analysis caches.
+owns process-visible topology, lazily constructed tenferro-owned engines,
+overlap-aware execution arbitration, and engine-local buffer and plan caches.
 
 Topology uses sparse OS CPU and NUMA node IDs. A usable node CPU set is
 `OS node cpuset ∩ process affinity`; `AllAllowed` is the process affinity set.
 No code may reinterpret node IDs as dense indexes or widen process affinity.
 
-For `CpuBackendKind::Faer`, `Auto` resolves to managed `AllAllowed`, and
-explicit node/all-allowed placement is supported. Each managed engine has a
-fixed Rayon pool whose workers are confined to the declared CPU set and
-verified at construction. Workers share the domain set instead of owning one CPU
-each, because provider-created threads inherit the creating worker's mask and a
-one-CPU mask would confine a provider's whole thread team. Provider parallelism
-is therefore bounded by the provider's own thread settings, not by worker
-affinity. Overlapping CPU sets cannot hold permits concurrently; disjoint sets
-can.
+## Provider Selection Is Compile-Time
 
-For `CpuBackendKind::Blas`, only `Auto` is valid. It resolves to a
-provider-default exclusive permit because tenferro cannot establish the CPU
-affinity of provider-owned OpenMP or native workers. Native graph segments and
-provider calls both cross the selected all-allowed domain executor exactly
-once. The executor entry owns admission and caller-thread placement; the BLAS
-runtime, rather than the executor's Rayon workers, owns provider fan-out.
+Exactly one CPU backend is compiled: `native` (the default) or `blas`.
 
-## External provider placement (#1938 D8)
+- `native` uses faer-backed tlinalg plus cpueinsum/tprims.
+- `blas` adds the `cpueinsum-blas` and `tlinalg-blas` adapters and keeps the
+  native path for steps those adapters decline.
 
-tenferro confines its own workers to a managed domain's CPU set and uses every
-domain's declared CPU set for resource exclusion. It makes no promise about
-where threads created by an external provider (OpenBLAS, MKL, Accelerate,
-OpenMP) run, or how many exist beyond the provider's declared count control.
-Cooperative-domain bundle validation therefore checks the thread count only;
-the former `CpuPlacementGuarantee` declaration and its `PlacementNotEnforceable`
-rejection were removed, because the rejection itself implied an enforcement the
-backend cannot provide. An `AllAllowed` domain must still declare exactly the
-process-allowed set, since that is its exclusion identity. Caller-managed
-domains keep their separate rule below.
+Enabling both, or neither, is a compile-time error. There is no runtime
+provider kind, provider bundle, kernel slot, or per-handle provider selection.
+`tenferro_cpu::cpu_provider_id()` names the compiled provider for diagnostics
+only; it is not a dispatch key.
 
-## Caller-managed external admission
+## Placement And Ownership
 
-An external domain explicitly selects one of two admission contracts:
+Every engine is tenferro-owned. `CpuPlacement::{Auto, NumaNode, AllAllowed}`
+resolves against the process topology: `Auto` and `AllAllowed` use the
+process-permitted CPU set, `NumaNode(id)` a node's CPUs. `CpuBackend::builder()`
+selects a CPU set, NUMA node, thread count, worker stack, and buffer limit;
+`CpuBackend::new()` / `with_threads(n)` use the environment thread count and the
+process CPU set.
 
-- **cooperative CPU-set admission** retains the resolved placement and
-  process-wide overlap arbitration on its declared CPU set; or
-- **caller-managed admission** declares no CPU set. The supplied executor's
-  workers are the complete CPU universe for that domain, and the caller owns
-  admission and oversubscription across caller-managed domains.
+An engine has a fixed Rayon pool confined to its declared CPU set and verified
+at construction. Workers share the domain mask instead of owning one CPU each,
+because provider-created threads inherit the creating worker's mask and a
+one-CPU mask would confine a provider's whole thread team. Overlapping CPU sets
+cannot hold permits concurrently; disjoint sets can. On platforms without
+verified worker affinity, `Auto` uses an unpinned compatibility context and
+explicit placement returns a typed error rather than weakening the request.
 
-`ExternalCpuDomain::new` remains the cooperative constructor.
-`ExternalCpuDomain::new_caller_managed(id, executor, thread_budget)` selects the
-second contract. `ExternalCpuDomain::admission_mode()` and
-`CpuExecutionInfo::admission_mode()` expose the distinction. Placement and CPU
-set accessors on `ExternalCpuDomain`, `CpuExecutionInfo`, and provider-facing
-`CpuExecutionContext` return `None` for caller-managed domains rather than
-inventing a placement claim. `CpuBackend::for_domain(CpuDomainId)` selects any
-registered external domain by stable ID; placement selection remains available
-only for cooperative domains.
+A clone shares topology, engines, arbitration, and engine-owned caches.
+tenferro never borrows an application-owned pool or executor.
 
-Caller-managed execution never enters `ResourceArbiter`, so unrelated
-caller-managed domains do not conflict because their process affinity overlaps.
-Instead, each caller-managed domain owns a small RAII admission guard carrying
-tenferro's execution-owner identity. It rejects a second public backend entry
-while that domain is active, including entry from another worker of the same
-caller pool, and clears on success, error, or unwind. This preserves public
-`CpuBackend` recursive-entry rejection without requiring TLS installation on a
-pool built by the caller. The permit never reports arbiter re-entry, so the
-existing engine-resource lock continues to protect that domain's caches and
-buffer pool. Cooperative, managed, compatibility, and provider-exclusive
-permits are unchanged.
+## Session Entry Is Admission, Not Installation
 
-The standard caller-owned Rayon adapter retains an `Arc<rayon::ThreadPool>` and
-implements the generic `CpuDomainExecutor` contract without constructing or
-shutting down a pool. Its synchronous `install` delegates to that exact pool,
-including when called by a worker already inside the same pool; inner faer and
-strided parallelism therefore sees only that pool and the validated domain
-thread budget. `submit` partitions only the indexed jobs supplied by tenferro.
-No path may fall back to ambient/global Rayon.
+`with_backend_session` and `with_execution_scope` are admission-only: the
+permit, the caller-affinity guard, and the workspace lease are acquired, and
+the callback and the coordinator stay on the calling OS thread. tenferro does
+not install the callback into a pool.
 
-Caller-managed domains explicitly select `CpuBackendKind::Faer`, independent of
-`CpuBackendKind::default_compiled()`; construction returns a typed unsupported
-configuration error when faer is not compiled. Provider-domain validation has a
-distinct caller-managed branch with no advisory or process-all-allowed bypass.
-It accepts only thread controls `PerCallUpperBound`, `Sequential`, or
-`BinaryClampToOne` and placement controls `EngineWorkers` or `CallingThread`.
-A bundle with external
-workers, uncontrolled thread count, or no placement control fails with a typed
-construction error before execution. The current BLAS/LAPACK operation-family
-path is unsupported because its process-global or provider-owned workers cannot
-be confined to the supplied executor. It must not run and then weaken
-isolation, mutate an output, or fall back silently.
+Entry with an explicitly declared CPU set observes the current thread mask `O`
+and narrows to `O ∩ D`, never widening it; a disjoint request returns a typed
+error before numerical work. `AllAllowed` performs no affinity syscall. The
+guard restores the mask on normal return, error, and unwind; the unwind path
+makes a best-effort restore and records a diagnostic rather than panicking.
 
-Diagnostics report caller-managed admission, absent verified placement, caller
-executor/shutdown ownership, worker count, and thread budget. Fresh output
-metadata may retain the stable CPU domain ID for routing, but it is not evidence
-of CPU affinity or NUMA residency. Executor ownership stays with the caller and
-is retained by the domain for every active synchronous job.
+A Rayon worker never waits for a conflicting permit or an eager backend owner:
+worker entry acquires non-blocking and reports the typed `Contended` /
+`Reentered` state on conflict. Ordinary independent callers keep blocking FIFO
+admission. Direct recursion is rejected from caller-local session state, so
+reentry rejection does not depend on pool-wide registration.
 
-The unentered crate-private `CpuOperationEntry` holds the selected domain and
-resource permit. It is the only CPU backend value allowed to call executor
-`install` or `submit`. Provider-facing `CpuExecutionContext` values are created
-inside an installed job or an outer child, so they are always already entered
-and expose only immutable policy/accessors. This separates executor entry,
-logical `ParallelMode`, and provider worker ownership and prevents a provider
-or operation-family implementation from re-entering the executor.
+## The Lower-Library Seam
 
-A context that owns an inner parallel region (`ParallelMode::Inner`, a Rayon
-executor, budget above one) also exposes that executor's pool through
-`CpuExecutionContext::rayon_pool`, gated exactly like `faer_parallelism`.
-It serves providers that schedule their own kernels, such as
-`ext/tenferro-cpu-tprims`: they declare `PerCallUpperBound` with
-`EngineWorkers`, run on the already-entered worker, and use at most
-`thread_budget()` threads of that pool. Installing on or scoping into the pool
-from its own worker runs in place, so this is not an executor entry and needs
-no permit. Executors not backed by one Rayon pool keep the defaulted
-`CpuDomainExecutor::rayon_pool` returning `None`, and such providers run
-serially there.
+`CpuExecutionContext` is the one owner-scoped interop seam. cpueinsum, tprims,
+and tlinalg receive one parallelism token: `Sequential`, or the selected pool
+with a thread budget. The lower library owns lane selection, vendor batching,
+scratch, and scheduling within that budget; tenferro owns tensor semantics,
+placement, output allocation, validation, and cache lifetime.
 
-Operation-family crates that need their own provider slot store it as a typed
-bundle extension (`CpuProviderBundleBuilder::extension`,
-`CpuProviderBundle::extension`, `CpuExecSession::provider_extension`) instead
-of a slot tenferro-cpu would have to name. tenferro-cpu does not interpret or
-validate extensions; the owning crate defines the trait and its execution
-contract, as `tenferro_linalg::cpu_kernels` does for linear algebra (same
-context, same `rayon_pool` and budget rules as the GEMM providers).
+One lower-library numerical call may install the selected pool for the duration
+of that call. Strided-rs work and FFT lane fan-out use the same bounded,
+operation-local exception. tenferro never installs the caller's continuation.
 
-A supported graph execution holds one permit and one backend session across
-Host operations, native operations, and session-capable FFI operations.
-Non-session extension runtimes are boundaries. Cache ownership follows engine
-ownership so clone handles do not duplicate retained execution state.
-The session stores `CpuOperationEntry` plus an optional entered execution
-context. Tenferro-managed sessions enter once and reuse that executor boundary
-while selecting an explicit logical mode for each native or provider
-operation. This includes BLAS/LAPACK sessions in `ProviderDefaultExclusive`
-mode: provider-owned worker threading is independent of session executor
-entry. The provider-exclusive permit spans the complete callback, including
-its single executor entry, and is released on normal return or unwind.
-Fallible external executors retain operation-level entry so their
-typed admission failures are not replaced by panic or fallback.
+Vendor BLAS/LAPACK is called from the coordinator thread. tenferro guarantees
+the calling thread's mask and nothing about the vendor's own worker team,
+thread count, or placement; `threads(1)` on a tenferro backend does not imply a
+one-thread vendor call.
+
+The token is not uniform across the two linalg providers, by design: the
+faer-backed `tlinalg` owns batch lanes and takes `Parallel` (pool plus budget),
+while `tlinalg-blas` is deliberately token-free because LAPACK/BLAS own their
+own threading, its batch loop is serial, and a Rayon fan-out around a vendor
+call would fight the vendor's own pool. The host places the vendor call instead;
+its scratch still comes from tenferro's buffer pool through the workspace seam.
+
+## Data Path
+
+CPU floating/complex `dot_general` and grouped GEMM go to cpueinsum prepared
+binary/grouped plans; CPU N-ary concrete einsum delegates to cpueinsum with the
+order tenferro's planner selected; CPU linalg families go to tlinalg /
+tlinalg-blas. The integer/all-batch elementwise contraction stays in
+tenferro-cpu. tenferro keeps axis, layout, dtype, placement, and output-form
+validation, the `MaybeUninit` complete-coverage proof for fresh binary outputs,
+and the typed unsupported mapping.
+
+Prepared plans are immutable and cacheable: they hold no live operands, no
+execution lease, and no mutable scratch. Execution scratch lives in an
+owner-scoped workspace with its own retention bound and accounting; retained
+plan and buffer caches are bounded and clearable through the runtime cache
+owner.
 
 Every successfully returned fresh CPU allocation records the selected resource
 domain as `Placement::cpu_affinity`. The tag is routing/locality metadata, not
 allocation ownership or evidence of NUMA page placement, worker pinning, or
-memory residency. Device, memory-kind, and backend allocation-domain metadata
-remain independent. Storage-sharing views and metadata-only reshapes preserve
-the source metadata; caller-owned `_into` outputs preserve the caller's
-metadata. Validation and provider/domain compatibility checks precede fresh
-allocation or caller-output mutation, and failures never cause tagging.
+memory residency. Storage-sharing views and metadata-only reshapes preserve the
+source metadata; caller-owned `_into` outputs preserve the caller's metadata.
 
-After that single executor entry, the already-entered
-`CpuExecutionContext` scopes tenferro-native strided work. `Inner` plus a
-selected executor that advertises Rayon uses that executor's Rayon region,
-capped by the validated operation budget. `Sequential`, every `Outer` child,
-and `Inner` backed by external workers use a sequential native policy. Thus
-native kernels never inherit an unrelated ambient Rayon pool, outer fan-out
-cannot create nested native fan-out, and an external BLAS runtime may still
-fan out independently of the sequential strided policy.
+## Diagnostics
 
-If direct GEMM dispatch reports exactly `Layout(Lhs)`, `Layout(Rhs)`, or
-`Conjugation` as unsupported, dot-general materializes canonical operands and
-retries the same provider once. Conjugation is fused into materialization and
-the retry flags are cleared. Output-layout and every other unsupported reason,
-a typed provider error, or a second unsupported result are terminal. Both
-temporary operands return to the engine buffer pool on every retry exit.
-
-Backend execution is non-reentrant. An active managed Rayon scope marks both
-the root call and every owned worker; direct nesting, a spawned or stolen child
-task, and unrelated work submitted to the same active `CpuContext` are rejected
-before acquiring another permit. External-provider execution also rejects
-same-thread nesting.
-
-Each managed Rayon worker registers the engine's shared execution-scope state
-once during `CpuContext` construction, before the constructor returns. An
-execution changes that shared active owner under RAII; workers consult the
-shared state when a nested backend entry is attempted. Entry must not broadcast
-owner metadata to every worker because that makes empty warm execution scale
-with the pool and adds mandatory per-entry allocations. Rayon may still perform
-occasional scheduler maintenance allocations; the backend does not promise that
-an unbounded sequence of calls remains allocation-free.
-
-This propagation contract covers Rayon workers owned by the active
-`CpuContext`. Ambient global Rayon workers are not part of a managed execution
-scope; tests for child-task propagation must use an explicit owned context.
-
-This intentionally does not infer permission from an execution owner. During a
-cross-pool wait Rayon may schedule a parallel sibling on the same OS worker as
-the direct call chain, so thread-local identity cannot distinguish those cases.
-Treating that sibling as reentrant could enter overlapping engine resources or
-an external BLAS provider concurrently. Separate top-level executions remain
-governed by process-wide overlap and provider exclusion.
-
-The stable public identity is `CpuBackendKind::{Faer, Blas}`. Concrete provider
-names are diagnostic strings, not dispatch or compatibility keys.
+`CpuBackend::placement()`, `num_threads()`, `topology()`, and
+`buffer_pool_stats()` are the observation accessors. `CpuRuntimeIdentity` is an
+opaque witness token for backend identity; clones share it and a backend whose
+placement or shared allocation domain changes receives a new one. The token
+carries no execution or storage authority.

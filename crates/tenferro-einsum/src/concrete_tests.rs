@@ -1539,6 +1539,46 @@ fn concrete_einsum_plan_execute_typed_into_accepts_non_send_adapter() {
 /// a tree without a contraction step hands the destination back for a copy;
 /// every case matches the allocating path.
 #[test]
+fn prepared_nary_accumulation_reuses_plan_with_runtime_scalars() {
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let id = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+    let reads = [
+        TensorRead::from_tensor(&a),
+        TensorRead::from_tensor(&id),
+        TensorRead::from_tensor(&id),
+    ];
+    let mut plan = ConcreteEinsumPlan::prepare_read(&reads, "ij,jk,kl->il").unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64; 4]).unwrap();
+    for (alpha, beta, expected) in [
+        (2.0, 3.0, [32.0, 34.0, 36.0, 38.0]),
+        (1.0, 0.0, [1.0, 2.0, 3.0, 4.0]),
+    ] {
+        backend
+            .with_backend_session(|session| {
+                plan.execute_read_into_accum(
+                    &reads,
+                    session,
+                    DotGeneralAccumulation {
+                        lhs_conj: false,
+                        rhs_conj: false,
+                        alpha: ContractionScalar::F64(alpha),
+                        beta: ContractionScalar::F64(beta),
+                    },
+                    TensorWrite::from_tensor(&mut out),
+                )
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.as_slice::<f64>().unwrap(), expected);
+    }
+    let stats = plan.cpu_cache_stats().unwrap();
+    assert_eq!((stats.entries, stats.hits, stats.misses), (1, 1, 1));
+    plan.clear_cpu_cache();
+    assert_eq!(plan.cpu_cache_stats().unwrap().entries, 0);
+}
+
+#[test]
 fn nary_read_into_matches_allocating_execution() {
     let mut backend = CpuBackend::new();
     let a = Tensor::from_vec_col_major(vec![2, 3], (1..=6).map(f64::from).collect()).unwrap();
@@ -1574,6 +1614,34 @@ fn nary_read_into_matches_allocating_execution() {
             .unwrap()
             .unwrap();
         assert_f64_tensor(&out, &shape, expected.as_slice::<f64>().unwrap());
+        if shape == [2, 2] {
+            for (strides, offset, positions) in
+                [([1, 3], 1, [1, 2, 4, 5]), ([-1, 3], 2, [2, 1, 5, 4])]
+            {
+                // Repeat the same layout to exercise the warm numerical plan.
+                for _ in 0..2 {
+                    let mut backing = [-99.0_f64; 9];
+                    let view = TensorViewMut::F64(
+                        TypedTensorViewMut::from_slice([2, 2], strides, offset, &mut backing)
+                            .unwrap(),
+                    );
+                    backend
+                        .with_backend_session(|session| {
+                            plan.execute_read_into(&reads, session, TensorWrite::from_view(view))
+                        })
+                        .unwrap()
+                        .unwrap();
+                    let mut expected_backing = [-99.0; 9];
+                    for (position, value) in positions
+                        .into_iter()
+                        .zip(expected.as_slice::<f64>().unwrap())
+                    {
+                        expected_backing[position] = *value;
+                    }
+                    assert_eq!(backing, expected_backing);
+                }
+            }
+        }
     }
 
     // A single operand has no contraction step: the result is materialized

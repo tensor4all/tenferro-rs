@@ -948,6 +948,15 @@ pub(crate) fn eager_einsum_exec(
     tree: &ContractionTree,
 ) -> Result<Tensor> {
     record_eager_einsum_profile("exec.enter", Duration::ZERO);
+    if inputs.len() >= 3 {
+        let reads: Vec<_> = inputs
+            .iter()
+            .map(|tensor| TensorRead::from_tensor(tensor))
+            .collect();
+        if let Some(result) = crate::cpu_concrete::execute(exec, &reads, tree) {
+            return result;
+        }
+    }
     let values = inputs
         .iter()
         .map(|tensor| TensorValue::Borrowed(tensor))
@@ -961,6 +970,9 @@ pub(crate) fn eager_einsum_exec_read(
     tree: &ContractionTree,
 ) -> Result<Tensor> {
     record_eager_einsum_profile("exec_read.enter", Duration::ZERO);
+    if let Some(result) = crate::cpu_concrete::execute(exec, inputs, tree) {
+        return result;
+    }
     let values = inputs
         .iter()
         .map(|input| match input {
@@ -1127,6 +1139,9 @@ pub(crate) fn eager_einsum_exec_read_into(
     out: TensorWrite<'_>,
 ) -> Result<()> {
     record_eager_einsum_profile("exec_read_into.enter", Duration::ZERO);
+    if crate::cpu_concrete::supports(exec, inputs) {
+        return crate::cpu_concrete::execute_into(exec, inputs, tree, None, out);
+    }
     let subscripts = &tree.subscripts;
     if let Some(plan) = binary_dot_plan_for_read_into(inputs, subscripts, &out) {
         return profile_eager_einsum_section("binary.fast_dot_general_into", || {

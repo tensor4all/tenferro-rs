@@ -28,7 +28,7 @@ fn placed_f64(shape: Vec<usize>, data: Vec<f64>, domain: CpuDomainId) -> Tensor 
 #[test]
 fn direct_and_session_fresh_outputs_use_the_selected_domain() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2], vec![1.0, 2.0], remote);
 
@@ -49,7 +49,7 @@ fn direct_and_session_fresh_outputs_use_the_selected_domain() {
 #[test]
 fn dot_and_fusion_vec_outputs_use_the_selected_domain() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let lhs = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
     let rhs = placed_f64(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0], remote);
@@ -100,7 +100,7 @@ fn dot_and_fusion_vec_outputs_use_the_selected_domain() {
 #[test]
 fn metadata_only_reshape_and_caller_owned_output_are_not_retagged() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
     let mut output = placed_f64(vec![2, 2], vec![0.0; 4], remote);
@@ -135,7 +135,7 @@ fn metadata_only_reshape_and_caller_owned_output_are_not_retagged() {
 #[test]
 fn direct_tensor_read_reshape_preserves_remote_storage_affinity() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
 
@@ -151,7 +151,7 @@ fn direct_tensor_read_reshape_preserves_remote_storage_affinity() {
 #[test]
 fn session_tensor_read_reshape_preserves_remote_storage_affinity() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
 
@@ -167,7 +167,7 @@ fn session_tensor_read_reshape_preserves_remote_storage_affinity() {
 #[test]
 fn direct_and_session_cpu_noop_transfers_preserve_remote_storage_affinity() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2], vec![1.0, 2.0], remote);
 
@@ -201,7 +201,7 @@ fn direct_and_session_cpu_noop_transfers_preserve_remote_storage_affinity() {
 #[test]
 fn reshaping_a_borrowed_view_tags_only_the_materialized_output() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
     let Some(input_tensor) = input.as_typed::<f64>() else {
@@ -226,7 +226,7 @@ fn reshaping_a_borrowed_view_tags_only_the_materialized_output() {
 #[test]
 fn validation_failure_does_not_mutate_or_retag_caller_owned_output() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0], remote);
     let mut output = placed_f64(vec![2, 2], vec![9.0, 8.0, 7.0, 6.0], remote);
@@ -257,7 +257,7 @@ fn validation_failure_does_not_mutate_or_retag_caller_owned_output() {
 #[test]
 fn lazy_tensor_value_tags_its_fresh_base() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    let selected = backend.execution_info().domain_id();
+    let selected = backend.domain_id_for_test();
     let remote = remote_domain(selected);
     let lhs = placed_f64(vec![3, 2], vec![1.0; 6], remote);
     let rhs = placed_f64(vec![4], vec![2.0; 4], remote);

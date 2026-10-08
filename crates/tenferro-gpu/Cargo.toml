@@ -17,15 +17,15 @@ documentation = "https://docs.rs/tenferro-gpu"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["cpu-faer", "cuda", "webgpu"]
+features = ["native", "cuda", "webgpu"]
 
 [lib]
 name = "tenferro_gpu"
 
 [features]
-default = ["cpu-faer"]
-cpu-faer = ["tenferro-cpu/cpu-faer"]
-cpu-blas = ["tenferro-cpu/cpu-blas"]
+default = ["native"]
+native = ["tenferro-cpu/native"]
+blas = ["tenferro-cpu/blas"]
 blas-openblas = ["tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]

@@ -40,10 +40,9 @@ thiserror.workspace = true
 # versioned dev-dependency would fail registry resolution during `cargo
 # package`. Dev-dependencies are stripped from the published manifest, so an
 # unversioned path dev-dependency is sufficient.
-# `cpu-faer` is enabled because tenferro-einsum links tenferro-cpu (which
-# cannot compile without a provider feature); no test code uses the CPU backend
-# directly.
-tenferro-einsum = { path = "../tenferro-einsum", default-features = false, features = ["cpu-faer"] }
+# The CPU backend feature comes from this workspace's `native`/`blas`
+# selection; forcing `native` here would collide with a `blas` build.
+tenferro-einsum = { path = "../tenferro-einsum", default-features = false }
 
 [[test]]
 name = "integration"

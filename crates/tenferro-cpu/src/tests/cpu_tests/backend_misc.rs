@@ -2222,9 +2222,9 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     impl BackendSession for DefaultOnlyBackend {}
 
     impl BackendSessionHost for DefaultOnlyBackend {
-        fn with_backend_session<R: Send>(
+        fn with_backend_session<R>(
             &mut self,
-            f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+            f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
         ) -> Result<R, tenferro_tensor::SessionEntryError> {
             tenferro_tensor::with_session_entry_guard("test backend", || f(self))
         }
@@ -3007,7 +3007,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     // A foreign session has no faer pool to lend, so the capability refuses
     // without running the callback.
-    #[cfg(feature = "cpu-faer")]
+    #[cfg(feature = "native")]
     {
         use crate::FaerParallelismExt;
         let mut ran = false;

@@ -5,10 +5,7 @@ use strided_kernel::{
     col_major_strides, copy_into, map_into, Identity, StridedView, StridedViewMut,
 };
 
-use crate::{
-    buffer_pool::{BufferPool, PoolScalar},
-    ConjElem,
-};
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::{
     DType, MemoryKind, Placement, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
     TypedTensor, TypedTensorView, TypedTensorViewMut,
@@ -326,137 +323,6 @@ where
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
     copy_into(&mut dst_view, &src_view).map_err(|err| crate::Error::backend_source(op, err))
-}
-
-pub(crate) fn typed_conjugate_view_into<T, R>(
-    src: &TypedTensorView<'_, T, R>,
-    dst: &mut TypedTensorViewMut<'_, T, R>,
-    op: &'static str,
-) -> crate::Result<()>
-where
-    T: Copy + Send + Sync + ConjElem + 'static,
-    R: TensorRank,
-{
-    if src.shape() != dst.shape() {
-        return Err(crate::Error::shape_mismatch(
-            op,
-            src.shape().to_vec(),
-            dst.shape().to_vec(),
-        ));
-    }
-    if let (Some(src_buffer), Some(dst_buffer)) = (src.backend_buffer(), dst.backend_buffer()) {
-        if std::ptr::eq(src_buffer, dst_buffer) {
-            return Err(crate::Error::invalid_argument(
-                op,
-                "configuration",
-                "CPU conjugating copy source and destination allocations must not alias",
-            ));
-        }
-    }
-    if src.backend_buffer().is_some() || dst.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    validate_cpu_host_placement(op, "source", src.placement())?;
-    validate_cpu_host_placement(op, "destination", dst.placement())?;
-
-    let src_view: StridedView<'_, T, Identity> = StridedView::new(
-        src.host_storage()?,
-        src.shape(),
-        src.strides(),
-        src.offset(),
-    )
-    .map_err(|err| crate::Error::backend_source(op, err))?;
-    let dst_shape = dst.shape().to_vec();
-    let dst_strides = dst.strides().to_vec();
-    let dst_offset = dst.offset();
-    let mut dst_view = StridedViewMut::new(
-        dst.host_storage_mut()?,
-        &dst_shape,
-        &dst_strides,
-        dst_offset,
-    )
-    .map_err(|err| crate::Error::backend_source(op, err))?;
-    map_into(&mut dst_view, &src_view, ConjElem::conj_elem)
-        .map_err(|err| crate::Error::backend_source(op, err))
-}
-
-/// Replay a (possibly conjugating) full-overwrite copy of `src` into a compact
-/// column-major uninitialized destination, writing every destination element.
-///
-/// The destination `output_bytes` must be exactly
-/// `element_count * size_of::<T>()` bytes, aligned for `T`; both are validated
-/// here before any write. The strided kernel replay traverses every
-/// destination element (identical shapes), so zero-element destinations are
-/// trivially satisfied.
-pub(crate) fn typed_copy_into_uninit<T, R>(
-    src: &TypedTensorView<'_, T, R>,
-    conjugate: bool,
-    output_bytes: &mut [MaybeUninit<u8>],
-    op: &'static str,
-) -> crate::Result<()>
-where
-    T: Copy + Send + Sync + ConjElem + 'static,
-    R: TensorRank,
-{
-    if src.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    validate_cpu_host_placement(op, "source", src.placement())?;
-
-    let element_count =
-        tenferro_tensor::validate::checked_shape_product(op, "output", src.shape())?;
-    let byte_len = element_count
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or_else(|| {
-            crate::Error::invalid_argument(op, "output", "destination byte length overflow")
-        })?;
-    if output_bytes.len() != byte_len {
-        return Err(crate::Error::invalid_argument(
-            op,
-            "output",
-            format!(
-                "uninitialized destination has {} bytes but {} elements require {byte_len}",
-                output_bytes.len(),
-                element_count
-            ),
-        ));
-    }
-    if !(output_bytes.as_ptr() as usize).is_multiple_of(std::mem::align_of::<T>()) {
-        return Err(crate::Error::invalid_argument(
-            op,
-            "output",
-            format!(
-                "uninitialized destination is misaligned for {}",
-                std::any::type_name::<T>()
-            ),
-        ));
-    }
-
-    let src_view: StridedView<'_, T, Identity> = StridedView::new(
-        src.host_storage()?,
-        src.shape(),
-        src.strides(),
-        src.offset(),
-    )
-    .map_err(|err| crate::Error::backend_source(op, err))?;
-    let strides = col_major_strides(src.shape());
-    // SAFETY: the caller provides a validated compact column-major destination
-    // of exactly `element_count` `T`-sized slots; alignment and length are
-    // checked above. This view is used only as a `MaybeUninit<T>` write target.
-    let dst_ptr = output_bytes.as_mut_ptr().cast::<MaybeUninit<T>>();
-    let dst = unsafe { std::slice::from_raw_parts_mut(dst_ptr, element_count) };
-    let mut dst_view = StridedViewMut::new(dst, src.shape(), &strides, 0)
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    if conjugate {
-        map_into(&mut dst_view, &src_view, |value| {
-            MaybeUninit::new(value.conj_elem())
-        })
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    } else {
-        strided_kernel::copy_into_uninit(&mut dst_view, &src_view)
-            .map_err(|err| crate::Error::backend_source(op, err))?;
-    }
-    Ok(())
 }
 
 pub(crate) fn validate_cpu_host_placement(

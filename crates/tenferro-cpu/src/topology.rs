@@ -250,8 +250,8 @@ impl CpuSet {
         false
     }
 
-    #[cfg(any(test, target_os = "linux"))]
-    fn intersection(&self, other: &Self) -> Option<Self> {
+    #[cfg(any(test, target_os = "linux", target_os = "android"))]
+    pub(crate) fn intersection(&self, other: &Self) -> Option<Self> {
         let mut intersection = Vec::with_capacity(self.len().min(other.len()));
         let (mut left, mut right) = (0, 0);
         while left < self.len() && right < other.len() {

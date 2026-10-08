@@ -76,6 +76,76 @@ impl ThreadAffinity for SystemThreadAffinity {
     }
 }
 
+/// Caller-local affinity borrowed for an admitted callback, never its workers.
+/// Normal exit reports restoration errors; unwinding restores best-effort.
+pub(crate) struct CallerAffinityGuard {
+    previous: Option<CpuSet>,
+    _caller: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl CallerAffinityGuard {
+    pub(crate) fn enter(cpus: Option<&CpuSet>) -> Result<Self, CpuAffinityError> {
+        let Some(cpus) = cpus else {
+            return Ok(Self {
+                previous: None,
+                _caller: std::marker::PhantomData,
+            });
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
+            // Without process-affinity support the caller's mask cannot be
+            // confined, so a constrained entry is a typed unsupported error
+            // rather than an unverified run.
+            let _ = cpus;
+            Err(CpuAffinityError::UnsupportedPlatform)
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let previous =
+                process_cpu_affinity().ok_or(CpuAffinityError::VerificationUnavailable)?;
+            // A selected domain may narrow the caller's mask, never widen it.
+            let target = previous
+                .intersection(cpus)
+                .ok_or(CpuAffinityError::EmptyMask)?;
+            let mut guard = Self {
+                previous: None,
+                _caller: std::marker::PhantomData,
+            };
+            if previous == target {
+                return Ok(guard);
+            }
+            guard.previous = Some(previous);
+            let observed = SystemThreadAffinity.confine_current(&target)?;
+            if observed != target {
+                return Err(CpuAffinityError::Verification {
+                    observed: observed.as_slice().to_vec(),
+                });
+            }
+            Ok(guard)
+        }
+    }
+
+    fn restore(&mut self) -> Result<(), CpuAffinityError> {
+        if let Some(previous) = &self.previous {
+            set_current_thread_affinity(previous)?;
+            self.previous = None;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<(), CpuAffinityError> {
+        self.restore()
+    }
+}
+
+impl Drop for CallerAffinityGuard {
+    fn drop(&mut self) {
+        if let Err(error) = self.restore() {
+            eprintln!("tenferro: failed to restore caller CPU affinity: {error}");
+        }
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) fn current_cpu() -> Result<CpuId, CpuAffinityError> {
     unsafe extern "C" {

@@ -63,8 +63,6 @@ mod multi_input_traced;
 mod nn_composites;
 #[path = "integration/numpy_api.rs"]
 mod numpy_api;
-#[path = "integration/placement_bound_eager.rs"]
-mod placement_bound_eager;
 #[path = "integration/primitive_ops.rs"]
 mod primitive_ops;
 #[path = "integration/runtime_execution.rs"]

@@ -123,7 +123,7 @@ other compile-time metadata changes.
 
 Use `CpuBackend::with_threads(n)` or the documented backend configuration
 rather than creating an independent Rayon pool inside an operation.
-`cpu-faer` follows tenferro's CPU context; BLAS/LAPACK provider threads are
+`native` follows tenferro's CPU context; BLAS/LAPACK provider threads are
 configured with variables such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, or
 `VECLIB_MAXIMUM_THREADS`. Avoid outer parallel loops that oversubscribe the
 provider.

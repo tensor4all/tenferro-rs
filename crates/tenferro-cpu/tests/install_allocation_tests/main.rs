@@ -1,7 +1,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::CpuBackend;
 
 struct CountingAllocator;
 
@@ -43,10 +43,10 @@ fn count_allocations(op: impl FnOnce()) -> usize {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 fn warm_empty_backend_install_has_no_mandatory_allocation() {
     for threads in [1, 2, 4] {
-        let backend = CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Faer).unwrap();
+        let backend = CpuBackend::with_threads(threads).unwrap();
         for _ in 0..32 {
             backend.install(|| ()).unwrap();
         }

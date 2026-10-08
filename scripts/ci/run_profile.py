@@ -30,18 +30,12 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "cargo fmt --all --check",
         "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
         "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
-        "cargo fmt --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all --check",
-        "cargo fmt --manifest-path ext/tenferro-cpu-tprims/Cargo.toml --all --check",
     ),
     "clippy": (
         f"cargo clippy --workspace --all-targets -- {_CLIPPY_FLAGS}",
         "cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- "
         f"{_CLIPPY_FLAGS}",
         "cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets -- "
-        f"{_CLIPPY_FLAGS}",
-        "cargo clippy --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all-targets -- "
-        f"{_CLIPPY_FLAGS}",
-        "cargo clippy --manifest-path ext/tenferro-cpu-tprims/Cargo.toml --all-targets -- "
         f"{_CLIPPY_FLAGS}",
     ),
     "workspace-faer": (
@@ -60,14 +54,14 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     "workspace-blas": (
         # Direct invocation preserves our CARGO wrapper in nextest test processes.
         f"cargo-nextest nextest run --workspace {_NEXTEST_PROFILE} --no-default-features "
-        "--features cpu-blas --no-fail-fast",
+        "--features blas --no-fail-fast",
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features cpu-blas",
+        "--features blas",
         # Downstream BLAS interop example (issue #1602): links the system
         # OpenBLAS/LAPACK through the profile RUSTFLAGS, so native symbol
         # linkage is verified, not just compilation.
         f"cargo run -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features cpu-blas --bin blas_interop",
+        "--features blas --bin blas_interop",
     ),
     "macos-accelerate": (
         # Select targets, not just test-name filters: do not compile the full workspace.
@@ -79,15 +73,13 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     ),
     "blas-inject": (
         f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
-        '--features "cpu-blas,provider-inject" --test integration inject_tests',
+        '--features "blas,provider-inject" --test integration inject_tests',
     ),
     "extensions": (
         f"cargo test --manifest-path ext/tropical/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--features autodiff",
         f"cargo test --manifest-path ext/sparse/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--features autodiff",
-        f"cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml {_CARGO_TEST_PROFILE}",
-        f"cargo test --manifest-path ext/tenferro-cpu-tprims/Cargo.toml {_CARGO_TEST_PROFILE}",
         f"cargo check --manifest-path samples/kdv-pinn/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--all-targets",
         f"cargo test --manifest-path samples/cubecl-kernel/Cargo.toml {_CARGO_TEST_PROFILE} "
@@ -107,13 +99,13 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         # binary links the system OpenBLAS/LAPACK installed by the docs CI job
         # (the RUSTFLAGS are scoped to this one command).
         f"cargo run -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features cpu-faer --bin faer_interop",
+        "--features native --bin faer_interop",
         f"RUSTFLAGS='-l dylib=openblas -l dylib=lapack' cargo run -p tenferro-tutorial-code "
-        f"{_CARGO_TEST_PROFILE} --no-default-features --features cpu-blas --bin blas_interop",
+        f"{_CARGO_TEST_PROFILE} --no-default-features --features blas --bin blas_interop",
         # Issue #1724: compile the source-backed raw CUDA examples on GPU-less
         # docs CI; hardware execution remains in the CUDA test lane.
         f"cargo check -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features cuda,cpu-faer --bin custom_cuda_kernels",
+        "--features cuda,native --bin custom_cuda_kernels",
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (

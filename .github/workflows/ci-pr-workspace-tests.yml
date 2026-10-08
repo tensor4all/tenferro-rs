@@ -172,8 +172,6 @@ jobs:
           workspaces: |
             ext/tropical
             ext/sparse
-            ext/tenferro-cpu-tblis
-            ext/tenferro-cpu-tprims
             samples/kdv-pinn
             samples/cubecl-kernel
       - name: Run extension profile

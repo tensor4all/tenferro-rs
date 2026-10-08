@@ -1,7 +1,7 @@
 use super::*;
 #[cfg(target_os = "linux")]
 use crate::{process_cpu_affinity, CpuSet};
-use crate::{CpuDomainId, CpuDomainOwnership, CpuId, ExternalCpuDomain, ResolvedCpuPlacement};
+use crate::{CpuDomainId, CpuId, ResolvedCpuPlacement};
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -11,13 +11,11 @@ fn engine_caps_workers_to_its_cpu_domain_and_owns_resources() {
     let placement = ResolvedCpuPlacement::AllAllowed {
         cpus: selected.clone(),
     };
-    let engine =
-        CpuEngine::new_managed(CpuDomainId::new(0), placement.clone(), usize::MAX, 0).unwrap();
+    let engine = CpuEngine::new(CpuDomainId::new(0), placement.clone(), usize::MAX, 0).unwrap();
 
     assert_eq!(engine.domain().thread_budget().get(), selected.len());
-    assert_eq!(engine.placement(), Some(&placement));
+    assert_eq!(engine.placement(), &placement);
     assert_eq!(engine.domain().id(), CpuDomainId::new(0));
-    assert_eq!(engine.domain().ownership(), CpuDomainOwnership::Managed);
     let resources = engine.resources.lock().unwrap();
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 0);
     assert_eq!(resources.gemm_analysis_cache.capacity(), 1024);
@@ -33,12 +31,14 @@ fn engine_from_context_preserves_placement_context_and_resources() {
         CpuDomainId::new(3),
         placement.clone(),
         Arc::clone(&context),
+        std::num::NonZeroUsize::new(1).unwrap(),
         4096,
+        Some(crate::CpuSet::singleton(CpuId::new(0))),
     );
 
-    assert_eq!(engine.placement(), Some(&placement));
+    assert_eq!(engine.placement(), &placement);
     assert_eq!(engine.domain().thread_budget().get(), 1);
-    assert_eq!(Arc::strong_count(&context), 2);
+    assert!(Arc::ptr_eq(&engine.context, &context));
     assert_eq!(engine.domain().id(), CpuDomainId::new(3));
     let resources = engine.resources.lock().unwrap();
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 4096);
@@ -52,42 +52,8 @@ fn engine_new_reports_unsupported_worker_affinity() {
         cpus: crate::CpuSet::singleton(CpuId::new(0)),
     };
 
-    let error = CpuEngine::new_managed(CpuDomainId::new(0), placement, 1, 0).unwrap_err();
+    let error = CpuEngine::new(CpuDomainId::new(0), placement, 1, 0).unwrap_err();
 
     assert!(matches!(error, CpuContextError::WorkerAffinity { .. }));
     assert!(error.to_string().contains("unsupported on this platform"));
-}
-
-#[test]
-fn external_engine_moves_the_resource_domain_without_a_staging_context() {
-    let placement = ResolvedCpuPlacement::AllAllowed {
-        cpus: crate::CpuSet::singleton(CpuId::new(0)),
-    };
-    let context = Arc::new(CpuContext::with_threads(1).unwrap());
-    let external = ExternalCpuDomain::new(
-        CpuDomainId::new(9),
-        placement.clone(),
-        context,
-        std::num::NonZeroUsize::new(1).unwrap(),
-    )
-    .unwrap();
-
-    let engine = CpuEngine::from_external(external, 2048);
-
-    assert_eq!(engine.domain().id(), CpuDomainId::new(9));
-    assert_eq!(engine.placement(), Some(&placement));
-    assert_eq!(
-        engine.domain().ownership(),
-        CpuDomainOwnership::ExternalManaged
-    );
-    assert_eq!(engine.domain().thread_budget().get(), 1);
-    assert_eq!(
-        engine
-            .resources
-            .lock()
-            .unwrap()
-            .buffers
-            .max_retained_capacity_bytes(),
-        2048
-    );
 }

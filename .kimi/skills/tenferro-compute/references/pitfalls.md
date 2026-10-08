@@ -34,11 +34,12 @@ is in the [traced API example](api-cheatsheet.md#traced-tensors-and-extensions).
 ## Cargo setup traps
 
 - A scratch crate inside the checkout needs an empty `[workspace]` table.
-- `cpu-faer` and `cpu-blas` are CPU capability features; at least one is needed.
-- Use `CpuBackend::with_threads(n)` for faer/native CPU work; configure BLAS
-  provider threads with the provider's environment variables.
+- `native` (default) and `blas` are the two CPU backend features; exactly one is
+  needed and enabling both is a build error.
+- Use `CpuBackend::with_threads(n)` for native CPU work; configure BLAS provider
+  threads with the provider's environment variables.
 - Choose exactly one BLAS provider feature (`blas-openblas`, `blas-mkl`, or
-  `blas-accelerate`) when using `cpu-blas`.
+  `blas-accelerate`) when using `blas`.
 - CUDA is explicit: enable `tenferro-gpu`'s `cuda` feature and upload CPU
   tensors before CUDA operations. There is no implicit transfer.
 

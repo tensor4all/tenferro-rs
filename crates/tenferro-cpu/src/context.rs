@@ -1,19 +1,9 @@
 use std::env;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use rayon::prelude::*;
 use thiserror::Error as ThisError;
 
 use crate::affinity::{CpuAffinityError, SystemThreadAffinity, ThreadAffinity};
-use crate::arbiter::{
-    current_execution_owner, register_worker_execution_scope, worker_execution_scope_matches,
-    ExecutionScopeState,
-};
-use crate::domain_executor::{
-    CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, ScopedCpuJob, ScopedCpuJobs,
-};
 use crate::{CpuSet, Error, ErrorKind, Result, ValidationKind};
 
 /// Stack size reserved for every Tenferro CPU worker thread.
@@ -36,7 +26,7 @@ pub const DEFAULT_WORKER_STACK_BYTES: usize = 16 << 20;
 /// A smaller stack cannot run a nontrivial provider call, so rejecting it while
 /// configuring the pool replaces an eventual stack-overflow abort with a typed
 /// configuration error.
-const MIN_WORKER_STACK_BYTES: usize = 64 << 10;
+pub(crate) const MIN_WORKER_STACK_BYTES: usize = 64 << 10;
 
 /// Resolve the worker stack size, honoring `TENFERRO_CPU_WORKER_STACK_BYTES`.
 ///
@@ -138,13 +128,33 @@ pub struct CpuContext {
     num_threads: usize,
     worker_stack_bytes: usize,
     pool: Option<Arc<rayon::ThreadPool>>,
+    contraction: Arc<crate::contraction::ExecutionResources>,
     pinned_cpus: Option<CpuSet>,
-    execution_scope: Arc<ExecutionScopeState>,
-    #[cfg(test)]
-    executor_install_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl CpuContext {
+    pub(crate) fn contraction_retention_guard(
+        &self,
+        max_bytes: usize,
+    ) -> crate::contraction::WorkspaceRetention<'_> {
+        self.contraction.retention_guard(max_bytes)
+    }
+
+    pub(crate) fn contraction_retained_bytes(&self) -> usize {
+        self.contraction.retained_bytes()
+    }
+    pub(crate) fn trim_contraction_workspace(&self) {
+        self.contraction.trim();
+    }
+
+    pub(crate) fn contraction_workspaces(&self) -> &crate::ContractionWorkspaces {
+        &self.contraction.nary
+    }
+
+    pub(crate) fn contraction_exec(&self, budget: usize) -> crate::Result<cpueinsum::Exec<'_>> {
+        self.contraction.exec(budget)
+    }
+
     /// Create a CPU context from `RAYON_NUM_THREADS`, or fall back to a
     /// single-threaded context with a stderr warning when validation fails.
     ///
@@ -278,17 +288,14 @@ impl CpuContext {
                 "worker stack size must be at least 65536 bytes",
             ));
         }
-        let execution_scope = Arc::new(ExecutionScopeState::default());
         let pool = if num_threads == 1 {
             None
         } else {
             let (startup_tx, startup_rx) = std::sync::mpsc::channel();
-            let worker_scope = Arc::clone(&execution_scope);
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(num_threads)
                 .stack_size(worker_stack_bytes)
                 .start_handler(move |_| {
-                    register_worker_execution_scope(Arc::clone(&worker_scope));
                     let _ = startup_tx.send(());
                 })
                 .build()
@@ -303,11 +310,9 @@ impl CpuContext {
         Ok(Self {
             num_threads,
             worker_stack_bytes,
+            contraction: Arc::new(crate::contraction::ExecutionResources::new(pool.clone())),
             pool,
             pinned_cpus: None,
-            execution_scope,
-            #[cfg(test)]
-            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -388,7 +393,6 @@ impl CpuContext {
             });
         }
 
-        let execution_scope = Arc::new(ExecutionScopeState::default());
         // Every worker is confined to the whole domain CPU set rather than to one
         // CPU: threads created by a provider (BLAS/LAPACK) inherit the creating
         // worker's mask, so a single-CPU mask would confine the provider's own
@@ -396,7 +400,6 @@ impl CpuContext {
         let domain_cpus = Arc::new(cpus.clone());
         let (startup_tx, startup_rx) = std::sync::mpsc::channel();
         let pool_domain_cpus = Arc::clone(&domain_cpus);
-        let worker_scope = Arc::clone(&execution_scope);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .stack_size(worker_stack_bytes)
@@ -405,7 +408,6 @@ impl CpuContext {
                 let worker_cpus = Arc::clone(&pool_domain_cpus);
                 let startup_tx = startup_tx.clone();
                 let affinity = affinity.clone();
-                let worker_scope = Arc::clone(&worker_scope);
                 let mut builder =
                     std::thread::Builder::new().name(format!("tenferro-cpu-{worker}"));
                 // Rayon applies its configured stack size only in its own spawn
@@ -415,7 +417,6 @@ impl CpuContext {
                 }
                 builder
                     .spawn(move || {
-                        register_worker_execution_scope(Arc::clone(&worker_scope));
                         let result = affinity.confine_current(&worker_cpus).and_then(|observed| {
                             (observed.as_slice() == worker_cpus.as_slice())
                                 .then_some(())
@@ -442,11 +443,11 @@ impl CpuContext {
         Ok(Self {
             num_threads,
             worker_stack_bytes,
+            contraction: Arc::new(crate::contraction::ExecutionResources::new(Some(
+                Arc::clone(&pool),
+            ))),
             pool: Some(pool),
             pinned_cpus: Some(cpus),
-            execution_scope,
-            #[cfg(test)]
-            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -455,10 +456,8 @@ impl CpuContext {
             num_threads: 1,
             worker_stack_bytes: DEFAULT_WORKER_STACK_BYTES,
             pool: None,
+            contraction: Arc::new(crate::contraction::ExecutionResources::new(None)),
             pinned_cpus: None,
-            execution_scope: Arc::new(ExecutionScopeState::default()),
-            #[cfg(test)]
-            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -528,78 +527,7 @@ impl CpuContext {
         }
     }
 
-    pub(crate) fn install_if_needed<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
-        if self.pool.is_some() && worker_execution_scope_matches(&self.execution_scope) {
-            op()
-        } else {
-            self.install(op)
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn owns_current_worker_for_test(&self) -> bool {
-        worker_execution_scope_matches(&self.execution_scope)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn executor_install_calls_for_test(&self) -> usize {
-        self.executor_install_calls
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-}
-
-impl CpuDomainExecutor for CpuContext {
-    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
-        // INVARIANT: every CpuContext constructor rejects zero workers, and
-        // `num_threads` is private so it cannot be invalidated after creation.
-        let worker_count = match NonZeroUsize::new(self.num_threads) {
-            Some(worker_count) => worker_count,
-            None => unreachable!("CpuContext must contain at least one worker"),
-        };
-        CpuDomainExecutorCapabilities {
-            worker_count,
-            outer_parallelism: self.num_threads > 1,
-            inner_parallelism: if self.pool.is_some() {
-                CpuInnerParallelism::Rayon
-            } else {
-                CpuInnerParallelism::None
-            },
-            // This permits internal entry through the same executor. Public
-            // CpuBackend re-entry remains guarded by BACKEND_REENTRY_PANIC.
-            reentrancy: CpuExecutorReentrancy::SameExecutor,
-            affinity: if self.pinned_cpus.is_some() {
-                CpuExecutorAffinity::TenferroDomainVerified
-            } else {
-                CpuExecutorAffinity::None
-            },
-            shutdown: CpuExecutorShutdown::TenferroOwned,
-        }
-    }
-
-    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> std::result::Result<(), CpuDomainExecutorError> {
-        let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
-        if self.pool.is_none() {
-            return (0..jobs.len()).try_for_each(|index| jobs.run(index));
-        }
-        self.install_if_needed(|| {
-            (0..jobs.len())
-                .into_par_iter()
-                .try_for_each(|index| jobs.run(index))
-        })
-    }
-
-    fn install(
-        &self,
-        job: &mut dyn ScopedCpuJob,
-    ) -> std::result::Result<(), CpuDomainExecutorError> {
-        #[cfg(test)]
-        self.executor_install_calls
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
-        self.install_if_needed(|| job.run())
-    }
-
-    fn rayon_pool(&self) -> Option<&rayon::ThreadPool> {
+    pub(crate) fn rayon_pool(&self) -> Option<&rayon::ThreadPool> {
         self.pool.as_deref()
     }
 }

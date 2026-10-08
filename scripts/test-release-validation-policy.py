@@ -88,7 +88,7 @@ class LaneClassificationTests(unittest.TestCase):
     def test_semantic_manifest_changes_select_semantic_lane(self) -> None:
         mutations = (
             (b'version = "0.3.0"', b'version = "0.3.1"'),  # dependency requirement
-            (b'[features]\ndefault = []', b"[features]\ndefault = [\"cpu-faer\"]"),
+            (b'[features]\ndefault = []', b"[features]\ndefault = [\"native\"]"),
             (b'tenferro-tensor = { path = "../tenferro-tensor", version = "0.3.0" }',
              b'tenferro-tensor = { path = "../tenferro-tensor", version = "0.3.0", default-features = false }'),
         )

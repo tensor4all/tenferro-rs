@@ -1,18 +1,17 @@
 use std::mem::{size_of, size_of_val};
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use tenferro_runtime::program::CoreSemanticOp;
 use tenferro_runtime::{
-    CompareDir, DType, DotGeneralConfig, DotGeneralPreparation, ElementwiseRuntime, EngineId,
+    CompareDir, DType, DotGeneralConfig, DotGeneralPreparation, ElementwiseRuntime,
     IndexingRuntime, InputSignature, InputSignatureEntry, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutClass, LayoutRuntime, LayoutSpecialization,
-    PlacementSpecialization, ReductionRuntime, Runtime, RuntimeCacheOwner, SpecializationError,
+    PlacementSpecialization, ReductionRuntime, RuntimeCacheOwner, SpecializationError,
     SpecializationRequirements,
 };
 use tenferro_tensor::{
-    BackendSessionHost, CpuDomainId, GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec,
-    SliceConfig, StrideVec, Tensor,
+    BackendSessionHost, GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig,
+    StrideVec, Tensor,
 };
 
 use super::{
@@ -82,203 +81,61 @@ fn public_cpu_runtime_registration_exposes_complete_preparation_capabilities() {
     assert!(capabilities.indexing().is_some());
     assert!(capabilities.dot_general().is_some());
     assert!(capabilities.layout().is_some());
-    let expected_provider_id = match backend.kind() {
-        crate::CpuBackendKind::Faer => "tenferro.cpu.faer",
-        crate::CpuBackendKind::Blas => "tenferro.cpu.blas",
-    };
     assert_eq!(
         registration
             .provider_device_identity()
             .provider_id()
             .as_str(),
-        expected_provider_id
+        crate::cpu_provider_id()
     );
     assert_eq!(
         registration.provider_device_identity().target_identity(),
-        format!("domain:{}", backend.execution_info().domain_id().as_u64())
+        format!("domain:{}", backend.domain_id_for_test().as_u64())
     );
 }
 
+// A build compiles exactly one CPU backend, so a single backend is registered
+// under the caller's engine IDs and reports the compiled provider identity.
+#[cfg(any(feature = "native", feature = "blas"))]
 #[test]
-fn public_cpu_runtime_registration_tracks_distinct_selected_cpu_domains() {
-    let topology = crate::discover_cpu_topology().expect("CPU topology");
-    if topology.nodes().len() < 2 {
-        return;
-    }
-    let first_node = &topology.nodes()[0];
-    let second_node = &topology.nodes()[1];
-    let first_domain_id = CpuDomainId::new(101);
-    let second_domain_id = CpuDomainId::new(102);
-    let first_domain = crate::ExternalCpuDomain::new(
-        first_domain_id,
-        crate::ResolvedCpuPlacement::NumaNode {
-            id: first_node.id(),
-            cpus: first_node.cpus().clone(),
-        },
-        Arc::new(crate::CpuContext::with_threads(1).expect("first CPU context")),
-        NonZeroUsize::new(1).unwrap(),
-    )
-    .expect("first CPU domain");
-    let second_domain = crate::ExternalCpuDomain::new(
-        second_domain_id,
-        crate::ResolvedCpuPlacement::NumaNode {
-            id: second_node.id(),
-            cpus: second_node.cpus().clone(),
-        },
-        Arc::new(crate::CpuContext::with_threads(1).expect("second CPU context")),
-        NonZeroUsize::new(1).unwrap(),
-    )
-    .expect("second CPU domain");
-    let first = crate::CpuBackend::from_external_managed_domains(first_domain_id, [first_domain])
-        .expect("first external CPU backend");
-    let second =
-        crate::CpuBackend::from_external_managed_domains(second_domain_id, [second_domain])
-            .expect("second external CPU backend");
+fn public_cpu_runtime_registration_uses_the_compiled_provider_under_caller_engine_ids() {
+    use tenferro_runtime::{EngineId, Runtime};
 
-    let first_registration = crate::runtime_engine_registration_with_id(
-        &first,
-        EngineId::new("tenferro-cpu.domain-first.v1").expect("first engine ID"),
+    let backend = CpuBackend::with_threads(1).expect("CPU backend");
+    let primary = crate::runtime_engine_registration_with_id(
+        &backend,
+        EngineId::new("tenferro-cpu.primary.identity.v1").expect("primary engine ID"),
     )
-    .expect("first CPU registration");
-    let second_registration = crate::runtime_engine_registration_with_id(
-        &second,
-        EngineId::new("tenferro-cpu.domain-second.v1").expect("second engine ID"),
+    .expect("primary CPU registration");
+    let secondary = crate::runtime_engine_registration_with_id(
+        &backend,
+        EngineId::new("tenferro-cpu.secondary.identity.v1").expect("secondary engine ID"),
     )
-    .expect("second CPU registration");
-    assert_ne!(
-        first_registration.provider_device_identity(),
-        second_registration.provider_device_identity()
+    .expect("secondary CPU registration");
+
+    assert_eq!(
+        primary.provider_device_identity().provider_id().as_str(),
+        crate::cpu_provider_id()
     );
     assert_eq!(
-        first_registration
-            .provider_device_identity()
-            .target_identity(),
-        "domain:101"
-    );
-    assert_eq!(
-        second_registration
-            .provider_device_identity()
-            .target_identity(),
-        "domain:102"
-    );
-}
-
-#[test]
-fn public_cpu_runtime_registration_allows_two_selected_cpu_domains_in_one_runtime() {
-    let topology = crate::discover_cpu_topology().expect("CPU topology");
-    if topology.nodes().len() < 2 {
-        return;
-    }
-    let first_node = &topology.nodes()[0];
-    let second_node = &topology.nodes()[1];
-    let first_domain_id = CpuDomainId::new(201);
-    let second_domain_id = CpuDomainId::new(202);
-    let first_domain = crate::ExternalCpuDomain::new(
-        first_domain_id,
-        crate::ResolvedCpuPlacement::NumaNode {
-            id: first_node.id(),
-            cpus: first_node.cpus().clone(),
-        },
-        Arc::new(crate::CpuContext::with_threads(1).expect("first CPU context")),
-        NonZeroUsize::new(1).unwrap(),
-    )
-    .expect("first CPU domain");
-    let second_domain = crate::ExternalCpuDomain::new(
-        second_domain_id,
-        crate::ResolvedCpuPlacement::NumaNode {
-            id: second_node.id(),
-            cpus: second_node.cpus().clone(),
-        },
-        Arc::new(crate::CpuContext::with_threads(1).expect("second CPU context")),
-        NonZeroUsize::new(1).unwrap(),
-    )
-    .expect("second CPU domain");
-    let first_backend = CpuBackend::from_external_managed_domains(first_domain_id, [first_domain])
-        .expect("first external CPU backend");
-    let second_backend =
-        CpuBackend::from_external_managed_domains(second_domain_id, [second_domain])
-            .expect("second external CPU backend");
-    let first_id = EngineId::new("tenferro-cpu.first.v1").expect("first engine ID");
-    let second_id = EngineId::new("tenferro-cpu.second.v1").expect("second engine ID");
-
-    let mut builder = Runtime::builder();
-    builder
-        .register_engine(
-            crate::runtime_engine_registration_with_id(&first_backend, first_id.clone())
-                .expect("first CPU registration"),
-        )
-        .expect("register first CPU engine");
-    builder
-        .register_engine(
-            crate::runtime_engine_registration_with_id(&second_backend, second_id.clone())
-                .expect("second CPU registration"),
-        )
-        .expect("register second CPU engine");
-    let runtime = builder.build().expect("runtime with two CPU engines");
-    let snapshot = runtime.snapshot().expect("runtime snapshot");
-
-    assert_eq!(snapshot.engine_count(), 2);
-    assert_eq!(snapshot.engine(&first_id).unwrap().engine_id(), &first_id);
-    assert_eq!(snapshot.engine(&second_id).unwrap().engine_id(), &second_id);
-}
-
-#[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
-#[test]
-fn public_cpu_runtime_registration_supports_distinct_compiled_provider_kinds() {
-    let faer = CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Faer)
-        .expect("faer CPU backend");
-    let blas = CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Blas)
-        .expect("BLAS CPU backend");
-
-    assert_ne!(faer.kind(), blas.kind());
-    let faer_registration = crate::runtime_engine_registration_with_id(
-        &faer,
-        EngineId::new("tenferro-cpu.faer.identity.v1").expect("faer engine ID"),
-    )
-    .expect("faer CPU registration");
-    let blas_registration = crate::runtime_engine_registration_with_id(
-        &blas,
-        EngineId::new("tenferro-cpu.blas.identity.v1").expect("BLAS engine ID"),
-    )
-    .expect("BLAS CPU registration");
-    assert_eq!(
-        faer_registration
-            .provider_device_identity()
-            .provider_id()
-            .as_str(),
-        "tenferro.cpu.faer"
-    );
-    assert_eq!(
-        blas_registration
-            .provider_device_identity()
-            .provider_id()
-            .as_str(),
-        "tenferro.cpu.blas"
-    );
-    assert_ne!(
-        faer_registration.provider_device_identity(),
-        blas_registration.provider_device_identity()
+        primary.provider_device_identity(),
+        secondary.provider_device_identity()
     );
 
     let mut builder = Runtime::builder();
     builder
-        .register_engine(
-            crate::runtime_engine_registration_with_id(
-                &faer,
-                EngineId::new("tenferro-cpu.faer.v1").expect("faer engine ID"),
-            )
-            .expect("faer CPU registration"),
-        )
-        .expect("register faer CPU engine");
-    builder
-        .register_engine(
-            crate::runtime_engine_registration_with_id(
-                &blas,
-                EngineId::new("tenferro-cpu.blas.v1").expect("BLAS engine ID"),
-            )
-            .expect("BLAS CPU registration"),
-        )
-        .expect("register BLAS CPU engine");
+        .register_engine(primary)
+        .expect("register primary CPU engine");
+    // One compiled provider owns one device target, so a second registration of
+    // the same provider is rejected rather than aliased.
+    let duplicate = builder.register_engine(secondary);
+    assert!(
+        matches!(
+            duplicate,
+            Err(tenferro_runtime::RuntimeConfigError::DuplicateProviderDeviceTarget { .. })
+        ),
+        "a second engine for one compiled provider must be rejected: {duplicate:?}"
+    );
     assert_eq!(
         builder
             .build()
@@ -286,7 +143,7 @@ fn public_cpu_runtime_registration_supports_distinct_compiled_provider_kinds() {
             .snapshot()
             .unwrap()
             .engine_count(),
-        2
+        1
     );
 }
 

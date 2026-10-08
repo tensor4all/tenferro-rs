@@ -17,7 +17,7 @@ tests do not compile the WebGPU stack. Compile and run them on macOS with:
 
 ```bash
 cargo test -p tenferro-tutorial-code --no-default-features \
-  --features cpu-faer,apple-shared --test tutorial_binaries
+  --features native,apple-shared --test tutorial_binaries
 ```
 
 `apple_shared_fft` selects RustFFT, CubeK Metal, and RustFFT again over one

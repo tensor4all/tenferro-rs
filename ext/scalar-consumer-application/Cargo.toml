@@ -9,16 +9,45 @@ description = "Final application role of the external-scalar consumer (not publi
 [lib]
 name = "tenferro_scalar_consumer_application"
 
+# The CPU backend is a compile-time choice; this consumer forwards it instead of
+# forcing `native`, so a `blas` workspace build does not collide with it.
+[features]
+default = ["native"]
+native = [
+    "tenferro-cpu/native",
+    "tenferro-ad/native",
+    "tenferro-linalg/native",
+    "tenferro-runtime/native",
+    "tenferro-df64-proof/native",
+    "tenferro-scalar-consumer-algorithm/native",
+]
+blas = [
+    "tenferro-cpu/blas",
+    "tenferro-ad/blas",
+    "tenferro-linalg/blas",
+    "tenferro-runtime/blas",
+    "tenferro-df64-proof/blas",
+    "tenferro-scalar-consumer-algorithm/blas",
+]
+blas-openblas = [
+    "tenferro-cpu/blas-openblas",
+    "tenferro-ad/blas-openblas",
+    "tenferro-linalg/blas-openblas",
+    "tenferro-runtime/blas-openblas",
+    "tenferro-df64-proof/blas-openblas",
+    "tenferro-scalar-consumer-algorithm/blas-openblas",
+]
+
 [dependencies]
-tenferro-df64-proof = { path = "../df64-proof" }
+tenferro-df64-proof = { path = "../df64-proof", default-features = false }
 tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }
 # The scalar-set declaration macro names the canonical host container, so the
 # library (not only its tests) depends on the tensor crate.
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 
 [dev-dependencies]
-tenferro-scalar-consumer-algorithm = { path = "../scalar-consumer-algorithm" }
-tenferro-cpu = { path = "../../crates/tenferro-cpu" }
-tenferro-ad = { path = "../../crates/tenferro-ad" }
-tenferro-linalg = { path = "../../crates/tenferro-linalg", features = ["autodiff"] }
-tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+tenferro-scalar-consumer-algorithm = { path = "../scalar-consumer-algorithm", default-features = false }
+tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
+tenferro-linalg = { path = "../../crates/tenferro-linalg", default-features = false, features = ["autodiff"] }
+tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }

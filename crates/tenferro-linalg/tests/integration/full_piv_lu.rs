@@ -121,11 +121,12 @@ fn full_piv_lu_uses_column_pivot_when_max_pivot_is_off_column() {
     assert_close(&f64_data(&u)[..1], &[100.0]);
 }
 
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 #[test]
 fn full_piv_lu_blas_rejects_singular_matrix() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
-    let mut backend = CpuBackend::with_kind(tenferro_cpu::CpuBackendKind::Blas).unwrap();
+    // This test only compiles in a `blas` build, where the compiled provider is LAPACK.
+    let mut backend = CpuBackend::with_threads(1).unwrap();
 
     let err =
         support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap_err();

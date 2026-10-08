@@ -28,11 +28,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
 
 [features]
-cpu-faer = []
+native = []
 autodiff = []
 """
 VALID_EXPLICIT_FEATURES = VALID_ALL_FEATURES.replace(
-    "all-features = true", 'features = ["cpu-faer", "autodiff"]'
+    "all-features = true", 'features = ["native", "autodiff"]'
 )
 
 
@@ -481,17 +481,17 @@ class PublishMetadataTests(unittest.TestCase):
             VALID_ALL_FEATURES.replace("all-features = true", ""),
             VALID_ALL_FEATURES.replace("all-features = true", "all-features = false"),
             VALID_ALL_FEATURES.replace("all-features = true", 'features = []'),
-            VALID_ALL_FEATURES.replace("all-features = true", 'features = "cpu-faer"'),
+            VALID_ALL_FEATURES.replace("all-features = true", 'features = "native"'),
             VALID_EXPLICIT_FEATURES.replace(
-                'features = ["cpu-faer", "autodiff"]',
-                'all-features = true\nfeatures = ["cpu-faer"]',
+                'features = ["native", "autodiff"]',
+                'all-features = true\nfeatures = ["native"]',
             ),
             VALID_EXPLICIT_FEATURES.replace(
-                'features = ["cpu-faer", "autodiff"]',
-                'all-features = false\nfeatures = ["cpu-faer"]',
+                'features = ["native", "autodiff"]',
+                'all-features = false\nfeatures = ["native"]',
             ),
             VALID_EXPLICIT_FEATURES.replace(
-                'features = ["cpu-faer", "autodiff"]',
+                'features = ["native", "autodiff"]',
                 'features = ["missing-feature"]',
             ),
         )

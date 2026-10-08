@@ -1,7 +1,7 @@
 //! Runtime BLAS/LAPACK function-pointer registration for `provider-inject`.
 //!
 //! This module is available only with:
-//! - `cpu-blas`
+//! - `blas`
 //! - `provider-inject`
 //!
 //! ## ABI conventions

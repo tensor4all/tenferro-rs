@@ -1,9 +1,14 @@
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::{CpuBackend, CpuId, CpuSet};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let faer = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer)?;
-    let blas = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Blas)?;
-    assert_eq!(faer.kind(), CpuBackendKind::Faer);
-    assert_eq!(blas.kind(), CpuBackendKind::Blas);
+    // The CPU backend is chosen at compile time: `native` (the default) or
+    // `blas`. Both expose the same tenferro-owned placement API.
+    let default_backend = CpuBackend::new();
+    let pinned = CpuBackend::builder()
+        .cpus(CpuSet::new([CpuId::new(0)])?)
+        .threads(1)?
+        .build()?;
+    assert!(default_backend.num_threads() >= 1);
+    assert_eq!(pinned.num_threads(), 1);
     Ok(())
 }

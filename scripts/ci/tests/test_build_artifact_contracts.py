@@ -107,7 +107,7 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
 
-        revision = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac"
+        revision = "12ff2de906f4d894a4329f7dbf195b0f874f846e"
         for name in (
             "strided-view",
             "strided-traits",
@@ -119,7 +119,7 @@ class BuildArtifactContracts(unittest.TestCase):
             with self.subTest(dependency=name):
                 self.assertEqual(dependencies[name]["rev"], revision)
                 # Exact, so a newer registry release cannot replace the pinned content.
-                self.assertEqual(dependencies[name]["version"], "=0.4.5")
+                self.assertEqual(dependencies[name]["version"], "=0.4.6")
 
         self.assertNotIn("strided-einsum2", dependencies)
 
@@ -130,8 +130,8 @@ class BuildArtifactContracts(unittest.TestCase):
         features = manifest["features"]
         dependencies = manifest["dependencies"]
 
-        self.assertIn("dep:faer", features["cpu-faer"])
-        self.assertIn("dep:lapack", features["cpu-blas"])
+        self.assertIn("dep:faer", features["native"])
+        self.assertIn("dep:lapack", features["blas"])
         self.assertTrue(dependencies["faer"]["optional"])
         self.assertTrue(dependencies["lapack"]["optional"])
 

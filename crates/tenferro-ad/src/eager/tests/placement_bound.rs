@@ -70,7 +70,7 @@ fn placement_bridge_source_keeps_runtime_and_executor_entry_boundaries_single() 
     // `EagerRuntime` method of the same signature in `eager.rs`.
     let with_session = item_body(
         eager_source,
-        "    pub fn with_eager_session<T: Send, E: From<Error> + Send>(",
+        "    pub fn with_eager_session<T, E: From<Error>>(",
     );
     let refresh = item_body(eager_source, "    fn refresh_runtime_selection(&mut self)");
     let select_cpu_runtime = item_body(eager_source, "fn select_cpu_runtime(");

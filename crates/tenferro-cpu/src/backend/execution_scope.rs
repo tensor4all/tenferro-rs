@@ -6,16 +6,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::{CpuBackend, CpuRuntimeIdentity, CPU_BACKEND};
+use crate::affinity::CallerAffinityGuard;
 use crate::arbiter::{fresh_execution_owner, has_active_execution, ResourcePermit};
-use crate::engine::CpuEngine;
 use crate::provider::CpuOperationEntry;
-use crate::resource_domain::CpuResourceDomain;
-use crate::CpuDomainOwnership;
 use tenferro_tensor::SessionEntryError;
 
 struct Scope {
     identity: CpuRuntimeIdentity,
-    engine: Arc<CpuEngine>,
     permit: Arc<ResourcePermit>,
     operation_active: bool,
 }
@@ -114,16 +111,6 @@ impl ExecutionAdmission {
     }
 }
 
-pub(crate) fn is_entered(domain: &CpuResourceDomain, permit: &ResourcePermit) -> bool {
-    SCOPE.with(|slot| {
-        slot.borrow().as_ref().is_some_and(|scope| {
-            scope.operation_active
-                && std::ptr::eq(scope.engine.domain(), domain)
-                && std::ptr::eq(scope.permit.as_ref(), permit)
-        })
-    })
-}
-
 impl CpuBackend {
     /// Run sequential high-level CPU work in one entered execution scope.
     ///
@@ -177,10 +164,7 @@ impl CpuBackend {
     /// # Panics
     ///
     /// A panic in the callback propagates after releasing the scope and permit.
-    pub fn with_execution_scope<R: Send>(
-        &self,
-        operation: impl FnOnce() -> R + Send,
-    ) -> crate::Result<R> {
+    pub fn with_execution_scope<R>(&self, operation: impl FnOnce() -> R) -> crate::Result<R> {
         const OP: &str = "CpuBackend::with_execution_scope";
         if has_active_execution() || SCOPE.with(|slot| slot.borrow().is_some()) {
             return Err(crate::Error::runtime_state(
@@ -188,32 +172,28 @@ impl CpuBackend {
                 "CPU execution is already active; open the shared scope outside active scopes and backend sessions",
             ));
         }
-        if self.engine.domain().ownership() != CpuDomainOwnership::Managed {
-            return Err(crate::Error::unsupported(
-                OP,
-                "shared execution scopes require a Tenferro-managed CPU domain; use ordinary operation entry for external domains",
-            ));
-        }
         let owner = fresh_execution_owner().ok_or(SessionEntryError::Reentered {
             backend: CPU_BACKEND,
         })?;
         let permit = Arc::new(self.acquire_execution_permit(owner)?);
-        let entry = CpuOperationEntry::new(self.engine.domain(), &permit)
-            .with_batch_policy(self.batch_policy);
-        entry
-            .enter(entry.preferred_engine_mode(), |_| {
-                SCOPE.with(|slot| {
-                    *slot.borrow_mut() = Some(Scope {
-                        identity: self.runtime_identity.clone(),
-                        engine: Arc::clone(&self.engine),
-                        permit: Arc::clone(&permit),
-                        operation_active: false,
-                    });
+        let affinity = CallerAffinityGuard::enter(self.engine.domain().caller_cpus())
+            .map_err(|error| crate::Error::backend_source(OP, error))?;
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let result = entry.enter(entry.preferred_engine_mode(), |_| {
+            SCOPE.with(|slot| {
+                *slot.borrow_mut() = Some(Scope {
+                    identity: self.runtime_identity.clone(),
+                    permit: Arc::clone(&permit),
+                    operation_active: false,
                 });
-                let _guard = ScopeGuard;
-                operation()
-            })
-            .map_err(|error| crate::Error::backend_source(OP, error))
+            });
+            let _guard = ScopeGuard;
+            operation()
+        });
+        affinity
+            .finish()
+            .map_err(|error| crate::Error::backend_source(OP, error))?;
+        Ok(result)
     }
 
     /// Admit one CPU operation or session, before any user callback runs.

@@ -1120,9 +1120,9 @@ impl CpuPlacementBoundEager {
     /// thread ([`tenferro_tensor::SessionEntryError::Reentered`]), and
     /// `E::from` the runtime-selection error when the CPU placement cannot be
     /// refreshed. Use only the borrowed `session` for work inside the scope.
-    pub fn with_eager_session<T: Send, E: From<Error> + Send>(
+    pub fn with_eager_session<T, E: From<Error>>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> std::result::Result<T, E> + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> std::result::Result<T, E>,
     ) -> std::result::Result<T, E> {
         self.refresh_runtime_selection().map_err(E::from)?;
         match self.backend.with_backend_session(f) {
@@ -2989,15 +2989,18 @@ impl EagerRuntime {
             || Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned");
         // A shared execution scope already holds the CPU permit, so waiting for
         // the owner could deadlock the same way. Take it only when it is free.
-        if tenferro_cpu::current_cpu_execution() == tenferro_cpu::CpuThreadExecution::SharedScope {
+        if rayon::current_thread_index().is_some()
+            || tenferro_cpu::current_cpu_execution()
+                == tenferro_cpu::CpuThreadExecution::SharedScope
+        {
             return match self.backend.try_lock() {
                 Ok(backend) => Ok(backend),
                 Err(std::sync::TryLockError::Poisoned(_)) => Err(poisoned()),
                 Err(std::sync::TryLockError::WouldBlock) => {
                     Err(tenferro_tensor::SessionEntryError::Contended {
                         backend: "EagerRuntime",
-                        message: "the runtime is in use by another thread while this thread's \
-                                  CPU execution scope holds the permit; waiting could deadlock"
+                        message: "the runtime is in use by another thread; a Rayon worker or \
+                                  CPU execution scope must not wait for its owner"
                             .to_owned(),
                     }
                     .into())
@@ -3751,9 +3754,9 @@ impl EagerRuntime {
     /// running the callback when the backend cannot admit the session.
     /// Backend operations retain their typed tensor/backend errors inside the
     /// callback result.
-    pub fn with_execution_session<R: Send>(
+    pub fn with_execution_session<R>(
         &self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R> {
         // Lock order: the eager backend owner lock is taken before admission,
         // and admission never waits on this lock while holding a permit.
@@ -3835,9 +3838,9 @@ impl EagerRuntime {
     /// when the backend cannot admit the session (for example same-thread
     /// reentry). `T` and `E` must be `Send` while the CPU session may run the
     /// callback on a pool thread.
-    pub fn with_eager_session<T: Send, E: From<Error> + Send>(
+    pub fn with_eager_session<T, E: From<Error>>(
         self: &Arc<Self>,
-        f: impl FnOnce(&mut EagerSession<'_>) -> std::result::Result<T, E> + Send,
+        f: impl FnOnce(&mut EagerSession<'_>) -> std::result::Result<T, E>,
     ) -> std::result::Result<T, E> {
         match self.with_execution_session(|backend| {
             f(&mut EagerSession {

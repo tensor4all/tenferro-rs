@@ -40,7 +40,7 @@ tenferro-einsum = { path = "../crates/tenferro-einsum", features = ["autodiff"] 
 ```
 
 The first local build can spend several minutes compiling the default
-`cpu-faer` stack. That is expected on a fresh machine.
+`native` stack. That is expected on a fresh machine.
 
 Most direct tensor examples start by importing the CPU backend and concrete
 tensor types:

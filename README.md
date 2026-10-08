@@ -254,13 +254,6 @@ solves your problem.
 | `tenferro-einsum` | Einsum and contraction planning |
 | `tenferro-fft` | FFT operations |
 
-### Standalone Examples
-
-| Path | Use when you need |
-| --- | --- |
-| `ext/tenferro-cpu-tblis` | An unpublished external CPU provider example that replaces only supported `dot_general` contractions with TBLIS |
-| `ext/tenferro-cpu-tprims` | An unpublished optional provider that runs GEMM, grouped GEMM, `dot_general` and the Cholesky, solve, SVD, QR and eigh kernels through [tprims](https://github.com/tensor4all/tprims-rs) on tenferro's pool, for A/B measurement against the default backend |
-
 ### Implementation Crates
 
 The crates `tenferro-tensor-core`, `tenferro-core-ops`,

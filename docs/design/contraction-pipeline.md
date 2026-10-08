@@ -98,19 +98,17 @@ CPU execution is handled by `CpuBackend`:
 - elementwise/reduction/structural work uses the split strided-basic,
   strided-kernel and strided-fused implementations plus dedicated CPU
   semantics, with automatic fusion retaining the enclosing context and pool,
-- `dot_general` uses the selected CPU provider (`cpu-faer`, `cpu-blas`, or
-  an optional external general-contraction provider for supported contractions),
-- faer-backed work runs inside the `CpuContext` Rayon pool through
-  `CpuExecSession`, with `Par::Seq` for one-thread contexts and explicit
-  `Par::rayon(n)` from the configured degree for multi-thread contexts,
-- BLAS/LAPACK provider threading remains provider-owned; the external TBLIS
-  example clamps TBLIS to one thread for each provider call.
+- `dot_general`, grouped GEMM, and N-ary concrete einsum delegate to cpueinsum
+  prepared plans, and CPU linalg delegates to tlinalg / tlinalg-blas,
+- the lower library runs inside the selected engine pool through
+  `CpuExecutionContext`, with `Sequential` for one-thread contexts and the
+  selected pool plus a thread budget otherwise,
+- vendor BLAS/LAPACK threading remains vendor-owned; tenferro guarantees only
+  the coordinator thread's mask.
 
-External general-contraction providers are additive to the faer/BLAS providers.
-`CpuBackendKind` still selects the complete base provider, while
-`CpuProviderBundleBuilder` controls whether `dot_general` attempts an external
-provider first. Unsupported shapes and unavailable optional runtimes fall back
-to the selected base provider unless the provider is required.
+Provider selection is compile-time (`native` or `blas`); there is no runtime
+provider bundle or override hook. Unsupported dtypes and shapes map to typed
+errors.
 
 ## CubeCL/CUDA Execution
 

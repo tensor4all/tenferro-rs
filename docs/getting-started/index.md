@@ -73,29 +73,29 @@ tenferro-linalg = { path = "../crates/tenferro-linalg" }
 The first build still needs network access unless dependencies are already
 vendored or cached. The workspace pins git dependencies and uses crates.io
 packages even when the tenferro crates themselves are local path dependencies.
-The default `cpu-faer` provider may take several minutes to compile the first
+The default `native` provider may take several minutes to compile the first
 time on a fresh machine; later incremental builds are much faster.
 
-With default features, this compiles the `cpu-faer` provider, so
+With default features, this compiles the `native` provider, so
 `CpuBackend::new()` uses faer. To use the LAPACK/BLAS CPU provider, enable
-`cpu-blas` and link a BLAS/LAPACK provider from the build environment:
+`blas` and link a BLAS/LAPACK provider from the build environment:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
-tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["cpu-blas"] }
-tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", default-features = false, features = ["cpu-blas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["blas"] }
+tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["blas"] }
+tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", default-features = false, features = ["blas"] }
 ```
 
-CPU backend features are additive. At least one of `cpu-faer` or `cpu-blas`
+CPU backend features are additive. At least one of `native` or `blas`
 must be enabled, and builds may enable both. `CpuBackend::new()` selects the
-compiled default provider: BLAS when `cpu-blas` is compiled, otherwise faer.
+compiled default provider: BLAS when `blas` is compiled, otherwise faer.
 Use `CpuBackend::with_kind` when a program needs explicit provider selection
 within a build that has multiple providers. External CPU providers may replace
 only a provider bundle slot, such as `dot_general`; they do not replace
-`cpu-faer` or `cpu-blas`, so one complete CPU provider is still required for
-fallback and linalg coverage. The `cpu-blas` backend needs a BLAS/LAPACK
-provider. Link one from the system toolchain with `cpu-blas`, or enable exactly
+`native` or `blas`, so one complete CPU provider is still required for
+fallback and linalg coverage. The `blas` backend needs a BLAS/LAPACK
+provider. Link one from the system toolchain with `blas`, or enable exactly
 one explicit provider feature to select a source provider for BLAS, LAPACK, and
 strided einsum:
 

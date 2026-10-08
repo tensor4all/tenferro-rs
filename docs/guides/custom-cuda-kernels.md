@@ -225,7 +225,7 @@ Compile-check the source-backed snippets without a GPU:
 
 ```bash
 cargo check -p tenferro-tutorial-code --no-default-features \
-  --features cuda,cpu-faer --bin custom_cuda_kernels
+  --features cuda,native --bin custom_cuda_kernels
 ```
 
 The CUDA tests `raw_ptx_load_launch_roundtrip` and

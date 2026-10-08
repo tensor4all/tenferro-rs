@@ -1,7 +1,5 @@
 #[path = "integration/cuda_eager_tensor.rs"]
 mod cuda_eager_tensor;
-#[path = "integration/custom_session.rs"]
-mod custom_session;
 #[path = "integration/deterministic_path.rs"]
 mod deterministic_path;
 #[path = "integration/eager_tensor.rs"]

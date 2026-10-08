@@ -52,8 +52,8 @@ operation and backend crates:
 [dependencies]
 tenferro-fft = { path = "../crates/tenferro-fft", features = ["webgpu"] }
 tenferro-gpu = { path = "../crates/tenferro-gpu", default-features = false, features = ["webgpu"] }
-tenferro-cpu = { path = "../crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }
-tenferro-linalg = { path = "../crates/tenferro-linalg", default-features = false, features = ["cpu-faer"] }
+tenferro-cpu = { path = "../crates/tenferro-cpu", default-features = false, features = ["native"] }
+tenferro-linalg = { path = "../crates/tenferro-linalg", default-features = false, features = ["native"] }
 tenferro-tensor = { path = "../crates/tenferro-tensor" }
 ```
 
@@ -248,7 +248,7 @@ CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda \
 LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-} \
 cargo run -p tenferro-tutorial-code --no-default-features \
-  --features cpu-faer,cuda,doc-snippets --bin cuda_fft
+  --features native,cuda,doc-snippets --bin cuda_fft
 ```
 
 CUDA supports one-dimensional transforms with these dtype combinations:
@@ -431,7 +431,7 @@ post-creation transfer counters, C64 CPU success, and typed C64 Metal failure:
 
 ```bash
 cargo test -p tenferro-tutorial-code --no-default-features \
-  --features cpu-faer,apple-shared,doc-snippets --test tutorial_binaries
+  --features native,apple-shared,doc-snippets --test tutorial_binaries
 ```
 
 Source: `docs/tutorial-code/src/bin/apple_shared_fft.rs`.

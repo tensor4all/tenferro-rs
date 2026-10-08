@@ -1447,9 +1447,9 @@ panic_analytic!(SessionCountingBackend);
 panic_reduction!(SessionCountingBackend);
 
 impl BackendSessionHost for SessionCountingBackend {
-    fn with_backend_session<R: Send>(
+    fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.entries.set(self.entries.get() + 1);
         self.inner.with_backend_session(f)
@@ -1756,9 +1756,9 @@ impl TensorReduction for WrongDTypeSessionBackend {
 }
 
 impl BackendSessionHost for WrongDTypeSessionBackend {
-    fn with_backend_session<R: Send>(
+    fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         tenferro_tensor::with_session_entry_guard("test backend", || f(self))
     }

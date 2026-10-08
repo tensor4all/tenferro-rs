@@ -145,7 +145,7 @@ CUDA tutorial is the hardware-gated artifact described in the tutorial index.
 
 ```bash
 cargo build -p tenferro-tutorial-code --no-default-features \
-  --features cuda,cpu-faer --bin cuda_tutorial
+  --features cuda,native --bin cuda_tutorial
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
@@ -331,9 +331,9 @@ runtime cannot silently pass the tutorial test:
 
 ```bash
 cargo run -p tenferro-tutorial-code --no-default-features \
-  --features cpu-faer,apple-shared --bin apple_shared_fft
+  --features native,apple-shared --bin apple_shared_fft
 cargo run -p tenferro-tutorial-code --no-default-features \
-  --features cpu-faer,apple-shared --bin apple_shared_cholesky
+  --features native,apple-shared --bin apple_shared_cholesky
 ```
 
 See `docs/tutorial-code/src/bin/apple_shared_fft.rs` and

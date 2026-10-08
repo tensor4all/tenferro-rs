@@ -697,8 +697,9 @@ fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
     assert!(backend_source.contains("buffers: &'a mut BufferPool"));
     assert!(buffer_pool_source.contains("OnceLock"));
     assert!(buffer_pool_source.contains("parse_default_max_retained_capacity_bytes"));
-    assert!(gemm_source.contains("lhs: &TensorRead<'_>"));
-    assert!(gemm_source.contains("rhs: &TensorRead<'_>"));
+    // The contraction plan cache is metadata-only: it names no tensor operand.
+    assert!(!gemm_source.contains("TensorRead"));
+    assert!(!gemm_source.contains("TensorWrite"));
     assert!(!backend_source.contains("lhs.clone()"));
     assert!(!backend_source.contains("rhs.clone()"));
     assert!(!exec_session_source.contains("lhs.clone()"));

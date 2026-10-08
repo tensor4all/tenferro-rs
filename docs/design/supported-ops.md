@@ -66,19 +66,17 @@ the normalizations) keeps this as its specification and reference.
 
 ### CPU Status
 
-The CPU backend is the main complete backend. At least one fallback/linalg CPU
-feature must be enabled:
+The CPU backend is the main complete backend. Exactly one CPU provider feature
+must be enabled:
 
-- `cpu-faer` for faer-backed GEMM,
-- `cpu-blas` for BLAS-backed GEMM.
+- `native` (the default) for faer-backed GEMM/linalg plus cpueinsum/tprims,
+- `blas` for the same stack with the `cpueinsum-blas`/`tlinalg-blas` adapters.
 
 Elementwise, reductions, structural operations, indexing, `dot_general`, and
 the standard linalg extension are implemented on CPU for the supported dtype
-subset of each op. External general-contraction providers, such as the
-unpublished TBLIS example under `ext/tenferro-cpu-tblis`, can override supported
-`dot_general` contractions without replacing the compiled faer/BLAS fallback
-and linalg provider. The unpublished `ext/tenferro-cpu-tprims` crate overrides
-the GEMM and `dot_general` slots the same way.
+subset of each op. CPU `dot_general`, grouped GEMM, and N-ary concrete einsum
+delegate to cpueinsum; CPU linalg delegates to tlinalg / tlinalg-blas. There is
+no runtime provider-override hook.
 
 ### CUDA/CubeCL Status
 
@@ -205,5 +203,5 @@ live in the owning extension crate. Rules must have corresponding
 oracle/finite-difference coverage before being treated as supported mainline AD.
 
 The default feature set enables AD. Builds without AD use
-`default-features = false` plus an explicit backend feature such as `cpu-faer`;
+`default-features = false` plus the `blas` backend feature;
 AD/eager-AD tests and AD rule modules are excluded in that configuration.

@@ -7,6 +7,6 @@ publish = false
 [workspace]
 
 [dependencies]
-tenferro-runtime = { path = "../../../crates/tenferro-runtime", default-features = false, features = ["cpu-faer"] }
+tenferro-runtime = { path = "../../../crates/tenferro-runtime", default-features = false, features = ["native"] }
 tenferro-tensor = { path = "../../../crates/tenferro-tensor", default-features = false }
-tenferro-cpu = { path = "../../../crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }
+tenferro-cpu = { path = "../../../crates/tenferro-cpu", default-features = false, features = ["native"] }

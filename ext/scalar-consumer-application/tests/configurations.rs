@@ -154,20 +154,14 @@ fn assert_extended_gradient(gradient: &Tensor) {
     );
 }
 
-/// Two separate CPU owners in one runtime, each with its own domain identity and its own CPU
-/// set, so the cooperating shape is exercisable on a host that declares one node as well as
-/// on a host that declares several.
+/// Two separate CPU owners in one runtime, each with its own tenferro-owned pool over its
+/// own CPU set, so the cooperating shape is exercisable on a host that declares one node as
+/// well as on a host that declares several.
 ///
 /// Returns `None` when the host offers no spare CPU for a second owner, because then the
 /// shape cannot be built at all.
 fn two_owner_runtime() -> Option<Runtime> {
-    use std::num::NonZeroUsize;
-    use std::sync::Arc;
-
-    use tenferro_cpu::{
-        discover_cpu_topology, CpuContext, CpuSet, ExternalCpuDomain, ResolvedCpuPlacement,
-    };
-    use tenferro_tensor::CpuDomainId;
+    use tenferro_cpu::{discover_cpu_topology, CpuBackend, CpuSet};
 
     let topology = discover_cpu_topology().expect("CPU topology");
     let node = topology.nodes().first()?;
@@ -182,35 +176,19 @@ fn two_owner_runtime() -> Option<Runtime> {
             .map_err(|error| eprintln!("two owners: CPU set rejected: {error}"))
             .ok()
     };
-    // Each owner takes its own disjoint slice of the node's CPUs, which is what makes them
-    // separate owners rather than two names for one.
-    let owner = |domain: u64, cpus: CpuSet| {
-        let domain_id = CpuDomainId::new(domain);
-        let external = ExternalCpuDomain::new(
-            domain_id,
-            ResolvedCpuPlacement::NumaNode {
-                id: node.id(),
-                cpus,
-            },
-            Arc::new(CpuContext::with_threads(1).expect("CPU context")),
-            NonZeroUsize::new(1).expect("nonzero"),
-        )
-        .map_err(|error| eprintln!("two owners: domain {domain} rejected: {error}"))
-        .ok()?;
-        Some((domain_id, external))
+    // Each owner takes its own disjoint slice of the node's CPUs and builds its own pool
+    // over it, which is what makes them separate owners rather than two names for one.
+    let owner = |cpus: CpuSet| {
+        CpuBackend::builder()
+            .cpus(cpus)
+            .threads(1)
+            .ok()?
+            .build()
+            .map_err(|error| eprintln!("two owners: backend rejected: {error}"))
+            .ok()
     };
-    let (standard_domain_id, standard_domain) = owner(401, assigned(0..middle)?)?;
-    let (contribution_domain_id, contribution_domain) =
-        owner(402, assigned(middle..available.len())?)?;
-
-    let standard_backend =
-        CpuBackend::from_external_managed_domains(standard_domain_id, [standard_domain])
-            .map_err(|error| eprintln!("two owners: standard backend rejected: {error}"))
-            .ok()?;
-    let contribution_backend =
-        CpuBackend::from_external_managed_domains(contribution_domain_id, [contribution_domain])
-            .map_err(|error| eprintln!("two owners: contribution backend rejected: {error}"))
-            .ok()?;
+    let standard_backend = owner(assigned(0..middle)?)?;
+    let contribution_backend = owner(assigned(middle..available.len())?)?;
 
     let standard_engine = EngineId::new("tenferro-cpu.standard.v1").expect("engine id");
     let contribution_engine = EngineId::new("tenferro-cpu.contribution.v1").expect("engine id");

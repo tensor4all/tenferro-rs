@@ -10,13 +10,13 @@
 //! binary. It reports steady-state counts — the pool is primed by warm-up calls
 //! first — because a cold first call legitimately allocates.
 
-#![cfg(feature = "cpu-blas")]
+#![cfg(feature = "blas")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_tensor::{BackendSessionHost, Tensor, TypedTensor};
 
@@ -102,7 +102,7 @@ fn measure(operation: impl FnOnce()) -> AllocationReport {
 }
 
 fn blas_backend() -> CpuBackend {
-    CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).expect("BLAS CPU backend")
+    CpuBackend::with_threads(1).expect("BLAS CPU backend")
 }
 
 fn sample_real(m: usize, n: usize) -> Vec<f64> {

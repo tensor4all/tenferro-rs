@@ -23,7 +23,7 @@ members = [
     "ext/scalar-consumer-algorithm",
     "ext/scalar-consumer-application",
 ]
-exclude = ["third_party/t4a-tblis-src", "ext/sparse", "ext/tropical"]
+exclude = ["ext/sparse", "ext/tropical"]
 default-members = [
     "crates/tenferro-tensor",
 ]
@@ -63,17 +63,16 @@ lru = "0.18.5"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# strided-rs v0.4.5 release commit (tag v0.4.5); update only with an intentional dependency bump.
-# The requirement is exact (`=0.4.5`): with a caret requirement the published crates
-# would resolve the newer 0.4.6 release, whose content differs from this revision
-# (scripts/check-git-pin-content.py). tlinalg still pins 0.4.5, so moving to 0.4.6
-# waits for the tlinalg pin and the B2 integration (#2010).
-strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "=0.4.5" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "=0.4.5" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "=0.4.5", features = ["parallel"] }
-strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "=0.4.5", default-features = false }
-strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "=0.4.5", default-features = false, features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "=0.4.5", features = ["parallel"] }
+# Published strided v0.4.6, shared with the CPU contraction/linalg stack (#2004).
+# Keep exact registry requirements aligned with this release revision.
+strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "12ff2de906f4d894a4329f7dbf195b0f874f846e", version = "=0.4.6" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "12ff2de906f4d894a4329f7dbf195b0f874f846e", version = "=0.4.6" }
+strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "12ff2de906f4d894a4329f7dbf195b0f874f846e", version = "=0.4.6", features = ["parallel"] }
+cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "e87d0d1bfab3f1353e5e57fe91ec0442ac99a4b2", version = "0.1.0" }
+cpueinsum-blas = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "e87d0d1bfab3f1353e5e57fe91ec0442ac99a4b2", version = "0.1.0" }
+strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "12ff2de906f4d894a4329f7dbf195b0f874f846e", version = "=0.4.6", default-features = false }
+strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "12ff2de906f4d894a4329f7dbf195b0f874f846e", version = "=0.4.6", default-features = false, features = ["parallel"] }
+strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "12ff2de906f4d894a4329f7dbf195b0f874f846e", version = "=0.4.6", features = ["parallel"] }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"

@@ -208,9 +208,9 @@ mod default_session_impls {
     impl BackendSession for DefaultFftSession {}
 
     impl BackendSessionHost for DefaultFftSession {
-        fn with_backend_session<R: Send>(
+        fn with_backend_session<R>(
             &mut self,
-            f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+            f: impl FnOnce(&mut dyn BackendSession) -> R,
         ) -> std::result::Result<R, tenferro_tensor::SessionEntryError> {
             tenferro_tensor::with_session_entry_guard("default FFT test session", || f(self))
         }

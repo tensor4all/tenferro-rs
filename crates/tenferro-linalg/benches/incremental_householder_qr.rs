@@ -4,7 +4,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use serde::Serialize;
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBackendKind, CpuExecSession};
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::{
     download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
@@ -83,20 +83,9 @@ fn main() {
     let config = parse_args().unwrap_or_else(|error| panic!("{error}"));
     let (initial_host, blocks_host, accumulated_host) = generate_inputs(&config).unwrap();
     let record = match config.backend.as_str() {
-        "faer" => run_cpu(
-            CpuBackendKind::Faer,
-            &config,
-            &initial_host,
-            &blocks_host,
-            &accumulated_host,
-        ),
-        "blas" => run_cpu(
-            CpuBackendKind::Blas,
-            &config,
-            &initial_host,
-            &blocks_host,
-            &accumulated_host,
-        ),
+        "faer" | "blas" | "native" => {
+            run_cpu(&config, &initial_host, &blocks_host, &accumulated_host)
+        }
         "cuda" => run_cuda(&config, &initial_host, &blocks_host, &accumulated_host),
         other => Err(format!("unsupported backend {other:?}")),
     }
@@ -232,14 +221,12 @@ fn generate_inputs(config: &Config) -> Result<(Tensor, Vec<Tensor>, Tensor), Str
 }
 
 fn run_cpu(
-    kind: CpuBackendKind,
     config: &Config,
     initial: &Tensor,
     blocks: &[Tensor],
     accumulated: &Tensor,
 ) -> Result<Record, String> {
-    let mut backend =
-        CpuBackend::with_threads_and_kind(1, kind).map_err(|error| error.to_string())?;
+    let mut backend = CpuBackend::with_threads(1).map_err(|error| error.to_string())?;
     backend
         .with_backend_session(|session| {
             with_cpu_exec_session(session, |session| {

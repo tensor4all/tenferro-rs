@@ -1,6 +1,5 @@
 use super::*;
 use crate::{CpuId, CpuSet};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,22 +17,9 @@ fn disjoint_domains_run_together_but_all_allowed_waits() {
 }
 
 #[test]
-fn provider_exclusive_conflicts_with_every_cpu_domain() {
-    let arbiter = ResourceArbiter::new();
-    let _node = arbiter.acquire(cpu_set([4, 5])).unwrap();
-    let other = arbiter.clone();
-    assert!(
-        std::thread::spawn(move || other.try_acquire_provider_exclusive().unwrap())
-            .join()
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[test]
 fn same_thread_reentrant_request_does_not_wait_on_its_own_permit() {
     let arbiter = ResourceArbiter::new();
-    let _outer = arbiter.acquire_provider_exclusive().unwrap();
+    let _outer = arbiter.acquire(cpu_set([0, 1])).unwrap();
 
     assert!(arbiter.try_acquire(cpu_set([0])).unwrap().is_some());
 }
@@ -43,7 +29,7 @@ fn blocking_same_thread_reentrant_request_completes() {
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let arbiter = ResourceArbiter::new();
-        let _outer = arbiter.acquire_provider_exclusive().unwrap();
+        let _outer = arbiter.acquire(cpu_set([0, 1])).unwrap();
         let _inner = arbiter.acquire(cpu_set([0])).unwrap();
         completed_tx.send(()).unwrap();
     });
@@ -51,16 +37,6 @@ fn blocking_same_thread_reentrant_request_completes() {
     assert!(completed_rx
         .recv_timeout(std::time::Duration::from_secs(2))
         .is_ok());
-}
-
-#[test]
-fn panic_releases_provider_exclusive_reservation() {
-    let arbiter = ResourceArbiter::new();
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        let _permit = arbiter.acquire_provider_exclusive().unwrap();
-        panic!("forced");
-    }));
-    assert!(arbiter.try_acquire_provider_exclusive().unwrap().is_some());
 }
 
 #[test]

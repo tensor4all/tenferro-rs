@@ -42,7 +42,7 @@
 //!
 //! | Feature | Enables |
 //! |---|---|
-//! | `cpu-faer` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
+//! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager surface (`EagerSessionLinalgExt`, `EagerTensorLinalgExt`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
 //! | `webgpu` | WebGPU/Metal execution through `tenferro-gpu` (a subset of operations). |
@@ -84,7 +84,6 @@
 mod ad;
 pub mod backend;
 mod cpu;
-pub mod cpu_kernels;
 #[cfg(feature = "autodiff")]
 mod eager_composites;
 #[cfg(feature = "autodiff")]
@@ -111,6 +110,14 @@ pub use backend::LinalgBackend;
 #[cfg(feature = "autodiff")]
 #[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub use eager_ext::{EagerSessionLinalgExt, EagerTensorLinalgExt};
+// The CPU linalg route is compiled per backend; a build with neither is a
+// configuration error, named as such rather than as a missing internal type.
+#[cfg(not(any(feature = "native", feature = "blas")))]
+compile_error!(
+    "tenferro-linalg needs exactly one CPU backend: enable the `native` (default) \
+     or `blas` feature"
+);
+
 pub use error::{Error, Result};
 pub use extension::{
     extension_module, EighDriver, EighGauge, EighOptions, QrGauge, QrOptions, SvdDriver, SvdGauge,

@@ -19,6 +19,57 @@ use tenferro_tensor::{DynRank, ErasedHostTensor, Host};
 use super::super::EagerTensor;
 
 #[test]
+fn eager_admission_callbacks_and_results_need_not_be_send() -> Result<(), Error> {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(2).unwrap())?;
+    let caller = std::thread::current().id();
+    let value = std::rc::Rc::new(7);
+    let result = runtime.with_execution_session(|_| {
+        assert_eq!(std::thread::current().id(), caller);
+        std::rc::Rc::clone(&value)
+    })?;
+    assert!(std::rc::Rc::ptr_eq(&value, &result));
+    let result = runtime.with_eager_session(|_| {
+        assert_eq!(std::thread::current().id(), caller);
+        Ok::<_, Error>(std::rc::Rc::clone(&value))
+    })?;
+    assert!(std::rc::Rc::ptr_eq(&value, &result));
+    Ok(())
+}
+
+#[test]
+fn eager_global_and_foreign_pool_children_do_not_wait_for_parent_owner() -> Result<(), Error> {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    for foreign in [false, true] {
+        let runtime =
+            EagerRuntime::with_cpu_backend(CpuBackend::with_threads_isolated_arbiter_for_test(1))?;
+        let child = Arc::clone(&runtime);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let received = runtime.with_execution_session(|_| {
+            let job = move || {
+                let _ = tx.send(child.with_execution_session(|_| ()));
+            };
+            if foreign {
+                pool.spawn(job);
+            } else {
+                rayon::spawn(job);
+            }
+            rx.recv_timeout(std::time::Duration::from_secs(5))
+        })?;
+        assert!(matches!(
+            received,
+            Ok(Err(Error::SessionEntry(
+                tenferro_tensor::SessionEntryError::Contended { .. }
+            )))
+        ));
+        pool.install(|| runtime.with_execution_session(|_| ()))?;
+    }
+    Ok(())
+}
+
+#[test]
 fn runtime_bound_eager_session_reuses_entry_and_rejects_foreign_tensors() -> Result<(), Error> {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     let other = EagerRuntime::with_cpu_backend(CpuBackend::new())?;

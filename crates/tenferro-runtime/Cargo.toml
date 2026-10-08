@@ -17,15 +17,15 @@ documentation = "https://docs.rs/tenferro-runtime"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["cpu-faer"]
+features = ["native"]
 
 [lib]
 name = "tenferro_runtime"
 
 [features]
-default = ["cpu-faer"]
-cpu-faer = ["tenferro-cpu/cpu-faer"]
-cpu-blas = ["tenferro-cpu/cpu-blas"]
+default = ["native"]
+native = ["tenferro-cpu/native"]
+blas = ["tenferro-cpu/blas"]
 blas-openblas = ["tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]
@@ -44,12 +44,15 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-trybuild.workspace = true
 # Path-only (unversioned): the versioned form resolves against crates.io during
 # `cargo package` and would fail because tenferro-cpu publishes after
 # tenferro-runtime, forming a publish cycle. Dev-dependencies are stripped from
 # the published manifest, so an unversioned path dev-dependency is sufficient.
-tenferro-cpu = { path = "../tenferro-cpu", default-features = false, features = ["cpu-faer"] }
+#
+# The backend feature comes from this crate's own `native`/`blas` forwarding, not
+# from a hard-coded `native` here: a hard-coded choice would collide with the
+# `blas` test configuration the workspace gate runs.
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 
 [[bench]]
 name = "elementwise_fusion"
@@ -68,8 +71,8 @@ name = "prelude"
 path = "tests/prelude.rs"
 
 [[test]]
-name = "session_surface_contract"
-path = "tests/session_surface_contract.rs"
+name = "session_surface"
+path = "tests/session_surface.rs"
 
 [[test]]
 name = "binary_allocations"

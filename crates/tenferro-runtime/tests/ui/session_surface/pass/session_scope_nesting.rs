@@ -8,16 +8,19 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
 
-fn main() {
+#[test]
+fn session_scope_nesting() {
     let owner = CpuBackend::with_threads(1).unwrap();
     let mut operations = owner.clone();
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
     let out = owner
         .with_execution_scope(|| {
-            operations.with_backend_session(|session| {
-                session.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&a))
-            }).unwrap()
+            operations
+                .with_backend_session(|session| {
+                    session.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&a))
+                })
+                .unwrap()
         })
         .unwrap()
         .unwrap();

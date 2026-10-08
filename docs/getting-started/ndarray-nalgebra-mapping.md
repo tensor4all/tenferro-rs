@@ -81,17 +81,17 @@ across the tiers — see the [performance idioms reference](https://tensor4all.o
 ## faer vs BLAS providers
 
 tenferro's CPU backend has two provider families controlled by additive
-features: the `cpu-faer` provider and the `cpu-blas` provider. `ndarray-linalg`
+features: the `native` provider and the `blas` provider. `ndarray-linalg`
 users know feature-based BLAS selection; tenferro's knobs live in the
 `tenferro-cpu` (and `tenferro-runtime`) features.
 
 | Provider | Features | When to use |
 | --- | --- | --- |
-| faer (default) | `cpu-faer` | Portable, pure Rust, no system dependencies; the right default for most workloads |
-| BLAS / LAPACK | `cpu-blas` plus exactly one explicit provider feature | Large GEMM-dominated workloads, or to reuse an already-tuned system BLAS |
+| faer (default) | `native` | Portable, pure Rust, no system dependencies; the right default for most workloads |
+| BLAS / LAPACK | `blas` plus exactly one explicit provider feature | Large GEMM-dominated workloads, or to reuse an already-tuned system BLAS |
 
-`cpu-faer` and `cpu-blas` are additive, and `CpuBackend::new()` selects the
-compiled default — BLAS when `cpu-blas` is compiled, otherwise faer — with
+`native` and `blas` are additive, and `CpuBackend::new()` selects the
+compiled default — BLAS when `blas` is compiled, otherwise faer — with
 `CpuBackend::with_kind` for explicit selection when both are compiled. Within
 the BLAS family the three explicit provider features (`blas-openblas`,
 `blas-mkl`, `blas-accelerate`) are mutually exclusive, and tenferro rejects a

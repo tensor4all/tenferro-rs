@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_cpu::{linalg_interop::BufferPool, CpuBackend, CpuBackendKind, CpuContext};
+use tenferro_cpu::{linalg_interop::BufferPool, CpuBackend, CpuContext};
 use tenferro_tensor::BackendRuntimeCache;
 
 fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
@@ -19,8 +19,7 @@ fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
             BenchmarkId::new("backend_install_empty", threads),
             &threads,
             |b, &threads| {
-                let backend =
-                    CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Faer).unwrap();
+                let backend = CpuBackend::with_threads(threads).unwrap();
                 b.iter(|| backend.install(|| black_box(1usize)).unwrap());
             },
         );

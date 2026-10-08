@@ -72,45 +72,47 @@ impl FftBackend for CpuExecSession<'_> {
         }
         let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
         self.with_linalg_pool(|context, buffers| {
-            macro_rules! transform {
-                ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
-                    pooled_transform(
-                        lanes::Input::$kind($input.as_slice()?),
-                        $input.shape(),
-                        spec,
-                        &mut plans,
-                        buffers,
-                        context.native_thread_count(),
-                        $project,
-                    )
-                    .map(Tensor::from_typed::<preset_scalar!($variant)>)
-                };
-            }
-            match (spec.operation(), view) {
-                (FftOperation::C2cForward | FftOperation::C2cInverse, TensorView::C64(x)) => {
-                    transform!(x, Complex, C64, |v| v)
+            in_selected_pool(context, || {
+                macro_rules! transform {
+                    ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
+                        pooled_transform(
+                            lanes::Input::$kind($input.as_slice()?),
+                            $input.shape(),
+                            spec,
+                            &mut plans,
+                            buffers,
+                            context.native_thread_count(),
+                            $project,
+                        )
+                        .map(Tensor::from_typed::<preset_scalar!($variant)>)
+                    };
                 }
-                (FftOperation::C2cForward | FftOperation::C2cInverse, TensorView::C32(x)) => {
-                    transform!(x, Complex, C32, |v| v)
+                match (spec.operation(), view) {
+                    (FftOperation::C2cForward | FftOperation::C2cInverse, TensorView::C64(x)) => {
+                        transform!(x, Complex, C64, |v| v)
+                    }
+                    (FftOperation::C2cForward | FftOperation::C2cInverse, TensorView::C32(x)) => {
+                        transform!(x, Complex, C32, |v| v)
+                    }
+                    (FftOperation::R2cFull | FftOperation::R2cOnesided, TensorView::F64(x)) => {
+                        transform!(x, Real, C64, |v| v)
+                    }
+                    (FftOperation::R2cFull | FftOperation::R2cOnesided, TensorView::F32(x)) => {
+                        transform!(x, Real, C32, |v| v)
+                    }
+                    (FftOperation::C2r, TensorView::C64(x)) => {
+                        transform!(x, Complex, F64, |v: Complex<f64>| v.re)
+                    }
+                    (FftOperation::C2r, TensorView::C32(x)) => {
+                        transform!(x, Complex, F32, |v: Complex<f32>| v.re)
+                    }
+                    (operation, other) => Err(crate::tensor_unsupported_dtype(
+                        fft_op_name(operation),
+                        other.dtype(),
+                        expected_dtype_description(operation),
+                    )),
                 }
-                (FftOperation::R2cFull | FftOperation::R2cOnesided, TensorView::F64(x)) => {
-                    transform!(x, Real, C64, |v| v)
-                }
-                (FftOperation::R2cFull | FftOperation::R2cOnesided, TensorView::F32(x)) => {
-                    transform!(x, Real, C32, |v| v)
-                }
-                (FftOperation::C2r, TensorView::C64(x)) => {
-                    transform!(x, Complex, F64, |v: Complex<f64>| v.re)
-                }
-                (FftOperation::C2r, TensorView::C32(x)) => {
-                    transform!(x, Complex, F32, |v: Complex<f32>| v.re)
-                }
-                (operation, other) => Err(crate::tensor_unsupported_dtype(
-                    fft_op_name(operation),
-                    other.dtype(),
-                    expected_dtype_description(operation),
-                )),
-            }
+            })
         })
     }
 
@@ -132,17 +134,36 @@ impl FftBackend for CpuExecSession<'_> {
             validate_host_fft_input(fft_op_name(spec.operation()), input)?;
         }
         self.with_linalg_pool(|context, buffers| {
-            execute_fft_with_plans(
-                input,
-                spec,
-                &mut plans,
-                buffers,
-                managed,
-                context.native_thread_count(),
-            )
+            in_selected_pool(context, || {
+                execute_fft_with_plans(
+                    input,
+                    spec,
+                    &mut plans,
+                    buffers,
+                    managed,
+                    context.native_thread_count(),
+                )
+            })
         })
     }
 }
+
+/// Run one host-owned FFT fan-out in the engine's selected pool.
+///
+/// The FFT lane path is host-owned parallel numerical work, so it installs the
+/// engine's pool for the duration of the call only: the same bounded,
+/// operation-local exception the strided adapters use. The caller's
+/// continuation is never installed.
+fn in_selected_pool<R: Send>(
+    context: &tenferro_cpu::CpuExecutionContext<'_>,
+    run: impl FnOnce() -> tenferro_tensor::Result<R> + Send,
+) -> tenferro_tensor::Result<R> {
+    match context.rayon_pool() {
+        Some(pool) => pool.install(run),
+        None => run(),
+    }
+}
+
 /// The typed tensor behind an FFT operand.
 ///
 /// The tables that call this match on the payload's dtype first, so the refusal is unreachable; it

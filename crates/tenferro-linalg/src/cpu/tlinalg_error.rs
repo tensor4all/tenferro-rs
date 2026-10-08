@@ -5,7 +5,7 @@
 //! enums carry the same shapes, and the mapping is one-to-one on kind, role and typed source,
 //! because callers downcast the source and classify by kind.
 
-#![cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
+#![cfg(any(feature = "native", feature = "blas"))]
 
 /// Rebuild tenferro's error from one provider's error enum.
 ///
@@ -54,7 +54,7 @@ macro_rules! map_provider_error {
 }
 
 /// Rebuild tenferro's error from a `tlinalg` (faer route) failure.
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 pub(crate) fn map_error(op: tlinalg::Op, error: tlinalg::Error) -> tenferro_tensor::Error {
     map_provider_error!(op, error, tlinalg)
 }
@@ -63,7 +63,7 @@ pub(crate) fn map_error(op: tlinalg::Op, error: tlinalg::Error) -> tenferro_tens
 ///
 /// `Internal` carries the complete message the host reported before the move (an impossible
 /// provider pivot), so it is passed through unchanged.
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 pub(crate) fn map_blas_error(
     op: tlinalg_blas::Op,
     error: tlinalg_blas::Error,

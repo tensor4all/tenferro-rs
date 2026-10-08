@@ -12,7 +12,8 @@ use tenferro_tensor::{
 
 const NONE: &[usize] = &[];
 
-fn main() {
+#[test]
+fn session_cached_route() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
@@ -32,7 +33,8 @@ fn main() {
                 TensorRead::from_tensor(&rhs),
                 &config,
             )
-        }).unwrap()
+        })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);

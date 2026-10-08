@@ -8,24 +8,93 @@ fn input() -> Tensor {
 }
 
 #[test]
-fn shared_scope_installs_once_and_reuses_resources_across_operations() {
-    let kinds = &[
-        #[cfg(feature = "cpu-faer")]
-        CpuBackendKind::Faer,
-        #[cfg(feature = "cpu-blas")]
-        CpuBackendKind::Blas,
-    ];
-    for &kind in kinds {
-        for threads in [1, 4] {
+fn admission_only_callbacks_and_results_need_not_be_send() {
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let caller = std::thread::current().id();
+    let value = std::rc::Rc::new(7);
+    let result = backend
+        .with_backend_session(|_| {
+            assert_eq!(std::thread::current().id(), caller);
+            std::rc::Rc::clone(&value)
+        })
+        .unwrap();
+    assert!(std::rc::Rc::ptr_eq(&value, &result));
+    let result = backend
+        .with_execution_scope(|| {
+            assert_eq!(std::thread::current().id(), caller);
+            std::rc::Rc::clone(&value)
+        })
+        .unwrap();
+    assert!(std::rc::Rc::ptr_eq(&value, &result));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn all_allowed_admission_preserves_narrowed_caller_affinity() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let previous = crate::process_cpu_affinity().unwrap();
+    let narrowed = CpuSet::new([previous.as_slice()[0]]).unwrap();
+    let affinity = crate::affinity::CallerAffinityGuard::enter(Some(&narrowed)).unwrap();
+    backend
+        .with_backend_session(|_| {
+            assert_eq!(crate::process_cpu_affinity().unwrap(), narrowed);
+        })
+        .unwrap();
+    backend
+        .with_execution_scope(|| {
+            assert_eq!(crate::process_cpu_affinity().unwrap(), narrowed);
+        })
+        .unwrap();
+    assert_eq!(crate::process_cpu_affinity().unwrap(), narrowed);
+    affinity.finish().unwrap();
+    assert_eq!(crate::process_cpu_affinity().unwrap(), previous);
+}
+
+#[test]
+fn global_and_foreign_pool_children_do_not_wait_for_parent_admission() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    for foreign in [false, true] {
+        // A private admission arbiter keeps this test's admission state
+        // independent of other backends the parallel test run creates.
+        let mut owner = CpuBackend::with_threads_isolated_arbiter_for_test(1);
+        let mut child = owner.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Timeout returns from the callback and releases admission even if a
+        // regression parks the child, so the test itself does not deadlock.
+        let received = owner
+            .with_backend_session(|_| {
+                let job = move || {
+                    let _ = tx.send(child.with_backend_session(|_| ()));
+                };
+                if foreign {
+                    pool.spawn(job);
+                } else {
+                    rayon::spawn(job);
+                }
+                rx.recv_timeout(std::time::Duration::from_secs(5))
+            })
+            .unwrap();
+        assert!(matches!(
+            received,
+            Ok(Err(SessionEntryError::Contended { .. }))
+        ));
+        // Unrelated idle worker calls are admitted rather than blanket-rejected.
+        pool.install(|| owner.with_backend_session(|_| ())).unwrap();
+    }
+}
+
+#[test]
+fn shared_scope_is_admission_only_and_reuses_resources_across_operations() {
+    for threads in [1, 4] {
+        {
             let context = Arc::new(CpuContext::with_threads(threads).unwrap());
-            let owner = CpuBackend::from_context_with_buffer_pool_limit_and_kind(
-                Arc::clone(&context),
-                1 << 20,
-                kind,
-            );
+            let owner =
+                CpuBackend::from_context_with_buffer_pool_limit(Arc::clone(&context), 1 << 20);
             let mut backend = owner.clone();
             let x = input();
-            let before = context.executor_install_calls_for_test();
             owner
                 .with_execution_scope(|| {
                     let thread = std::thread::current().id();
@@ -99,7 +168,6 @@ fn shared_scope_installs_once_and_reuses_resources_across_operations() {
                     }
                 })
                 .unwrap();
-            assert_eq!(context.executor_install_calls_for_test() - before, 1);
             assert_eq!(
                 backend
                     .with_backend_session(|__s| __s
@@ -110,7 +178,6 @@ fn shared_scope_installs_once_and_reuses_resources_across_operations() {
                     .unwrap(),
                 &[2.0, 4.0, 6.0, 8.0]
             );
-            assert_eq!(context.executor_install_calls_for_test() - before, 2);
         }
     }
 }
@@ -139,20 +206,6 @@ fn shared_scope_rejects_wrong_witness_and_nested_scopes() {
             ));
             assert!(!ran);
             assert!(owner.with_execution_scope(|| ()).is_err());
-            #[cfg(all(feature = "cpu-blas", feature = "cpu-faer"))]
-            {
-                let different_kind = if owner.kind() == CpuBackendKind::Blas {
-                    CpuBackendKind::Faer
-                } else {
-                    CpuBackendKind::Blas
-                };
-                let different_provider =
-                    CpuBackend::with_threads_and_kind(1, different_kind).unwrap();
-                assert!(matches!(
-                    different_provider.execution_admission(),
-                    Err(tenferro_tensor::SessionEntryError::IncompatibleContext { .. })
-                ));
-            }
             assert_eq!(
                 backend
                     .with_backend_session(|__s| __s
@@ -258,10 +311,10 @@ fn shared_scope_does_not_admit_child_worker_backend_reentry() {
 }
 
 #[test]
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 fn shared_scope_holds_blas_exclusion_until_callback_unwinds() {
-    let owner = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
-    let other = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+    let owner = CpuBackend::with_threads(1).unwrap();
+    let other = CpuBackend::with_threads(1).unwrap();
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         owner
             .with_execution_scope(|| {

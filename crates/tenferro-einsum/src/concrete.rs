@@ -1293,9 +1293,50 @@ pub struct ConcreteEinsumPlan {
     inputs: Vec<ConcreteEinsumInputSpec>,
     output_shape: Vec<usize>,
     binary_dot: Option<crate::binary_dot::BinaryDotPlan>,
+    cpu_plan: crate::cpu_concrete::Cache,
 }
 
 impl ConcreteEinsumPlan {
+    /// Release this plan's retained CPU numerical descriptors.
+    ///
+    /// The semantic contraction tree and the owning backend's workspaces are unchanged.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::Tensor;
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// let mut plan = ConcreteEinsumPlan::prepare([&a, &a, &a], "ij,jk,kl->il")?;
+    /// plan.clear_cpu_cache();
+    /// assert_eq!(plan.cpu_cache_stats()?.entries, 0);
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    pub fn clear_cpu_cache(&mut self) {
+        self.cpu_plan.clear();
+    }
+
+    /// Inspect this plan's bounded CPU numerical descriptor cache.
+    ///
+    /// Counts exclude backend-owned scratch and allocator RSS. Retained bytes
+    /// currently describe host layout descriptors and opaque lower plan headers.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::Tensor;
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// let plan = ConcreteEinsumPlan::prepare([&a, &a, &a], "ij,jk,kl->il")?;
+    /// assert_eq!(plan.cpu_cache_stats()?.entries, 0);
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] when no CPU plan cache exists for this plan.
+    pub fn cpu_cache_stats(&self) -> Result<tenferro_tensor::CacheStats> {
+        self.cpu_plan.stats().map_err(Error::from)
+    }
+
     /// Prepare a plan from dtype-erased concrete tensor inputs and string
     /// notation.
     ///
@@ -1485,6 +1526,20 @@ impl ConcreteEinsumPlan {
     {
         let inputs = inputs.as_ref();
         self.validate_tensor_inputs(inputs, PLAN_EXECUTE_OP)?;
+        if inputs.len() >= 3 {
+            let reads: Vec<_> = inputs
+                .iter()
+                .map(|tensor| TensorRead::from_tensor(tensor))
+                .collect();
+            if let Some(result) = crate::cpu_concrete::execute_cached(
+                session,
+                &reads,
+                &self.tree,
+                Some(&self.cpu_plan),
+            ) {
+                return result.map_err(Error::from);
+            }
+        }
         eager_einsum_exec(session, inputs, &self.tree).map_err(Error::from)
     }
 
@@ -1531,7 +1586,15 @@ impl ConcreteEinsumPlan {
         let inputs = inputs.as_ref();
         self.validate_typed_inputs(inputs, PLAN_EXECUTE_OP)?;
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-        let result = eager_einsum_exec_read(session, &reads, &self.tree)?;
+        let result = match crate::cpu_concrete::execute_cached(
+            session,
+            &reads,
+            &self.tree,
+            Some(&self.cpu_plan),
+        ) {
+            Some(result) => result?,
+            None => eager_einsum_exec_read(session, &reads, &self.tree)?,
+        };
         into_typed_result(result, PLAN_EXECUTE_OP)
     }
 
@@ -1576,6 +1639,11 @@ impl ConcreteEinsumPlan {
     {
         let inputs = inputs.as_ref();
         self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
+        if let Some(result) =
+            crate::cpu_concrete::execute_cached(session, inputs, &self.tree, Some(&self.cpu_plan))
+        {
+            return result.map_err(Error::from);
+        }
         eager_einsum_exec_read(session, inputs, &self.tree).map_err(Error::from)
     }
 
@@ -1638,7 +1706,8 @@ impl ConcreteEinsumPlan {
             .iter()
             .map(|tensor| TensorRead::from_tensor(tensor))
             .collect();
-        eager_einsum_exec_read_into(session, &reads, &self.tree, out).map_err(Error::from)
+        self.execute_cpu_or_fallback_into(session, &reads, out)
+            .map_err(Error::from)
     }
 
     /// Execute this plan on typed concrete tensor inputs into caller-provided
@@ -1697,7 +1766,8 @@ impl ConcreteEinsumPlan {
             }
         }
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-        eager_einsum_exec_read_into(session, &reads, &self.tree, out).map_err(Error::from)
+        self.execute_cpu_or_fallback_into(session, &reads, out)
+            .map_err(Error::from)
     }
 
     /// Execute this plan on read-only tensor inputs into caller-provided output
@@ -1752,7 +1822,8 @@ impl ConcreteEinsumPlan {
             return execute_binary_dot_read_into(session, inputs, binary_dot, out)
                 .map_err(Error::from);
         }
-        eager_einsum_exec_read_into(session, inputs, &self.tree, out).map_err(Error::from)
+        self.execute_cpu_or_fallback_into(session, inputs, out)
+            .map_err(Error::from)
     }
 
     /// Execute this plan on read-only inputs with scaled output accumulation
@@ -1817,8 +1888,42 @@ impl ConcreteEinsumPlan {
             )
             .map_err(Error::from);
         }
+        if crate::cpu_concrete::supports(session, inputs) {
+            let result = self.execute_read(inputs, session)?;
+            let accumulation = DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                ..accumulation
+            };
+            let mut out = out;
+            return tenferro_tensor::backend::accumulate_dot_result_into(
+                &result,
+                accumulation,
+                &mut out,
+            )
+            .map_err(Error::from);
+        }
         eager_einsum_exec_read_into_accum(session, inputs, &self.tree, accumulation, out)
             .map_err(Error::from)
+    }
+
+    fn execute_cpu_or_fallback_into(
+        &self,
+        session: &mut dyn BackendSession,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        if crate::cpu_concrete::supports(session, inputs) {
+            crate::cpu_concrete::execute_into(
+                session,
+                inputs,
+                &self.tree,
+                Some(&self.cpu_plan),
+                out,
+            )
+        } else {
+            eager_einsum_exec_read_into(session, inputs, &self.tree, out)
+        }
     }
 
     fn prepare_subscripts_internal(
@@ -1834,6 +1939,7 @@ impl ConcreteEinsumPlan {
             inputs,
             output_shape,
             binary_dot,
+            cpu_plan: crate::cpu_concrete::Cache::default(),
         })
     }
 

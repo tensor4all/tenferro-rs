@@ -1,8 +1,8 @@
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 pub mod faer_linalg;
 
-#[cfg(feature = "cpu-blas")]
-#[cfg_attr(feature = "cpu-faer", allow(dead_code, unused_imports))]
+#[cfg(feature = "blas")]
+#[cfg_attr(feature = "native", allow(dead_code, unused_imports))]
 pub mod lapack_linalg;
 
 mod rank_revealing_qr;
@@ -36,9 +36,9 @@ pub(crate) fn raw_view<'v, T: 'static>(
     .map_err(|error| tenferro_tensor::Error::invalid_argument(op, "layout", error.to_string()))
 }
 
-#[cfg(feature = "cpu-faer")]
+#[cfg(feature = "native")]
 pub(crate) use faer_linalg as faer;
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "blas")]
 pub(crate) use lapack_linalg as blas;
 
 /// A view the providers can read in place, or a compact pooled copy of it.

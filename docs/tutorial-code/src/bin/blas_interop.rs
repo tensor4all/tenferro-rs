@@ -7,7 +7,7 @@
 //! `docs/guides/external-linalg-interop.md`.
 //!
 //! Provider contract:
-//! - Enable `cpu-blas` plus exactly one provider feature (`blas-openblas`,
+//! - Enable `blas` plus exactly one provider feature (`blas-openblas`,
 //!   `blas-accelerate`, or `blas-mkl`) on tenferro crates, or link a native
 //!   provider yourself (CI links the system OpenBLAS through `RUSTFLAGS`).
 //! - cblas-sys and lapack use the LP64 convention: dimensions and leading

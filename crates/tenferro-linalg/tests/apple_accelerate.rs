@@ -6,18 +6,14 @@ mod apple_shared;
 #[path = "integration/support.rs"]
 pub mod support;
 
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead};
 
 #[test]
 fn accelerate_gemm_and_cholesky_without_metal() {
+    // This target only builds with the Accelerate-backed `blas` adapter.
     let mut cpu = CpuBackend::with_threads(1).unwrap();
-    assert_eq!(cpu.kind(), CpuBackendKind::Blas);
-    assert_eq!(
-        cpu.execution_info().provider_diagnostic(),
-        "Apple Accelerate (external worker affinity)"
-    );
     let input = Tensor::from_vec_col_major([2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
     let product = cpu
         .with_backend_session(|session| {

@@ -139,7 +139,7 @@ fn cpu_install_accepts_send_state() {
 }
 
 #[test]
-fn cpu_backend_multi_operation_session_enters_executor_once() {
+fn cpu_backend_multi_operation_session_is_caller_inline() {
     let context = Arc::new(CpuContext::with_threads(2).unwrap());
     let mut backend = CpuBackend::from_context(Arc::clone(&context));
     let lhs = Tensor::from_typed::<f64>(
@@ -148,10 +148,11 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
     let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
     );
-    let before = context.executor_install_calls_for_test();
+    let caller = std::thread::current().id();
 
     backend
         .with_backend_session(|session| {
+            assert_eq!(std::thread::current().id(), caller);
             session
                 .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
                 .unwrap();
@@ -174,20 +175,12 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
         })
         .unwrap();
 
-    let install_delta = context.executor_install_calls_for_test() - before;
-    assert_eq!(install_delta, 1);
-
-    let before_standalone = context.executor_install_calls_for_test();
     backend
         .with_backend_session(|__s| {
             __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
         .unwrap()
         .unwrap();
-    assert_eq!(
-        context.executor_install_calls_for_test() - before_standalone,
-        1
-    );
 }
 
 #[test]
