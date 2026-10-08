@@ -50,3 +50,10 @@
   test. The code-change PR gate, including CI-parity clippy, formatting and
   293 CI helper tests, passed. Numerical library code and GPU kernels are
   unchanged; only test-oracle arithmetic and reporting are changed.
+
+- Source diagnostic 37795634794 was cancelled during hosted compilation before
+  any pod was created: review found the two added host-check tests also need
+  explicit CUDA archive partition entries. Classify both as host so the
+  exhaustive inventory remains closed and the GPU workload remains 285 cases.
+  The next committed source supersedes 829a4b1a for diagnostics; no primary
+  measurements have begun.

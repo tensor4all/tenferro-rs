@@ -1102,6 +1102,8 @@ host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_solve_accepts_vector_
 host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_solve_rejects_exactly_singular_system
 host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_solve_returns_expected_solution
 host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_uses_column_pivot_when_max_pivot_is_off_column
+host	tenferro-linalg::integration	full_svd_host_checks::complex_gram_matches_all_ordered_reference_entries
+host	tenferro-linalg::integration	full_svd_host_checks::gram_rejects_nonfinite_and_correlated_columns
 host	tenferro-linalg::integration	full_svd_lstsq::lstsq_rejects_wide_system
 host	tenferro-linalg::integration	full_svd_lstsq::lstsq_solves_square_real_system
 host	tenferro-linalg::integration	full_svd_lstsq::lstsq_solves_tall_consistent_complex_system
