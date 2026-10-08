@@ -6,3 +6,21 @@
 # on every run, and warns again when an entry becomes stale and should be
 # removed. Each entry therefore needs a tracked issue and a concrete reason so
 # that review sees why the deviation is accepted.
+
+
+# tensor4all/cpueinsum-rs is the lower CPU-contraction library introduced by the
+# #2004 CPU boundary integration. Publication is deliberately deferred for now,
+# so the pinned revision has no crates.io release and `cargo publish` of the
+# depending tenferro crates cannot resolve it from the registry. The exception
+# keeps that finding visible as a warning on every run; publish cpueinsum-rs
+# 0.1.0 (and cpueinsum-blas) and remove these entries before releasing the
+# tenferro crates that depend on it.
+[[exception]]
+package = "cpueinsum"
+reason = "Deliberately unpublished for now; the pinned revision has no crates.io release."
+issue = "https://github.com/tensor4all/cpueinsum-rs/issues/4"
+
+[[exception]]
+package = "cpueinsum-blas"
+reason = "Deliberately unpublished for now; the pinned revision has no crates.io release."
+issue = "https://github.com/tensor4all/cpueinsum-rs/issues/4"

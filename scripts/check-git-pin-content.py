@@ -525,6 +525,22 @@ def apply_exceptions(
     return errors, warnings
 
 
+def unpublished_pin_finding(name: str, requirement: str, package: str) -> Finding:
+    """A git pin whose package has no crates.io release at all.
+
+    `cargo publish` strips the `git` source and keeps only the version, so a
+    published crate that depends on this pin cannot resolve it from the
+    registry. The finding is an error unless a reviewed exception covers the
+    package, which downgrades it to a visible warning.
+    """
+
+    return Finding(
+        "error",
+        f"{name} {requirement!r} is pinned to {package}, which has no crates.io "
+        "release; cargo publish cannot resolve it from the registry",
+    )
+
+
 def check(root: Path = ROOT, *, helper: Mapping | None = None, client=None) -> tuple[list[Finding], list[Finding]]:
     """Run the check for every git pin and return failures and warnings."""
 
@@ -534,6 +550,21 @@ def check(root: Path = ROOT, *, helper: Mapping | None = None, client=None) -> t
     for requirement in parse_requirements(root, helper):
         dependency = requirement.dependency
         pinned = fetch_pinned_package(dependency, helper)
+        if not client.package_exists(dependency.package):
+            reports.append(
+                Report(
+                    dependency.package,
+                    requirement.raw,
+                    pinned.declared_version,
+                    "",
+                    (
+                        unpublished_pin_finding(
+                            dependency.name, requirement.raw, dependency.package
+                        ),
+                    ),
+                )
+            )
+            continue
         versions = client.versions(dependency.package)
         resolved = effective_version(requirement.raw, versions)
         if resolved is None:

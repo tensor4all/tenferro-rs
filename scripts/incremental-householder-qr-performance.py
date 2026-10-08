@@ -70,7 +70,7 @@ def process_order(case: Case, cycle: int) -> tuple[str, ...]:
 def cargo_prefix(backend: str) -> list[str]:
     command = ["cargo", "bench", "-q", "-p", "tenferro-linalg"]
     if backend == "blas":
-        command += ["--no-default-features", "--features", "cpu-blas,blas-openblas"]
+        command += ["--no-default-features", "--features", "blas,blas-openblas"]
     elif backend == "cuda":
         command += ["--features", "cuda"]
     command += ["--bench", "incremental_householder_qr", "--"]

@@ -130,8 +130,8 @@ class BuildArtifactContracts(unittest.TestCase):
         features = manifest["features"]
         dependencies = manifest["dependencies"]
 
-        self.assertIn("dep:faer", features["cpu-faer"])
-        self.assertIn("dep:lapack", features["cpu-blas"])
+        self.assertIn("dep:faer", features["native"])
+        self.assertIn("dep:lapack", features["blas"])
         self.assertTrue(dependencies["faer"]["optional"])
         self.assertTrue(dependencies["lapack"]["optional"])
 

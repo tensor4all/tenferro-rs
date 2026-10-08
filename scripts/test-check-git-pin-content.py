@@ -243,6 +243,39 @@ class ExceptionTests(unittest.TestCase):
         self.assertIn("unknown package", errors[0].message)
 
 
+class UnpublishedPinTests(unittest.TestCase):
+    def test_unpublished_pin_is_an_error_without_an_exception(self) -> None:
+        report = CHECKER.Report(
+            "cpueinsum",
+            "0.1.0",
+            "0.1.0",
+            "",
+            (CHECKER.unpublished_pin_finding("cpueinsum", "0.1.0", "cpueinsum"),),
+        )
+        errors, warnings = CHECKER.apply_exceptions([report], {})
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(warnings, [])
+        self.assertIn("no crates.io release", errors[0].message)
+
+    def test_unpublished_pin_with_exception_warns_with_its_issue(self) -> None:
+        report = CHECKER.Report(
+            "cpueinsum",
+            "0.1.0",
+            "0.1.0",
+            "",
+            (CHECKER.unpublished_pin_finding("cpueinsum", "0.1.0", "cpueinsum"),),
+        )
+        exceptions = {
+            "cpueinsum": CHECKER.ExceptionEntry(
+                "cpueinsum", "deliberately unpublished for now", "https://example.invalid/2"
+            )
+        }
+        errors, warnings = CHECKER.apply_exceptions([report], exceptions)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("https://example.invalid/2" in w.message for w in warnings))
+        self.assertTrue(any("no crates.io release" in w.message for w in warnings))
+
+
 class RepositoryConfigurationTests(unittest.TestCase):
     def test_repository_exceptions_are_justified(self) -> None:
         exceptions = CHECKER.load_exceptions(CHECKER.ROOT)

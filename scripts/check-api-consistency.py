@@ -144,8 +144,6 @@ def workspace_crates(root: pathlib.Path) -> list[CrateInfo]:
         *workspace["members"],
         "ext/sparse",
         "ext/tropical",
-        "ext/tenferro-cpu-tblis",
-        "ext/tenferro-cpu-tprims",
     ]
     for member in dict.fromkeys(members):
         member_path = root / member
