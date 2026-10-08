@@ -700,17 +700,80 @@ jobs:
           python3 scripts/ci/gpu_test_partition.py --kind cuda --lane host --archive-file "${CUDA_ARCHIVE}"
           python3 scripts/ci/gpu_test_partition.py --kind pjrt --lane host --archive-file "${PJRT_ARCHIVE}"
 
+      # Inline trusted transport code also works when an older tested PR ref
+      # does not contain the latest CI helpers. Keep the single artifact below
+      # for hosted cross-run reuse; only the paid transfer uses the five parts.
+      - name: Prepare five archive transfer parts
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          mkdir archive-transfer
+          cd tenferro-rs
+          sha256sum "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" "${CUDA_TUTORIAL_ARCHIVE}" > ../archive-transfer/archives.sha256
+          tar -cf ../archive-transfer/archives.tar "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" "${CUDA_TUTORIAL_ARCHIVE}"
+          cd ../archive-transfer
+          split -n 5 -d -a 2 archives.tar archives.part
+          rm archives.tar
+          for part in 00 01 02 03 04; do
+            mkdir "${part}"
+            mv "archives.part${part}" "${part}/"
+          done
+          mv archives.sha256 00/
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        # Always publish the per-key archives to this run: the self-hosted
-        # RunPod runner downloads them by name, and later GPU allocation
-        # retries reuse them through find_archive_artifact.py instead of
-        # rebuilding (#1403).
+        # Preserve the immutable single artifact for hosted cross-run reuse
+        # through find_archive_artifact.py (#1403).
         with:
           name: ${{ steps.archive_key.outputs.artifact_name }}
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
             tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload archive transfer part 00
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.archive_key.outputs.artifact_name }}-transfer-part00
+          path: archive-transfer/00/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload archive transfer part 01
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.archive_key.outputs.artifact_name }}-transfer-part01
+          path: archive-transfer/01/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload archive transfer part 02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.archive_key.outputs.artifact_name }}-transfer-part02
+          path: archive-transfer/02/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload archive transfer part 03
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.archive_key.outputs.artifact_name }}-transfer-part03
+          path: archive-transfer/03/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload archive transfer part 04
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.archive_key.outputs.artifact_name }}-transfer-part04
+          path: archive-transfer/04/
+          compression-level: 0
           if-no-files-found: error
           retention-days: 7
 

@@ -855,7 +855,7 @@ class WorkflowContractTests(unittest.TestCase):
             text.index("  run-gpu-tests:") : text.index("  cleanup-runpod:")
         ]
         self.assertIn(
-            "name: ${{ inputs.archive_artifact_name }}",
+            "pattern: ${{ inputs.archive_artifact_name }}-transfer-part*",
             run_gpu,
         )
 
