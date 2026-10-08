@@ -17,8 +17,8 @@ A minimal release dependency block for a CPU concrete program is:
 
 ```toml
 [dependencies]
-tenferro-runtime = { version = "0.2", default-features = false, features = ["cpu-faer"] }
-tenferro-cpu = { version = "0.2", default-features = false, features = ["cpu-faer"] }
+tenferro-runtime = { version = "0.2", default-features = false, features = ["native"] }
+tenferro-cpu = { version = "0.2", default-features = false, features = ["native"] }
 ```
 
 For eager AD and linear algebra, add the owning crates and opt into the
@@ -26,10 +26,10 @@ operation family's AD rules:
 
 ```toml
 [dependencies]
-tenferro-ad = { version = "0.2", default-features = false, features = ["cpu-faer"] }
-tenferro-runtime = { version = "0.2", default-features = false, features = ["cpu-faer"] }
-tenferro-cpu = { version = "0.2", default-features = false, features = ["cpu-faer"] }
-tenferro-linalg = { version = "0.2", default-features = false, features = ["autodiff", "cpu-faer"] }
+tenferro-ad = { version = "0.2", default-features = false, features = ["native"] }
+tenferro-runtime = { version = "0.2", default-features = false, features = ["native"] }
+tenferro-cpu = { version = "0.2", default-features = false, features = ["native"] }
+tenferro-linalg = { version = "0.2", default-features = false, features = ["autodiff", "native"] }
 ```
 
 The exact current publishable package set is discoverable without compiling:
@@ -45,17 +45,18 @@ metadata at the revision you are using.
 
 ## CPU provider features
 
-At least one of `cpu-faer` or `cpu-blas` must be compiled. They are additive;
-`cpu-blas` may be enabled alongside `cpu-faer`, and the default provider is BLAS
-when it is compiled, otherwise faer. For a BLAS build choose one provider
-feature such as `blas-openblas`, `blas-mkl`, or `blas-accelerate`; those provider
-choices are mutually exclusive.
+Exactly one CPU backend feature must be compiled: `native` (the default, faer
+kernels plus tenferro's own thread pool) or `blas` (delegates contractions to
+cpueinsum and linear algebra to tlinalg on a vendor BLAS/LAPACK). Enabling both
+is a build error. For a BLAS build choose one provider feature such as
+`blas-openblas`, `blas-mkl`, or `blas-accelerate`; those provider choices are
+mutually exclusive.
 
 ```toml
 [dependencies]
-tenferro-runtime = { version = "0.2", default-features = false, features = ["cpu-blas"] }
-tenferro-cpu = { version = "0.2", default-features = false, features = ["cpu-blas", "blas-openblas"] }
-tenferro-linalg = { version = "0.2", default-features = false, features = ["cpu-blas", "blas-openblas"] }
+tenferro-runtime = { version = "0.2", default-features = false, features = ["blas"] }
+tenferro-cpu = { version = "0.2", default-features = false, features = ["blas", "blas-openblas"] }
+tenferro-linalg = { version = "0.2", default-features = false, features = ["blas", "blas-openblas"] }
 ```
 
 Do not enable two BLAS provider implementations in one dependency graph.
