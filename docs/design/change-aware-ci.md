@@ -177,6 +177,17 @@ requested tier, is rejected before the external runner starts. The created pod
 ID is still forwarded to the trusted startup-failure cleanup path so rejection
 cannot leave a paid pod running.
 
+After confirmed pod deletion, the hosted cleanup job emits a best-effort JSON
+artifact with the tested ref, archive/cuTENSOR/CUDA cache-hit observations and
+estimated paid cost by stage. The paid window uses the pod's start timestamp
+through confirmed deletion and its adjusted hourly price, with list-price
+fallback. Startup/queue, test-job setup and execution, and cleanup/queue remain
+visible; unassigned overhead reconciles the stage totals to the paid window.
+Missing cache outputs remain unknown. Failed workloads retain their failure
+conclusion. Reporting and artifact upload are bounded, nonblocking, and run
+after deletion so they cannot extend this pod's paid lifetime. Rejected
+provisioning attempts and storage charges are separate from this estimate.
+
 The CUDA/PJRT test archive key is content-addressed across source, manifests,
 tests, lockfile, workflow, and RunPod configuration. It excludes branch, ref,
 and commit identity, allowing equivalent automatic and recovery runs to reuse
@@ -198,12 +209,19 @@ in the job summary. A separate single artifact remains available for hosted
 cross-run reuse; the cache content key and restore-only ownership are unchanged.
 
 The archive is compiled with cudarc's CUDA 12.8 binding set, while CubeCL JITs
-PTX on the external runner. RunPod therefore accepts CUDA 12.4-or-newer hosts
-and chooses NVRTC after reading the assigned host's driver API: NVRTC 12.4 for
+PTX on the external runner. RunPod therefore accepts CUDA 12.6-or-newer hosts
+and chooses NVRTC after reading the assigned host's driver API: NVRTC 12.6 for
 the baseline tier and NVRTC 12.8 for hosts supporting CUDA 12.8 or newer. This
 keeps PTX compatible with older drivers while retaining all hardware-supported
 CubeCL features on the newer tier. Before tests, the runner logs both versions
-and rejects runtimes below 12.4 or NVRTC newer than the driver.
+and rejects runtimes below 12.6 or NVRTC newer than the driver.
+
+Runtime tree caches contain CUDA JIT headers (including CRT and CCCL) and
+shared runtime libraries. Soname links and the `include`/`lib64` aliases remain
+links to one physical copy. Compiler binaries, static libraries and driver
+stubs are excluded. The main-only publisher prepares both supported runtime
+tiers; consumers restore the same versioned format and retain installation
+on a miss. A tree is marked complete only after its library links resolve.
 
 ## Recovery
 
@@ -219,3 +237,25 @@ open, same-repository, authorized, and head-stable; it derives both the tested
 revision and required-check target rather than accepting them from the caller.
 Raw revision dispatch remains available for trusted post-merge validation, but
 cannot be combined with PR-number recovery.
+
+## Hosted GPU execution dependencies
+
+The read-only runtime preparation workflow runs on a hosted Ubuntu 24.04
+runner before the paid lifecycle, alongside test archive preparation. It
+restores trusted cuTENSOR and minimal CUDA 12.6/12.8 caches, installs misses
+on the hosted runner, verifies the JIT headers with real NVRTC, and prepares
+immutable five-part artifacts for common tools/PJRT wheels and each SDK.
+Only trusted controller source prepares these dependencies; the tested ref
+continues to identify the separately compiled test archives. Shared cache
+publication remains owned by ci-cache-publish on main.
+
+The digest-pinned CUDA 12.6.3 runtime image retains the 12.6 driver floor.
+Pre-registration NVRTC compile/load/launch validation remains mandatory.
+After registration the GPU selects the driver-compatible SDK (12.8 for the
+full capability tier), transfers only that SDK and the common payload,
+verifies checksums and required libraries, and runs the complete archives.
+Cargo/nextest and PJRT wheels are staged; no Rust toolchain installation or
+PJRT package download occurs on the accepted GPU. Preparation failures block
+allocation and fail the required GPU gate. SDK and cuTENSOR paid-side cache
+hits are reported as unknown because those dependencies are now host-staged;
+the test archive's restore-only cache remains unchanged.

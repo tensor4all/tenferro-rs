@@ -88,7 +88,7 @@ class GpuTestPartitionTests(unittest.TestCase):
         for kind in ("cuda", "pjrt"):
             self.assertIn(f"gpu_test_partition.py --kind {kind} --lane host", host_step)
             self.assertIn(f"gpu_test_partition.py --kind {kind} --lane gpu", child)
-        self.assertIn("needs: [authorize, runpod-contract, pre-runpod-gate, cuda-archive]", parent)
+        self.assertIn("needs: [authorize, runpod-contract, pre-runpod-gate, cuda-archive, gpu-runtime]", parent)
         self.assertNotIn("cargo nextest run", child)
 
     def test_hardware_classification_is_not_a_name_heuristic(self):

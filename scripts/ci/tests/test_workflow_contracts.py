@@ -22,7 +22,8 @@ def read(path: str) -> str:
         # Existing execution contracts span the parent and its trusted callee.
         execution = (ROOT / ".github/workflows/runpod-gpu-execute.yml").read_text()
         index = text.index("  ci-gpu-gate:")
-        text = text[:index] + execution[execution.index("  start-runpod:"):] + text[index:]
+        runtime = (ROOT / ".github/workflows/runpod-gpu-runtime.yml").read_text()
+        text = text[:index] + runtime[runtime.index("  prepare-runtime:"):] + execution[execution.index("  start-runpod:"):] + text[index:]
     return text
 
 
@@ -48,7 +49,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("group: runpod-tenferro-gpu-refs/heads/main", child)
         self.assertIn("cancel-in-progress: false\n  queue: max", child)
         call = parent.split("  gpu-execution:", 1)[1].split("  ci-gpu-gate:", 1)[0]
-        self.assertIn("needs: [authorize, runpod-contract, pre-runpod-gate, cuda-archive]", call)
+        self.assertIn("needs: [authorize, runpod-contract, pre-runpod-gate, cuda-archive, gpu-runtime]", call)
         self.assertIn("uses: ./.github/workflows/runpod-gpu-execute.yml", call)
         self.assertIn("GPU_EXECUTION_RESULT: ${{ needs.gpu-execution.result }}", parent)
         self.assertIn('record_result "gpu-execution (including cleanup)"', parent)
@@ -352,11 +353,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("2>/dev/null || true", create)
         self.assertIn('echo "warning: could not populate the runner tarball cache"', create)
         whole_job = read(".github/workflows/runpod-gpu-test.yml")
-        install = whole_job.index("      - name: Install pod-side build dependencies")
+        install = whole_job.index("      - name: Install pod-side execution dependencies")
         job_install = whole_job[
             install : whole_job.index("      - name: Checkout tenferro-rs", install)
         ]
-        for package in ("zstd \\", "git \\", "jq \\", "build-essential \\"):
+        for package in ("zstd \\", "git \\", "jq \\", "binutils \\"):
             self.assertIn(package, job_install)
             self.assertNotIn(package, create)
         self.assertLess(
@@ -376,9 +377,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("cuda_tree_has_runtime_libs", configure)
         for lib in ("libcublas.so", "libcusolver.so", "libcusparse.so", "libnvrtc.so"):
             self.assertIn(lib, configure)
-        # Both acceptance paths (discovered toolkit and cached seed tree)
-        # must run the completeness check.
-        self.assertGreaterEqual(configure.count("cuda_tree_has_runtime_libs "), 2)
+        # Only the staged, driver-selected tree is accepted; partial native
+        # NVRTC installations cannot bypass the completeness check.
+        self.assertGreaterEqual(configure.count("cuda_tree_has_runtime_libs "), 1)
         self.assertNotIn("TENFERRO_REF", create)
         # Smoke parameters flow through non-secret pod env only.
         for pod_env in (
@@ -493,7 +494,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("nvidia-smi --query-gpu=index,name", text)
         check_machine = text[
             text.index("      - name: Check machine") : text.index(
-                "      - name: Restore cuTENSOR redistributable"
+                "      - name: Select CUDA runtime for driver"
             )
         ]
         run_script = check_machine[check_machine.index("        run: |") :]
@@ -801,11 +802,11 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(pair_line, consumer)
             self.assertIn(pair_line, publisher)
         self.assertIn(
-            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v6",
+            "key: cuda-runtime-${{ runner.os }}-x86_64-12.8-minimal-v7",
             consumer,
         )
         self.assertIn(
-            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v6",
+            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v7",
             publisher,
         )
         for env_line in (

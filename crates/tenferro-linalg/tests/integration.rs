@@ -19,6 +19,8 @@ mod eager_surface_parity;
 mod eager_tensor;
 #[path = "integration/full_piv_lu.rs"]
 mod full_piv_lu;
+#[path = "integration/full_svd_host_checks.rs"]
+mod full_svd_host_checks;
 #[path = "integration/full_svd_lstsq.rs"]
 mod full_svd_lstsq;
 #[path = "integration/full_svd_read.rs"]
