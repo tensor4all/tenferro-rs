@@ -209,12 +209,12 @@ in the job summary. A separate single artifact remains available for hosted
 cross-run reuse; the cache content key and restore-only ownership are unchanged.
 
 The archive is compiled with cudarc's CUDA 12.8 binding set, while CubeCL JITs
-PTX on the external runner. RunPod therefore accepts CUDA 12.4-or-newer hosts
-and chooses NVRTC after reading the assigned host's driver API: NVRTC 12.4 for
+PTX on the external runner. RunPod therefore accepts CUDA 12.6-or-newer hosts
+and chooses NVRTC after reading the assigned host's driver API: NVRTC 12.6 for
 the baseline tier and NVRTC 12.8 for hosts supporting CUDA 12.8 or newer. This
 keeps PTX compatible with older drivers while retaining all hardware-supported
 CubeCL features on the newer tier. Before tests, the runner logs both versions
-and rejects runtimes below 12.4 or NVRTC newer than the driver.
+and rejects runtimes below 12.6 or NVRTC newer than the driver.
 
 ## Recovery
 

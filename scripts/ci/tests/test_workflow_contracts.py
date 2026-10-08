@@ -801,11 +801,11 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(pair_line, consumer)
             self.assertIn(pair_line, publisher)
         self.assertIn(
-            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v6",
+            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v7",
             consumer,
         )
         self.assertIn(
-            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v6",
+            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v7",
             publisher,
         )
         for env_line in (

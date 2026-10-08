@@ -57,3 +57,28 @@
   exhaustive inventory remains closed and the GPU workload remains 285 cases.
   The next committed source supersedes 829a4b1a for diagnostics; no primary
   measurements have begun.
+
+## Runtime cache payload reduction candidate
+
+The timed-out CUDA 12.8 cache contained 1,150,165,089 compressed bytes;
+restoration waited three minutes before falling back to about 75 seconds of
+installation. Seed only JIT headers and shared runtime library families, keeping
+soname links and include/lib64 aliases rather than dereferencing duplicate
+trees. Compiler, static archives and driver stubs do not belong in the runtime
+payload. Bump the restore/publish key to v7 so existing v6 payloads cannot mask
+the new format. Both CUDA 12.6 and 12.8 publishers remain.
+
+Actual-copy fixture tests verify headers and chained sonames resolve, only one
+physical library copy remains, static/compiler/stub files are excluded, and
+broken sonames cannot mark a tree complete. All 295 CI helper tests pass.
+Real CUDA payload size and GPU execution on this seed are not yet measured;
+this is not a verified speedup. A40, A6000 and 4090 diagnostic attempts were
+out of stock before pod creation; no GPU charges arose from those attempts.
+
+An official CUDA 12.8 package fixture exposed missing crt/mma.h when
+compiling the CubeCL-style include set with NVRTC. Include the small cuda-crt
+header package in both runtime tiers. With cudart, NVRTC and these headers,
+the seeded tree passed real NVRTC compilation without a GPU. This validates
+header completeness for the fixture, not full vendor-library GPU execution
+or the final production payload size. The full local PR gate passed before
+this package-list correction; recheck the affected helpers afterward.

@@ -649,7 +649,7 @@ jobs:
           SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ steps.select_cuda_runtime.outputs.runtime_version }}
-          key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v6
+          key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v7
 
       - name: Log pod cache restore status
         timeout-minutes: 1

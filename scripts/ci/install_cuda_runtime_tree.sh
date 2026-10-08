@@ -35,6 +35,7 @@ as_root apt-get update
 as_root apt-get install -y --no-install-recommends \
   "cuda-cudart-${cuda_apt_suffix}" \
   "cuda-cudart-dev-${cuda_apt_suffix}" \
+  "cuda-crt-${cuda_apt_suffix}" \
   "cuda-nvrtc-${cuda_apt_suffix}" \
   "cuda-nvrtc-dev-${cuda_apt_suffix}" \
   "libcublas-${cuda_apt_suffix}" \
@@ -55,10 +56,7 @@ if [ -z "${installed_path}" ]; then
 fi
 
 echo "Seeding CUDA runtime tree at ${DEST_DIR} from ${installed_path}..."
-as_root rm -rf "${DEST_DIR}"
-as_root mkdir -p "${DEST_DIR}"
-as_root cp -aL "${installed_path}/." "${DEST_DIR}/"
-as_root touch "${DEST_DIR}/.seed-complete"
+as_root bash "$(dirname "$0")/seed_cuda_runtime_tree.sh" "${installed_path}" "${DEST_DIR}"
 if [ "$(id -u)" -ne 0 ]; then
   sudo chown -R "$(id -u):$(id -g)" "${DEST_DIR}"
 fi
