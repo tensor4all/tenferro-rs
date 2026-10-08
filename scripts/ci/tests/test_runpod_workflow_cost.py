@@ -79,3 +79,18 @@ class StageCostTests(unittest.TestCase):
             self.assertEqual(value['cache_hits'], {'archives': True, 'cutensor': False, 'cuda_runtime': None})
             self.assertEqual(value['stages']['cuda_tests']['seconds'], 40)
             self.assertEqual(value['paid_seconds'], 60)
+
+    def test_staged_dependencies_count_as_runtime_setup(self):
+        names = ['Download staged execution payload', 'Install staged execution payload',
+                 'Transfer selected CUDA SDK', 'Install selected CUDA SDK']
+        steps = [{'name': name, 'conclusion': 'success',
+                  'started_at': f'2026-10-08T13:00:{i * 10:02}Z',
+                  'completed_at': f'2026-10-08T13:00:{(i + 1) * 10:02}Z'}
+                 for i, name in enumerate(names)]
+        result = report({'costPerHr': 0.5, 'lastStartedAt': '2026-10-08T13:00:00Z'},
+                        [{'name': 'CUDA GPU tests on RunPod', 'conclusion': 'success',
+                          'started_at': '2026-10-08T13:00:00Z',
+                          'completed_at': '2026-10-08T13:00:40Z', 'steps': steps}],
+                        '2026-10-08T13:01:00Z')
+        self.assertEqual(result['stages']['runtime_setup']['seconds'], 40)
+        self.assertEqual(sum(s['seconds'] for s in result['stages'].values()), 60)

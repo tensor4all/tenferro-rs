@@ -194,6 +194,7 @@ class GatePublicationTests(unittest.TestCase):
                 CONTRACT_RESULT="success",
                 PRE_RUNPOD_RESULT="success",
                 ARCHIVE_RESULT="success",
+                RUNTIME_RESULT="success",
                 GPU_EXECUTION_RESULT="success",
                 PAID_PATH_DECISION="run",
                 REUSED_CHECK_URL="",
@@ -226,6 +227,7 @@ class GatePublicationTests(unittest.TestCase):
     def test_failures_and_non_paid_successes_are_not_reusable(self) -> None:
         for overrides, conclusion, kind in (
             ({"GPU_EXECUTION_RESULT": "failure"}, "failure", "failed"),
+            ({"RUNTIME_RESULT": "failure"}, "failure", "failed"),
             ({"GPU_REQUIRED": "false"}, "success", "not-required"),
             ({"PAID_PATH_DECISION": "skip"}, "success", "skipped"),
             ({"PAID_PATH_DECISION": ""}, "success", "skipped"),
@@ -279,14 +281,18 @@ class SetupBoundTests(unittest.TestCase):
     def test_cache_restores_abort_stalls_and_fall_back(self) -> None:
         gpu = job(text(CHILD), "run-gpu-tests")
         restores = [block for block in steps(gpu) if "actions/cache/restore@" in block]
-        self.assertEqual(len(restores), 3)
+        self.assertEqual(len(restores), 1)
+        hosted = job(text(".github/workflows/runpod-gpu-runtime.yml"), "prepare-runtime")
+        restores += [block for block in steps(hosted) if "actions/cache/restore@" in block]
+        self.assertEqual(len(restores), 4)
         for block in restores:
             self.assertIn('SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"', block)
             self.assertIn("continue-on-error: true", block)
 
     def test_artifact_download_is_retried_once(self) -> None:
         gpu = job(text(CHILD), "run-gpu-tests")
-        downloads = [block for block in steps(gpu) if "actions/download-artifact@" in block]
+        downloads = [block for block in steps(gpu) if "actions/download-artifact@" in block
+                     and "inputs.archive_artifact_name" in block]
         self.assertEqual(len(downloads), 2)
         self.assertIn("continue-on-error: true", downloads[0])
         self.assertIn("steps.archive_download.outcome != 'success'", downloads[1])

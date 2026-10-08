@@ -21,7 +21,9 @@ def stage(name: str) -> str:
         return "archive_transfer"
     if name in {"Select CUDA runtime for driver", "Restore cuTENSOR redistributable",
                 "Restore CUDA minimal runtime tree", "Configure CUDA runtime libraries",
-                "Verify loaded NVRTC version"}:
+                "Verify loaded NVRTC version", "Download staged execution payload",
+                "Install staged execution payload", "Transfer selected CUDA SDK",
+                "Install selected CUDA SDK"}:
         return "runtime_setup"
     return "other_setup"
 

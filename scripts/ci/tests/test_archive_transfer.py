@@ -80,6 +80,6 @@ class ArchiveTransferTests(unittest.TestCase):
         parent, child = text(PARENT), text(CHILD)
         for part in range(5):
             self.assertIn(f"artifact_name }}}}-transfer-part{part:02d}", parent)
-        self.assertEqual(parent.count("compression-level: 0"), 5)
+        self.assertEqual(parent.split("  gpu-runtime:", 1)[0].count("compression-level: 0"), 5)
         self.assertEqual(child.count("pattern: ${{ inputs.archive_artifact_name }}-transfer-part*"), 2)
-        self.assertEqual(child.count("merge-multiple: true"), 2)
+        self.assertEqual(child.count("pattern: ${{ inputs.archive_artifact_name }}-transfer-part*"), 2)

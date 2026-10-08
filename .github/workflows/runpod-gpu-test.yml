@@ -121,7 +121,7 @@ env:
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
   NVIDIA_CUDNN_CU12_VERSION: "9.23.2.1"
   NVIDIA_CUDA_NVCC_CU12_VERSION: "12.9.86"
-  RUNPOD_IMAGE: runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
+  RUNPOD_IMAGE: nvidia/cuda:12.6.3-runtime-ubuntu24.04@sha256:92906d87596d638d35015c6353053121bd299d25943b875763321653884ba924
 
 jobs:
   authorize:
@@ -777,9 +777,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  gpu-runtime:
+    name: Prepare GPU execution dependencies
+    needs: [authorize, runpod-contract]
+    if: needs.authorize.outputs.gpu_required == 'true'
+    uses: ./.github/workflows/runpod-gpu-runtime.yml
+
   gpu-execution:
     name: Paid GPU lifecycle
-    needs: [authorize, runpod-contract, pre-runpod-gate, cuda-archive]
+    needs: [authorize, runpod-contract, pre-runpod-gate, cuda-archive, gpu-runtime]
     # Deliberately no `if` here. A skipped caller job never passes its `with:`
     # block and the called workflow's jobs are scheduled regardless, so the paid
     # workflow decides for itself in `Decide whether the paid path runs` (it
@@ -792,6 +798,7 @@ jobs:
       pr_number: ${{ needs.authorize.outputs.pr_number }}
       archive_cache_key: ${{ needs.cuda-archive.outputs.archive_cache_key }}
       archive_artifact_name: ${{ needs.cuda-archive.outputs.archive_artifact_name }}
+      runtime_artifact_prefix: ${{ needs.gpu-runtime.outputs.artifact_prefix }}
       keep_failed_pods: ${{ inputs.keep_failed_pods || false }}
     secrets:
       RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
@@ -805,6 +812,7 @@ jobs:
       - runpod-contract
       - pre-runpod-gate
       - cuda-archive
+      - gpu-runtime
       - gpu-execution
 
     if: >-
@@ -841,6 +849,7 @@ jobs:
           CONTRACT_RESULT: ${{ needs.runpod-contract.result }}
           PRE_RUNPOD_RESULT: ${{ needs.pre-runpod-gate.result }}
           ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
+          RUNTIME_RESULT: ${{ needs.gpu-runtime.result }}
           GPU_EXECUTION_RESULT: ${{ needs.gpu-execution.result }}
           PAID_PATH_DECISION: ${{ needs.gpu-execution.outputs.paid_path_decision }}
           REUSED_CHECK_URL: ${{ needs.gpu-execution.outputs.reused_check_url }}
@@ -901,6 +910,7 @@ jobs:
             record_result "runpod-contract" "${CONTRACT_RESULT}"
             record_result "pre-runpod-gate" "${PRE_RUNPOD_RESULT}"
             record_result "cuda-archive" "${ARCHIVE_RESULT}"
+            record_result "gpu-runtime" "${RUNTIME_RESULT}"
             if [ "${LOCAL_GPU_VALIDATION}" = true ]; then
               # The label decides that the paid path is skipped; the recorded
               # evidence decides whether the requirement is satisfied, so a

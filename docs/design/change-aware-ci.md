@@ -237,3 +237,25 @@ open, same-repository, authorized, and head-stable; it derives both the tested
 revision and required-check target rather than accepting them from the caller.
 Raw revision dispatch remains available for trusted post-merge validation, but
 cannot be combined with PR-number recovery.
+
+## Hosted GPU execution dependencies
+
+The read-only runtime preparation workflow runs on a hosted Ubuntu 24.04
+runner before the paid lifecycle, alongside test archive preparation. It
+restores trusted cuTENSOR and minimal CUDA 12.6/12.8 caches, installs misses
+on the hosted runner, verifies the JIT headers with real NVRTC, and prepares
+immutable five-part artifacts for common tools/PJRT wheels and each SDK.
+Only trusted controller source prepares these dependencies; the tested ref
+continues to identify the separately compiled test archives. Shared cache
+publication remains owned by ci-cache-publish on main.
+
+The digest-pinned CUDA 12.6.3 runtime image retains the 12.6 driver floor.
+Pre-registration NVRTC compile/load/launch validation remains mandatory.
+After registration the GPU selects the driver-compatible SDK (12.8 for the
+full capability tier), transfers only that SDK and the common payload,
+verifies checksums and required libraries, and runs the complete archives.
+Cargo/nextest and PJRT wheels are staged; no Rust toolchain installation or
+PJRT package download occurs on the accepted GPU. Preparation failures block
+allocation and fail the required GPU gate. SDK and cuTENSOR paid-side cache
+hits are reported as unknown because those dependencies are now host-staged;
+the test archive's restore-only cache remains unchanged.

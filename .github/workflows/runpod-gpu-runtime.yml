@@ -1,0 +1,213 @@
+name: Prepare GPU execution dependencies
+
+# Hosted, read-only preparation. No RunPod credentials or GPU allocation.
+on:
+  workflow_call:
+    outputs:
+      artifact_prefix:
+        description: Immutable runtime artifacts prepared before GPU allocation
+        value: ${{ jobs.prepare-runtime.outputs.artifact_prefix }}
+permissions:
+  contents: read
+
+env:
+  ORG_NAME: tensor4all
+  TENFERRO_REPO: tensor4all/tenferro-rs
+  CARGO_TERM_COLOR: always
+  CUBECL_DEBUG_LOG: "0"
+  CUDA_ARCHIVE: cuda-tests.tar.zst
+  PJRT_ARCHIVE: pjrt-tests.tar.zst
+  CUDA_TUTORIAL_ARCHIVE: cuda-tutorial.tar.zst
+  # Keep 12.8 bindings so newer runtimes retain every CubeCL CUDA feature.
+  CUDARC_CUDA_VERSION: "12080"
+  # RunPod may select the 12.6 baseline; 12.8 enables the full CubeCL feature set.
+  CUDA_MIN_RUNTIME_VERSION: "12.6"
+  CUDA_RUNTIME_VERSION: "12.8"
+  ARCHIVE_WORKSPACE_ROOT: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+  # Fixed cache root shared by GitHub-hosted writers (ci-cache-publish) and
+  # the RunPod pod so restored absolute paths line up on both runner kinds.
+  TENFERRO_CI_CACHE_ROOT: /opt/tenferro-ci
+  CUTENSOR_VERSION: "2.6.0.4"
+  JAX_CUDA12_PJRT_VERSION: "0.10.2"
+  NVIDIA_CUDNN_CU12_VERSION: "9.23.2.1"
+  NVIDIA_CUDA_NVCC_CU12_VERSION: "12.9.86"
+  RUNPOD_IMAGE: nvidia/cuda:12.6.3-runtime-ubuntu24.04@sha256:92906d87596d638d35015c6353053121bd299d25943b875763321653884ba924
+
+jobs:
+  prepare-runtime:
+    name: Prepare GPU execution dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      artifact_prefix: ${{ steps.runtime_ready.outputs.artifact_prefix }}
+    steps:
+      - name: Checkout trusted runtime preparation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@3ad7ed62b9acd4b43f91777bf240fac23e489eac
+        with:
+          tool: nextest
+      - name: Prepare hosted runtime cache directories
+        run: |
+          sudo mkdir -p "${TENFERRO_CI_CACHE_ROOT}"
+          sudo chown "$(id -u):$(id -g)" "${TENFERRO_CI_CACHE_ROOT}"
+      - name: Restore hosted CUDA 12.6 runtime
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
+        with:
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-12.6
+          key: cuda-runtime-${{ runner.os }}-x86_64-12.6-minimal-v7
+      - name: Restore hosted CUDA 12.8 runtime
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
+        with:
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-12.8
+          key: cuda-runtime-${{ runner.os }}-x86_64-12.8-minimal-v7
+      - name: Restore cuTENSOR redistributable
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
+        with:
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cutensor-${{ env.CUTENSOR_VERSION }}
+          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2
+      - name: Prepare GPU execution payloads
+        timeout-minutes: 15
+        run: bash scripts/ci/prepare_gpu_execution_payload.sh
+      - name: Upload runtime common part 00
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-common-part00
+          path: runtime-common/00/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime common part 01
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-common-part01
+          path: runtime-common/01/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime common part 02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-common-part02
+          path: runtime-common/02/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime common part 03
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-common-part03
+          path: runtime-common/03/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime common part 04
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-common-part04
+          path: runtime-common/04/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.6 part 00
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.6-part00
+          path: runtime-sdk-12.6/00/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.6 part 01
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.6-part01
+          path: runtime-sdk-12.6/01/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.6 part 02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.6-part02
+          path: runtime-sdk-12.6/02/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.6 part 03
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.6-part03
+          path: runtime-sdk-12.6/03/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.6 part 04
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.6-part04
+          path: runtime-sdk-12.6/04/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.8 part 00
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.8-part00
+          path: runtime-sdk-12.8/00/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.8 part 01
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.8-part01
+          path: runtime-sdk-12.8/01/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.8 part 02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.8-part02
+          path: runtime-sdk-12.8/02/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.8 part 03
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.8-part03
+          path: runtime-sdk-12.8/03/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload runtime cuda12.8 part 04
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpu-runtime-${{ github.run_id }}-cuda12.8-part04
+          path: runtime-sdk-12.8/04/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Publish prepared runtime identity
+        id: runtime_ready
+        run: echo "artifact_prefix=gpu-runtime-${{ github.run_id }}" >> "${GITHUB_OUTPUT}"
