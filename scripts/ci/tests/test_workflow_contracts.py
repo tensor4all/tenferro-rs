@@ -467,7 +467,7 @@ class WorkflowContractTests(unittest.TestCase):
         text = read(".github/workflows/runpod-gpu-test.yml")
         self.assertIn("gpu_cost_per_hr:", text)
         self.assertIn("RunPod hourly price:", text)
-        self.assertIn("python3 scripts/ci/runpod_cost.py", text)
+        self.assertIn("python3 -m scripts.ci.runpod_workflow_cost", text)
         self.assertIn("RunPod estimated paid cost:", read("scripts/ci/runpod_cost.py"))
         # The job timeout must contain the worst-case provision budget so
         # the loop reaches its explicit exhaustion error instead of being

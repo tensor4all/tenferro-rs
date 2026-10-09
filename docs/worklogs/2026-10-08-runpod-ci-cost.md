@@ -4,8 +4,9 @@
 
 - Record stage costs and cache hits from the trusted execution workflow after
   mandatory deletion. Preserve failed workload conclusions and unknown cache
-  outputs; report an estimate rather than a provider invoice. Telemetry must
-  never delay or block pod deletion.
+  outputs; report an estimate rather than a provider invoice. Checkouts and cost calculations must
+  never delay or block pod deletion. The Pod record must be captured before
+  deletion, with a bounded best-effort read.
 - Investigate hosted runtime preparation, slimmer CUDA images and GPU selection
   using the complete frozen CUDA/PJRT/tutorial workload. Experimental benchmark
   workflows do not alter production until complete-workload evidence supports
@@ -420,3 +421,22 @@ Workflow orchestration remains trusted main; its definition changes retain
 static contract/actionlint checks and require post-merge validation of the
 changed controller. This correction does not promote the rejected transfer
 or compression candidate.
+
+## Cleanup before telemetry
+
+Production main run [37878827068](https://github.com/tensor4all/tenferro-rs/actions/runs/37878827068)
+finished its final PJRT step at 03:28:55 UTC and confirmed DELETE at 03:29:07.
+The paid window was 359.817 seconds. The reporting checkout took three seconds
+and the pre-delete report step took one, so the directly removable work is
+about 1.1% of that window. This does not establish a meaningful full-workload
+speedup under the existing performance gates; no paid paired optimization
+campaign is justified for those four seconds.
+
+The existing requirement that telemetry never delay deletion is nevertheless
+violated by putting a checkout (up to two minutes) and an unbounded network
+read/report (another two-minute step timeout) before DELETE. The operational
+fix removes pre-delete checkout and calculation, bounds the required Pod-record
+capture to five seconds, and performs checkout and stage-cost reporting only
+after confirmed deletion. The existing stage report retains the real deletion
+timestamp and workload conclusion. This is a cleanup reliability correction;
+no measured performance gain is claimed.
