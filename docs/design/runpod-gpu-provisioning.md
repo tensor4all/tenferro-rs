@@ -143,13 +143,14 @@ Before #2002 the setup steps of `run-gpu-tests` were bounded only by the
 45-minute job timeout; one artifact download took 34 minutes and another pod
 spent 25.8 minutes downloading plus 10.3 minutes restoring the CUDA runtime
 before it was cancelled without a test result. Every step before
-`Run CUDA tests from archive` now has its own `timeout-minutes` (40 minutes in
-total even if every step stalls; a normal setup takes about 2.5 minutes, and a
-single stall now costs at most 4 minutes plus one retry):
+`Run CUDA tests from archive` has its own `timeout-minutes`; the aggregate
+watchdog below is stricter than the sum of those individual limits. A normal
+setup takes about 2.5 minutes; archive downloads allow one bounded retry:
 
 - the cache restores abort a stalled segment after
-  `SEGMENT_DOWNLOAD_TIMEOUT_MINS=2` and are non-blocking, because every miss
-  already has a fallback (artifact download, pod-side install);
+  `SEGMENT_DOWNLOAD_TIMEOUT_MINS=2` and are non-blocking, because a test-archive
+  miss falls back to its immutable artifact. Runtime dependency preparation
+  and cache repair happen on the hosted prerequisite;
 - the archive artifact download is retried once with the same bound.
 
 A separate hosted setup watchdog bounds the accepted pod from its
