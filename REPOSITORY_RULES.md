@@ -160,7 +160,8 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
 Session entry — creating backend execution state — is owned by backend entry
 mechanisms, not by exported names. The audited set lives in
 [`scripts/audit-session-entry.py`](scripts/audit-session-entry.py): CPU
-execution admission, CPU/CUDA/WebGPU session construction,
+execution admission, CPU/CUDA/WebGPU session construction, the held CPU session
+entry and construction (`open_session`, `adopt_held_permit`, `CpuHeldSession`),
 `run_backend_session_cached`, `with_execution_scope`, the portable
 `with_session_entry_guard`, and every library call of
 `with_backend_session[_cached]`, `with_eager_session`,
@@ -175,9 +176,14 @@ execution admission, CPU/CUDA/WebGPU session construction,
   the reason it is a legitimate boundary (a session host, a named top-level
   entry point, a documented exception or a native-context region). An entry
   without a reason fails, and so does a `PENDING` reason: a known-illegitimate
-  entry may be tracked on a branch but not merged. The allowlist may only shrink; `--bless` is for
-  recording a removal. Every tracked mechanism must still match a library
-  definition or site, so a rename cannot silently shrink coverage.
+  entry may be tracked on a branch but not merged. The allowlist may only shrink
+  for the mechanisms it already lists; a change that introduces a new entry
+  mechanism authorized by a reviewed design — as the held CPU session entry of
+  #1945 does — records that mechanism, its function-level entries and the reason
+  each boundary is legitimate in the same change, and states the growth in the
+  pull request. `--bless` is for recording a removal. Every tracked mechanism must
+  still match a library definition or site, so a rename cannot silently shrink
+  coverage.
 - An execution scope creates execution state too: it holds an execution permit and
   the resource set that permit keys, and sessions opened inside it reuse them. Scope
   entry points therefore belong to the audited set. `with_evaluation_scope` (an
@@ -195,7 +201,10 @@ execution admission, CPU/CUDA/WebGPU session construction,
   must not create execution state themselves. Entry is fallible: admission
   failures (reentry, a busy caller-managed domain, a scope mismatch, poisoned
   admission state, executor failure) are typed `SessionEntryError`s reported
-  before the callback runs, never panics.
+  before the callback runs, never panics. The one exception is restoration rather
+  than admission: when the CPU backend cannot restore the caller's CPU affinity
+  after the callback, it reports `SessionEntryError::Executor` after the callback
+  has run and that error replaces the callback's value.
 - Backend-leaf native services are reached only through the leaf's visitor on
   `BackendSession::native_session()`; `NativeSessionRef` has one `unsafe`
   constructor, used only by the leaf that owns the marker.

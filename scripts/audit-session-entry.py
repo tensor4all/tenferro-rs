@@ -71,6 +71,11 @@ MECHANISMS: dict[str, tuple[str, tuple[str, ...]]] = {
     "with_execution_scope": (r"\bwith_execution_scope\b", ("with_execution_scope",)),
     "with_evaluation_scope": (r"\bwith_evaluation_scope\b", ("with_evaluation_scope",)),
     "CpuExecSession construction": (r"\bCpuExecSession\s*\{", ("CpuExecSession",)),
+    "CPU held session entry": (
+        r"\b(?:open_session|adopt_held_permit)\b",
+        ("open_session", "adopt_held_permit"),
+    ),
+    "CpuHeldSession construction": (r"\bCpuHeldSession\s*\{", ("CpuHeldSession",)),
     "CudaExecSession construction": (r"\bCudaExecSession\s*\{", ("CudaExecSession",)),
     "WebGpuExecSession construction": (r"\bWebGpuExecSession\s*\{", ("WebGpuExecSession",)),
     "backend session entry": (
@@ -511,6 +516,19 @@ fn einsum(&self) {
 }
 """
 
+SELF_TEST_HELD_ENTRY = """
+fn open_session(&self) -> Held {
+    let permit = self.acquire();
+    self.adopt_held_permit(permit)
+}
+
+fn adopt_held_permit(&self, permit: Permit) -> Held {
+    Held {
+        state: CpuHeldSession { permit },
+    }
+}
+"""
+
 SELF_TEST_UNRELATED_STRUCT = """
 struct Other;
 
@@ -556,6 +574,12 @@ def self_test() -> int:
     if ("CPU backend install wrappers", "install") not in qualified:
         failures.append("an `_unmarked` install helper call must be reported")
 
+    held = sites(SELF_TEST_HELD_ENTRY)
+    if ("CPU held session entry", "open_session") not in held:
+        failures.append("a held-session entry call must be reported with its function")
+    if ("CpuHeldSession construction", "adopt_held_permit") not in held:
+        failures.append("held-session construction must be reported with its function")
+
     eager = sites(SELF_TEST_EAGER_ENTRY)
     if ("eager session entry", "einsum") not in eager:
         failures.append("a library eager-session entry must be reported")
@@ -599,7 +623,7 @@ def self_test() -> int:
         print(f"self-test failure: {failure}")
     if failures:
         return 1
-    print("self-test passed: alias, boundary, method, eager, test-scope, cfg(test), trait, grouped-import and scope cases")
+    print("self-test passed: alias, boundary, method, eager, held, test-scope, cfg(test), trait, grouped-import and scope cases")
     return 0
 
 

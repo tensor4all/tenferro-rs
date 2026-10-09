@@ -1569,7 +1569,7 @@ fn test_session_linalg_pool_preserves_buffers() {
 }
 
 #[test]
-fn test_with_linalg_pool_reports_poison_after_panic() {
+fn test_with_linalg_pool_returns_resources_after_panic() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     backend
         .with_backend_session(|__s| {
@@ -1587,14 +1587,29 @@ fn test_with_linalg_pool_reports_poison_after_panic() {
     }));
 
     assert!(result.is_err());
-    assert_eq!(
-        backend.buffer_pool_len().unwrap_err().kind(),
-        tenferro_tensor::ErrorKind::RuntimeState
-    );
+    // A held session owns the engine resources for the callback instead of
+    // locking them, so unwinding returns them rather than poisoning the engine,
+    // and the next session reuses the same pool.
+    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+
+    let value = backend
+        .with_backend_session(|session| {
+            session.add_read(
+                TensorRead::from_tensor(
+                    &Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+                ),
+                TensorRead::from_tensor(
+                    &Tensor::from_vec_col_major(vec![1], vec![5.0_f64]).unwrap(),
+                ),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(value.as_slice::<f64>().unwrap(), &[7.0]);
 }
 
 #[test]
-fn test_backend_session_reports_poison_after_panic() {
+fn test_backend_session_returns_resources_after_panic() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     backend
         .with_backend_session(|__s| {
@@ -1612,10 +1627,22 @@ fn test_backend_session_reports_poison_after_panic() {
     }));
 
     assert!(result.is_err());
-    assert_eq!(
-        backend.buffer_pool_len().unwrap_err().kind(),
-        tenferro_tensor::ErrorKind::RuntimeState
-    );
+    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+
+    let value = backend
+        .with_backend_session(|session| {
+            session.add_read(
+                TensorRead::from_tensor(
+                    &Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+                ),
+                TensorRead::from_tensor(
+                    &Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+                ),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(value.as_slice::<f64>().unwrap(), &[3.0]);
 }
 
 #[test]

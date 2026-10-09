@@ -307,7 +307,8 @@ fn workspace_contention_does_not_partially_clear_buffers_or_change_limits() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let engine = Arc::clone(&backend.engine);
     {
-        let mut resources = engine.resources.lock().unwrap();
+        let mut slot = engine.resources.lock().unwrap();
+        let resources = slot.ready_mut().expect("engine resources are present");
         <f64 as PoolScalar>::pool_release(&mut resources.buffers, Vec::with_capacity(16));
     }
     let before = backend.buffer_pool_len().unwrap();
@@ -689,7 +690,7 @@ fn with_linalg_pool_restores_backend_pool_and_context() {
 }
 
 #[test]
-fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
+fn linalg_pool_acquire_then_panic_replenishes_buffer_without_poisoning_engine() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     with_cpu_session(&mut backend, |cpu| {
         cpu.with_linalg_pool(|_, pool| {
@@ -715,16 +716,14 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
     }));
 
     assert!(result.is_err());
-    let resources = backend.engine.resources.lock().unwrap_err().into_inner();
-    assert_eq!(resources.buffers.len(), 1);
+    // The engine no longer holds its resource mutex across the callback, so a
+    // panic in the callback no longer poisons it. The pooled buffer that
+    // `BufferPoolLoan` replenished while unwinding stays available to the next
+    // session instead of being reported as poisoned state.
+    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
     assert_eq!(
-        resources.buffers.stats().capacity_bytes,
+        backend.buffer_pool_stats().unwrap().capacity_bytes,
         1024 * std::mem::size_of::<f64>()
-    );
-    drop(resources);
-    assert_eq!(
-        backend.buffer_pool_len().unwrap_err().kind(),
-        tenferro_tensor::ErrorKind::RuntimeState
     );
 }
 
@@ -750,9 +749,8 @@ fn uninit_output_partial_write_then_panic_discards_without_replenishment() {
     }));
 
     assert!(result.is_err());
-    let resources = backend.engine.resources.lock().unwrap_err().into_inner();
-    assert_eq!(resources.buffers.len(), 0);
-    assert_eq!(resources.buffers.stats().capacity_bytes, 0);
+    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_stats().unwrap().capacity_bytes, 0);
 }
 
 #[test]

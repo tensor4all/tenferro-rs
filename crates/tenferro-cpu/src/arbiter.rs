@@ -36,17 +36,36 @@ pub(crate) fn fresh_execution_owner() -> Option<ResourceOwner> {
 }
 
 pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() -> R) -> R {
-    struct RestoreOwner(Option<ResourceOwner>);
+    let guard = ExecutionOwnerGuard::enter(owner);
+    let result = op();
+    drop(guard);
+    result
+}
 
-    impl Drop for RestoreOwner {
-        fn drop(&mut self) {
-            EXECUTION_OWNER.set(self.0);
+/// Owned execution-owner marker for a held CPU session.
+///
+/// The scoped entry sets the caller's execution owner for one callback with
+/// [`with_execution_owner`]. A held session owns this guard instead, so the
+/// same thread-local marker stays installed on the opening thread for the whole
+/// session: a nested root entry is rejected there, and an owner lock that
+/// serializes callers is still refused while this session holds its permit.
+pub(crate) struct ExecutionOwnerGuard {
+    previous: Option<ResourceOwner>,
+}
+
+impl ExecutionOwnerGuard {
+    /// Install `owner` as this thread's CPU execution owner until the guard drops.
+    pub(crate) fn enter(owner: ResourceOwner) -> Self {
+        Self {
+            previous: EXECUTION_OWNER.replace(Some(owner)),
         }
     }
+}
 
-    let previous = EXECUTION_OWNER.replace(Some(owner));
-    let _restore = RestoreOwner(previous);
-    op()
+impl Drop for ExecutionOwnerGuard {
+    fn drop(&mut self) {
+        EXECUTION_OWNER.set(self.previous);
+    }
 }
 
 #[cfg(test)]
@@ -338,8 +357,11 @@ impl ResourceArbiter {
         }))
     }
 
+    /// Block until at least `expected` requests are queued, or `timeout` elapses.
+    ///
+    /// Test-only: production entry never inspects the waiter list.
     #[cfg(test)]
-    fn wait_for_waiter_count_for_test(
+    pub(crate) fn wait_for_waiter_count_for_test(
         &self,
         expected: usize,
         timeout: std::time::Duration,

@@ -3862,7 +3862,7 @@ pub trait BackendSessionHost: BackendRuntimeCache {
     /// order), but it never runs `f` twice, never retries `f` through a fallback
     /// path, and never reports a failure of `f` as an admission failure: the
     /// callback's own value, including its own `Result`, is returned unchanged in
-    /// `Ok`.
+    /// `Ok` — unless a post-callback restoration fails, see below.
     ///
     /// # Errors
     ///
@@ -3873,6 +3873,11 @@ pub trait BackendSessionHost: BackendRuntimeCache {
     /// for a mismatched execution scope or executor declaration,
     /// [`SessionEntryError::ResourcePoisoned`] for poisoned admission state, and
     /// [`SessionEntryError::Executor`] when the executor cannot be entered.
+    ///
+    /// The CPU backend also returns [`SessionEntryError::Executor`] when it cannot
+    /// restore the calling thread's CPU affinity *after* `f` has run. That error
+    /// replaces the callback's value, so a caller that needs the value must
+    /// re-derive it; it says nothing about whether `f` ran.
     fn with_backend_session<R>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R,

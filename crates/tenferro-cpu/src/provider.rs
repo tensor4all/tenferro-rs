@@ -268,10 +268,19 @@ impl<'a> CpuOperationEntry<'a> {
         self,
         operation: impl FnOnce(CpuExecutionContext<'a>) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
+        Ok(self.enter_owned(operation))
+    }
+
+    /// Enter this domain and hand the caller owned context facts.
+    ///
+    /// [`Self::enter`] lends a context tied to a callback local. A held session
+    /// builds its operation view outside a callback and keeps the context in that
+    /// view, so it needs the value with the entry's own lifetime.
+    pub(crate) fn enter_owned<R>(self, operation: impl FnOnce(CpuExecutionContext<'a>) -> R) -> R {
         let mode = self.preferred_engine_mode();
-        Ok(self.enter(mode, |_| {
+        self.enter(mode, |_| {
             operation(CpuExecutionContext::entered(self.domain, mode))
-        }))
+        })
     }
 
     pub(crate) fn preferred_engine_mode(self) -> ParallelMode {

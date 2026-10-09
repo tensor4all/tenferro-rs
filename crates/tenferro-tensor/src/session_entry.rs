@@ -1,10 +1,19 @@
 //! Typed admission failures for backend session entry.
 //!
 //! [`BackendSessionHost::with_backend_session`](crate::BackendSessionHost::with_backend_session)
-//! returns [`SessionEntryError`] when a backend refuses to open a session. Every
-//! variant is reported *before* the session callback runs, so a caller that sees
-//! this error knows the callback was not executed. A callback's own result is
-//! returned inside the `Ok` value and is never folded into this type.
+//! returns [`SessionEntryError`] when a backend refuses to open a session, or when
+//! entering it fails. Except for one case, every variant is reported *before* the
+//! session callback runs, so a caller that sees this error knows the callback was
+//! not executed.
+//!
+//! The exception is restoration, not admission. A CPU session narrows the calling
+//! thread's CPU affinity for the callback and restores it afterwards; when that
+//! restoration fails, entry reports [`SessionEntryError::Executor`] **after** the
+//! callback has run. That failure is therefore not proof that no work happened, and
+//! it replaces the callback's own value in the `Err` arm. Affinity restoration is
+//! retried by the guard's destructor, so the failure is about the report, not about
+//! a process left half-confined. A callback's own result is otherwise returned
+//! inside the `Ok` value and is never folded into this type.
 //!
 //! # Examples
 //!
@@ -20,12 +29,14 @@ use tenferro_tensor_core::ErrorKind;
 
 use crate::BoxError;
 
-/// Why a backend refused to open an execution session.
+/// Why a backend refused to open an execution session, or why entering it failed.
 ///
-/// The session callback has not run when this error is returned. Contention
-/// that the backend can wait out (another thread holding an overlapping CPU
-/// resource permit) is waited for, not reported; this type covers only states
-/// that waiting cannot resolve.
+/// The session callback has not run when this error is returned, with one
+/// exception: the CPU backend reports [`SessionEntryError::Executor`] when it cannot
+/// restore the calling thread's CPU affinity *after* the callback has run, and that
+/// error replaces the callback's value. Contention that the backend can wait out
+/// (another thread holding an overlapping CPU resource permit) is waited for, not
+/// reported; this type covers only states that waiting cannot resolve.
 ///
 /// # Examples
 ///

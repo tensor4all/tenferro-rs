@@ -141,7 +141,14 @@ impl CallerAffinityGuard {
 impl Drop for CallerAffinityGuard {
     fn drop(&mut self) {
         if let Err(error) = self.restore() {
-            eprintln!("tenferro: failed to restore caller CPU affinity: {error}");
+            // Cleanup must not panic; this can run while unwinding, where a
+            // second panic aborts the process. Diagnostic output is therefore
+            // best-effort and its own failure is discarded.
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr(),
+                "tenferro: failed to restore caller CPU affinity: {error}"
+            );
         }
     }
 }
