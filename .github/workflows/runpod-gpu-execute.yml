@@ -260,6 +260,9 @@ jobs:
           PROVISION_RUNNER_LABEL: ${{ steps.vars.outputs.runner_label }}
           PROVISION_RUNNER_GROUP_ID: ${{ vars.RUNPOD_RUNNER_GROUP_ID || '1' }}
           PROVISION_KEEP_FAILED_PODS: ${{ inputs.keep_failed_pods || 'false' }}
+          PROVISION_PR_NUMBER: ${{ inputs.pr_number }}
+          PROVISION_HEAD_SHA: ${{ inputs.target_head_sha }}
+          GH_TOKEN: ${{ github.token }}
           # Block-buffered output stamped every provision line with the flush
           # time, not the event time (#2002); paid sessions must be timeable.
           PYTHONUNBUFFERED: "1"
@@ -430,17 +433,17 @@ jobs:
           fi
 
   setup-watchdog:
-    name: Bound paid GPU setup
+    name: Monitor paid GPU lifecycle
     needs: start-runpod
     if: >-
       needs.start-runpod.result == 'success' &&
       needs.start-runpod.outputs.pod_id != '' &&
       needs.start-runpod.outputs.paid_path_skipped != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 65
     permissions:
       contents: read
-      actions: read
+      actions: write # Cancel obsolete/expired work only after confirming pod deletion.
     steps:
       - name: Checkout trusted setup watchdog
         timeout-minutes: 1
@@ -448,12 +451,16 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - name: Bound accepted pod setup to 15 minutes
+      - name: Bound setup and monitor the accepted pod
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
           GH_TOKEN: ${{ github.token }}
-        run: python3 -m scripts.ci.runpod_setup_watchdog --budget-seconds 900
+          PR_NUMBER: ${{ inputs.pr_number }}
+          TARGET_HEAD_SHA: ${{ inputs.target_head_sha }}
+          TESTED_REF: ${{ inputs.tenferro_ref }}
+          GPU_TYPE_ID: ${{ needs.start-runpod.outputs.gpu_type_id }}
+        run: python3 -m scripts.ci.runpod_setup_watchdog --budget-seconds 900 --lifetime-seconds 3600
       - name: Delete pod if setup watchdog could not finish
         # Checkout/helper failures must not leave the accepted pod waiting
         # for the independent GPU job's longer timeout.
@@ -948,7 +955,8 @@ jobs:
 
           response_file=/tmp/runpod-delete-response.json
           status="$(
-            curl -sS \
+            curl -sS --connect-timeout 5 --max-time 15 \
+              --retry 2 --retry-delay 5 --retry-all-errors \
               --request DELETE \
               --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
               --header "Authorization: Bearer ${RUNPOD_API_KEY}" \

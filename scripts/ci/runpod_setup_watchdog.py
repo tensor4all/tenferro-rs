@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bound the accepted pod's paid setup window from a hosted runner."""
+"""Bound setup and stop obsolete paid work throughout the accepted pod's life."""
 from __future__ import annotations
 
 import argparse
@@ -8,11 +8,11 @@ import json
 import math
 import os
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 
 from scripts.ci.runpod_cost import parse_runpod_timestamp
+from scripts.ci.runpod_lifecycle import HostedClient, request
+from scripts.ci.runpod_workflow_cost import report
 
 
 def execution_started(jobs: list[dict]) -> bool:
@@ -30,68 +30,79 @@ def execution_started(jobs: list[dict]) -> bool:
 
 def watch(
     *, deadline: float, jobs: Callable[[], list[dict]], delete: Callable[[], None],
+    lifetime_deadline: float,
+    obsolete: Callable[[], str | None] = lambda: None,
+    cancel: Callable[[], None] = lambda: None,
     now: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
     poll_seconds: float = 15,
 ) -> bool:
-    """Return true on disarm; delete and return false when setup expires."""
+    """Wait for GPU job completion; confirm deletion before cancelling lost work."""
+    tests_started = False
     while True:
         try:
+            reason = obsolete()
+        except (OSError, ValueError, KeyError, RuntimeError) as error:
+            print(f"::warning::PR state unavailable; retaining bounded workload: {error}", flush=True)
+            reason = None
+        if reason:
+            print(f"Stopping obsolete paid work: {reason}", flush=True)
+            delete()
+            cancel()
+            return False
+        try:
             rows = jobs()
-        except (OSError, ValueError, RuntimeError) as error:
+        except (OSError, ValueError, KeyError, RuntimeError) as error:
             # Unknown progress never extends the paid setup budget.
             print(f"::warning::Setup progress unavailable: {error}", flush=True)
             rows = []
-        if execution_started(rows):
-            print("Setup watchdog disarmed: GPU tests started.", flush=True)
-            return True
+        if execution_started(rows) and not tests_started:
+            tests_started = True
+            print("Setup deadline disarmed: GPU tests started; lifecycle monitoring continues.", flush=True)
         if any(job.get("name", "").endswith("CUDA GPU tests on RunPod")
                and job.get("status") == "completed" for job in rows):
+            if tests_started:
+                # Normal cleanup captures metadata and deletes immediately. Returning
+                # here keeps the watcher out of the cleanup job's dependency chain.
+                return True
             print("::error::GPU setup finished before tests; deleting pod.", flush=True)
             delete()
+            cancel()
             return False
-        remaining = deadline - now()
+        effective_deadline = lifetime_deadline if tests_started else min(deadline, lifetime_deadline)
+        remaining = effective_deadline - now()
         if remaining <= 0:
-            print("::error::Paid GPU setup deadline exceeded; deleting pod.", flush=True)
+            print("::error::Paid GPU setup/lifetime deadline exceeded; deleting pod.", flush=True)
             delete()
+            cancel()
             return False
         sleep(min(poll_seconds, remaining))
-
-
-def request(url: str, token: str, method: str = "GET") -> tuple[int, bytes]:
-    req = urllib.request.Request(url, method=method, headers={
-        "Authorization": f"Bearer {token}", "User-Agent": "tenferro-ci-setup-watchdog",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            return response.status, response.read()
-    except urllib.error.HTTPError as error:
-        return error.code, error.read()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--budget-seconds", type=float, default=900)
+    parser.add_argument("--lifetime-seconds", type=float, default=3600)
     args = parser.parse_args()
     if not math.isfinite(args.budget_seconds) or args.budget_seconds <= 0:
         parser.error("budget must be finite and positive")
+    if not math.isfinite(args.lifetime_seconds) or args.lifetime_seconds < args.budget_seconds:
+        parser.error("lifetime must be finite and at least the setup budget")
     pod_url = f"https://rest.runpod.io/v1/pods/{os.environ['POD_ID']}"
     pod_token = os.environ["RUNPOD_API_KEY"]
-
+    client = HostedClient(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"], pod_token, transport=request)
+    run_id, run_attempt = os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"]
+    pod = None
     def delete() -> None:
-        for attempt in range(3):
-            try:
-                code, _ = request(pod_url, pod_token, "DELETE")
-                if 200 <= code < 300 or code == 404:
-                    deleted_at = dt.datetime.now(dt.timezone.utc).isoformat()
-                    print(f"Setup watchdog confirmed pod deletion at {deleted_at} (HTTP {code}).", flush=True)
-                    return
-                if code < 500 and code not in {408, 429}:
-                    raise RuntimeError(f"Pod deletion rejected: HTTP {code}")
-            except OSError:
-                pass
-            if attempt < 2:
-                time.sleep(5)
-        raise RuntimeError("Setup watchdog could not confirm pod deletion")
+        deleted_at = client.delete(os.environ["POD_ID"])
+        # The normal cleanup can no longer GET a pod we deleted. Emit the
+        # already-held metadata after DELETE and before cancellation, with no
+        # extra request on the paid path. Missing metadata stays a warning.
+        try:
+            value = report(pod, [], deleted_at, os.environ.get("GPU_TYPE_ID", ""))
+            value.update(tested_ref=os.environ.get("TESTED_REF", ""), gpu_job_conclusion="interrupted")
+            print("RunPod lifecycle cost: " + json.dumps(value), flush=True)
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            print(f"::warning::Lifecycle cost unavailable after deletion: {error}", flush=True)
     try:
         for attempt in range(3):
             try:
@@ -122,21 +133,12 @@ def main() -> int:
     deadline = started + args.budget_seconds
     print(f"Paid setup deadline: {dt.datetime.fromtimestamp(deadline, dt.timezone.utc).isoformat()}", flush=True)
 
-    def jobs() -> list[dict]:
-        url = (f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
-               f"{os.environ['GITHUB_RUN_ID']}/jobs?filter=latest&per_page=100")
-        result: list[dict] = []
-        page = 1
-        while True:
-            code, body = request(f"{url}&page={page}", os.environ["GH_TOKEN"])
-            if code != 200:
-                raise RuntimeError(f"Cannot read GPU progress: HTTP {code}")
-            rows = json.loads(body)["jobs"]
-            result.extend(rows)
-            if len(rows) < 100:
-                return result
-            page += 1
-    return 0 if watch(deadline=deadline, jobs=jobs, delete=delete) else 1
+    return 0 if watch(
+        deadline=deadline, lifetime_deadline=started + args.lifetime_seconds,
+        jobs=lambda: client.jobs(run_id, run_attempt), delete=delete,
+        obsolete=lambda: client.obsolete(os.environ["PR_NUMBER"], os.environ["TARGET_HEAD_SHA"]),
+        cancel=lambda: client.cancel(run_id, run_attempt),
+    ) else 1
 
 
 if __name__ == "__main__":

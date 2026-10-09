@@ -11,6 +11,7 @@ from scripts.ci.runpod_client import (
 )
 from scripts.ci.runpod_provision import (
     PodLeakError,
+    ObsoleteRunError,
     PodState,
     _pod_state_checker,
     ProvisionExhaustedError,
@@ -69,6 +70,25 @@ class ParseCostTests(unittest.TestCase):
 
 
 class ProvisionTests(unittest.TestCase):
+    def test_obsolete_during_startup_deletes_and_never_creates_next_candidate(self) -> None:
+        reasons = iter([None, "PR head moved"])
+        create = mock.Mock(side_effect=lambda req, jit: created("old-pod", "A40", req.tier_name))
+        deleted = []
+        with self.assertRaisesRegex(ObsoleteRunError, "Stopped obsolete paid startup"):
+            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _: "jit",
+                      create=create, runner_online=lambda _: False, pod_status=lambda _: live(),
+                      delete_pod=lambda pod: (deleted.append(pod), True)[1], obsolete=lambda: next(reasons))
+        self.assertEqual(deleted, ["old-pod"])
+        self.assertEqual(create.call_count, 1)
+
+    def test_obsolete_before_startup_spends_nothing(self) -> None:
+        create = mock.Mock()
+        with self.assertRaisesRegex(ObsoleteRunError, "Not provisioning"):
+            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _: "jit",
+                      create=create, runner_online=lambda _: False, pod_status=lambda _: live(),
+                      delete_pod=lambda _: self.fail("no pod exists"), obsolete=lambda: "PR closed")
+        create.assert_not_called()
+
     def test_first_candidate_accepted_when_runner_comes_online(self) -> None:
         clock = Clock()
         online_after = {"count": 3}

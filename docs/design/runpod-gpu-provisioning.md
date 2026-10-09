@@ -155,15 +155,42 @@ setup takes about 2.5 minutes; archive downloads allow one bounded retry:
 
 A separate hosted setup watchdog bounds the accepted pod from its
 `lastStartedAt` to the start of `Run CUDA tests from archive` to 900 seconds.
-It retains the RunPod credential on the hosted runner, polls read-only job
+It retains the RunPod credential on the hosted runner, polls attempt-specific job
 progress, and confirms deletion if setup expires or the GPU job finishes
 before reaching tests. Progress API failures do not extend the deadline;
 unreadable pod start metadata triggers deletion and a visible failure.
 A bounded inline deletion step also covers checkout/helper failures before
 the guard can finish; an already-deleted pod is accepted idempotently.
-Real test execution disarms this setup-only guard, so the complete numerical
-suite retains its existing timeouts. Normal cleanup remains mandatory and
-idempotent. Seeding the test archive onto persistent storage remains deferred.
+Real test execution disarms the setup deadline, while the same hosted job
+continues monitoring through GPU job completion with a 3600-second total
+accepted-pod lifetime backstop. It stops work when the authorized PR head moves
+or the PR closes, confirms pod deletion, then cancels the obsolete workflow.
+The provisioner checks the same PR condition before each candidate and while
+waiting for runner registration. Unknown PR/API state never means obsolete;
+existing deadlines remain effective. A base-branch update alone does not abort
+an already-running immutable test. Manual revision validations (`pr_number=0`)
+retain their pinned workload. The complete numerical suite keeps its existing
+timeouts, and normal cleanup remains mandatory and idempotent.
+
+## Orphan recovery
+
+`runpod-reap.yml` runs independently of the GPU workflow every 15 minutes on
+trusted main. It considers only pods tagged by the provisioner with repository,
+workflow owner, run id, and attempt, whose name agrees with that identity.
+Untagged/foreign pods and `keep_failed_pods` debug sessions are excluded. The
+owning GitHub run must match the repository and GPU workflow path. A candidate
+is reclaimed if its run completed at least five minutes ago, its attempt was
+superseded, or its active pod exceeds the two-hour lifetime backstop. API errors
+leave the pod untouched and fail visibly for the next scheduled retry.
+
+Deletion is bounded and idempotent; cancellation follows confirmed deletion and
+never intentionally targets a newer attempt. A manual dispatch defaults to
+dry-run (`execute=false`). Decision artifacts retain pod/run identity, deletion
+time, and available cost estimates, excluding pod environment/credentials.
+Schedule and hosted-runner queue delays, GitHub outages, and persistent provider
+DELETE failures mean this is best-effort recovery, not an independent billing
+guarantee. Legacy untagged pods need the existing manual cleanup workflow.
+Seeding the test archive onto persistent storage remains deferred.
 
 ## Observability
 
@@ -176,15 +203,38 @@ idempotent. Seeding the test archive onto persistent storage remains deferred.
 - The accepted pod's GPU, tier, price, startup time, and attempt count go
   to the job summary and `gpu_cost_per_hr` output; the pod-side "Check
   machine" step echoes them next to `nvidia-smi`.
-- `cleanup-runpod` reads the pod record before deletion and logs paid time
-  and estimated cost for the whole run (`runpod_cost.py`). RunPod's REST
+- `cleanup-runpod` captures the pod record with a five-second bound, deletes
+  the pod, and reports its paid window by stage (`runpod_workflow_cost.py`).
+  RunPod's REST
   `lastStartedAt` is Go's time format (`2026-10-04 11:09:24.633 +0000 UTC`),
   not ISO-8601; the previous inline parser raised on it in every cleanup job
   that had a pod (#2002). Both forms are parsed, an unreadable record prints a
-  `::warning::` with the raw value, and the report runs as a non-blocking step
-  before the deletion step, so telemetry can never keep a pod alive.
+  `::warning::`, and reporting runs as a non-blocking step after deletion.
+  Early watchdog deletion logs the cost from its already-held pod metadata
+  before requesting workflow cancellation, preserving interrupted-run evidence.
 - The provisioner runs with `PYTHONUNBUFFERED=1`, so each provision log line
   carries its event time rather than the time a block buffer was flushed.
+
+For read-only cross-run analysis, run:
+
+```bash
+python3 -m scripts.ci.runpod_cost_history \
+  --since 2026-10-06 --until 2026-10-09 \
+  --directory /tmp/tenferro-runpod-history
+```
+
+The command collects every workflow attempt in the inclusive UTC date range,
+downloads logs and only the small cost artifacts, and writes JSON/Markdown
+summaries outside the repository. Omit the dates to regenerate a report from
+the saved evidence without network access. It reports repeated automatic refs
+separately from manual confirmations, reused gates, rejected candidates,
+per-GPU spend including failures, and stage totals where available. Missing
+logs/prices/deletion evidence remain explicit unknowns. Older/rejected-pod log
+windows are estimates and can miss provider latency; these are not invoices.
+Independent reaper decision artifacts provide the separate recovery record when
+normal workflow logs cannot confirm deletion. Compare GPU rankings only on
+matched workloads/revisions; these historical totals alone do not select a new
+GPU policy.
 
 ## Local GPU validation instead of provisioning
 
