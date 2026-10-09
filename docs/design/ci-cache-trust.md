@@ -43,6 +43,14 @@ the pod uses `actions/cache/restore` plus rust-cache `save-if: false`, with
 read-only workflow permissions (`cuda-archive` adds `actions: read` only, for
 artifact lookup). These invariants are contract-tested.
 
+The trusted hosted lifecycle watcher and independent orphan reaper have
+`actions: write` solely to cancel obsolete/expired workflows after confirming
+pod deletion. They check out the trusted workflow SHA without persisted
+credentials and never build or execute PR code. The reusable lifecycle's caller
+grants that ceiling, while the callee's default permissions and GPU/build jobs
+remain read-only. These jobs do not save caches; shared-cache publication stays
+with `ci-cache-publish.yml`.
+
 ## Key derivation
 
 The CUDA/PJRT archive key is derived from material compilation inputs only:

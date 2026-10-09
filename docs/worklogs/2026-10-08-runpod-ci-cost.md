@@ -440,3 +440,62 @@ capture to five seconds, and performs checkout and stage-cost reporting only
 after confirmed deletion. The existing stage report retains the real deletion
 timestamp and workload conclusion. This is a cleanup reliability correction;
 no measured performance gain is claimed.
+
+## Cost history and lifecycle follow-up
+
+The maintainer accepted this order: aggregate existing cost evidence, stop
+obsolete PR work, recover orphaned CI pods, then evaluate GPU ordering and
+shared test initialization. The follow-up starts from main `1dccad7e`.
+
+The read-only history collector examined all 143 production workflow runs
+created from 2026-10-06 10:08:40 through 2026-10-09 10:11:08 UTC, including
+cancelled/failed runs and empty-job cancellations. It found 26 created pods,
+24 successful GPU workloads, two unaccepted pods, and ten successful gate
+reuses. The sole repeated automatic tested ref was #2011's own pre-merge
+validation, before its reuse fix ran on main. Known GPU spend is approximately
+$1.33003, including about $0.05980 for the two unaccepted pods. Eleven stage
+artifacts are available; older/rejected windows use log timestamps and recorded
+prices, so the total is an estimate, excludes storage, and is not billing
+reconciliation. The collector records missing evidence separately instead of
+assuming zero cost. Source logs/artifacts are retained by their run/attempt IDs;
+reproduction and offline reporting are documented in the provisioning design.
+
+GPU-specific historical cost per successful workload, including known failed
+spend, is approximately A40 $0.08418 (8 successes), RTX 2000 Ada $0.04152
+(12), A4000 $0.03614 (1), A5000 $0.04075 (3). Revisions, oracle/runtime
+changes and provision conditions differ, and A4000/A5000 samples are sparse.
+These observations do not justify changing the current live-price candidate
+order. No extra paid selection campaign is warranted by this evidence alone.
+
+Five post-bootstrap production logs (37860294000, 37868742999, 37878827068,
+37893558517, 37913232821) each contain 285 successful CUDA cases. Their
+per-case sums differ from nextest's total by only 0.021–0.059 seconds;
+scheduler gaps are not a useful optimization target. Initialization/JIT
+inside each test process is not isolated by these logs, so process grouping,
+JIT-cache changes and parallel execution remain unpromoted. The full workload
+and numerical assertions stay intact.
+
+Lifecycle decisions: monitor PR closure/head movement during provisioning and
+through GPU execution; unknown API state is not obsolescence. Delete before
+requesting workflow cancellation. Preserve immutable manual validations and
+normal cleanup. An independent scheduled reaper considers only explicitly
+owned CI pods, skips debug-retained/legacy pods, and confirms the owning run
+before reclaiming completed/superseded attempts or the two-hour lifetime
+backstop. This addresses real cancellation/cleanup gaps without a new backend,
+dependency, public API or policy exception. API outages and hosted queue delays
+remain operational limits. Durable contracts are in the provisioning and cache
+trust designs.
+
+Local verification covers the actual lifecycle loop with fake time and HTTP,
+including head movement after test start, startup interruption, no cancellation
+before successful deletion, rerun identity, transient/permanent provider
+failures, foreign/debug pods, and historical attempt aggregation. Hosted
+workflow wiring and the scheduled provider query still require trusted-main
+execution after merge; a PR's normal GPU gate runs the existing controller.
+
+Review follow-up tightened two evidence boundaries: debug dispatches exempt only
+startup-failure pod IDs explicitly published in a retention artifact, so accepted
+or obsolete pods remain recoverable after failed deletion. The per-success cost
+ratio is unavailable if any pod in its GPU group has unknown cost; missing costs
+cannot lower the ratio. Historical totals above have complete pod cost evidence
+and remain unchanged.

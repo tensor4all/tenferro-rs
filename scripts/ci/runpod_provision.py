@@ -48,6 +48,7 @@ from scripts.ci.runpod_client import (
 )
 from scripts.ci.runpod_contract import configured_gpu_tiers
 from scripts.ci.runpod_pricing import candidate_plan
+from scripts.ci.runpod_lifecycle import HostedClient, ownership_environment
 
 # Pod desiredStatus values that mean the startup script stopped without
 # registering the runner (smoke failure or setup failure). desiredStatus
@@ -80,6 +81,10 @@ class PodLeakError(RunPodError):
     The leaked pod id stays published to GITHUB_OUTPUT so the workflow's
     delete-on-failure safety net and cleanup job can still reach it.
     """
+
+
+class ObsoleteRunError(RunPodError):
+    """The authorized PR head is no longer useful to validate."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -122,6 +127,8 @@ def provision(
     delete_pod: Callable[[str], bool],
     publish_pod_id: Callable[[str], None] = lambda pod_id: None,
     keep_failed_pods: bool = False,
+    record_retained_pods: Callable[[list[str]], None] = lambda pods: None,
+    obsolete: Callable[[], str | None] = lambda: None,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> ProvisionResult:
@@ -189,9 +196,10 @@ def provision(
                 f"{kept_suffix()}"
             )
 
-    def reject_and_delete(pod_id: str, description: str) -> None:
-        if keep_failed_pods:
+    def reject_and_delete(pod_id: str, description: str, *, allow_debug_retention: bool = True) -> None:
+        if keep_failed_pods and allow_debug_retention:
             kept_pods.append(pod_id)
+            record_retained_pods(kept_pods)
             print(
                 f"DEBUG MODE: keeping failed pod {pod_id} ({description}) "
                 "for console-log inspection. It keeps billing until deleted "
@@ -209,6 +217,8 @@ def provision(
     for tier_name, gpu_type_ids in plan:
         if attempts >= max_attempts:
             break
+        if reason := obsolete():
+            raise ObsoleteRunError(f"Not provisioning obsolete work: {reason}")
         attempts += 1
         label = f"{label_prefix}-c{attempts}"
         print(
@@ -254,6 +264,11 @@ def provision(
         reason: str | None = None
         runtime_seen = False
         while True:
+            if reason := obsolete():
+                # Debug retention is for diagnosing startup failures. A moved
+                # PR has no failed startup to inspect and must stop billing.
+                reject_and_delete(result.pod_id, reason, allow_debug_retention=False)
+                raise ObsoleteRunError(f"Stopped obsolete paid startup: {reason}")
             # Check the pod BEFORE trusting the runner registry: the two
             # signals are independently eventually consistent, and a stale
             # online record (or a runner that registered and died) must not
@@ -502,6 +517,17 @@ def _pod_state_checker(graphql_url: str, api_key: str) -> Callable[[str], PodSta
     return check
 
 
+def _record_retained_pods(pods: list[str]) -> None:
+    """Publish actual startup failures for the independent reaper's exclusion."""
+    if not all(pod.isalnum() for pod in pods):
+        raise ValueError("Unexpected RunPod ID in debug retention record")
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        with open(output_path, "a", encoding="utf-8") as output:
+            output.write(f"retained_pod_ids={','.join(pods)}\n")
+    Path("/tmp/runpod-debug-retained.json").write_text(json.dumps(pods) + "\n")
+
+
 def _publish(result: ProvisionResult) -> None:
     output_path = os.environ.get("GITHUB_OUTPUT")
     if output_path:
@@ -576,6 +602,7 @@ def main() -> int:
                     f"--pod-env entries must be KEY=VALUE, got {entry!r}"
                 )
             extra_env[key] = value
+        extra_env.update(ownership_environment(dict(os.environ)))
         plan = candidate_plan(config, list(configured_gpu_tiers(config)))
         transport = _http_transport(str(config["api_url"]), api_key)
 
@@ -614,6 +641,19 @@ def main() -> int:
             os.environ.get("PROVISION_KEEP_FAILED_PODS", "").lower() == "true"
         )
 
+        def obsolete() -> str | None:
+            pr_number = os.environ.get("PROVISION_PR_NUMBER", "0")
+            if pr_number == "0":
+                return None
+            client = HostedClient(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"])
+            try:
+                return client.obsolete(pr_number, os.environ["PROVISION_HEAD_SHA"])
+            except (OSError, ValueError, KeyError, RuntimeError) as error:
+                # Unknown PR state is not a moved head. The existing startup
+                # deadline still bounds the candidate during an API outage.
+                print(f"::warning::Cannot check PR obsolescence during startup: {error}")
+                return None
+
         def publish_pod_id(pod_id: str) -> None:
             output_path = os.environ.get("GITHUB_OUTPUT")
             if output_path and "\n" not in pod_id and "\r" not in pod_id:
@@ -631,6 +671,8 @@ def main() -> int:
             delete_pod=delete_pod,
             publish_pod_id=publish_pod_id,
             keep_failed_pods=keep_failed_pods,
+            record_retained_pods=_record_retained_pods,
+            obsolete=obsolete,
         )
         args.response_file.write_bytes(result.body)
         _publish(result)
