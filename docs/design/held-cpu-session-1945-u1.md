@@ -1,10 +1,13 @@
 # Held CPU session: ownership and entry proof (#1945 U1)
 
-**Status:** specification half of work package U1 of
+**Status:** work package U1 of
 [tenferro-rs #1945](https://github.com/tensor4all/tenferro-rs/issues/1945)
 ("specify root/child/drop/lock graphs, access compatibility, scoped error precedence,
-provider route inventory and session audit"). The **prototype** is the other half of U1
-and is not delivered by this document.
+provider route inventory and session audit. Prototype a safe held concrete CPU
+session"). This record is the specification half and is delivered together with the
+working prototype that [§9](#9-delivered-prototype-and-what-remains) records. The
+remaining U1-adjacent work is the paired measurement campaign, not the ownership or
+entry proof.
 
 Baseline: `origin/main` `763ba4c5034f952ef33601b14dd307ce2dc1ea8a`. Scope: the CPU held
 root session. Held eager sessions (U2-AD), held CUDA sessions and session-bound
@@ -211,16 +214,31 @@ mechanism groups**; four groups are empty (three retired, plus `with_execution_s
 which has zero allowlisted *call* locations). Neither `open_session` nor held-session
 construction is a current matcher mechanism.
 
-A complete before/after census is therefore required, not a two-row table. At minimum it
-must account for: CPU execution admission in the standalone-root body of
-`run_backend_session_cached`; `CpuExecSession` construction there; the
-`with_backend_session`/`with_backend_session_cached` call pair; the new root constructor
-and its `CpuExecSession` view construction; and the unchanged shared/child constructor
-calls. The change must also extend the matcher's mechanism list and negative tests so a
-held root or child constructor is *detected* rather than hidden behind an untracked
-name. If the full census is not count-neutral, that requires a reviewed policy
-amendment; it is not something `--bless` may paper over. #2044's "no new host, derive a
-handle" precedent applies to the child path only.
+The mechanisms are **moved**, not added, and the mapping is explicit:
+
+| Mechanism | Before | After |
+| --- | --- | --- |
+| CPU execution admission | standalone-root body of `CpuBackend::run_backend_session_cached` | unchanged: `run_backend_session_cached` still calls `execution_admission` for every shape, and the held session reuses the same `acquire_execution_permit` |
+| `CpuExecSession` construction | `CpuBackend::run_backend_session_cached` | `with_operation_session`, the single view builder now shared by the scoped wrapper and the held session |
+| `with_backend_session` / `with_backend_session_cached` call pairs | scoped entry | unchanged; callers keep calling the scoped wrapper |
+
+The delivered allowlist edit is exactly that one relocation — the
+`CpuExecSession construction` key moves from
+`crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached` to
+`crates/tenferro-cpu/src/backend.rs::with_operation_session` with an updated reason — and
+`python3 scripts/audit-session-entry.py --check` passes with no other change to
+`scripts/session-entry-allowlist.json`.
+
+What that buys, and what it does not:
+
+- The mechanism is count-neutral (1 -> 1) and the total allowlist is unchanged. Equal
+  counts are **not** proof of compliance: the matcher still needs extended mechanism
+  coverage and negative tests so a *new* library entry mechanism (a held root or child
+  constructor) is *detected* instead of hidden behind an untracked name. That matcher
+  work is not part of this change.
+- `--check` validates the current inventory against the current allowlist; it is not a
+  historical no-growth ratchet.
+- #2044's "no new host, derive a handle" precedent applies to the child path only.
 
 ## 7. Provider route inventory
 
@@ -272,12 +290,60 @@ Open gap, deliberately left to U4: how a *concrete* session publishes a source l
 receives an owned in-flight result without a graph-oriented submission entry. Recording
 that gap is the U1 inventory; no CUDA or transfer behaviour is designed or claimed here.
 
-## 9. Prototype plan (the other half of U1)
+## 9. Delivered prototype, and what remains
 
-Scope: `CpuBackend::open_session` returning a `!Send + !Sync` `CpuHeldSession` with the
-checkout of §2, one concrete operation through the view (dot-general read-into-accum with
-`BufferPoolLoan`), `close`, `Drop`, and the standalone-root rewrite inside
-`run_backend_session_cached`. This document is not evidence that it works.
+`CpuBackend::open_session` returns a `!Send + !Sync` `CpuHeldSession` over the checkout of
+§2, with one operation-view path (`with_operation_session`, shared with the scoped entry),
+`close` and `Drop`. The standalone-root body of `run_backend_session_cached` now runs
+through it, so the scoped and held entries share one admission, checkout and cleanup
+implementation instead of maintaining two.
+
+Evidence delivered with the prototype:
+
+1. **Auto-traits.** An in-source compile-time assertion proves `CpuHeldSession` is neither
+   `Send` nor `Sync` (the `assert_not_impl_any` ambiguity idiom).
+2. **Reentry.** `open_session` inside a held session and any scoped entry inside it return
+   `Reentered` before blocking, and the session stays usable afterwards.
+3. **Shared scope.** A held root opened inside `with_execution_scope` is rejected typed,
+   and that scope's own sessions keep working afterwards.
+4. **Children.** A handle from `CpuExecSession::child_execution()` does not open a held
+   root; `tests/child_execution.rs` still passes unchanged.
+5. **Numerical parity.** The held session and the scoped entry return the same result for
+   the same inputs.
+6. **Management.** `buffer_pool_len`, `buffer_pool_stats` and `indexed_plan_cache_stats`
+   report the checked-out resources while a session is held and work again after `close`.
+7. **Release.** Dropping a session releases the same state as `close`, and a session
+   reopens immediately afterwards.
+8. **Admission fairness.** A scoped entry queued behind a held session succeeds after the
+   session closes: it never observes a vacant resource slot.
+9. **Accounting and recovery.** The tests that previously asserted "the engine mutex is
+   poisoned after a callback panic" now assert the preserved accounting instead: the
+   pooled buffer that `BufferPoolLoan` replenishes while unwinding stays available to the
+   next session, and an ordinary operation succeeds afterwards.
+10. **Existing consumers.** The whole `tenferro-cpu` suite (396 unit tests, integration
+    tests and doctests) and the suites of `tenferro-tensor`, `tenferro-cpu-basic`,
+    `tenferro-runtime`, `tenferro-einsum`, `tenferro-linalg` and `tenferro-ad` pass on the
+    same revision. (`tenferro-ad`'s `trybuild` compile-fail snapshots fail in the local
+    build sandbox because compiler paths are remapped; the same test fails identically on
+    the unmodified baseline revision, and no other diagnostic differs.)
+11. **Gates.** `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and
+    `python3 scripts/audit-session-entry.py --check` pass.
+
+Still open, and not claimed here:
+
+- The paired release measurement campaign: cold and warm, one and multi-thread, held
+  versus scoped versus untracked eager versus AD, with wrapper allocations, lock counts,
+  plan preparation and scratch reuse, and the sub-microsecond small-GEMM target. No
+  performance claim is made.
+- Instrumented proof that a plain root/phase operation creates no `EagerTensor`, semantic
+  node or gradient slot. The prototype route does not reach `tenferro-ad` at all, but that
+  is an argument, not a measurement.
+- Access-compatibility tests (host data across CPU-budget contexts with copy counters;
+  foreign-domain and pending provider inputs rejected before shortcuts).
+- N-ary scratch poison after a panic is reported, not promised usable
+  (`contraction/workspaces.rs`).
+- The held entry is crate-private; U2-concrete owns exposing it and the phase/pool lease.
+- The session-entry matcher extension of [§6](#6-session-entry-audit).
 
 1. Compile-fail: the session cannot cross threads or be moved into a `'static` context;
    an operation view cannot escape the session.
