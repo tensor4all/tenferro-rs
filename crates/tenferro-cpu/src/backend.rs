@@ -1917,7 +1917,18 @@ impl CpuBackend {
             // runs through the held session: both entries then share one
             // admission, checkout and cleanup implementation.
             ExecutionAdmission::Standalone(permit) if !permit.is_reentrant() => {
-                self.run_held_session(permit, cache, f)
+                // The callback's value is returned unchanged; a restoration
+                // failure after the callback is reported as the outer error,
+                // exactly as the scoped path reports it.
+                let mut session = self.adopt_held_permit(permit)?;
+                let result = session.with_concrete_session(cache, f);
+                session
+                    .close()
+                    .map_err(|source| SessionEntryError::Executor {
+                        backend: CPU_BACKEND,
+                        source: Box::new(source),
+                    })?;
+                Ok(result)
             }
             admission => {
                 let affinity_error = |source| SessionEntryError::Executor {
@@ -1943,28 +1954,6 @@ impl CpuBackend {
                 result.and_then(std::convert::identity)
             }
         }
-    }
-
-    /// Run one backend session through a held root session.
-    ///
-    /// The callback's value is returned unchanged; a restoration failure after
-    /// the callback is reported as the outer error, exactly as the scoped path
-    /// reports it.
-    fn run_held_session<R>(
-        &self,
-        permit: ResourcePermit,
-        cache: Option<&mut gemm::GemmAnalysisCache>,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
-    ) -> Result<R, SessionEntryError> {
-        let mut session = self.adopt_held_permit(permit)?;
-        let result = session.with_concrete_session(cache, f);
-        session
-            .close()
-            .map_err(|source| SessionEntryError::Executor {
-                backend: CPU_BACKEND,
-                source: Box::new(source),
-            })?;
-        Ok(result)
     }
 }
 

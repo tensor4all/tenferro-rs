@@ -52,27 +52,33 @@ Three facts shape the design:
 ## 2. Ownership graph
 
 Engine resources are **checked out by value**, not locked for the session's duration.
-`CpuEngine` initializes `EngineResources` at construction (`engine.rs:96`), so an empty
-slot means "checked out", never "not yet created".
+`CpuEngine` initializes them at construction, so a vacant slot means "checked out",
+never "not yet created".
 
 ```text
-CpuEngine { domain, context: Arc<CpuContext>, resources: Mutex<Option<EngineResources>> }
+CpuEngine { domain, context: Arc<CpuContext>, resources: Mutex<ResourceSlot> }
+enum ResourceSlot { Ready(Box<EngineResources>), CheckedOut }
       │
-      │  open_session()          (root shape only; see §6 for the audit consequence)
+      │  adopt_held_permit()   (root shape only; see §6 for the audit consequence)
       v
 CpuHeldSession<'b>                                   // !Send + !Sync
-  └── state: Option<SessionState<'b>>               // disarmable; close() takes it, Drop takes it if present
+  └── state: HeldSessionState<'b>                    // field order IS the release order, see §3
         ├── backend:    &'b CpuBackend               // immutable facts; owner-inheriting child handles derived on demand
-        ├── permit:     ResourcePermit              // OWNED reservation (standalone-root shape)
-        ├── resources:  ResourceCheckout            // OWNED EngineResources, taken under a short lock
+        ├── checkout:   EngineResourceCheckout      // OWNED boxed EngineResources, taken under a short lock
+        ├── owner:      ExecutionOwnerGuard         // OWNED previous EXECUTION_OWNER value
         ├── affinity:   CallerAffinityGuard         // OWNED
-        └── owner:      ExecutionOwnerRestore       // OWNED previous EXECUTION_OWNER value
+        └── permit:     ResourcePermit              // OWNED reservation (standalone-root shape)
 ```
 
-- `open_session` locks `resources` **briefly**, `take()`s the value, unlocks. No lock is
-  held while an operation, kernel, join or admission wait runs. The empty slot is the
-  exclusion proof for this engine; `open_session` never manufactures a second
-  `EngineResources`.
+- `adopt_held_permit` locks `resources` **briefly**, moves the boxed value out, unlocks.
+  No lock is held while an operation, kernel, join or admission wait runs. The vacant
+  slot is the exclusion proof for this engine; the entry never manufactures a second
+  `EngineResources`, and the box is moved back and forth so a session entry allocates
+  nothing.
+- `HeldSessionState` has no `Drop` implementation and `CpuHeldSession` has none either, so
+  the declared field order *is* the cleanup order when a session is dropped. `close`
+  consumes the session, destructures the same fields and drops them in the same order, so
+  the explicit and implicit paths cannot diverge.
 - Each operation is a method on `&mut CpuHeldSession` that builds a **short-lived
   `CpuExecSession<'_>` view inside the method scope**, wrapped in the existing
   `BufferPoolLoan` so a caught panic still replenishes in-flight accounting
@@ -88,7 +94,8 @@ CpuHeldSession<'b>                                   // !Send + !Sync
   (`eager.rs:2974-3008`), and `current_cpu_execution` reports `SharedScope` whenever
   `operation_active` is false (`execution_scope.rs:64-75`).
 - `run_backend_session_cached` keeps its current structure for the shared and child
-  shapes; only the standalone-root body is re-expressed on the held session.
+  shapes; only the standalone-root arm is re-expressed on the held session, and that arm
+  is the only place the held entry is reached from library code.
 
 ## 3. Unwind, close and error precedence
 
@@ -96,11 +103,11 @@ One unconditional cleanup function is shared by `close` and `Drop`, so neither a
 a panic can skip a step:
 
 ```text
-fn release(&mut self)                                   // takes self.state
-  1. return resources         short lock; put EngineResources back   (must run first: §3.1)
-  2. owner                    restore previous EXECUTION_OWNER value  (infallible)
-  3. affinity                 restore caller CPU mask                 (fallible, best-effort diagnostics)
-  4. permit                   drop: arbiter removes the request and broadcasts
+Drop (field order, no explicit impl)        close(self) (destructures the same fields)
+  1. checkout: EngineResourceCheckout → returns the boxed resources under a short lock
+  2. owner:    ExecutionOwnerGuard    → restores the previous EXECUTION_OWNER value
+  3. affinity: CallerAffinityGuard    → restores the caller CPU mask (the only fallible step)
+  4. permit:   ResourcePermit         → arbiter removes the request and broadcasts
 ```
 
 - **Resources return before the admission reservation is released.** Today the callback
@@ -143,11 +150,14 @@ edge to a short checkout, and management/configuration paths have their own orde
 `backend.rs:1500-1536`: configuration → ordered engine guards → N-ary leases → buffer
 bookkeeping). The design therefore states three distinct classes rather than one line:
 
-| Class | Contains | Spans execution? |
-| --- | --- | --- |
-| Exclusion / admission | arbiter reservation; the checked-out resource slot | no (taken and released inside `open_session`/`close`) |
-| Short bookkeeping | buffer-pool in-flight accounting; management/configuration guards | no |
-| Numerical leases | the N-ary scratch lease (`contraction/workspaces.rs:89-120`, `try_lock`, non-waiting) | yes, per N-ary call only |
+| Class | Contains | Lock held across execution? | Reservation held across execution? |
+| --- | --- | --- | --- |
+| Exclusion / admission | the arbiter reservation and the checked-out resource slot | no: the slot mutex is taken and released inside the entry and inside `close` | yes, by design: the session owns the reservation and the resources for its whole life |
+| Short bookkeeping | buffer-pool in-flight accounting; management/configuration guards | no | n/a |
+| Numerical leases | the N-ary scratch lease (`contraction/workspaces.rs:89-120`, `try_lock`, non-waiting) | yes, for the duration of one N-ary call | n/a |
+
+The distinction matters: #1945 forbids a shared *lock* spanning a kernel or a join, not
+holding admission.
 
 Properties:
 
@@ -209,10 +219,11 @@ tracked entry mechanism to sit in a function listed in
 excludes definitions from occurrence matching, and compares the current inventory with
 the current allowlist — it is not a historical no-growth ratchet.
 
-Current census: **45 mechanism/function entries over 42 function locations in 13
-mechanism groups**; four groups are empty (three retired, plus `with_execution_scope`,
-which has zero allowlisted *call* locations). Neither `open_session` nor held-session
-construction is a current matcher mechanism.
+Current census before this change: **45 mechanism/function entries over 43 function
+locations in 13 mechanism groups**; four groups are empty (three retired, plus
+`with_execution_scope`, which has zero allowlisted *call* locations). Neither
+`open_session` nor held-session construction was a matcher mechanism, so the held entry
+would have been invisible.
 
 The mechanisms are **moved**, not added, and the mapping is explicit:
 
@@ -222,12 +233,25 @@ The mechanisms are **moved**, not added, and the mapping is explicit:
 | `CpuExecSession` construction | `CpuBackend::run_backend_session_cached` | `with_operation_session`, the single view builder now shared by the scoped wrapper and the held session |
 | `with_backend_session` / `with_backend_session_cached` call pairs | scoped entry | unchanged; callers keep calling the scoped wrapper |
 
-The delivered allowlist edit is exactly that one relocation — the
-`CpuExecSession construction` key moves from
-`crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached` to
-`crates/tenferro-cpu/src/backend.rs::with_operation_session` with an updated reason — and
-`python3 scripts/audit-session-entry.py --check` passes with no other change to
-`scripts/session-entry-allowlist.json`.
+Two edits are delivered:
+
+1. The **relocation** — the `CpuExecSession construction` key moves from
+   `crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached` to
+   `crates/tenferro-cpu/src/backend.rs::with_operation_session` with an updated reason.
+2. The **coverage extension** the issue requires in the same change — two new mechanisms,
+   `CPU held session entry` and `CpuHeldSession construction`, with the self-test case
+   that proves they are detected; three entries
+   (`CpuBackend::run_backend_session_cached`, `CpuBackend::open_session`,
+   `CpuBackend::adopt_held_permit`); and an amendment to
+   `REPOSITORY_RULES.md` §"Backend Session Entry" recording that a reviewed change may
+   introduce a new entry mechanism with its reasons instead of only removing entries.
+
+   This grows the allowlist from 45 to 48 entries. That growth is the reviewed policy
+   amendment the issue's "updating the session-boundary inventory/audit and any affected
+   policy is part of the same change" clause requires; it is *not* a `--bless` and it is
+   called out in the pull request.
+
+`python3 scripts/audit-session-entry.py --check` and `--self-test` pass.
 
 What that buys, and what it does not:
 
@@ -321,11 +345,17 @@ Evidence delivered with the prototype:
    pooled buffer that `BufferPoolLoan` replenishes while unwinding stays available to the
    next session, and an ordinary operation succeeds afterwards.
 10. **Existing consumers.** The whole `tenferro-cpu` suite (396 unit tests, integration
-    tests and doctests) and the suites of `tenferro-tensor`, `tenferro-cpu-basic`,
-    `tenferro-runtime`, `tenferro-einsum`, `tenferro-linalg` and `tenferro-ad` pass on the
-    same revision. (`tenferro-ad`'s `trybuild` compile-fail snapshots fail in the local
-    build sandbox because compiler paths are remapped; the same test fails identically on
-    the unmodified baseline revision, and no other diagnostic differs.)
+    tests and doctests) passes, as do the suites of `tenferro-tensor`,
+    `tenferro-cpu-basic`, `tenferro-runtime`, `tenferro-einsum`, `tenferro-linalg` and
+    `tenferro-ad`, and `cargo test --workspace --no-fail-fast` reports no other failure.
+    **Partial, with a known environmental failure:** three `trybuild` compile-fail
+    snapshot tests (`tenferro-ad`'s `eager_backend_capability_boundary`, `tenferro-tensor`'s
+    `storage_ui_compile_contracts`, `tenferro-gpu`'s
+    `session_contract::execution_session_capability_cannot_project_or_escape_owner_borrow`)
+    fail in the local build sandbox because the compiler sees remapped source paths. All
+    three were reproduced failing identically on the unmodified baseline revision
+    `763ba4c50`, and their diffs contain no diagnostic difference other than the path
+    prefix. They are not evidence for or against this change.
 11. **Gates.** `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and
     `python3 scripts/audit-session-entry.py --check` pass.
 

@@ -170,9 +170,15 @@ fn a_queued_entry_succeeds_after_the_session_closes() {
             .send(value.as_slice::<f64>().expect("f64 payload").to_vec())
             .expect("send result");
     });
-    // The waiter either queues behind the session or arrives after it closes;
-    // both orders must succeed rather than reporting a vacant resource slot.
-    thread::sleep(Duration::from_millis(100));
+    // Close only once the scoped entry is actually queued behind the session, so
+    // the test observes the release order rather than an ordinary reopen.
+    assert!(
+        backend
+            .shared
+            .arbiter
+            .wait_for_waiter_count_for_test(1, Duration::from_secs(30)),
+        "the scoped entry must be queued behind the held session"
+    );
     session.close().expect("affinity restores");
     assert_eq!(
         receiver

@@ -357,8 +357,11 @@ impl ResourceArbiter {
         }))
     }
 
+    /// Block until at least `expected` requests are queued, or `timeout` elapses.
+    ///
+    /// Test-only: production entry never inspects the waiter list.
     #[cfg(test)]
-    fn wait_for_waiter_count_for_test(
+    pub(crate) fn wait_for_waiter_count_for_test(
         &self,
         expected: usize,
         timeout: std::time::Duration,

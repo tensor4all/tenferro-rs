@@ -88,7 +88,9 @@ impl ResourceSlot {
 /// as the scoped execution path does.
 pub(crate) struct EngineResourceCheckout {
     engine: Arc<CpuEngine>,
-    resources: Option<EngineResources>,
+    /// The engine's boxed resources, moved between the slot and this checkout so
+    /// no session entry allocates.
+    resources: Option<Box<EngineResources>>,
 }
 
 impl EngineResourceCheckout {
@@ -102,7 +104,7 @@ impl EngineResourceCheckout {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let resources = match std::mem::replace(&mut *slot, ResourceSlot::CheckedOut) {
-            ResourceSlot::Ready(resources) => *resources,
+            ResourceSlot::Ready(resources) => resources,
             vacant @ ResourceSlot::CheckedOut => {
                 *slot = vacant;
                 return None;
@@ -121,7 +123,7 @@ impl EngineResourceCheckout {
     /// from the held session's `close` or `Drop`; no other `&mut` method of the
     /// session can observe it absent.
     pub(crate) fn resources_mut(&mut self) -> &mut EngineResources {
-        match self.resources.as_mut() {
+        match self.resources.as_deref_mut() {
             Some(resources) => resources,
             None => unreachable!("engine resources are released only by the held session"),
         }
@@ -144,7 +146,7 @@ impl EngineResourceCheckout {
             matches!(&*slot, ResourceSlot::CheckedOut),
             "engine resources returned twice"
         );
-        *slot = ResourceSlot::Ready(Box::new(resources));
+        *slot = ResourceSlot::Ready(resources);
     }
 }
 
