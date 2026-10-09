@@ -1,5 +1,5 @@
 use crate::buffer_pool::{BufferPool, PoolScalar};
-use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
+use crate::{CpuBackend, Tensor, TensorRead, TensorValue, TensorWrite};
 use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
@@ -33,7 +33,123 @@ pub struct CpuExecSession<'a> {
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
     pub(crate) indexed_plan_cache: &'a mut IndexedPlanCache,
+    /// N-ary contraction scratch for this session: the engine's shared store, or
+    /// this child execution's private store.
+    pub(crate) nary: &'a crate::ContractionWorkspaces,
     pub(crate) allocation_domain: Option<&'a Arc<dyn SharedTensorAllocationDomain>>,
+    /// Backend handle whose sessions are admitted under this session's owner.
+    pub(crate) child_backend: CpuBackend,
+}
+
+/// Borrowed handle for running child executions of one CPU session.
+///
+/// The handle borrows the session it was derived from, so it cannot outlive the
+/// callback that received that session: a child therefore never outlives its
+/// issuing execution. A worker that the issuing execution joins before returning
+/// may hold it and enter its own sessions; those are admitted reentrant under the
+/// issuing execution's owner and never wait for its reservation. An execution
+/// with an unrelated owner still conflicts exactly as before, and a handle whose
+/// issuing execution has already finished is rejected instead of being admitted
+/// as a fresh independent owner.
+///
+/// # Examples
+///
+/// ```
+/// use std::thread;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+/// use tenferro_tensor::BackendSessionHost;
+///
+/// let mut backend = CpuBackend::with_threads(2)?;
+/// let value = backend
+///     .with_backend_session(|session| {
+///         with_cpu_exec_session(session, |cpu| {
+///             let child = cpu.child_execution();
+///             thread::scope(|scope| {
+///                 let worker = scope.spawn(|| {
+///                     child.backend().with_backend_session(|_| 7usize)
+///                 });
+///                 worker.join().expect("child worker must not panic")
+///             })
+///         })
+///         .expect("CpuBackend exposes its CpuExecSession")
+///     })??;
+/// assert_eq!(value, 7);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone)]
+pub struct CpuChildExecution<'a> {
+    backend: CpuBackend,
+    session: std::marker::PhantomData<&'a CpuExecSession<'a>>,
+}
+
+impl std::fmt::Debug for CpuChildExecution<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A summary only: the wrapped backend's own `Debug` queries live resource
+        // statistics, which is not what this handle is about.
+        f.debug_struct("CpuChildExecution")
+            .field("num_threads", &self.backend.num_threads())
+            .finish_non_exhaustive()
+    }
+}
+
+impl CpuChildExecution<'_> {
+    /// A backend handle whose sessions are admitted under the issuing
+    /// execution's owner.
+    ///
+    /// The handle shares the issuing execution's engine, arbiter and witness, so
+    /// descendant sessions are admitted reentrant. A backend taken from a handle
+    /// whose execution has finished is rejected when it next enters a session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         let child: CpuBackend = cpu.child_execution().backend();
+    ///         assert_eq!(child.num_threads(), 1);
+    ///     })
+    ///     .expect("CpuBackend exposes its CpuExecSession");
+    /// })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn backend(&self) -> CpuBackend {
+        self.backend.clone()
+    }
+}
+
+impl<'a> CpuExecSession<'a> {
+    /// Derive the child-execution handle for this session.
+    ///
+    /// The handle is only valid while this session is active: a session entered
+    /// from it is admitted under this execution's owner, and a handle used after
+    /// this execution finished is rejected with the typed entry error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         let child = cpu.child_execution();
+    ///         assert_eq!(child.backend().num_threads(), 1);
+    ///     })
+    ///     .expect("CpuBackend exposes its CpuExecSession");
+    /// })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn child_execution(&self) -> CpuChildExecution<'a> {
+        CpuChildExecution {
+            backend: self.child_backend.clone(),
+            session: std::marker::PhantomData,
+        }
+    }
 }
 
 fn pooled_zero_tensor<T>(
@@ -218,7 +334,7 @@ impl CpuExecSession<'_> {
         let _retention =
             context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
         let exec = context.contraction_exec(self.entry.thread_budget().get())?;
-        op(&exec, self.buffers, context.contraction_workspaces())
+        op(&exec, self.buffers, self.nary)
     }
 
     fn run_native<R: Send>(

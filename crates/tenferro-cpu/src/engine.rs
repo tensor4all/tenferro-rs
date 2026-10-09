@@ -13,6 +13,12 @@ pub(crate) struct EngineResources {
     pub(crate) buffers: BufferPool,
     pub(crate) gemm_analysis_cache: GemmAnalysisCache,
     pub(crate) indexed_plan_cache: IndexedPlanCache,
+    /// N-ary contraction scratch. A session that runs on the engine's shared
+    /// resources keeps `None` and uses the context-wide store, exactly as
+    /// before. A reentrant child execution gets its own store here, because the
+    /// shared one is a single `try_lock`ed lease that assumes one active
+    /// execution per owner: two concurrent children would otherwise race on it.
+    pub(crate) nary: Option<crate::ContractionWorkspaces>,
     pub(crate) runtime_clears: u64,
 }
 
@@ -22,7 +28,17 @@ impl EngineResources {
             buffers: BufferPool::with_max_retained_capacity_bytes(buffer_limit),
             gemm_analysis_cache: GemmAnalysisCache::default(),
             indexed_plan_cache: IndexedPlanCache::default(),
+            nary: None,
             runtime_clears: 0,
+        }
+    }
+
+    /// Resources for a reentrant child execution: same shape as [`Self::new`],
+    /// but with a private N-ary scratch store.
+    pub(crate) fn for_child_execution(buffer_limit: usize) -> Self {
+        Self {
+            nary: Some(crate::ContractionWorkspaces::default()),
+            ..Self::new(buffer_limit)
         }
     }
 }

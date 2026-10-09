@@ -258,7 +258,7 @@ pub use context::{CpuContext, CpuContextError};
 #[doc(hidden)]
 pub use dot_runtime::{validate_cpu_host_read, validate_cpu_host_write};
 #[doc(hidden)]
-pub use exec_session::CpuExecSession;
+pub use exec_session::{CpuChildExecution, CpuExecSession};
 pub use indexed_plan_cache::IndexedPlanCacheLimits;
 pub use placement::{
     CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
