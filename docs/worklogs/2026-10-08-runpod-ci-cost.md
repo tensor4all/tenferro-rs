@@ -408,3 +408,15 @@ and `check_cuda_headers.py`. Each was reproduced as `run_gpu=false` on main
 when changed alone; the fix makes each `run_gpu=true`, with regression checks.
 This correctness fix is independent of the rejected transfer experiment and
 leaves production payloads, images, compression, and numerical tests unchanged.
+
+
+Integration review found that classification alone still prepared dependencies
+from trusted main, so changed helpers would not run in the newly required GPU
+gate. The read-only runtime workflow now requires the authorized tested ref,
+checks out that revision without persisted credentials, and executes its
+payload and header helpers. The trusted controller passes the same ref used
+for test archives. No provider secrets or cache writes enter preparation.
+Workflow orchestration remains trusted main; its definition changes retain
+static contract/actionlint checks and require post-merge validation of the
+changed controller. This correction does not promote the rejected transfer
+or compression candidate.

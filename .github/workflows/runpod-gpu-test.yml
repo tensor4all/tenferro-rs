@@ -782,6 +782,8 @@ jobs:
     needs: [authorize, runpod-contract]
     if: needs.authorize.outputs.gpu_required == 'true'
     uses: ./.github/workflows/runpod-gpu-runtime.yml
+    with:
+      tenferro_ref: ${{ needs.authorize.outputs.tenferro_ref }}
 
   gpu-execution:
     name: Paid GPU lifecycle
