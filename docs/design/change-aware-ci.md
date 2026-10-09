@@ -15,8 +15,10 @@ Pull requests have one primary class and independent lane flags:
 - **docs-only** contains only rendered documentation or repository prose. It
   runs documentation validation and skips compiled-code lanes.
 - **CI-only** contains only known workflow and CI-helper paths. It runs helper
-  tests and actionlint. RunPod workflow, request, recovery, or classification
-  changes additionally require the GPU gate.
+  tests and actionlint. RunPod workflow, request, recovery, runtime preparation,
+  CUDA-header validation, or classification changes additionally require the
+  GPU gate. Hosted preparation still determines the payload consumed on the
+  paid GPU, even when the helper itself runs without a GPU.
 
 Mixed docs and CI changes are CI-only with both lightweight flags enabled.
 Unknown paths always fall back to code. `docs/tutorial-code/` is executable
@@ -245,9 +247,15 @@ runner before the paid lifecycle, alongside test archive preparation. It
 restores trusted cuTENSOR and minimal CUDA 12.6/12.8 caches, installs misses
 on the hosted runner, verifies the JIT headers with real NVRTC, and prepares
 immutable five-part artifacts for common tools/PJRT wheels and each SDK.
-Only trusted controller source prepares these dependencies; the tested ref
-continues to identify the separately compiled test archives. Shared cache
-publication remains owned by ci-cache-publish on main.
+The trusted controller passes the authorized tested ref to the read-only
+preparer, which checks out that revision and executes its payload/header
+helpers. Thus the GPU gate consumes dependencies prepared by the proposed
+helper code as well as test archives compiled from the same revision. No
+provider secrets or cache-write credentials enter this job. Workflow
+orchestration remains on trusted main; proposed workflow definitions are
+checked by CI configuration tests/actionlint and verified after merge when
+the controller changes. Shared cache publication remains owned by
+ci-cache-publish on main.
 
 The digest-pinned CUDA 12.6.3 runtime image retains the 12.6 driver floor.
 Pre-registration NVRTC compile/load/launch validation remains mandatory.

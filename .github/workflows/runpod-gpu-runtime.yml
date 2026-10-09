@@ -3,6 +3,11 @@ name: Prepare GPU execution dependencies
 # Hosted, read-only preparation. No RunPod credentials or GPU allocation.
 on:
   workflow_call:
+    inputs:
+      tenferro_ref:
+        description: Authorized tested revision for runtime preparation helpers
+        type: string
+        required: true
     outputs:
       artifact_prefix:
         description: Immutable runtime artifacts prepared before GPU allocation
@@ -43,10 +48,11 @@ jobs:
     outputs:
       artifact_prefix: ${{ steps.runtime_ready.outputs.artifact_prefix }}
     steps:
-      - name: Checkout trusted runtime preparation
+      - name: Checkout authorized tested runtime preparation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ env.TENFERRO_REPO }}
+          ref: ${{ inputs.tenferro_ref }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
@@ -87,7 +93,9 @@ jobs:
           key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2
       - name: Prepare GPU execution payloads
         timeout-minutes: 15
-        run: bash scripts/ci/prepare_gpu_execution_payload.sh
+        run: |
+          echo "GPU runtime preparation source: $(git rev-parse HEAD)"
+          bash scripts/ci/prepare_gpu_execution_payload.sh
       - name: Upload runtime common part 00
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

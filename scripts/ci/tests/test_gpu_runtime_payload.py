@@ -156,7 +156,12 @@ else:
         self.assertIn('cuda-archive, gpu-runtime]', parent)
         self.assertIn('record_result "gpu-runtime" "${RUNTIME_RESULT}"', parent)
         self.assertIn('runs-on: ubuntu-24.04', prep)
-        self.assertIn('ref: ${{ github.workflow_sha }}', prep)
+        self.assertIn('ref: ${{ inputs.tenferro_ref }}', prep)
+        self.assertNotIn('github.workflow_sha', prep)
+        self.assertIn('repository: ${{ env.TENFERRO_REPO }}', prep)
+        self.assertIn('tenferro_ref: ${{ needs.authorize.outputs.tenferro_ref }}',
+                      parent.split('  gpu-runtime:', 1)[1].split('  gpu-execution:', 1)[0])
+        self.assertIn('persist-credentials: false', prep)
         self.assertIn('artifact_prefix: ${{ steps.runtime_ready.outputs.artifact_prefix }}', prep)
         self.assertGreater(prep.index('name: Publish prepared runtime identity'),
                            prep.index('name: Upload runtime cuda12.8 part 04'))

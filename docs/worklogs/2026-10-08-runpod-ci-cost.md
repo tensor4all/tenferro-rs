@@ -335,3 +335,88 @@ was 8.0432% higher and pair 1 regressed. The predeclared acceptance verdict is
 FAIL. The public image is not promoted; all six samples are retained, with no
 selective retries or exclusions. This campaign does not establish that every
 preloaded image is slower or isolate the cause of cloud timing variation.
+
+
+The next transfer experiment uses main `7c8cf7d9` as its control-plane baseline.
+In production run 37868742999, common and selected-SDK download steps took
+57 and 49 of 393.217 paid seconds (26.96%); their unpack steps took two and
+three seconds. This passes the predeclared 5% need gate for transfer work.
+The candidate selects the driver-compatible SDK before downloading and uses
+one existing pinned download action for common plus selected-SDK artifacts.
+Both five-part bundles and their independent checksums remain required.
+No provider credentials or additional download dependency are introduced.
+
+A predeclared offline compression screen compared zstd levels 3, 10, and 15
+on the complete frozen common and CUDA 12.6/12.8 tar streams. All nine cases
+retained the same uncompressed tar-stream SHA-256 for their source. Level 15
+reduced common bytes from 1,196,745,934 to 1,168,159,507; the 12.6 SDK from
+656,566,549 to 576,093,849; the 12.8 SDK from 1,074,446,861 to 961,480,496.
+Combined reduction is about 5.9% for 12.6 and 6.2% for 12.8, passing the 5%
+byte gate in both tiers. Compression runs used four threads on CPUs 0-3;
+each completed under the predeclared 300-second preparation limit and each
+streaming decode/hash under 20 seconds. These are exact byte/integrity results,
+not a paid-time or CPU speedup claim.
+
+Promotion requires three complete fresh A40 pairs in B,C,C,B,B,C order, at
+least 10% median reduction from pod start through confirmed deletion, no
+paired regression, and within-arm max/min <=1.5. Both arms use the same
+frozen Rust source `2605c46f45016a2472ebdf7ba75bba533bc6a5fd` and all
+285 CUDA cases, three PJRT cases, and the tutorial from run 37814278025,
+profile `ci`, actual NVRTC 12.8, and the same native 12.6.3 image. No numerical
+library changes since that frozen source are included in this experiment.
+Production retains its 12.6 floor. No favorable-only retries or exclusions
+are allowed. Full results and raw logs are retained outside Git under
+`/var/tmp/tenferro-ci-overlap-artifacts/`; the complete adoption verdict below is FAIL.
+
+Persistent network storage is a separate cost tradeoff. The current
+`volumeInGb` Pod disk does not supply shared storage after Pod deletion.
+[RunPod network-volume documentation](https://docs.runpod.io/storage/network-volumes)
+quotes standard storage at $0.07/GB/month and constrains attached GPU placement
+to the volume location. A hypothetical 10-GB cache costs $0.70/month. Even
+eliminating all 106 observed transfer seconds at $0.24/hour saves only
+$0.007067 per run, requiring about 100 cache hits/month to cover that storage;
+real read/validation time, misses, and placement costs increase the threshold.
+[Hosted pre-seeding through S3](https://docs.runpod.io/storage/s3-api) also needs
+a separate S3 credential. No new persistent storage or credential is created
+for this experiment. The repositories have no configured S3 credential; persistent
+volume testing remains a separate follow-up.
+
+
+The concurrent compressed-transfer confirmation finished at controller
+`fd4f693a687a0a94166506537800b3d817d25996`. All six fresh A40 runs used
+$0.59/hour, actual NVRTC 12.8, and passed the complete unchanged workload,
+with confirmed deletion. No samples were excluded or selectively retried.
+
+| Pair | Baseline run / paid seconds | Candidate run / paid seconds |
+| --- | --- | --- |
+| 1 | [37873093238](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37873093238) / 385.185067 | [37873643482](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37873643482) / 409.861901 |
+| 2 | [37874731809](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37874731809) / 346.737780 | [37874250171](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37874250171) / 343.423509 |
+| 3 | [37875288117](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37875288117) / 353.431877 | [37875785755](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37875785755) / 346.337335 |
+
+Within-arm max/min stayed below 1.5; the campaign is valid. Median paid time
+fell from 353.431877 to 346.337335 seconds (2.0073%), below the predeclared
+10% gate, and pair 1 regressed. The verdict is FAIL. Neither concurrent
+transfer nor stronger compression is promoted to production from this result.
+The first candidate's combined download took 15 seconds, but its longer
+startup, cleanup wait, and test execution offset the setup gain. Secondary
+transfer observations do not replace the primary billing metric or isolate
+causes of cloud variation. The six estimated GPU costs total about $0.3581.
+
+The neighborhood scan also found three runtime-control paths absent from GPU
+change classification: `runpod-gpu-runtime.yml`, `prepare_gpu_execution_payload.sh`,
+and `check_cuda_headers.py`. Each was reproduced as `run_gpu=false` on main
+when changed alone; the fix makes each `run_gpu=true`, with regression checks.
+This correctness fix is independent of the rejected transfer experiment and
+leaves production payloads, images, compression, and numerical tests unchanged.
+
+
+Integration review found that classification alone still prepared dependencies
+from trusted main, so changed helpers would not run in the newly required GPU
+gate. The read-only runtime workflow now requires the authorized tested ref,
+checks out that revision without persisted credentials, and executes its
+payload and header helpers. The trusted controller passes the same ref used
+for test archives. No provider secrets or cache writes enter preparation.
+Workflow orchestration remains trusted main; its definition changes retain
+static contract/actionlint checks and require post-merge validation of the
+changed controller. This correction does not promote the rejected transfer
+or compression candidate.
