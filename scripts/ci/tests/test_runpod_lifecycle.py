@@ -28,12 +28,22 @@ class HostedLifecycleTests(unittest.TestCase):
 
     def test_foreign_debug_and_bad_identity_pods_are_never_owned(self):
         for changes in ({"TENFERRO_CI_REPOSITORY": "other/repo"},
-                        {"TENFERRO_CI_KEEP_FAILED": "true"},
                         {"TENFERRO_CI_KEEP_FAILED": "unknown"},
                         {"TENFERRO_CI_RUN_ID": "0"}, {"TENFERRO_CI_ATTEMPT": "x"},
                         {"TENFERRO_CI_OWNER": "some-other-service"}):
             self.assertIsNone(owner({**POD, "env": {**POD["env"], **changes}}, REPO))
         self.assertIsNone(owner({**POD, "name": "my-personal-training"}, REPO))
+
+    def test_debug_dispatch_is_owned_until_actual_retention_is_recorded(self):
+        debug = {**POD, "env": {**POD["env"], "TENFERRO_CI_KEEP_FAILED": "true"}}
+        self.assertEqual(owner(debug, REPO), (123, 2))
+        transport = Mock(return_value=(200, json.dumps({"artifacts": [
+            {"name": "runpod-debug-retained-123-1-old"},
+            {"name": "runpod-debug-retained-123-2-rejected,another"}]}).encode()))
+        client = HostedClient(REPO, "token", transport=transport)
+        self.assertTrue(client.retained_for_debug(123, 2, "rejected"))
+        self.assertFalse(client.retained_for_debug(123, 2, "accepted"))
+        self.assertFalse(client.retained_for_debug(123, 2, "old"))
 
     def test_manual_validation_does_not_query_pr_state(self):
         client = HostedClient(REPO, "token", transport=Mock(side_effect=AssertionError("unexpected API")))
@@ -127,6 +137,24 @@ class ReaperTests(unittest.TestCase):
         client = Mock(repository=REPO)
         client.github.side_effect = RuntimeError("HTTP 503")
         result = reap(client, [{**POD, "lastStartedAt": "2000-01-01T00:00:00Z"}], execute=True, now=NOW)
+        self.assertEqual(len(result["errors"]), 1)
+        client.delete.assert_not_called()
+
+    def test_debug_flag_alone_never_exempts_accepted_or_obsolete_pods(self):
+        debug = {**POD, "env": {**POD["env"], "TENFERRO_CI_KEEP_FAILED": "true"}}
+        for retained in (True, False):
+            client = Mock(repository=REPO)
+            client.github.return_value = {**RUN, "status": "completed"}
+            client.retained_for_debug.return_value = retained
+            client.delete.return_value = NOW.isoformat()
+            result = reap(client, [debug], execute=True, now=NOW)
+            self.assertEqual(result["errors"], [])
+            self.assertEqual(client.delete.called, not retained)
+            self.assertEqual(client.cancel.called, not retained)
+        client = Mock(repository=REPO)
+        client.github.return_value = {**RUN, "status": "completed"}
+        client.retained_for_debug.side_effect = RuntimeError("HTTP 503")
+        result = reap(client, [debug], execute=True, now=NOW)
         self.assertEqual(len(result["errors"]), 1)
         client.delete.assert_not_called()
 

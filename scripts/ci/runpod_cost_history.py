@@ -236,7 +236,7 @@ def summarize(directory: Path) -> dict:
                       "not_accepted": sum(not p["accepted"] for p in pods),
                       "unknown_cost_pods": len(pods) - len(known),
                       "known_estimated_cost": spend,
-                      "known_cost_per_success": spend / len(successful) if successful else None,
+                      "known_cost_per_success": spend / len(successful) if successful and len(known) == len(pods) else None,
                       "median_success_seconds": statistics.median(times) if times else None,
                       "failed_or_unaccepted_cost": sum(p["estimated_gpu_cost"] for p in known
                           if p["gpu_job_conclusion"] != "success")}
@@ -261,8 +261,9 @@ def markdown(value: dict) -> str:
                     f"{row['unknown_cost_pods']} | {row['known_estimated_cost']:.5f} | "
                     f"{f'{average:.5f}' if average is not None else 'n/a'} | "
                     f"{f'{median:.1f}' if median is not None else 'n/a'} |")
-    rows += ["", "*Known spend including failures divided by successful GPU jobs. Missing costs are excluded, "
-             "not zero. Mixed revisions, GPU hosts and prices make this descriptive evidence, not a selection benchmark. "
+    rows += ["", "*Known spend including failures divided by successful GPU jobs. The ratio is unavailable when any pod "
+             "cost is missing; missing costs are not zero. Mixed revisions, GPU hosts and prices make this "
+             "descriptive evidence, not a selection benchmark. "
              "Stage artifacts use provider start timestamps; older/rejected pods use log windows and recorded prices. "
              "Log windows can miss provider startup/deletion latency. Storage and invoice reconciliation are excluded.",
              "", "## Same-ref repeated accepted pods", ""]

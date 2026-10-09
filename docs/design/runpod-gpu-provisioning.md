@@ -179,7 +179,14 @@ PR closure/head movement is deleted even when `keep_failed_pods` was requested.
 `runpod-reap.yml` runs independently of the GPU workflow every 15 minutes on
 trusted main. It considers only pods tagged by the provisioner with repository,
 workflow owner, run id, and attempt, whose name agrees with that identity.
-Untagged/foreign pods and `keep_failed_pods` debug sessions are excluded. The
+Untagged/foreign pods and explicitly recorded startup failures retained for
+inspection are excluded. `keep_failed_pods` alone does not exempt a pod: the
+provisioner records actual retained IDs in a small `runpod-debug-retained`
+artifact, whose name includes the run, attempt and comma-separated pod IDs.
+The reaper checks this record only for otherwise eligible debug-dispatch pods;
+accepted pods and failed obsolete deletions remain reclaimable. If the retention
+record cannot be uploaded or is later removed, the pod is reclaimable. An API
+failure reading retention records leaves the decision unknown for that sweep. The
 owning GitHub run must match the repository and GPU workflow path. A candidate
 is reclaimed if its run completed at least five minutes ago, its attempt was
 superseded, or its active pod exceeds the two-hour lifetime backstop. API errors

@@ -398,6 +398,17 @@ jobs:
             --pod-env "SMOKE_FULL_RUNTIME_VERSION=${CUDA_RUNTIME_VERSION}" \
             --pod-env "SMOKE_MIN_VRAM_GB=${smoke_min_vram_gb}"
 
+      - name: Record intentionally retained startup failures
+        if: always() && steps.create_pod.outputs.retained_pod_ids != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # The reaper reads the exact retained IDs from the artifact name;
+          # no large logs or artifact downloads are needed to check retention.
+          name: runpod-debug-retained-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.create_pod.outputs.retained_pod_ids }}
+          path: /tmp/runpod-debug-retained.json
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Delete pod if runner startup failed
         # keep_failed_pods debug dispatches preserve the last failed pod so
         # its console logs stay readable in the RunPod dashboard.

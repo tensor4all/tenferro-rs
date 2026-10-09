@@ -127,6 +127,7 @@ def provision(
     delete_pod: Callable[[str], bool],
     publish_pod_id: Callable[[str], None] = lambda pod_id: None,
     keep_failed_pods: bool = False,
+    record_retained_pods: Callable[[list[str]], None] = lambda pods: None,
     obsolete: Callable[[], str | None] = lambda: None,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
@@ -198,6 +199,7 @@ def provision(
     def reject_and_delete(pod_id: str, description: str, *, allow_debug_retention: bool = True) -> None:
         if keep_failed_pods and allow_debug_retention:
             kept_pods.append(pod_id)
+            record_retained_pods(kept_pods)
             print(
                 f"DEBUG MODE: keeping failed pod {pod_id} ({description}) "
                 "for console-log inspection. It keeps billing until deleted "
@@ -515,6 +517,17 @@ def _pod_state_checker(graphql_url: str, api_key: str) -> Callable[[str], PodSta
     return check
 
 
+def _record_retained_pods(pods: list[str]) -> None:
+    """Publish actual startup failures for the independent reaper's exclusion."""
+    if not all(pod.isalnum() for pod in pods):
+        raise ValueError("Unexpected RunPod ID in debug retention record")
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        with open(output_path, "a", encoding="utf-8") as output:
+            output.write(f"retained_pod_ids={','.join(pods)}\n")
+    Path("/tmp/runpod-debug-retained.json").write_text(json.dumps(pods) + "\n")
+
+
 def _publish(result: ProvisionResult) -> None:
     output_path = os.environ.get("GITHUB_OUTPUT")
     if output_path:
@@ -658,6 +671,7 @@ def main() -> int:
             delete_pod=delete_pod,
             publish_pod_id=publish_pod_id,
             keep_failed_pods=keep_failed_pods,
+            record_retained_pods=_record_retained_pods,
             obsolete=obsolete,
         )
         args.response_file.write_bytes(result.body)

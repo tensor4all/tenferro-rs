@@ -1,5 +1,7 @@
 import io
 import json
+import tempfile
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -81,15 +83,29 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(deleted, ["old-pod"])
         self.assertEqual(create.call_count, 1)
 
+    def test_retained_failure_record_preserves_all_candidate_ids(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "outputs"
+            record = Path(folder) / "retained.json"
+            with mock.patch.dict("os.environ", {"GITHUB_OUTPUT": str(output)}), \
+                    mock.patch.object(provision_module, "Path", return_value=record):
+                provision_module._record_retained_pods(["failed1"])
+                provision_module._record_retained_pods(["failed1", "failed2"])
+            self.assertEqual(json.loads(record.read_text()), ["failed1", "failed2"])
+            self.assertEqual(output.read_text().splitlines()[-1], "retained_pod_ids=failed1,failed2")
+
     def test_debug_retention_never_keeps_obsolete_startup(self) -> None:
         reasons = iter([None, "PR closed"])
         deleted = []
+        retained = mock.Mock()
         with self.assertRaises(ObsoleteRunError):
             provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _: "jit",
                       create=lambda req, jit: created("debug-pod", "A40", req.tier_name),
                       runner_online=lambda _: False, pod_status=lambda _: live(), keep_failed_pods=True,
-                      delete_pod=lambda pod: (deleted.append(pod), True)[1], obsolete=lambda: next(reasons))
+                      delete_pod=lambda pod: (deleted.append(pod), True)[1], obsolete=lambda: next(reasons),
+                      record_retained_pods=retained)
         self.assertEqual(deleted, ["debug-pod"])
+        retained.assert_not_called()
 
     def test_obsolete_before_startup_spends_nothing(self) -> None:
         create = mock.Mock()
@@ -383,6 +399,7 @@ class ProvisionTests(unittest.TestCase):
 
     def test_keep_failed_pods_skips_deletion_and_reports_ids(self) -> None:
         clock = Clock()
+        retained = mock.Mock()
         with self.assertRaises(ProvisionExhaustedError) as caught:
             provision(
                 {**CONFIG, "max_provision_attempts": 1},
@@ -394,10 +411,12 @@ class ProvisionTests(unittest.TestCase):
                 pod_status=lambda pod_id: live("EXITED"),
                 delete_pod=lambda pod_id: self.fail("debug mode must not delete"),
                 keep_failed_pods=True,
+                record_retained_pods=retained,
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
         self.assertIn("kept debug pods: pod-debug", str(caught.exception))
+        retained.assert_called_once_with(["pod-debug"])
 
     def test_exhaustion_is_explicit_and_bounded(self) -> None:
         clock = Clock()

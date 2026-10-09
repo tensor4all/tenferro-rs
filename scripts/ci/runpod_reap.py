@@ -54,6 +54,10 @@ def reap(client: HostedClient, pods: list[dict], *, execute: bool, now: dt.datet
         try:
             run = client.github(f"actions/runs/{run_id}")
             reason = reason_to_reap(pod, run, client.repository, now)
+            if reason and pod["env"]["TENFERRO_CI_KEEP_FAILED"] == "true":
+                if client.retained_for_debug(run_id, attempt, pod["id"]):
+                    record["debug_retained"] = True
+                    reason = None
             record["reason"] = reason
             if reason:
                 print(f"{'Reclaiming' if execute else 'Would reclaim'} CI pod {pod['id']}: {reason}", flush=True)

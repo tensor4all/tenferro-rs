@@ -492,3 +492,10 @@ before successful deletion, rerun identity, transient/permanent provider
 failures, foreign/debug pods, and historical attempt aggregation. Hosted
 workflow wiring and the scheduled provider query still require trusted-main
 execution after merge; a PR's normal GPU gate runs the existing controller.
+
+Review follow-up tightened two evidence boundaries: debug dispatches exempt only
+startup-failure pod IDs explicitly published in a retention artifact, so accepted
+or obsolete pods remain recoverable after failed deletion. The per-success cost
+ratio is unavailable if any pod in its GPU group has unknown cost; missing costs
+cannot lower the ratio. Historical totals above have complete pod cost evidence
+and remain unchanged.

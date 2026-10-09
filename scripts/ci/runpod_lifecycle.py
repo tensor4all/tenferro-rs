@@ -36,11 +36,11 @@ def ownership_environment(environ: dict[str, str]) -> dict[str, str]:
 
 
 def owner(pod: dict, repository: str) -> tuple[int, int] | None:
-    """Ignore foreign, legacy and explicitly retained debug pods."""
+    """Identify managed pods; retention requires a separate failure record."""
     env = pod.get("env") or {}
     if (not isinstance(env, dict) or env.get("TENFERRO_CI_OWNER") != "runpod-gpu-test-v1"
             or env.get("TENFERRO_CI_REPOSITORY") != repository
-            or env.get("TENFERRO_CI_KEEP_FAILED") != "false"):
+            or env.get("TENFERRO_CI_KEEP_FAILED") not in {"false", "true"}):
         return None
     run_id, attempt = env.get("TENFERRO_CI_RUN_ID", ""), env.get("TENFERRO_CI_ATTEMPT", "")
     if not re.fullmatch(r"[1-9][0-9]*", run_id) or not re.fullmatch(r"[1-9][0-9]*", attempt):
@@ -98,6 +98,21 @@ class HostedClient:
             rows.extend(batch)
             if len(batch) < 100:
                 return rows
+            page += 1
+
+    def retained_for_debug(self, run_id: int, attempt: int, pod_id: str) -> bool:
+        # The artifact name records only candidates actually retained after
+        # startup failure. A dispatch-wide flag never exempts accepted pods.
+        prefix = f"runpod-debug-retained-{run_id}-{attempt}-"
+        page = 1
+        while True:
+            batch = self.github(f"actions/runs/{run_id}/artifacts?per_page=100&page={page}")["artifacts"]
+            for artifact in batch:
+                name = artifact["name"]
+                if name.startswith(prefix) and pod_id in name[len(prefix):].split(","):
+                    return True
+            if len(batch) < 100:
+                return False
             page += 1
 
     def delete(self, pod_id: str) -> str:

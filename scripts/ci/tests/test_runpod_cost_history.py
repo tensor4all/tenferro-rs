@@ -97,6 +97,26 @@ class CostHistoryTests(unittest.TestCase):
             self.assertEqual(result["by_gpu"]["A40"]["successful_pods"], 4)
             self.assertEqual(len(result["errors"]), 1)
 
+    def test_unknown_cost_success_makes_per_success_ratio_unknown(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            runs = [{**RUN, "id": i} for i in (1, 2)]
+            (root / "runs.json").write_text(json.dumps(runs))
+            for run in runs:
+                dest = root / str(run["id"]) / "1"
+                dest.mkdir(parents=True)
+                (dest / "run.json").write_text(json.dumps(run))
+                lines = evidence(f"pod{run['id']}")
+                if run["id"] == 2:
+                    lines = lines[:-1]  # No confirmed deletion, hence unknown cost.
+                (dest / "logs.zip").write_bytes(archive({"0_Start RunPod.txt": "\n".join(
+                    f"{time} {line}" for time, line in lines)}))
+            row = summarize(root)["by_gpu"]["A40"]
+            self.assertEqual(row["successful_pods"], 2)
+            self.assertEqual(row["unknown_cost_pods"], 1)
+            self.assertEqual(row["known_estimated_cost"], 0.01)
+            self.assertIsNone(row["known_cost_per_success"])
+
     def test_collect_fetches_each_attempt_and_only_its_small_cost_artifact(self):
         calls = []
         def api(path, pages=False):
