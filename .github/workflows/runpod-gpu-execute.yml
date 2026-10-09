@@ -429,6 +429,48 @@ jobs:
             exit 0
           fi
 
+  setup-watchdog:
+    name: Bound paid GPU setup
+    needs: start-runpod
+    if: >-
+      needs.start-runpod.result == 'success' &&
+      needs.start-runpod.outputs.pod_id != '' &&
+      needs.start-runpod.outputs.paid_path_skipped != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout trusted setup watchdog
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Bound accepted pod setup to 15 minutes
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m scripts.ci.runpod_setup_watchdog --budget-seconds 900
+      - name: Delete pod if setup watchdog could not finish
+        # Checkout/helper failures must not leave the accepted pod waiting
+        # for the independent GPU job's longer timeout.
+        if: failure()
+        timeout-minutes: 1
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
+        run: |
+          set -euo pipefail
+          status="$(curl --retry 2 --retry-delay 5 --retry-all-errors --max-time 15 \
+            -sS -o /tmp/watchdog-delete-response.json -w '%{http_code}' \
+            -X DELETE "https://rest.runpod.io/v1/pods/${POD_ID}" \
+            -H "Authorization: Bearer ${RUNPOD_API_KEY}")"
+          echo "Setup watchdog fallback DELETE HTTP status: ${status}"
+          [[ "$status" == 404 || ("$status" -ge 200 && "$status" -lt 300) ]]
+
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
     # Same-workflow job outputs are reliable, unlike the caller's inputs.

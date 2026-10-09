@@ -143,18 +143,27 @@ Before #2002 the setup steps of `run-gpu-tests` were bounded only by the
 45-minute job timeout; one artifact download took 34 minutes and another pod
 spent 25.8 minutes downloading plus 10.3 minutes restoring the CUDA runtime
 before it was cancelled without a test result. Every step before
-`Run CUDA tests from archive` now has its own `timeout-minutes` (40 minutes in
-total even if every step stalls; a normal setup takes about 2.5 minutes, and a
-single stall now costs at most 4 minutes plus one retry):
+`Run CUDA tests from archive` has its own `timeout-minutes`; the aggregate
+watchdog below is stricter than the sum of those individual limits. A normal
+setup takes about 2.5 minutes; archive downloads allow one bounded retry:
 
 - the cache restores abort a stalled segment after
-  `SEGMENT_DOWNLOAD_TIMEOUT_MINS=2` and are non-blocking, because every miss
-  already has a fallback (artifact download, pod-side install);
+  `SEGMENT_DOWNLOAD_TIMEOUT_MINS=2` and are non-blocking, because a test-archive
+  miss falls back to its immutable artifact. Runtime dependency preparation
+  and cache repair happen on the hosted prerequisite;
 - the archive artifact download is retried once with the same bound.
 
-Seeding the test archive onto the pod's persistent volume from a hosted job,
-and a hosted watchdog that deletes a pod whose test job never starts, are not
-implemented; see residual risks.
+A separate hosted setup watchdog bounds the accepted pod from its
+`lastStartedAt` to the start of `Run CUDA tests from archive` to 900 seconds.
+It retains the RunPod credential on the hosted runner, polls read-only job
+progress, and confirms deletion if setup expires or the GPU job finishes
+before reaching tests. Progress API failures do not extend the deadline;
+unreadable pod start metadata triggers deletion and a visible failure.
+A bounded inline deletion step also covers checkout/helper failures before
+the guard can finish; an already-deleted pod is accepted idempotently.
+Real test execution disarms this setup-only guard, so the complete numerical
+suite retains its existing timeouts. Normal cleanup remains mandatory and
+idempotent. Seeding the test archive onto persistent storage remains deferred.
 
 ## Observability
 
@@ -255,11 +264,12 @@ plane in `change_policy.py`, so changing them requires the GPU gate.
   dispatch input keeps rejected pods alive (billing!) so their console
   logs can be read in the RunPod dashboard when a smoke failure needs
   manual triage.
-- Step timeouts bound setup only once `run-gpu-tests` has started on the
-  accepted runner. A job that is never picked up by the online runner is still
-  bounded only by GitHub's queue timeout; a hosted watchdog holding
-  `RUNPOD_API_KEY` could delete such a pod, but it cannot be verified without a
-  paid run and is left as follow-up work, together with seeding the archive
-  onto the persistent volume.
+- The hosted setup watchdog also covers a queued GPU job, but its own hosted
+  queue can delay enforcement. The 900-second deadline is not extended by
+  that delay; deletion still requires working provider APIs and is bounded
+  by polling and request/retry time once the guard is running. Permanent
+  deletion failures remain visible and normal cleanup makes another attempt.
+  Live healthy-start and stalled-setup validation must be recorded before
+  claiming an end-to-end billing bound.
 - The gate reuse and the parent concurrency group run from the default branch,
   so they first execute live on the first RunPod run after they merge.

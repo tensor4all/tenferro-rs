@@ -10,7 +10,10 @@ if [ ! -s "$cutensor_root/lib/libcutensor.so.2" ]; then
   bash scripts/ci/install_cutensor.sh "$CUTENSOR_VERSION" "$cutensor_root"
 fi
 test -s "$cutensor_root/lib/libcutensor.so.2"
-cp -a "$TENFERRO_CI_CACHE_ROOT/cutensor-$CUTENSOR_VERSION" "$payload/opt/tenferro-ci/"
+# Only libcutensor's shared ABI is loaded by this single-GPU test suite.
+# Static archives and the independent multi-GPU/MPI providers never execute.
+mkdir -p "$payload/opt/tenferro-ci/cutensor-$CUTENSOR_VERSION/lib"
+cp -a "$cutensor_root"/lib/libcutensor.so* "$payload/opt/tenferro-ci/cutensor-$CUTENSOR_VERSION/lib/"
 python3 -m pip download --only-binary=:all: --no-deps --python-version 312 --platform manylinux_2_27_x86_64 --platform manylinux2014_x86_64 --implementation cp --abi cp312 \
   --dest "$payload/wheels" "jax-cuda12-pjrt==$JAX_CUDA12_PJRT_VERSION" \
   "nvidia-cudnn-cu12==$NVIDIA_CUDNN_CU12_VERSION" "nvidia-cuda-nvcc-cu12==$NVIDIA_CUDA_NVCC_CU12_VERSION"

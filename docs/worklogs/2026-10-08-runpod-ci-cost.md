@@ -246,3 +246,92 @@ cleanup (HTTP 204). The follow-up restores that installer before registration
 and guards its order after checksum verification. Full production validation
 remains pending this repair; no failed sample is included in the frozen
 24.24% comparison.
+
+
+## Follow-up transfer and setup controls
+
+Runtime setup accounted for 41 of 636.124217 paid seconds in the complete
+native-image A40 pilot, exceeding the predeclared 5% need threshold. The next
+transfer candidate omits only cuTENSOR static archives and its independent
+multi-GPU/MPI providers. The single-GPU shared library and symlinks remain
+unchanged; the hosted source cache is preserved. With the frozen runtime
+artifacts from run 37855580181, common compressed bytes fell from
+1,567,514,494 to 1,196,745,934. Including the selected 12.8 SDK
+(1,074,446,861 bytes), required runtime transfer is 14.0338% smaller and passes
+the predeclared 5% byte gate. This is a byte-count result, not a paid-time
+speedup; full GPU correctness validation passed in run 37861535693: all 285 CUDA
+cases, three PJRT cases, and the tutorial passed with NVRTC 12.8, and the fresh
+A40 pod was deleted. The observed 340.518493 paid seconds is a diagnostic
+sample, not a paired timing claim.
+The preserved shared library SHA-256 is
+`224d65152fe5bc5d61e00d15081d6f78b16bc6961b1650579e0a82489b9dcdbc`.
+
+The hosted setup watchdog uses a 900-second deadline from the accepted pod's
+start timestamp. It confirms deletion on deadline or setup failure, disarms
+only when the real CUDA test step starts, and leaves the mandatory cleanup
+path independent. Local tests cover stalled setup, queued/skipped jobs,
+progress outages, malformed start metadata, deletion retries/failures, and
+healthy disarm. Live validation confirmed healthy disarm in run 37861535693. A deliberately
+unassigned GPU job in run 37862165502 exercised the same guard with a shortened
+120-second budget to limit experimental spend: confirmed HTTP 204 deletion
+occurred at 120.942753 paid seconds, followed by successful mandatory cleanup.
+This demonstrates inclusion of startup and queue time in the deadline; the
+production 900-second value is covered by the workflow regression, not a
+900-second paid drill. A bounded inline failure-path DELETE also prevents a
+checkout/helper failure from leaving the accepted pod waiting for the longer
+GPU job timeout; its success, already-deleted, and rejected-response paths
+were verified locally. Hosted queue delay and permanent provider deletion
+failures remain limitations.
+
+A dependency-preloaded image was built and validated locally with the pinned
+runner, actual NVRTC 12.6/12.8 JIT header compilation, and cuTENSOR loading.
+Publication requires the shared human-only registry handoff. No image switch
+is included here: a larger cold pull can regress paid time, so promotion needs
+three complete fresh A40 baseline/candidate pairs, at least 10% median paid-time
+reduction, no paired regression, and within-arm max/min <=1.5, with the full
+numerical workload and confirmed deletion in every run.
+
+The low-priority test audit reused all three successful candidate-run logs.
+The slowest individual test had a 9.117-second median, 1.96% of median paid
+time, below the 5% need threshold. Individual test optimization is deferred;
+shared initialization/JIT cost was not isolated by that audit. No numerical
+assertions, tolerances, or workload entries are removed.
+
+
+Post-repair production validation at main `3ede60cc30e4b48fa6cef776d28c3d93aa7e48a0`
+(run 37860294000) passed all 285 CUDA cases, three PJRT cases, and the tutorial,
+with loaded NVRTC 12.8. The first RTX 2000 Ada pod registered in 76 seconds;
+cleanup confirmed HTTP 204 deletion. The measured paid window was 409.115
+seconds at $0.24/hour (estimated $0.0272743). Runtime setup was 107 seconds.
+This validates the integrated production controller and both bootstrap repairs;
+it is not a same-hardware comparison with the A40 confirmation campaign.
+
+The custom-image publication route is held locally. An alternative experiment
+uses the existing public NVIDIA CUDA 12.8.1 runtime image, reusing only files
+that match the frozen SDK byte for byte and transferring every other file.
+The assembled SDK passed real NVRTC/CubeCL JIT-header compilation locally.
+The 12.8 SDK compressed transfer is 523,422,490 bytes rather than
+1,074,446,861 bytes; the complete paid-time result below determines adoption. Both image arms use
+the same pruned common payload, test archives, and exact remaining SDK bytes.
+This experiment is restricted to the 12.8 host tier; production's existing
+12.6 floor must remain supported before any image change can be promoted.
+
+
+The public-image confirmation campaign completed all six predeclared runs in
+B,C,C,B,B,C order at controller `04e7ee4bfc20a932f947242947a52f17e41aa9ea`
+and Rust source `2605c46f45016a2472ebdf7ba75bba533bc6a5fd`, using profile `ci`,
+fresh A40 pods at $0.59/hour, and loaded NVRTC 12.8. Each run passed all 285
+CUDA cases, three PJRT cases, and the tutorial, with confirmed deletion.
+
+| Pair | Baseline run / paid seconds | Candidate run / paid seconds |
+| --- | --- | --- |
+| 1 | [37862290115](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37862290115) / 378.948154 | [37862990583](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37862990583) / 422.794449 |
+| 2 | [37864316842](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37864316842) / 449.171688 | [37863673837](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37863673837) / 409.427574 |
+| 3 | [37865003729](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37865003729) / 358.526079 | [37865568612](https://github.com/tensor4all/tenferro-benchmark/actions/runs/37865568612) / 347.383450 |
+
+Within-arm max/min remained below 1.5, so the campaign is valid. Baseline and
+candidate medians were 378.948154 and 409.427574 paid seconds: the candidate
+was 8.0432% higher and pair 1 regressed. The predeclared acceptance verdict is
+FAIL. The public image is not promoted; all six samples are retained, with no
+selective retries or exclusions. This campaign does not establish that every
+preloaded image is slower or isolate the cause of cloud timing variation.

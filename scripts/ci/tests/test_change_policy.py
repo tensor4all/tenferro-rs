@@ -75,6 +75,7 @@ class ChangePolicyTests(unittest.TestCase):
             "scripts/ci/install_cutensor.sh",
             "scripts/ci/runpod_pricing.py",
             "scripts/ci/runpod_provision.py",
+            "scripts/ci/runpod_setup_watchdog.py",
             "scripts/ci/cuda_smoke_test.py",
             "scripts/ci/gpu_gate_reuse.py",
             "scripts/ci/runpod_cost.py",
