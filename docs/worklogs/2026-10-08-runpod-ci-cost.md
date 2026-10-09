@@ -277,7 +277,10 @@ unassigned GPU job in run 37862165502 exercised the same guard with a shortened
 occurred at 120.942753 paid seconds, followed by successful mandatory cleanup.
 This demonstrates inclusion of startup and queue time in the deadline; the
 production 900-second value is covered by the workflow regression, not a
-900-second paid drill. Hosted queue delay and permanent provider deletion
+900-second paid drill. A bounded inline failure-path DELETE also prevents a
+checkout/helper failure from leaving the accepted pod waiting for the longer
+GPU job timeout; its success, already-deleted, and rejected-response paths
+were verified locally. Hosted queue delay and permanent provider deletion
 failures remain limitations.
 
 A dependency-preloaded image was built and validated locally with the pinned

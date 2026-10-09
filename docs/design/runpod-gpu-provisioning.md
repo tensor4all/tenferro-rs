@@ -159,6 +159,8 @@ It retains the RunPod credential on the hosted runner, polls read-only job
 progress, and confirms deletion if setup expires or the GPU job finishes
 before reaching tests. Progress API failures do not extend the deadline;
 unreadable pod start metadata triggers deletion and a visible failure.
+A bounded inline deletion step also covers checkout/helper failures before
+the guard can finish; an already-deleted pod is accepted idempotently.
 Real test execution disarms this setup-only guard, so the complete numerical
 suite retains its existing timeouts. Normal cleanup remains mandatory and
 idempotent. Seeding the test archive onto persistent storage remains deferred.

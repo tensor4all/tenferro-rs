@@ -133,3 +133,22 @@ class SetupWatchdogTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "lastStartedAt"):
                     main()
                 self.assertEqual(call.call_args_list[-1].args[-1], "DELETE")
+
+    def test_checkout_or_helper_failure_has_bounded_idempotent_deletion(self):
+        from pathlib import Path
+        import os
+        import subprocess
+        from scripts.ci.tests.test_runpod_cost_contracts import job, step_script
+        child = (Path(__file__).resolve().parents[3] / ".github/workflows/runpod-gpu-execute.yml").read_text()
+        step = child.split("- name: Delete pod if setup watchdog could not finish", 1)[1].split("\n  run-gpu-tests:", 1)[0]
+        self.assertIn("if: failure()", step)
+        self.assertIn("timeout-minutes: 1", step)
+        script = step_script(job(child, "setup-watchdog"), "Delete pod if setup watchdog could not finish")
+        stub = ('curl() { [[ " $* " == *" -X DELETE https://rest.runpod.io/v1/pods/fixture "* ]] '
+                '|| return 2; printf "%s" "$FIXTURE_STATUS"; }\n')
+        for status, success in (("204", True), ("404", True), ("403", False), ("503", False)):
+            with self.subTest(status=status):
+                run = subprocess.run(["bash", "-c", stub + script], capture_output=True, text=True,
+                    env={**os.environ, "FIXTURE_STATUS": status, "POD_ID": "fixture",
+                         "RUNPOD_API_KEY": "fixture-key"})
+                self.assertEqual(run.returncode == 0, success, run.stdout + run.stderr)
