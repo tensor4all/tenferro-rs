@@ -21,7 +21,7 @@ fn vector_b() -> tenferro_tensor::Tensor {
 fn add_in_session(session: &mut CpuHeldSession<'_>) -> Vec<f64> {
     let (a, b) = (vector_a(), vector_b());
     let value = session
-        .with_concrete_session(None, |view| {
+        .with_session(|view| {
             view.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
         })
         .expect("held concrete operation");
@@ -209,4 +209,109 @@ fn held_session_is_neither_send_nor_sync() {
         impl<T: ?Sized + Sync> AmbiguousIfImpl<InvalidSync> for T {}
         let _ = <CpuHeldSession<'static> as AmbiguousIfImpl<_>>::item;
     };
+}
+
+/// A host value produced under one CPU budget is usable under another without a
+/// conversion copy: the held route validates storage/readiness, not which context
+/// produced the value (`#1945` "access compatibility is not context identity").
+#[test]
+fn host_values_cross_cpu_budget_contexts_without_a_conversion_copy() {
+    let producer = CpuBackend::with_threads(1).expect("producer backend");
+    let consumer = CpuBackend::with_threads(4).expect("consumer backend");
+    let input = vector_a();
+    let pointer_before = input.as_slice::<f64>().expect("f64 payload").as_ptr();
+
+    let mut session = consumer.open_session().expect("held session");
+    let doubled = session
+        .with_session(|view| {
+            view.add_read(
+                TensorRead::from_tensor(&input),
+                TensorRead::from_tensor(&input),
+            )
+        })
+        .expect("cross-budget read");
+    assert_eq!(doubled.as_slice::<f64>().expect("f64 payload"), &[2.0]);
+    session.close().expect("affinity restores");
+
+    assert_eq!(
+        input.as_slice::<f64>().expect("f64 payload").as_ptr(),
+        pointer_before,
+        "the input storage must be borrowed, not moved or re-registered"
+    );
+    // The producing backend did not have to run for the consumer to work.
+    assert_eq!(producer.buffer_pool_len().expect("producer resources"), 0);
+}
+
+/// Child work inherits the held session's owner and its own private resources, so
+/// a scoped worker succeeds while the parent still owns the root reservation.
+///
+/// The child handle is entered on a worker of an enclosing pool, which is the
+/// placement #2044 supports: the parent's own thread keeps its execution, and the
+/// worker's session is admitted reentrant instead of parking on the parent.
+#[test]
+fn child_work_succeeds_while_the_parent_holds_the_root_reservation() {
+    let backend = backend();
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("one-worker enclosing pool"),
+    );
+    let (a, b) = (vector_a(), vector_b());
+    let mut session = backend.open_session().expect("held session");
+    let value = session.with_session(|view| {
+        let child_backend =
+            crate::with_cpu_exec_session(view, |session| session.child_execution().backend())
+                .expect("CPU native session");
+        let (a, b) = (a, b);
+        pool.install(move || {
+            let mut child_backend = child_backend;
+            child_backend
+                .with_backend_session(|child| {
+                    child.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                })
+                .expect("child entry inherits the owner")
+                .expect("child operation")
+        })
+    });
+    assert_eq!(value.as_slice::<f64>().expect("f64 payload"), &[3.0]);
+    session.close().expect("affinity restores");
+    // The parent's pool is intact and reusable after the child returned.
+    let _ = backend.buffer_pool_len().expect("parent resources");
+}
+
+/// An unrelated owner that cannot wait is rejected with a typed error instead of
+/// parking behind the held session.
+#[test]
+fn an_unrelated_non_waiting_owner_is_rejected_while_the_session_is_held() {
+    use rayon::prelude::*;
+
+    let backend = Arc::new(backend());
+    let _session = backend.open_session().expect("held session");
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("one-worker enclosing pool"),
+    );
+    let worker_backend = Arc::clone(&backend);
+    let outcome = std::thread::spawn(move || {
+        pool.install(|| {
+            (0..1usize)
+                .into_par_iter()
+                .map(|_| match worker_backend.open_session() {
+                    Ok(_) => "admitted",
+                    Err(SessionEntryError::Contended { .. }) => "contended",
+                    Err(other) => panic!("unexpected entry error: {other}"),
+                })
+                .collect::<Vec<_>>()
+        })
+    })
+    .join()
+    .expect("worker thread");
+    assert_eq!(
+        outcome,
+        vec!["contended"],
+        "a Rayon worker cannot wait for the held session's reservation"
+    );
 }

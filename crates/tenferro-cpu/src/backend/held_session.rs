@@ -25,8 +25,20 @@ use crate::provider::CpuOperationEntry;
 /// A held session's only fallible cleanup step is affinity restoration; the
 /// resource checkout, the execution-owner marker and the admission reservation
 /// all release infallibly.
+///
+/// # Examples
+///
+/// ```
+/// use std::error::Error;
+/// use tenferro_cpu::CpuHeldSessionError;
+///
+/// let error = CpuHeldSessionError::Restore {
+///     source: Box::new(std::io::Error::other("affinity restore failed")),
+/// };
+/// assert!(error.source().is_some());
+/// ```
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum HeldSessionError {
+pub enum CpuHeldSessionError {
     /// Restoring the caller's CPU affinity mask failed.
     #[error("failed to restore the caller's CPU affinity after a held session: {source}")]
     Restore {
@@ -36,12 +48,39 @@ pub(crate) enum HeldSessionError {
     },
 }
 
-/// One held root CPU session.
+/// One held root CPU session, open across calls instead of one callback.
+///
+/// [`CpuBackend::open_session`] returns it. The session owns the CPU execution
+/// admission reservation, the engine's reusable numerical resources (checked out
+/// by value, not locked for the session's lifetime), the execution-owner marker
+/// and the caller's narrowed CPU affinity mask until [`CpuHeldSession::close`] or
+/// drop. Reusing one session across a sequence of operations amortizes entry and
+/// keeps the engine's prepared-plan caches and buffer pool warm, without holding
+/// any engine lock while an operation runs.
 ///
 /// The session is `!Send + !Sync`: admission, the resource checkout, the
 /// execution-owner marker and the caller's narrowed CPU mask all belong to the
-/// opening thread, and a held session never migrates.
-pub(crate) struct CpuHeldSession<'b> {
+/// opening thread, and a held session never migrates. Dropping a session releases
+/// the same state as [`CpuHeldSession::close`], without reporting a restoration
+/// failure.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_tensor::{Tensor, TensorRead};
+///
+/// let backend = CpuBackend::with_threads(1)?;
+/// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
+/// let mut session = backend.open_session()?;
+/// let y = session.with_session(|view| {
+///     view.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+/// })?;
+/// assert_eq!(y.as_slice::<f64>()?, &[2.0, 6.0]);
+/// session.close()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct CpuHeldSession<'b> {
     state: HeldSessionState<'b>,
 }
 
@@ -80,10 +119,59 @@ impl CpuBackend {
     /// [`SessionEntryError::ResourcePoisoned`] for poisoned arbiter state and
     /// [`SessionEntryError::Executor`] when the caller's CPU mask cannot be
     /// narrowed for the session.
-    // Exercised by this module's tests and by `run_backend_session_cached`
-    // indirectly; U2-concrete is what exposes the held entry publicly.
-    #[allow(dead_code)]
-    pub(crate) fn open_session(&self) -> Result<CpuHeldSession<'_>, SessionEntryError> {
+    /// Open a held CPU session on this backend.
+    ///
+    /// The session owns the CPU execution admission reservation and the engine's
+    /// reusable resources until it is closed, so consecutive operations reuse the
+    /// same warm plan caches, buffer pool and entered execution instead of paying
+    /// one session entry each. No engine lock is held while an operation runs.
+    ///
+    /// Open one session around a related batch of operations and close it with
+    /// [`CpuHeldSession::close`]. Use the scoped
+    /// [`BackendSessionHost::with_backend_session`](tenferro_tensor::BackendSessionHost::with_backend_session)
+    /// instead when the work is a single callback, or when it must run inside a
+    /// shared execution scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let backend = CpuBackend::with_threads(2)?;
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let mut session = backend.open_session()?;
+    /// // One entry, two operations, one warm buffer pool and plan cache.
+    /// let doubled = session.with_session(|view| {
+    ///     view.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+    /// })?;
+    /// let quadrupled = session.with_session(|view| {
+    ///     view.add_read(
+    ///         TensorRead::from_tensor(&doubled),
+    ///         TensorRead::from_tensor(&doubled),
+    ///     )
+    /// })?;
+    /// assert_eq!(quadrupled.as_slice::<f64>()?, &[4.0, 8.0]);
+    /// session.close()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionEntryError::Reentered`] when a CPU execution is already
+    /// active on this thread, when an execution scope is open, or when this handle
+    /// is a child execution handle. Returns [`SessionEntryError::Contended`] when
+    /// another held session already owns this engine's resources, and
+    /// [`SessionEntryError::ResourcePoisoned`] for poisoned admission state.
+    /// Returns [`SessionEntryError::Executor`] when the caller's CPU mask cannot be
+    /// narrowed for the session.
+    ///
+    /// # Panics
+    ///
+    /// Never. A session that cannot be opened reports a typed error, and a session
+    /// that cannot restore the caller's CPU mask reports
+    /// [`CpuHeldSessionError`] from [`CpuHeldSession::close`].
+    pub fn open_session(&self) -> Result<CpuHeldSession<'_>, SessionEntryError> {
         match current_cpu_execution() {
             CpuThreadExecution::Idle => {}
             CpuThreadExecution::SharedScope | CpuThreadExecution::Active => {
@@ -141,12 +229,51 @@ impl CpuBackend {
 impl CpuHeldSession<'_> {
     /// Run one concrete operation in this held session.
     ///
-    /// Builds the operation view inside this method: the engine's caches and
-    /// buffer pool are borrowed from the session's own checkout, wrapped in the
-    /// same buffer-pool loan the scoped entry uses, and dropped before returning.
-    /// `cache` lets a caller supply its own prepared-plan cache exactly as
+    /// The callback receives the session's concrete execution surface — the same
+    /// `BackendSession` the scoped entry hands out — so every operation that takes
+    /// a session (primitives, indexing, structural, reductions, einsum, linalg,
+    /// borrowed reads and caller-provided output buffers) runs in this held
+    /// session without opening another one. Build one short-lived view per
+    /// operation: the view borrows the session's own checked-out resources and is
+    /// dropped before this method returns, so no lock or cache borrow outlives the
+    /// callback.
+    ///
+    /// Nothing in the view reaches `tenferro-ad`: a plain operation creates no
+    /// eager value, trace node or gradient slot and takes no eager owner lock.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let backend = CpuBackend::with_threads(1)?;
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let mut session = backend.open_session()?;
+    /// // Two operations reuse one session entry.
+    /// let doubled = session.with_session(|view| {
+    ///     view.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+    /// })?;
+    /// let quadrupled = session.with_session(|view| {
+    ///     view.add_read(
+    ///         TensorRead::from_tensor(&doubled),
+    ///         TensorRead::from_tensor(&doubled),
+    ///     )
+    /// })?;
+    /// assert_eq!(quadrupled.as_slice::<f64>()?, &[4.0, 8.0]);
+    /// session.close()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R {
+        self.with_session_cached(None, f)
+    }
+
+    /// Run one concrete operation with a caller-supplied prepared-plan cache.
+    ///
+    /// Same as [`Self::with_session`], except that `cache` replaces the engine's
+    /// GEMM analysis cache for this callback, exactly as
     /// [`super::BackendSessionHost::with_backend_session_cached`] does.
-    pub(crate) fn with_concrete_session<R>(
+    pub(crate) fn with_session_cached<R>(
         &mut self,
         cache: Option<&mut GemmAnalysisCache>,
         f: impl FnOnce(&mut dyn BackendSession) -> R,
@@ -171,12 +298,25 @@ impl CpuHeldSession<'_> {
     /// reported instead of only being logged. Dropping a session instead runs the
     /// same order best-effort.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::with_threads(1)?;
+    /// let session = backend.open_session()?;
+    /// session.close()?;
+    /// // The reservation is released: the next entry is admitted immediately.
+    /// let _again = backend.open_session()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
     /// # Errors
     ///
-    /// Returns [`HeldSessionError::Restore`] when the caller's CPU affinity mask
-    /// cannot be restored. The resources, the execution-owner marker and the
+    /// Returns [`CpuHeldSessionError::Restore`] when the caller's CPU affinity
+    /// mask cannot be restored. The resources, the execution-owner marker and the
     /// admission reservation are released either way.
-    pub(crate) fn close(self) -> Result<(), HeldSessionError> {
+    pub fn close(self) -> Result<(), CpuHeldSessionError> {
         let HeldSessionState {
             backend: _,
             checkout,
@@ -188,7 +328,7 @@ impl CpuHeldSession<'_> {
         drop(owner);
         let restored = affinity.finish();
         drop(permit);
-        restored.map_err(|source| HeldSessionError::Restore {
+        restored.map_err(|source| CpuHeldSessionError::Restore {
             source: Box::new(source),
         })
     }

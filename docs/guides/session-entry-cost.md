@@ -5,6 +5,31 @@ preserves its pool and caches; reusing one entered session additionally
 amortizes the cost of reaching its workers. These are different optimizations.
 A session is an execution scope, not merely a tensor wrapper.
 
+## Holding a session across calls
+
+`CpuBackend::open_session` opens a session that stays open across calls instead of
+being scoped to one callback. It owns the CPU admission reservation and the engine's
+reusable plan caches, buffer pool and entered execution, so a sequence of operations
+pays one entry instead of one per operation:
+
+```text
+let mut session = backend.open_session()?;
+for work in batch {
+    session.with_session(|view| op(view, work))?;
+}
+session.close()?;
+```
+
+The session is `!Send + !Sync`, there is one root session per engine, and it is closed
+on the thread that opened it. Reentry from inside a `with_session` callback is rejected
+with a typed error rather than waited for. Use
+`BackendSessionHost::with_backend_session` when the work is a single callback, or when
+it must run inside a shared execution scope; that route is unchanged.
+
+`crates/tenferro-cpu/benches/held_session_dispatch.rs` compares the two routes on a
+one-worker, CPU-pinned backend, and `docs/design/held-cpu-session-1945-u2-concrete.md`
+records the numbers with their harness and hardware.
+
 ## What costs time?
 
 For the managed CPU path inspected at tenferro revision
