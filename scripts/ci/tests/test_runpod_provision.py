@@ -81,6 +81,16 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(deleted, ["old-pod"])
         self.assertEqual(create.call_count, 1)
 
+    def test_debug_retention_never_keeps_obsolete_startup(self) -> None:
+        reasons = iter([None, "PR closed"])
+        deleted = []
+        with self.assertRaises(ObsoleteRunError):
+            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _: "jit",
+                      create=lambda req, jit: created("debug-pod", "A40", req.tier_name),
+                      runner_online=lambda _: False, pod_status=lambda _: live(), keep_failed_pods=True,
+                      delete_pod=lambda pod: (deleted.append(pod), True)[1], obsolete=lambda: next(reasons))
+        self.assertEqual(deleted, ["debug-pod"])
+
     def test_obsolete_before_startup_spends_nothing(self) -> None:
         create = mock.Mock()
         with self.assertRaisesRegex(ObsoleteRunError, "Not provisioning"):

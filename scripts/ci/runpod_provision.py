@@ -195,8 +195,8 @@ def provision(
                 f"{kept_suffix()}"
             )
 
-    def reject_and_delete(pod_id: str, description: str) -> None:
-        if keep_failed_pods:
+    def reject_and_delete(pod_id: str, description: str, *, allow_debug_retention: bool = True) -> None:
+        if keep_failed_pods and allow_debug_retention:
             kept_pods.append(pod_id)
             print(
                 f"DEBUG MODE: keeping failed pod {pod_id} ({description}) "
@@ -263,7 +263,9 @@ def provision(
         runtime_seen = False
         while True:
             if reason := obsolete():
-                reject_and_delete(result.pod_id, reason)
+                # Debug retention is for diagnosing startup failures. A moved
+                # PR has no failed startup to inspect and must stop billing.
+                reject_and_delete(result.pod_id, reason, allow_debug_retention=False)
                 raise ObsoleteRunError(f"Stopped obsolete paid startup: {reason}")
             # Check the pod BEFORE trusting the runner registry: the two
             # signals are independently eventually consistent, and a stale

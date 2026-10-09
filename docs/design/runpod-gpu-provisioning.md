@@ -171,6 +171,8 @@ existing deadlines remain effective. A base-branch update alone does not abort
 an already-running immutable test. Manual revision validations (`pr_number=0`)
 retain their pinned workload. The complete numerical suite keeps its existing
 timeouts, and normal cleanup remains mandatory and idempotent.
+Debug retention applies to genuine startup failures; a pod made obsolete by
+PR closure/head movement is deleted even when `keep_failed_pods` was requested.
 
 ## Orphan recovery
 
