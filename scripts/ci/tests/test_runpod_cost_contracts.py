@@ -366,7 +366,7 @@ class TelemetryTests(unittest.TestCase):
         permissions = re.search(r"    permissions:\n((?:      [^\n]+\n)+)", caller)
         self.assertIsNotNone(permissions, "GPU caller must grant cleanup's actions: read")
         scopes = dict(re.findall(r"      (\S+): (\S+)", permissions.group(1)))
-        self.assertEqual(scopes, {"checks": "read", "contents": "read", "actions": "read"})
+        self.assertEqual(scopes, {"checks": "read", "contents": "read", "actions": "write"})
         self.assertNotIn("actions: write", job(text(CHILD), "run-gpu-tests"))
 
     def test_stage_report_runs_only_after_confirmed_deletion(self) -> None:

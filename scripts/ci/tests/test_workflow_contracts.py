@@ -761,9 +761,15 @@ class WorkflowContractTests(unittest.TestCase):
         permissions = top[top.index("permissions:") :]
         permissions = permissions[: permissions.index("\n\n")]
         self.assertNotIn("write", permissions)
-        # Extra Actions scope stays read-only for artifact lookup and hosted cleanup.
-        for match in re.finditer(r"(?m)^      actions: (\S+)$", text):
-            self.assertEqual(match.group(1), "read")
+        # Only the trusted hosted lifecycle watcher and its caller ceiling may
+        # cancel a workflow after deleting its pod. PR builds/pod jobs remain
+        # readers, including when inherited through the reusable workflow.
+        for match in re.finditer(r"^  ([a-z][a-z0-9-]*):\n(.*?)(?=^  [a-z][a-z0-9-]*:|\Z)",
+                                 text[text.index("jobs:"):], re.MULTILINE | re.DOTALL):
+            for scope in re.findall(r"(?m)^      actions: (\S+)", match[2]):
+                self.assertEqual(scope, "write" if match[1] in {"gpu-execution", "setup-watchdog"} else "read")
+        child = (ROOT / ".github/workflows/runpod-gpu-execute.yml").read_text()
+        self.assertNotIn("write", child.split("\npermissions:\n")[1].split("\nenv:\n")[0])
 
     def test_cache_publish_is_default_branch_only(self) -> None:
         text = read(".github/workflows/ci-cache-publish.yml")

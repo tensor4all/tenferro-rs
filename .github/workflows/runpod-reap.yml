@@ -1,0 +1,50 @@
+name: Reclaim orphaned RunPod CI pods
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: Delete eligible orphaned CI pods (otherwise report only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runpod-orphan-reaper
+  cancel-in-progress: false
+
+jobs:
+  reclaim:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write # Cancel an expired owning run only after confirmed pod deletion.
+    steps:
+      - name: Checkout trusted lifecycle helpers
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Reclaim orphaned CI pods
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          EXECUTE: ${{ github.event_name == 'schedule' || inputs.execute }}
+        run: |
+          args=()
+          if [ "$EXECUTE" = true ]; then args+=(--execute); fi
+          python3 -m scripts.ci.runpod_reap "${args[@]}" --output /tmp/runpod-reap.json
+      - name: Save reclamation decisions
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runpod-reap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/runpod-reap.json
+          if-no-files-found: warn
+          retention-days: 30

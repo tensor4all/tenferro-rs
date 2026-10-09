@@ -190,6 +190,14 @@ conclusion. Reporting and artifact upload are bounded, nonblocking, and run
 after deletion so they cannot extend this pod's paid lifetime. Rejected
 provisioning attempts and storage charges are separate from this estimate.
 
+The hosted lifecycle watcher retains the setup deadline through CUDA test start
+and monitors PR obsolescence through GPU job completion. It deletes the pod
+before cancelling a moved-head/closed PR run; immutable manual validations keep
+running. An independent trusted-main reaper recovers explicitly tagged CI pods
+after completed/superseded workflows or the two-hour lifetime backstop, while
+respecting debug retention. See [RunPod lifecycle and orphan recovery](runpod-gpu-provisioning.md#orphan-recovery)
+for ownership, API-failure behavior and read-only cost-history collection.
+
 The CUDA/PJRT test archive key is content-addressed across source, manifests,
 tests, lockfile, workflow, and RunPod configuration. It excludes branch, ref,
 and commit identity, allowing equivalent automatic and recovery runs to reuse
