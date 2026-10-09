@@ -8,7 +8,9 @@ ownership/drop/lock proof and the internal prototype.
 
 Delivered here: the public entry and session surface, the doctested usage contracts, the
 paired dispatch/allocation measurements, and the access-compatibility and
-execution-routing checks. **Not** delivered here: the CPU phase/pool lease, and the
+execution-routing checks. The CPU phase/pool lease is delivered separately in
+[held-cpu-session-1945-phase-lease.md](./held-cpu-session-1945-phase-lease.md). **Not**
+delivered here: the
 concrete CPU routes a *downstream* consumer builds on top (tensor4all-rs #859 B1).
 
 ## 1. Public surface
@@ -140,7 +142,7 @@ The part that *is* observable at this layer is measured instead:
 
 | Item | Owner |
 | --- | --- |
-| CPU phase/pool lease (park root execution, drive joined worker children under the owner's budget, cancellation and join) | U2-concrete, next step |
+| CPU phase/pool lease (park root execution, drive joined worker children under the owner's budget, cancellation and join) | delivered, see [held-cpu-session-1945-phase-lease.md](./held-cpu-session-1945-phase-lease.md) |
 | Instrumented eager/AD counters on the concrete path | upstream of the downstream B1 gate; the crate boundary above is the current proof |
 | Sub-microsecond small-GEMM fixed cost | #1904 / #2033-#2038 (in-session dispatch path) |
 | Downstream explicit/concrete tensorbackend frontend and its bridges | tensor4all-rs #859 B1 |

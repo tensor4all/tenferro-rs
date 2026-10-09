@@ -72,6 +72,14 @@ One lower-library numerical call may install the selected pool for the duration
 of that call. Strided-rs work and FFT lane fan-out use the same bounded,
 operation-local exception. tenferro never installs the caller's continuation.
 
+One caller-owned exception exists, and it is explicit rather than implicit: a
+[held session's phase lease](./held-cpu-session-1945-phase-lease.md) runs the
+caller's own lane callbacks on the workers of the context's pool. A lane is the
+coordinator of the numerical calls it makes and reaches tenferro through an
+owner-inheriting child session, so ordinary session entry stays admission-only
+and lower-library lane ownership is unchanged. A phase never creates a pool, and
+vendor threading remains outside tenferro's budget.
+
 Vendor BLAS/LAPACK is called from the coordinator thread. tenferro guarantees
 the calling thread's mask and nothing about the vendor's own worker team,
 thread count, or placement; `threads(1)` on a tenferro backend does not imply a

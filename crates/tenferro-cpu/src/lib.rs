@@ -244,7 +244,9 @@ pub use affinity::{
     available_parallelism, process_cpu_affinity, process_cpu_affinity_count, CpuAffinityError,
 };
 pub use backend::execution_scope::{current_cpu_execution, CpuThreadExecution};
-pub use backend::held_session::{CpuHeldSession, CpuHeldSessionError};
+pub use backend::held_session::{
+    CpuHeldSession, CpuHeldSessionError, CpuPhase, CpuPhaseError, PhaseLane, PhaseRunError,
+};
 pub use backend::{CpuBackend, CpuBackendError, CpuRuntimeIdentity};
 
 pub use buffer_pool::BufferPoolStats;

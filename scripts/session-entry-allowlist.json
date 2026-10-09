@@ -44,7 +44,8 @@
     "crates/tenferro-tensor/src/backend.rs::BackendSessionHost::with_backend_session_cached": "default trait method: the cached host variant delegates to with_backend_session",
     "ext/bf16-proof/src/einsum.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet",
     "ext/sparse/src/extension.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet",
-    "ext/tropical/src/extension.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet"
+    "ext/tropical/src/extension.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet",
+    "crates/tenferro-cpu/src/backend/held_session/phase.rs::run_worker_lane": "CPU phase lease (#1945 U2-concrete): one worker lane of a held session opens exactly one owner-inheriting child session for the lane, then runs the downstream callback's work items through it; the root session keeps its own reservation and checkout"
   },
   "default_backend_session": {},
   "eager extension context entry": {
