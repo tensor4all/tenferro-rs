@@ -904,38 +904,28 @@ jobs:
       actions: read
 
     steps:
-      # Telemetry only: a failed checkout or report must never block the
-      # deletion below.
-      - name: Checkout trusted RunPod cost report
+      # Capture the record before DELETE makes it unavailable. No checkout
+      # or report belongs on the paid path; this best-effort read has a hard
+      # five-second bound and cannot prevent the mandatory deletion.
+      - name: Read pod record for cost reporting
         if: needs.start-runpod.outputs.pod_id != '' && needs.start-runpod.outputs.pod_id != 'null'
         continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/checkout@v5
-
-      - name: Report RunPod paid time and estimated cost
-        # Estimated paid cost observability (#1404, #2002): read the hourly
-        # price and start time from the pod record before deleting it.
-        if: needs.start-runpod.outputs.pod_id != '' && needs.start-runpod.outputs.pod_id != 'null'
-        continue-on-error: true
-        timeout-minutes: 2
+        timeout-minutes: 1
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
         run: |
           set -euo pipefail
-          pod_file=/tmp/runpod-pod.json
           get_status="$(
-            curl -sS \
+            curl -sS --connect-timeout 2 --max-time 5 \
               --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
               --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              --output "$pod_file" \
+              --output /tmp/runpod-pod.json \
               --write-out "%{http_code}"
           )" || get_status=000
           if [ "$get_status" -lt 200 ] || [ "$get_status" -ge 300 ]; then
             echo "::warning::RunPod pod record unavailable (HTTP ${get_status}); no cost estimate."
-            exit 0
           fi
-          python3 scripts/ci/runpod_cost.py "$pod_file"
 
       - name: Delete RunPod pod
         id: delete_pod
@@ -976,6 +966,12 @@ jobs:
 
           echo "deleted_at=$(date --utc +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
           echo "Deleted RunPod pod: ${POD_ID}"
+
+      - name: Checkout trusted RunPod cost report
+        if: always() && steps.delete_pod.outputs.deleted_at != ''
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/checkout@v5
 
       - name: Report paid GPU CI cost by stage
         if: always() && steps.delete_pod.outputs.deleted_at != ''

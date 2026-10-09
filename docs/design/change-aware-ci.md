@@ -269,3 +269,13 @@ PJRT package download occurs on the accepted GPU. Preparation failures block
 allocation and fail the required GPU gate. SDK and cuTENSOR paid-side cache
 hits are reported as unknown because those dependencies are now host-staged;
 the test archive's restore-only cache remains unchanged.
+
+## GPU cleanup and cost reporting
+
+After GPU execution, the hosted cleanup job reads the soon-to-be-deleted Pod
+record with a two-second connection timeout and a five-second total timeout.
+A missing record or failed read does not prevent deletion. Mandatory DELETE
+runs before any checkout or cost calculation; only confirmed deletion permits
+the reporting checkout and stage-cost artifact. The stage report uses the
+recorded deletion timestamp, so time spent reporting is not counted as paid
+GPU time. Reporting remains best effort and does not change the GPU result.

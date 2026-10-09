@@ -308,23 +308,54 @@ class TelemetryTests(unittest.TestCase):
 
     def test_cost_report_never_blocks_deletion(self) -> None:
         cleanup = job(text(CHILD), "cleanup-runpod")
-        blocks = steps(cleanup)
-        names = [block.splitlines()[0] for block in blocks]
-        self.assertEqual(
-            names,
-            [
-                "name: Checkout trusted RunPod cost report",
-                "name: Report RunPod paid time and estimated cost",
-                "name: Delete RunPod pod",
-                "name: Report paid GPU CI cost by stage",
-                "name: Save paid GPU CI cost record",
-            ],
-        )
-        for block in blocks[:2]:
-            self.assertIn("continue-on-error: true", block)
-        self.assertIn("python3 scripts/ci/runpod_cost.py", blocks[1])
-        self.assertNotIn("continue-on-error", blocks[2])
-        self.assertNotIn("runpod_cost", blocks[2])
+        deletion = cleanup.index("name: Delete RunPod pod")
+        self.assertLess(deletion, cleanup.index("name: Checkout trusted RunPod cost report"))
+        self.assertLess(deletion, cleanup.index("name: Report paid GPU CI cost by stage"))
+        capture = step(text(CHILD), "Read pod record for cost reporting")
+        self.assertIn("continue-on-error: true", capture)
+        self.assertIn("--connect-timeout 2 --max-time 5", capture)
+        self.assertNotIn("uses:", cleanup[:deletion])
+        self.assertNotIn("python3", cleanup[:deletion])
+        self.assertNotIn("continue-on-error", step(text(CHILD), "Delete RunPod pod"))
+        checkout = step(text(CHILD), "Checkout trusted RunPod cost report")
+        self.assertIn("steps.delete_pod.outputs.deleted_at != ''", checkout)
+        self.assertIn("continue-on-error: true", checkout)
+
+    def test_failed_cost_record_read_still_deletes_pod(self) -> None:
+        script = step_script(text(CHILD), "Read pod record for cost reporting")
+        script += "\n" + step_script(text(CHILD), "Delete RunPod pod")
+        for get_result in ("success", "timeout", "500"):
+            with self.subTest(get_result=get_result), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "output"
+                calls = Path(directory) / "calls"
+                stub = r"""
+                curl() {
+                  case "$*" in
+                    *--request\ DELETE*)
+                      echo DELETE >> "$CALLS"
+                      echo '{}' > "$RESPONSE_FILE"
+                      printf 204 ;;
+                    *)
+                      echo GET >> "$CALLS"
+                      case "$*" in *--connect-timeout\ 2\ --max-time\ 5*) ;; *) return 99 ;; esac
+                      case "$GET_RESULT" in
+                        success) printf 200 ;;
+                        timeout) return 28 ;;
+                        *) printf '%s' "$GET_RESULT" ;;
+                      esac ;;
+                  esac
+                }
+                jq() { cat "$RESPONSE_FILE"; }
+                """
+                env = dict(os.environ, RUNPOD_API_KEY="stub", POD_ID="test-pod",
+                           GITHUB_OUTPUT=str(output), CALLS=str(calls),
+                           RESPONSE_FILE=f"{directory}/runpod-delete-response.json", GET_RESULT=get_result)
+                result = subprocess.run(["bash", "-c", stub + script.replace("/tmp/", f"{directory}/")],
+                                        env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(calls.read_text().splitlines(), ["GET", "DELETE"])
+                self.assertIn("RunPod delete HTTP status: 204", result.stdout)
+                self.assertIn("deleted_at=", output.read_text())
 
     def test_called_cleanup_read_permissions_are_granted_by_caller(self) -> None:
         caller = job(text(PARENT), "gpu-execution")
