@@ -372,7 +372,7 @@ Still open, and not claimed here:
   foreign-domain and pending provider inputs rejected before shortcuts).
 - N-ary scratch poison after a panic is reported, not promised usable
   (`contraction/workspaces.rs`).
-- The held entry is crate-private; U2-concrete owns exposing it and the phase/pool lease.
+- The held entry is crate-private here; U2-concrete exposes it, and the phase/pool lease is delivered with it (see [held-cpu-session-1945-phase-lease.md](./held-cpu-session-1945-phase-lease.md)).
 - The session-entry matcher extension of [§6](#6-session-entry-audit).
 
 1. Compile-fail: the session cannot cross threads or be moved into a `'static` context;
@@ -414,7 +414,8 @@ Still open, and not claimed here:
 ## 10. Not decided here
 
 - Lending the pool to an outer phase scheduler from a held session (#1945 "CPU pool
-  lending") — a separate scope API, owned by U2-concrete.
+  lending") — delivered in U2-concrete, see
+  [held-cpu-session-1945-phase-lease.md](./held-cpu-session-1945-phase-lease.md).
 - Held **eager** sessions: #2044 leaves parent eager-owner re-entry invalid; U2-AD owns
   that proof.
 - Held CUDA sessions and session-bound submission (U3); the transfer provider/event seam

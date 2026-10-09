@@ -7,6 +7,8 @@
 //! admits a second root execution, and never leaves a peer stranded.
 
 use std::fmt;
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tenferro_tensor::{BackendSession, BackendSessionHost, SessionEntryError};
@@ -31,8 +33,12 @@ use crate::provider::CpuOperationEntry;
 /// ```
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CpuPhaseError {
-    /// The phase was opened from a worker of the pool it would broadcast to, where
-    /// the blocking broadcast can never be driven.
+    /// The phase was opened from a worker of the pool it would broadcast to.
+    ///
+    /// This is the phase's driver-placement policy, not a limitation of the
+    /// broadcast itself: a target-pool driver would run the inline lane on a worker
+    /// that is not the session's opening thread, and would have to re-enter a child
+    /// session on a thread that already carries the root's execution.
     #[error(
         "{backend}: a CPU phase cannot be driven from a worker of its own pool; open it on a \
          thread outside that pool"
@@ -59,33 +65,17 @@ pub enum CpuPhaseError {
 /// assert!(error.to_string().contains("CpuBackend"));
 /// assert!(std::error::Error::source(&error).is_some());
 /// ```
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PhaseRunError<E> {
     /// A lane callback returned an error. Every other lane was joined first, and
     /// one lane error is reported rather than a chronologically first one.
-    Lane(E),
+    #[error("CPU phase lane failed: {0}")]
+    Lane(#[source] E),
     /// A lane could not enter its child session or could not clean up. This
     /// replaces a lane error, exactly as a restoration failure replaces a callback
     /// value on the scoped entry.
-    Session(SessionEntryError),
-}
-
-impl<E: fmt::Display> fmt::Display for PhaseRunError<E> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Lane(error) => write!(formatter, "CPU phase lane failed: {error}"),
-            Self::Session(error) => write!(formatter, "CPU phase session failed: {error}"),
-        }
-    }
-}
-
-impl<E: std::error::Error + 'static> std::error::Error for PhaseRunError<E> {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Lane(error) => Some(error),
-            Self::Session(error) => Some(error),
-        }
-    }
+    #[error("CPU phase session failed: {0}")]
+    Session(#[source] SessionEntryError),
 }
 
 /// One lane of a running phase.
@@ -94,9 +84,41 @@ impl<E: std::error::Error + 'static> std::error::Error for PhaseRunError<E> {
 /// that stays open for the whole lane, so its scratch and prepared plans are reused
 /// across every work item the callback pulls. The lane exposes the operation
 /// surface only: it cannot open a root session or another phase.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_tensor::{Tensor, TensorRead};
+///
+/// let backend = CpuBackend::with_threads(1)?;
+/// let x = Tensor::from_vec_col_major(vec![1], vec![7.0_f64])?;
+/// let mut session = backend.open_session()?;
+/// session.phase(|phase| -> Result<(), Box<dyn std::error::Error>> {
+///     phase.run(|_index, lane| -> Result<(), tenferro_tensor::Error> {
+///         let value = lane
+///             .session()
+///             .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))?;
+///         assert_eq!(value.as_slice::<f64>()?, &[14.0]);
+///         Ok(())
+///     })?;
+///     Ok(())
+/// })?;
+/// session.close()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct PhaseLane<'lane> {
     session: &'lane mut dyn BackendSession,
     cancel: &'lane AtomicBool,
+}
+
+impl fmt::Debug for PhaseLane<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PhaseLane")
+            .field("cancelled", &self.cancelled())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PhaseLane<'_> {
@@ -174,6 +196,21 @@ pub struct CpuPhase<'h> {
     child: CpuBackend,
     pool: Option<&'h rayon::ThreadPool>,
     lanes: usize,
+    /// The inline lane runs under the caller-affinity guard and the owner marker the
+    /// root session installed on its **opening thread**. Moving a phase to another
+    /// thread would run that lane outside the selected CPU set, so the lease is
+    /// bound to the thread that opened it.
+    _opening_thread: PhantomData<Rc<()>>,
+}
+
+impl fmt::Debug for CpuPhase<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CpuPhase")
+            .field("lanes", &self.lanes)
+            .field("pooled", &self.pool.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl CpuPhase<'_> {
@@ -288,48 +325,37 @@ impl CpuPhase<'_> {
         &mut self,
         lane: &(impl Fn(usize, &mut PhaseLane<'_>) -> Result<(), E> + Sync),
     ) -> Result<(), PhaseRunError<E>> {
+        // A single lane has no peer that could set the stop signal, so it is not
+        // checked here; the flag stays part of the common lane surface and is always
+        // false for this lane.
         let cancel = AtomicBool::new(false);
-        let outcome = {
-            let _guard = CancelOnUnwind { cancel: &cancel };
-            if cancel.load(Ordering::Relaxed) {
-                None
-            } else {
-                // The pool has no inner execution region here, so this lane runs
-                // inline under the admission the root session already holds. It gets
-                // the same private scratch and panic isolation a worker lane gets,
-                // without a second admission and without relaxing same-thread child
-                // rejection.
-                let mut resources = EngineResources::for_child_execution(self.buffer_limit());
-                let entry = CpuOperationEntry::new(self.backend.engine.domain(), self.permit);
-                let owner = self.owner;
-                let backend = self.backend;
-                match entry.enter_owned(|context| {
-                    crate::backend::with_operation_session(
-                        backend,
-                        entry,
-                        Some(context),
-                        &mut resources,
-                        None,
-                        owner,
-                        |session| {
-                            if cancel.load(Ordering::Relaxed) {
-                                return Ok(());
-                            }
-                            let mut lane_handle = PhaseLane {
-                                session,
-                                cancel: &cancel,
-                            };
-                            lane(0, &mut lane_handle)
-                        },
-                    )
-                }) {
-                    Ok(()) => None,
-                    Err(error) => {
-                        cancel.store(true, Ordering::Relaxed);
-                        Some(PhaseRunError::Lane(error))
-                    }
-                }
-            }
+        // The pool has no inner execution region here, so this lane runs inline under
+        // the admission the root session already holds. It gets the same private
+        // scratch and panic isolation a worker lane gets, without a second admission
+        // and without relaxing same-thread child rejection.
+        let mut resources = EngineResources::for_child_execution(self.buffer_limit());
+        let entry = CpuOperationEntry::new(self.backend.engine.domain(), self.permit);
+        let owner = self.owner;
+        let backend = self.backend;
+        let outcome = match entry.enter_owned(|context| {
+            crate::backend::with_operation_session(
+                backend,
+                entry,
+                Some(context),
+                &mut resources,
+                None,
+                owner,
+                |session| {
+                    let mut lane_handle = PhaseLane {
+                        session,
+                        cancel: &cancel,
+                    };
+                    lane(0, &mut lane_handle)
+                },
+            )
+        }) {
+            Ok(()) => None,
+            Err(error) => Some(PhaseRunError::Lane(error)),
         };
         reduce_outcomes([outcome])
     }
@@ -363,13 +389,25 @@ fn run_worker_lane<E>(
     }
     let mut child = child.clone();
     let outcome = {
-        let _guard = CancelOnUnwind { cancel };
+        // Also arms cancellation while a worker unwinds, so peers stop pulling work
+        // even when this lane fails by panicking.
+        let _unwind = CancelOnUnwind { cancel };
         child.with_backend_session(|session| {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());
             }
             let mut lane_handle = PhaseLane { session, cancel };
-            lane(index, &mut lane_handle)
+            let outcome = {
+                // Signal a callback failure *before* the child session is cleaned up,
+                // so peers stop pulling work during the cleanup window rather than
+                // after it.
+                let _callback_unwind = CancelOnUnwind { cancel };
+                lane(index, &mut lane_handle)
+            };
+            if outcome.is_err() {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            outcome
         })
     };
     fold_lane_outcome(outcome, cancel)
@@ -494,6 +532,7 @@ impl super::CpuHeldSession<'_> {
             child: backend.with_inherited_owner(owner),
             pool,
             lanes: budget.max(1),
+            _opening_thread: PhantomData,
         };
         Ok(f(&mut phase))
     }

@@ -489,11 +489,14 @@ Audit hints:
 - Use `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` from the
   configured `CpuContext` degree for multi-thread contexts. Do not derive the
   policy from an ambient Rayon pool during plan or session setup.
-- tenferro does not own an outer fan-out: lane selection for batched and
-  grouped work belongs to cpueinsum, tlinalg, and tlinalg-blas, which receive
-  one parallelism token (the selected pool with a budget, or `Sequential`) and
-  never call back into tenferro from a lane. No placement promise is made for
-  threads a vendor creates.
+- tenferro does not own an outer fan-out for ordinary numerical work: lane
+  selection for batched and grouped work belongs to cpueinsum, tlinalg, and
+  tlinalg-blas, which receive one parallelism token (the selected pool with a
+  budget, or `Sequential`) and never call back into tenferro from a lane. No
+  placement promise is made for threads a vendor creates. The one deliberate
+  exception is a held session's phase lease, where caller-supplied lane
+  callbacks run on the context's pool workers by explicit request; each lane
+  coordinates its own numerical calls through an owner-inheriting child session.
 - Vendor BLAS/LAPACK is called from the coordinator thread; tenferro bounds
   only the token it passes to its own lower libraries.
 - Tensor-sized strided CPU kernels that are not provider-owned also run inside

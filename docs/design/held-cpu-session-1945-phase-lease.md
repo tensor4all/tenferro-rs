@@ -32,7 +32,7 @@ impl CpuHeldSession<'_> {
         -> Result<R, CpuPhaseError>;
 }
 
-impl CpuPhase<'_, '_> {
+impl CpuPhase<'_> {
     /// Lanes this phase will drive: the context's thread budget, at least one.
     pub fn lanes(&self) -> usize;
 
@@ -44,7 +44,6 @@ impl CpuPhase<'_, '_> {
 }
 
 pub struct PhaseLane<'lane> {
-    index: usize,
     /// The worker-local execution surface. One child session stays open for the
     /// whole lane, so its scratch and plan caches are reused across work items.
     session: &'lane mut dyn BackendSession,
@@ -76,7 +75,7 @@ Two shape decisions that the pre-implementation review forced, and that are deli
 | No second pool | Lanes run through the context's own pool via `ThreadPool::broadcast`; the phase never creates a pool. |
 | Driver outside the target pool | The phase is rejected with a typed error when the calling thread is a worker **of that pool** (`target_pool.current_thread_index()`), before any blocking wait. |
 | One lane == one worker == one child callback | Each broadcast invocation keeps exactly one child `with_backend_session` callback open (at most one after cancellation, see §5). |
-| No nested phase, no implicit root entry | `phase` takes `&mut CpuHeldSession`; the lane exposes only the operation surface, so a lane cannot open a root session or a phase. |
+| No nested phase, no implicit root entry | `phase` takes `&mut CpuHeldSession`; the lane exposes only the operation surface, so a lane cannot open a root session or a phase directly. The guarantee this phase owns is that it joins every lane callback it started: a lane that deliberately derives an owned child handle through the native visitor and spawns further work of its own must join and cancel that work itself, and the phase does not track it. |
 | Bounded **tenferro-controlled** execution | Lanes are bounded by the context's thread budget; the parked driver is not a numerical lane. Vendor BLAS/LAPACK threads are the provider's and are outside this bound. |
 | One-thread context | The same API runs one lane inline on the caller under the already-held root permit; it does not call entry admission again and creates no pool. It does not fall back to an inline eager backend. |
 | Join before return | `run` returns only after every lane has finished, on the success, error and panic paths. |
@@ -95,6 +94,10 @@ CpuHeldSession<'_>                  owns admission, the resource checkout, the o
         ├── budget:     NonZeroUsize                   // lanes
         ├── child:      CpuBackend                     // owner-inheriting prototype, cloned per lane
         └── cancel:     AtomicBool                     // per-run stop signal, borrowed by the lanes
+
+`CpuPhase` is `!Send + !Sync`, like the held session: its inline lane runs under the
+caller-affinity guard and owner marker the root session installed on its opening thread,
+so moving a phase would run that lane outside the selected CPU set.
 ```
 
 Admission and lock order, extending the U1 order by one step:
@@ -175,29 +178,36 @@ Inner numerical work is not automatically phase-compatible, and the design does 
   BLAS/LAPACK teams are the provider's, and measurements record the provider's thread settings
   alongside the observed process-thread concurrency.
 
-## 7. Verification plan
+## 7. Tests and the plan behind them
 
-1. Lane counts 1, 2 and larger than the task count; a wholly empty queue; a queue with idle
-   lanes; skewed distribution.
-2. **Routing, not counters of closures:** every multi-thread lane reports the target pool's
-   thread identity, and the budget-one lane reports the caller's thread identity.
-3. A bound observed inside actual numerical partitions, not merely the number of live lane
-   callbacks.
-4. One-thread context: one inline lane, same API, no additional pool constructed by the phase.
-5. The execution-routing oracle: while a phase is running, an unrelated non-waiting owner
-   requesting the **same CPU set** is rejected, and inherited child numerical work succeeds
-   concurrently.
-6. Cancellation on **error and on panic** with peers still active; a worker that arrives after
-   cancellation; numerical work remaining in flight when cancellation is set.
-7. Recovery: root `with_session` and a fresh `phase` both succeed after a caught lane failure,
-   including an unwind inside private N-ary scratch.
-8. Foreign-caller policy (a worker of another pool is admitted, a worker of the target pool is
-   rejected), nested-phase prevention, and lane/ticket lifetime escapes.
-9. Mixed callback and session-error precedence.
-10. Numerical parity with the single-threaded result.
-11. `cargo fmt`, clippy `-D warnings`, the whole `tenferro-cpu` suite, doctests, and
-    `scripts/audit-session-entry.py --check` with the new call sites recorded — the phase reuses
-    the child mechanism, but a new authorized caller still has to appear in the inventory.
+Delivered in `crates/tenferro-cpu/src/backend/held_session/phase/tests.rs`:
+
+| Property | Test |
+| --- | --- |
+| Every lane runs, every multi-thread lane is a worker of the context pool, and results agree with the single-threaded value | `phase_runs_every_lane_and_matches_a_single_threaded_result` |
+| One-worker context: one lane, on the calling thread, no pool worker, no additional pool | `phase_on_a_one_worker_context_runs_one_lane_on_the_caller` |
+| Target-pool caller rejected before any work | `phase_rejects_a_caller_inside_its_own_pool` |
+| Foreign-pool caller admitted | `phase_runs_from_a_foreign_pool_worker` |
+| Error cancels peers, which observe it, and one error is returned after joining | `phase_reports_one_lane_error_after_joining_and_cancels_peers` |
+| Panic cancels peers while unwinding, every lane is joined first, and the session survives the caught unwind | `phase_joins_every_lane_before_a_lane_panic_surfaces` |
+| Session failures take precedence over lane errors; a clean run is `Ok` | `session_failures_take_precedence_over_lane_errors` |
+| The lease is repeatable: a second run on the same phase does real work | `phase_repeats_on_the_same_lease_after_a_failure` |
+| Session usable after a caught lane failure | `phase_leaves_the_session_usable_after_a_caught_lane_failure` |
+| Unrelated non-waiting owner rejected while inherited child numerical work succeeds | `unrelated_owner_is_rejected_while_lanes_run` |
+| `!Send + !Sync` lease | `phase_lease_is_neither_send_nor_sync` |
+
+Still open, and not claimed:
+
+- Lane counts larger than the task count, a wholly empty queue, and skewed distribution.
+- A bound observed inside actual numerical partitions, rather than per-lane callbacks; the
+  tests exercise one contraction per lane.
+- A worker that arrives after cancellation, and numerical work still in flight when
+  cancellation is set.
+- An unwind inside private N-ary scratch, and recovery from it.
+- Representative N-ary, linalg and structured routes inside a lane.
+- `cargo fmt`, clippy `-D warnings`, the whole `tenferro-cpu` suite, doctests and
+  `scripts/audit-session-entry.py --check` all pass with the new authorized caller recorded in
+  the session-entry allowlist.
 
 ## 8. Out of scope
 

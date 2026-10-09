@@ -23,6 +23,7 @@ fn phase_runs_every_lane_and_matches_a_single_threaded_result() {
     let x = vector(3.0);
     let lane_count = AtomicUsize::new(0);
     let results = Mutex::new(Vec::new());
+    let worker_indices = Mutex::new(Vec::new());
     let session = backend.open_session().expect("held session");
     let mut session = session;
     session
@@ -37,6 +38,10 @@ fn phase_runs_every_lane_and_matches_a_single_threaded_result() {
                     .lock()
                     .expect("results lock")
                     .push((index, value.as_slice::<f64>()?[0]));
+                worker_indices
+                    .lock()
+                    .expect("worker index lock")
+                    .push(rayon::current_thread_index());
                 Ok(())
             })?;
             Ok(())
@@ -49,6 +54,14 @@ fn phase_runs_every_lane_and_matches_a_single_threaded_result() {
     assert_eq!(results.len(), 2);
     for (_, value) in results {
         assert_eq!(value, 6.0);
+    }
+    let worker_indices = worker_indices.into_inner().expect("worker indices");
+    assert_eq!(worker_indices.len(), 2);
+    for index in worker_indices {
+        assert!(
+            index.is_some(),
+            "every multi-thread lane runs on a worker of the context pool"
+        );
     }
     session.close().expect("affinity restores");
 }
@@ -67,6 +80,10 @@ fn phase_on_a_one_worker_context_runs_one_lane_on_the_caller() {
             assert_eq!(phase.lanes(), 1);
             phase.run(|_index, lane| -> Result<(), tenferro_tensor::Error> {
                 *lane_thread.lock().expect("lane thread lock") = Some(thread::current().id());
+                assert!(
+                    rayon::current_thread_index().is_none(),
+                    "the one-worker lane runs on the caller, not on a pool worker"
+                );
                 let value = lane
                     .session()
                     .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))?;
@@ -154,25 +171,44 @@ fn phase_reports_one_lane_error_after_joining_and_cancels_peers() {
     session.close().expect("affinity restores");
 }
 
-/// A lane panic is resumed only after every lane has finished, so the phase never
-/// abandons a peer.
+/// A lane panic is resumed only after every lane has finished, and it cancels its
+/// peers while it unwinds.
 #[test]
 fn phase_joins_every_lane_before_a_lane_panic_surfaces() {
     let backend = backend(2);
+    let x = vector(2.0);
     let barrier = Arc::new(Barrier::new(2));
+    let survivor_saw_cancel = Arc::new(AtomicBool::new(false));
     let survivor_finished = Arc::new(AtomicBool::new(false));
     let mut session = backend.open_session().expect("held session");
+    let saw_cancel = Arc::clone(&survivor_saw_cancel);
+    let finished = Arc::clone(&survivor_finished);
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = session.phase(
-            |phase| -> Result<(), PhaseRunError<std::convert::Infallible>> {
-                phase.run(|index, _lane| -> Result<(), std::convert::Infallible> {
+            |phase| -> Result<(), PhaseRunError<tenferro_tensor::Error>> {
+                phase.run(|index, lane| -> Result<(), tenferro_tensor::Error> {
                     if index == 0 {
                         barrier.wait();
                         panic!("lane zero panicked");
                     }
                     barrier.wait();
-                    thread::sleep(Duration::from_millis(200));
-                    survivor_finished.store(true, Ordering::Relaxed);
+                    // The panic arms the stop signal while its lane unwinds, before the
+                    // child session is cleaned up.
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    while !lane.cancelled() {
+                        assert!(
+                            Instant::now() < deadline,
+                            "the survivor never observed the panicking lane's cancellation"
+                        );
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    saw_cancel.store(true, Ordering::Relaxed);
+                    // Real numerical work still runs through the survivor's child session.
+                    let value = lane
+                        .session()
+                        .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))?;
+                    assert_eq!(value.as_slice::<f64>()?, &[4.0]);
+                    finished.store(true, Ordering::Relaxed);
                     Ok(())
                 })
             },
@@ -180,9 +216,22 @@ fn phase_joins_every_lane_before_a_lane_panic_surfaces() {
     }));
     assert!(panic.is_err(), "the lane panic surfaces on the driver");
     assert!(
+        survivor_saw_cancel.load(Ordering::Relaxed),
+        "the surviving lane observed the panic's cancellation"
+    );
+    assert!(
         survivor_finished.load(Ordering::Relaxed),
         "the surviving lane finished before the panic surfaced"
     );
+
+    // The session survives the caught unwind, and a later run is not left cancelled.
+    let value = session
+        .with_session(|view| {
+            view.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+        })
+        .expect("root operation after a caught lane panic");
+    assert_eq!(value.as_slice::<f64>().expect("f64 payload"), &[4.0]);
+    session.close().expect("affinity restores");
 }
 
 /// After a caught lane failure the session is unchanged: a root operation and a
@@ -252,14 +301,15 @@ fn unrelated_owner_is_rejected_while_lanes_run() {
         done_tx.send(outcome).expect("send probe result");
     });
 
+    let x = vector(2.0);
     let lane_count = Arc::new(AtomicUsize::new(0));
     let lanes = Arc::clone(&lane_count);
     let reported = Arc::clone(&outsider_reported);
     let mut session = backend.open_session().expect("held session");
     session
         .phase(
-            |phase| -> Result<(), PhaseRunError<std::convert::Infallible>> {
-                phase.run(|_index, lane| -> Result<(), std::convert::Infallible> {
+            |phase| -> Result<(), PhaseRunError<tenferro_tensor::Error>> {
+                phase.run(|_index, lane| -> Result<(), tenferro_tensor::Error> {
                     let started = lanes.fetch_add(1, Ordering::Relaxed) + 1;
                     if started == 2 {
                         probe_tx.send(()).expect("signal the probe");
@@ -273,6 +323,12 @@ fn unrelated_owner_is_rejected_while_lanes_run() {
                             "the probe never reported while the lanes were running"
                         );
                         assert!(!lane.cancelled(), "no lane failed, so none is cancelled");
+                        // Inherited child numerical work succeeds while the unrelated
+                        // owner is rejected.
+                        let value = lane
+                            .session()
+                            .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))?;
+                        assert_eq!(value.as_slice::<f64>()?, &[4.0]);
                         thread::sleep(Duration::from_millis(1));
                     }
                     Ok(())
@@ -291,4 +347,116 @@ fn unrelated_owner_is_rejected_while_lanes_run() {
     );
     outsider.join().expect("outsider thread");
     session.close().expect("affinity restores");
+}
+
+/// A failed run does not cancel the lease: a later run on the *same* phase does real
+/// work.
+#[test]
+fn phase_repeats_on_the_same_lease_after_a_failure() {
+    let backend = backend(1);
+    let mut session = backend.open_session().expect("held session");
+    let ran = AtomicUsize::new(0);
+    let outcome: Result<(), PhaseRunError<&'static str>> = session
+        .phase(|phase| -> Result<(), PhaseRunError<&'static str>> {
+            let first = phase.run(|_index, _lane| Err("first run failed"));
+            assert!(matches!(
+                first,
+                Err(PhaseRunError::Lane("first run failed"))
+            ));
+            ran.fetch_add(1, Ordering::Relaxed);
+            phase.run(|_index, lane| -> Result<(), &'static str> {
+                assert!(
+                    !lane.cancelled(),
+                    "a fresh run starts with a cleared stop signal"
+                );
+                ran.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+        })
+        .expect("phase starts");
+    assert!(outcome.is_ok(), "the second run on the same lease succeeds");
+    assert_eq!(ran.load(Ordering::Relaxed), 2);
+    session.close().expect("affinity restores");
+}
+
+/// A session (entry/cleanup) failure replaces a lane error, whatever order the lanes
+/// finish in.
+#[test]
+fn session_failures_take_precedence_over_lane_errors() {
+    let session_error = SessionEntryError::Reentered {
+        backend: "CpuBackend",
+    };
+    let reduced: Result<(), PhaseRunError<&'static str>> = reduce_outcomes([
+        Some(PhaseRunError::Lane("lane error")),
+        Some(PhaseRunError::Session(session_error)),
+    ]);
+    assert!(matches!(reduced, Err(PhaseRunError::Session(_))));
+
+    let reduced: Result<(), PhaseRunError<&'static str>> =
+        reduce_outcomes([Some(PhaseRunError::Lane("lane error")), None]);
+    assert!(matches!(reduced, Err(PhaseRunError::Lane("lane error"))));
+
+    let reduced: Result<(), PhaseRunError<&'static str>> = reduce_outcomes([None, None]);
+    assert!(reduced.is_ok());
+}
+
+/// A worker of a *different* Rayon pool is admitted: only a worker of the pool the
+/// phase would broadcast to is rejected.
+#[test]
+fn phase_runs_from_a_foreign_pool_worker() {
+    let backend = Arc::new(backend(2));
+    let foreign_pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("foreign pool"),
+    );
+    let lane_count = Arc::new(AtomicUsize::new(0));
+    let counts = Arc::clone(&lane_count);
+    let outcome = foreign_pool.install(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut session = loop {
+            match backend.open_session() {
+                Ok(session) => break session,
+                Err(SessionEntryError::Contended { .. }) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("held session on a foreign worker: {error:?}"),
+            }
+        };
+        let result = session.phase(
+            |phase| -> Result<(), PhaseRunError<std::convert::Infallible>> {
+                phase.run(|_index, _lane| {
+                    counts.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                })
+            },
+        );
+        session.close().expect("affinity restores");
+        result
+    });
+    outcome
+        .expect("phase starts from a foreign pool worker")
+        .expect("phase runs");
+    assert_eq!(lane_count.load(Ordering::Relaxed), 2);
+}
+
+/// A phase lease is `!Send + !Sync`: its inline lane runs under the caller-affinity
+/// guard and owner marker the root session installed on its opening thread.
+///
+/// The probe is the `assert_not_impl_any` ambiguity idiom from the `static_assertions`
+/// crate.
+#[test]
+fn phase_lease_is_neither_send_nor_sync() {
+    const _: fn() = || {
+        trait AmbiguousIfImpl<A> {
+            fn item() {}
+        }
+        struct InvalidSend;
+        struct InvalidSync;
+        impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+        impl<T: ?Sized + Send> AmbiguousIfImpl<InvalidSend> for T {}
+        impl<T: ?Sized + Sync> AmbiguousIfImpl<InvalidSync> for T {}
+        let _ = <CpuPhase<'static> as AmbiguousIfImpl<_>>::item;
+    };
 }

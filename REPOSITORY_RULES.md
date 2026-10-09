@@ -177,11 +177,12 @@ entry and construction (`open_session`, `adopt_held_permit`, `CpuHeldSession`),
   entry point, a documented exception or a native-context region). An entry
   without a reason fails, and so does a `PENDING` reason: a known-illegitimate
   entry may be tracked on a branch but not merged. The allowlist may only shrink
-  for the mechanisms it already lists; a change that introduces a new entry
-  mechanism authorized by a reviewed design — as the held CPU session entry of
-  #1945 does — records that mechanism, its function-level entries and the reason
-  each boundary is legitimate in the same change, and states the growth in the
-  pull request. `--bless` is for recording a removal. Every tracked mechanism must
+  except where a reviewed design authorizes a new boundary: a change that
+  introduces a new entry mechanism — as the held CPU session entry of #1945 does —
+  or a reviewed new caller under an already-listed mechanism — as that design's
+  phase lease does for the per-lane child entry — records the mechanism or site,
+  the reason the boundary is legitimate, and the growth itself in the same change
+  and in the pull request. `--bless` is for recording a removal. Every tracked mechanism must
   still match a library definition or site, so a rename cannot silently shrink
   coverage.
 - An execution scope creates execution state too: it holds an execution permit and
