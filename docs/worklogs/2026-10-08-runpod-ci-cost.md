@@ -259,7 +259,10 @@ artifacts from run 37855580181, common compressed bytes fell from
 1,567,514,494 to 1,196,745,934. Including the selected 12.8 SDK
 (1,074,446,861 bytes), required runtime transfer is 14.0338% smaller and passes
 the predeclared 5% byte gate. This is a byte-count result, not a paid-time
-speedup; full GPU correctness validation of this candidate remains pending.
+speedup; full GPU correctness validation passed in run 37861535693: all 285 CUDA
+cases, three PJRT cases, and the tutorial passed with NVRTC 12.8, and the fresh
+A40 pod was deleted. The observed 340.518493 paid seconds is a diagnostic
+sample, not a paired timing claim.
 The preserved shared library SHA-256 is
 `224d65152fe5bc5d61e00d15081d6f78b16bc6961b1650579e0a82489b9dcdbc`.
 
@@ -268,8 +271,14 @@ start timestamp. It confirms deletion on deadline or setup failure, disarms
 only when the real CUDA test step starts, and leaves the mandatory cleanup
 path independent. Local tests cover stalled setup, queued/skipped jobs,
 progress outages, malformed start metadata, deletion retries/failures, and
-healthy disarm. Live healthy-start and stalled-setup trials are still pending;
-hosted queue delay and permanent provider deletion failures remain limitations.
+healthy disarm. Live validation confirmed healthy disarm in run 37861535693. A deliberately
+unassigned GPU job in run 37862165502 exercised the same guard with a shortened
+120-second budget to limit experimental spend: confirmed HTTP 204 deletion
+occurred at 120.942753 paid seconds, followed by successful mandatory cleanup.
+This demonstrates inclusion of startup and queue time in the deadline; the
+production 900-second value is covered by the workflow regression, not a
+900-second paid drill. Hosted queue delay and permanent provider deletion
+failures remain limitations.
 
 A dependency-preloaded image was built and validated locally with the pinned
 runner, actual NVRTC 12.6/12.8 JIT header compilation, and cuTENSOR loading.
