@@ -1921,7 +1921,7 @@ impl CpuBackend {
                 // failure after the callback is reported as the outer error,
                 // exactly as the scoped path reports it.
                 let mut session = self.adopt_held_permit(permit)?;
-                let result = session.with_concrete_session(cache, f);
+                let result = session.with_session_cached(cache, f);
                 session
                     .close()
                     .map_err(|source| SessionEntryError::Executor {
@@ -2052,7 +2052,7 @@ impl Default for CpuBackend {
 
 pub(crate) mod execution_scope;
 
-mod held_session;
+pub(crate) mod held_session;
 
 #[cfg(test)]
 mod tests;

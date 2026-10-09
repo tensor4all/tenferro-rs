@@ -9,7 +9,7 @@
   },
   "CPU held session entry": {
     "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: the standalone-root shape runs the callback through a held CPU session (#1945 U1) instead of a callback-scoped session",
-    "crates/tenferro-cpu/src/backend/held_session.rs::CpuBackend::open_session": "held root entry point: the only crate-private constructor of a held CPU session, gated on Idle thread execution and a non-child handle; U2-concrete exposes it publicly"
+    "crates/tenferro-cpu/src/backend/held_session.rs::CpuBackend::open_session": "held root entry point: the public constructor of a held CPU session, gated on Idle thread execution and a non-child handle (#1945 U2-concrete)"
   },
   "CpuHeldSession construction": {
     "crates/tenferro-cpu/src/backend/held_session.rs::CpuBackend::adopt_held_permit": "held root entry point: turns an admitted standalone root reservation into the held session's owned checkout, owner marker and affinity guard"
