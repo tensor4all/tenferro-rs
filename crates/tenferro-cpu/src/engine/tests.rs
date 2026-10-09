@@ -16,7 +16,8 @@ fn engine_caps_workers_to_its_cpu_domain_and_owns_resources() {
     assert_eq!(engine.domain().thread_budget().get(), selected.len());
     assert_eq!(engine.placement(), &placement);
     assert_eq!(engine.domain().id(), CpuDomainId::new(0));
-    let resources = engine.resources.lock().unwrap();
+    let mut slot = engine.resources.lock().unwrap();
+    let resources = slot.ready_mut().expect("engine resources are present");
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 0);
     assert_eq!(resources.gemm_analysis_cache.capacity(), 1024);
 }
@@ -40,7 +41,8 @@ fn engine_from_context_preserves_placement_context_and_resources() {
     assert_eq!(engine.domain().thread_budget().get(), 1);
     assert!(Arc::ptr_eq(&engine.context, &context));
     assert_eq!(engine.domain().id(), CpuDomainId::new(3));
-    let resources = engine.resources.lock().unwrap();
+    let mut slot = engine.resources.lock().unwrap();
+    let resources = slot.ready_mut().expect("engine resources are present");
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 4096);
     assert_eq!(resources.gemm_analysis_cache.capacity(), 1024);
 }

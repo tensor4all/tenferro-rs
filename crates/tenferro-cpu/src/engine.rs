@@ -51,7 +51,107 @@ impl EngineResources {
 pub(crate) struct CpuEngine {
     domain: CpuResourceDomain,
     pub(crate) context: Arc<CpuContext>,
-    pub(crate) resources: Mutex<EngineResources>,
+    /// Reusable numerical resources, or the fact that a held session has them
+    /// checked out; see [`EngineResourceCheckout`].
+    pub(crate) resources: Mutex<ResourceSlot>,
+}
+
+/// One engine's reusable numerical resources, or the fact that a held session
+/// has checked them out.
+#[derive(Debug)]
+pub(crate) enum ResourceSlot {
+    /// The engine owns the resources and a session may check them out.
+    ///
+    /// Boxed so the slot stays small: the resources are moved as a whole, never
+    /// per field, and the engine allocates this once.
+    Ready(Box<EngineResources>),
+    /// A held session owns the resources until it closes.
+    CheckedOut,
+}
+
+impl ResourceSlot {
+    /// Borrow the checked-out resources, or `None` while a held session owns them.
+    pub(crate) fn ready_mut(&mut self) -> Option<&mut EngineResources> {
+        match self {
+            Self::Ready(resources) => Some(resources),
+            Self::CheckedOut => None,
+        }
+    }
+}
+
+/// Owned checkout of one engine's reusable numerical resources.
+///
+/// A held CPU session owns this value instead of holding the engine's mutex for
+/// its whole lifetime, so no shared plan-cache or buffer-pool lock spans an
+/// operation, a kernel or a join (#1945 A2). Dropping the checkout returns the
+/// resources; the return is unconditional and recovers a poisoned mutex exactly
+/// as the scoped execution path does.
+pub(crate) struct EngineResourceCheckout {
+    engine: Arc<CpuEngine>,
+    resources: Option<EngineResources>,
+}
+
+impl EngineResourceCheckout {
+    /// Take the engine's resources, or `None` when another holder has them.
+    ///
+    /// The engine builds its resources eagerly, so a vacant slot always means
+    /// "checked out", never "not created yet".
+    pub(crate) fn take(engine: &Arc<CpuEngine>) -> Option<Self> {
+        let mut slot = engine
+            .resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let resources = match std::mem::replace(&mut *slot, ResourceSlot::CheckedOut) {
+            ResourceSlot::Ready(resources) => *resources,
+            vacant @ ResourceSlot::CheckedOut => {
+                *slot = vacant;
+                return None;
+            }
+        };
+        drop(slot);
+        Some(Self {
+            engine: Arc::clone(engine),
+            resources: Some(resources),
+        })
+    }
+
+    /// Borrow the checked-out resources for one operation view.
+    ///
+    /// The checkout is released only by [`Self::return_resources`], which runs
+    /// from the held session's `close` or `Drop`; no other `&mut` method of the
+    /// session can observe it absent.
+    pub(crate) fn resources_mut(&mut self) -> &mut EngineResources {
+        match self.resources.as_mut() {
+            Some(resources) => resources,
+            None => unreachable!("engine resources are released only by the held session"),
+        }
+    }
+
+    fn return_resources(&mut self) {
+        let Some(resources) = self.resources.take() else {
+            return;
+        };
+        let mut slot = self
+            .engine
+            .resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // INVARIANT: the arbiter grants one root execution per engine, and a
+        // reentrant child owns private resources, so the slot cannot be refilled
+        // while this checkout is live. Replacing instead of asserting keeps a
+        // violated invariant from leaking resources without introducing a panic.
+        debug_assert!(
+            matches!(&*slot, ResourceSlot::CheckedOut),
+            "engine resources returned twice"
+        );
+        *slot = ResourceSlot::Ready(Box::new(resources));
+    }
+}
+
+impl Drop for EngineResourceCheckout {
+    fn drop(&mut self) {
+        self.return_resources();
+    }
 }
 
 impl CpuEngine {
@@ -93,7 +193,9 @@ impl CpuEngine {
                 caller_cpus,
             ),
             context,
-            resources: Mutex::new(EngineResources::new(buffer_limit)),
+            resources: Mutex::new(ResourceSlot::Ready(Box::new(EngineResources::new(
+                buffer_limit,
+            )))),
         }
     }
 

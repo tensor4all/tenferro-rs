@@ -13,10 +13,10 @@ use tenferro_tensor::DType;
 
 use crate::arbiter::{ResourceArbiter, ResourceOwner, ResourcePermit};
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
-use crate::engine::{CpuEngine, EngineResources};
+use crate::engine::{CpuEngine, EngineResources, ResourceSlot};
 use crate::indexed_plan_cache::{IndexedPlanCacheLimits, DEFAULT_INDEXED_PLAN_CACHE_LIMITS};
 use crate::placement::{resolve_placement, CpuEngineConstructionError, ResolvedCpuExecution};
-use crate::provider::{CpuOperationEntry, ParallelMode};
+use crate::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
 use crate::{
     discover_cpu_topology, CpuDomainId, CpuId, CpuPlacement, CpuPlacementError, CpuSet,
     CpuTopology, CpuTopologyError, NumaNodeId, ResolvedCpuPlacement,
@@ -30,6 +30,7 @@ use tenferro_tensor::{SessionEntryError, SharedTensorAllocationDomain};
 
 use super::exec_session::CpuExecSession;
 use super::{copy_tensor_read_into, elementwise, gemm, CpuContext};
+use execution_scope::ExecutionAdmission;
 
 fn lock_contraction_workspaces(
     engines: &[Arc<CpuEngine>],
@@ -449,14 +450,17 @@ impl CpuBackendState {
         requested: CpuPlacement,
         limits: IndexedPlanCacheLimits,
     ) -> Result<(), CpuPlacementError> {
-        let mut resources =
-            engine
-                .resources
-                .lock()
-                .map_err(|_| CpuPlacementError::InternalState {
-                    requested,
-                    message: "new CPU engine indexed-plan cache lock is poisoned",
-                })?;
+        let mut slot = engine
+            .resources
+            .lock()
+            .map_err(|_| CpuPlacementError::InternalState {
+                requested,
+                message: "new CPU engine indexed-plan cache lock is poisoned",
+            })?;
+        let resources = slot.ready_mut().ok_or(CpuPlacementError::InternalState {
+            requested,
+            message: "new CPU engine resources are unexpectedly checked out",
+        })?;
         resources.indexed_plan_cache.set_limits(limits);
         Ok(())
     }
@@ -487,14 +491,90 @@ fn poisoned_cpu_lock(op: &'static str, lock: &'static str) -> crate::Error {
     crate::Error::runtime_state(op, format!("{lock} lock poisoned"))
 }
 
+/// Build one operation view over `resources` and run `f` in it.
+///
+/// This is the single place a CPU `CpuExecSession` is constructed. The scoped
+/// entry and the held session share it, so they share one view lifetime, one
+/// buffer-pool loan and one profiling path.
+fn with_operation_session<'a, R>(
+    backend: &'a CpuBackend,
+    entry: CpuOperationEntry<'a>,
+    entered: Option<CpuExecutionContext<'a>>,
+    resources: &'a mut EngineResources,
+    cache: Option<&'a mut gemm::GemmAnalysisCache>,
+    owner: ResourceOwner,
+    f: impl FnOnce(&mut dyn BackendSession) -> R,
+) -> R {
+    let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+    let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
+    let session_started = Instant::now();
+    let mut session = CpuExecSession {
+        entry,
+        context: Some(backend.engine.context.as_ref()),
+        entered,
+        buffers: buffers.get_mut(),
+        gemm_analysis_cache: cache,
+        indexed_plan_cache: &mut resources.indexed_plan_cache,
+        nary: resources
+            .nary
+            .as_ref()
+            .unwrap_or_else(|| backend.engine.context.contraction_workspaces()),
+        allocation_domain: backend.allocation_domain.as_ref(),
+        child_backend: backend.with_inherited_owner(owner),
+    };
+    record_cpu_session_profile(
+        "with_backend_session_cached.session_construct",
+        session_started.elapsed(),
+    );
+    let exec_started = Instant::now();
+    let result = f(&mut session);
+    record_cpu_session_profile(
+        "with_backend_session_cached.exec_body",
+        exec_started.elapsed(),
+    );
+    result
+}
+
+fn engine_resources_checked_out(op: &'static str) -> crate::Error {
+    crate::Error::runtime_state(
+        op,
+        "CPU engine resources are checked out by an active held session",
+    )
+}
+
 fn lock_engine_resources<'a>(
     engine: &'a CpuEngine,
     op: &'static str,
-) -> crate::Result<std::sync::MutexGuard<'a, EngineResources>> {
+) -> crate::Result<std::sync::MutexGuard<'a, ResourceSlot>> {
     engine
         .resources
         .lock()
         .map_err(|_| poisoned_cpu_lock(op, "CPU engine resources"))
+}
+
+/// Resolve one locked engine slot to its resources.
+///
+/// A held session owns these resources for its lifetime, so management reports
+/// them as unavailable instead of waiting on a lock the session holds.
+fn engine_resources_mut<'a>(
+    slot: &'a mut ResourceSlot,
+    op: &'static str,
+) -> crate::Result<&'a mut EngineResources> {
+    match slot.ready_mut() {
+        Some(resources) => Ok(resources),
+        None => Err(engine_resources_checked_out(op)),
+    }
+}
+
+/// Resolve a whole locked engine set before any of it is mutated.
+fn resolve_engine_resources<'a>(
+    slots: &'a mut [std::sync::MutexGuard<'_, ResourceSlot>],
+    op: &'static str,
+) -> crate::Result<Vec<&'a mut EngineResources>> {
+    slots
+        .iter_mut()
+        .map(|slot| engine_resources_mut(slot, op))
+        .collect()
 }
 
 fn saturating_add_tensor_cache_stats(total: &mut CacheStats, value: CacheStats) {
@@ -1248,10 +1328,9 @@ impl CpuBackend {
             .initialized_engines("CpuBackend::buffer_pool_len")?
             .iter()
             .try_fold(0, |total, engine| {
-                Ok(total
-                    + lock_engine_resources(engine, "CpuBackend::buffer_pool_len")?
-                        .buffers
-                        .len())
+                let mut slot = lock_engine_resources(engine, "CpuBackend::buffer_pool_len")?;
+                let resources = engine_resources_mut(&mut slot, "CpuBackend::buffer_pool_len")?;
+                Ok(total + resources.buffers.len())
             })
     }
 
@@ -1278,9 +1357,9 @@ impl CpuBackend {
             .initialized_engines("CpuBackend::buffer_pool_stats")?
             .iter()
             .try_fold(BufferPoolStats::default(), |mut total, engine| {
-                let stats = lock_engine_resources(engine, "CpuBackend::buffer_pool_stats")?
-                    .buffers
-                    .stats();
+                let mut slot = lock_engine_resources(engine, "CpuBackend::buffer_pool_stats")?;
+                let resources = engine_resources_mut(&mut slot, "CpuBackend::buffer_pool_stats")?;
+                let stats = resources.buffers.stats();
                 total.buffers += stats.buffers;
                 total.capacity_bytes += stats.capacity_bytes;
                 Ok(total)
@@ -1382,12 +1461,14 @@ impl CpuBackend {
         let engines = self
             .shared
             .initialized_engines("CpuBackend::set_indexed_plan_cache_limits")?;
-        let mut resources = engines
+        let mut slots = engines
             .iter()
             .map(|engine| {
                 lock_engine_resources(engine, "CpuBackend::set_indexed_plan_cache_limits")
             })
             .collect::<crate::Result<Vec<_>>>()?;
+        let mut resources =
+            resolve_engine_resources(&mut slots, "CpuBackend::set_indexed_plan_cache_limits")?;
         *configured_limits = limits;
         for resource in &mut resources {
             resource.indexed_plan_cache.set_limits(limits);
@@ -1416,9 +1497,11 @@ impl CpuBackend {
             .initialized_engines("CpuBackend::indexed_plan_cache_stats")?
             .iter()
             .try_fold(CacheStats::default(), |mut total, engine| {
-                let stats = lock_engine_resources(engine, "CpuBackend::indexed_plan_cache_stats")?
-                    .indexed_plan_cache
-                    .stats();
+                let mut slot =
+                    lock_engine_resources(engine, "CpuBackend::indexed_plan_cache_stats")?;
+                let resources =
+                    engine_resources_mut(&mut slot, "CpuBackend::indexed_plan_cache_stats")?;
+                let stats = resources.indexed_plan_cache.stats();
                 saturating_add_tensor_cache_stats(&mut total, stats);
                 Ok(total)
             })
@@ -1445,10 +1528,12 @@ impl CpuBackend {
         let engines = self
             .shared
             .initialized_engines("CpuBackend::clear_indexed_plan_cache")?;
-        let mut resources = engines
+        let mut slots = engines
             .iter()
             .map(|engine| lock_engine_resources(engine, "CpuBackend::clear_indexed_plan_cache"))
             .collect::<crate::Result<Vec<_>>>()?;
+        let mut resources =
+            resolve_engine_resources(&mut slots, "CpuBackend::clear_indexed_plan_cache")?;
         for resource in &mut resources {
             resource.indexed_plan_cache.clear();
         }
@@ -1513,10 +1598,12 @@ impl CpuBackend {
         let engines = self
             .shared
             .initialized_engines("CpuBackend::set_buffer_pool_limit_bytes")?;
-        let mut resources = engines
+        let mut slots = engines
             .iter()
             .map(|engine| lock_engine_resources(engine, "CpuBackend::set_buffer_pool_limit_bytes"))
             .collect::<crate::Result<Vec<_>>>()?;
+        let mut resources =
+            resolve_engine_resources(&mut slots, "CpuBackend::set_buffer_pool_limit_bytes")?;
         let mut workspaces = lock_contraction_workspaces(&engines)?;
         self.shared
             .buffer_limit
@@ -1568,10 +1655,11 @@ impl CpuBackend {
         let engines = self
             .shared
             .initialized_engines("CpuBackend::reset_buffer_pool")?;
-        let mut resources = engines
+        let mut slots = engines
             .iter()
             .map(|engine| lock_engine_resources(engine, "CpuBackend::reset_buffer_pool"))
             .collect::<crate::Result<Vec<_>>>()?;
+        let mut resources = resolve_engine_resources(&mut slots, "CpuBackend::reset_buffer_pool")?;
         let mut workspaces = lock_contraction_workspaces(&engines)?;
         for resource in &mut resources {
             resource.buffers.clear();
@@ -1588,7 +1676,8 @@ impl CpuBackend {
     pub(crate) fn runtime_cache_stats(
         &self,
     ) -> crate::Result<tenferro_runtime::runtime::CacheStats> {
-        let resources = lock_engine_resources(&self.engine, "CpuBackend::runtime_cache_stats")?;
+        let mut slot = lock_engine_resources(&self.engine, "CpuBackend::runtime_cache_stats")?;
+        let resources = engine_resources_mut(&mut slot, "CpuBackend::runtime_cache_stats")?;
         let workspaces = lock_contraction_workspaces(std::slice::from_ref(&self.engine))?;
         let (workspace_entries, nary_bytes) =
             workspaces
@@ -1621,8 +1710,8 @@ impl CpuBackend {
     }
 
     pub(crate) fn clear_runtime_caches(&self) -> crate::Result<()> {
-        let mut resources =
-            lock_engine_resources(&self.engine, "CpuBackend::clear_runtime_caches")?;
+        let mut slot = lock_engine_resources(&self.engine, "CpuBackend::clear_runtime_caches")?;
+        let resources = engine_resources_mut(&mut slot, "CpuBackend::clear_runtime_caches")?;
         let mut workspaces = lock_contraction_workspaces(std::slice::from_ref(&self.engine))?;
         resources.buffers.clear();
         for workspace in &mut workspaces {
@@ -1669,7 +1758,7 @@ impl CpuBackend {
         &self,
         permit: &ResourcePermit,
         op: impl FnOnce(&mut EngineResources) -> R,
-    ) -> R {
+    ) -> Result<R, SessionEntryError> {
         if permit.is_reentrant() {
             // A reentrant child owns its execution resources, including its
             // N-ary contraction scratch, so concurrent children never share one
@@ -1677,19 +1766,30 @@ impl CpuBackend {
             let mut resources = EngineResources::for_child_execution(
                 self.shared.buffer_limit.load(Ordering::Relaxed),
             );
-            return op(&mut resources);
+            return Ok(op(&mut resources));
         }
         // INVARIANT: this lock is poisoned only by a session callback that
         // unwound while holding it, and `BufferPoolLoan` restores the pool's
         // in-flight accounting on unwind, so the resources are consistent and
         // the next session may reuse them. Pool introspection
         // (`buffer_pool_len`, `buffer_pool_stats`) still reports the poison.
-        let mut resources = self
+        let mut slot = self
             .engine
             .resources
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        op(&mut resources)
+        let Some(resources) = slot.ready_mut() else {
+            // A held root session owns this engine's resources. The arbiter
+            // queues an ordinary scoped entry behind that session and a
+            // reentrant child takes private resources, so reaching this with a
+            // root permit means the admission invariant was violated; report it
+            // typed rather than aliasing the shared caches.
+            return Err(SessionEntryError::ResourcePoisoned {
+                backend: CPU_BACKEND,
+                resource: "the CPU engine resources (checked out by a held session)",
+            });
+        };
+        Ok(op(resources))
     }
 
     fn acquire_execution_permit(
@@ -1811,55 +1911,60 @@ impl CpuBackend {
         cache: Option<&mut gemm::GemmAnalysisCache>,
         f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, SessionEntryError> {
-        let admission = self.execution_admission()?;
-        let affinity_error = |source| SessionEntryError::Executor {
-            backend: CPU_BACKEND,
-            source: Box::new(source),
-        };
-        let affinity =
-            crate::affinity::CallerAffinityGuard::enter(self.engine.domain().caller_cpus())
-                .map_err(affinity_error)?;
-        let permit = admission.permit();
-        let owner = permit.owner();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
-        // Provider-owned BLAS threading does not change session entry: the
-        // permit, including provider exclusion, spans this entire callback.
-        let run = |entered| {
-            self.with_execution_resources(permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
-                let session_started = Instant::now();
-                let mut session = CpuExecSession {
-                    entry,
-                    context: Some(self.engine.context.as_ref()),
-                    entered,
-                    buffers: buffers.get_mut(),
-                    gemm_analysis_cache: cache,
-                    indexed_plan_cache: &mut resources.indexed_plan_cache,
-                    nary: resources
-                        .nary
-                        .as_ref()
-                        .unwrap_or_else(|| self.engine.context.contraction_workspaces()),
-                    allocation_domain: self.allocation_domain.as_ref(),
-                    child_backend: self.with_inherited_owner(owner),
+        match self.execution_admission()? {
+            // A standalone root session owns its reservation, the engine
+            // resources and the caller's affinity for the whole callback, so it
+            // runs through the held session: both entries then share one
+            // admission, checkout and cleanup implementation.
+            ExecutionAdmission::Standalone(permit) if !permit.is_reentrant() => {
+                self.run_held_session(permit, cache, f)
+            }
+            admission => {
+                let affinity_error = |source| SessionEntryError::Executor {
+                    backend: CPU_BACKEND,
+                    source: Box::new(source),
                 };
-                record_cpu_session_profile(
-                    "with_backend_session_cached.session_construct",
-                    session_started.elapsed(),
-                );
-                let exec_started = Instant::now();
-                let result = f(&mut session);
-                record_cpu_session_profile(
-                    "with_backend_session_cached.exec_body",
-                    exec_started.elapsed(),
-                );
-                result
-            })
-        };
-        let _ = owner;
-        let result = entry.enter_managed_session(|context| run(Some(context)));
-        affinity.finish().map_err(affinity_error)?;
-        result
+                let affinity =
+                    crate::affinity::CallerAffinityGuard::enter(self.engine.domain().caller_cpus())
+                        .map_err(affinity_error)?;
+                let permit = admission.permit();
+                let owner = permit.owner();
+                let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+                // Provider-owned BLAS threading does not change session entry: the
+                // permit, including provider exclusion, spans this entire callback.
+                let run = |entered| {
+                    self.with_execution_resources(permit, |resources| {
+                        with_operation_session(self, entry, entered, resources, cache, owner, f)
+                    })
+                };
+                let _ = owner;
+                let result = entry.enter_managed_session(|context| run(Some(context)));
+                affinity.finish().map_err(affinity_error)?;
+                result.and_then(std::convert::identity)
+            }
+        }
+    }
+
+    /// Run one backend session through a held root session.
+    ///
+    /// The callback's value is returned unchanged; a restoration failure after
+    /// the callback is reported as the outer error, exactly as the scoped path
+    /// reports it.
+    fn run_held_session<R>(
+        &self,
+        permit: ResourcePermit,
+        cache: Option<&mut gemm::GemmAnalysisCache>,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
+    ) -> Result<R, SessionEntryError> {
+        let mut session = self.adopt_held_permit(permit)?;
+        let result = session.with_concrete_session(cache, f);
+        session
+            .close()
+            .map_err(|source| SessionEntryError::Executor {
+                backend: CPU_BACKEND,
+                source: Box::new(source),
+            })?;
+        Ok(result)
     }
 }
 
@@ -1957,6 +2062,8 @@ impl Default for CpuBackend {
 }
 
 pub(crate) mod execution_scope;
+
+mod held_session;
 
 #[cfg(test)]
 mod tests;

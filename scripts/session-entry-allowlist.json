@@ -5,7 +5,7 @@
     "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU session construction behind with_backend_session[_cached])"
   },
   "CpuExecSession construction": {
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU session construction behind with_backend_session[_cached])"
+    "crates/tenferro-cpu/src/backend.rs::with_operation_session": "operation-view definition: builds the backend's execution state for one callback or held session (CPU session construction behind with_backend_session[_cached] and CpuHeldSession)"
   },
   "CudaExecSession construction": {
     "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (CUDA)"
