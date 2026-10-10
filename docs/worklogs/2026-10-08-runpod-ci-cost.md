@@ -558,3 +558,30 @@ The published 2.337.0 image is Ubuntu 24.04 and resolves to index digest
 `sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4`.
 Local compatibility must be checked before another paid diagnostic; this does
 not authorize or require custom image publication.
+
+
+## Official runner image diagnostic
+
+The next diagnostic compares the original production bootstrap against the
+published GitHub runner image pinned above. Experimental controller
+`235be866e9ff97949f4d97c0340e9e6c62548642` in `tensor4all/tenferro-benchmark`
+contains both arms and preserves the same immutable archives from run
+`38000490223`, full workload, A40 model/price ceiling, and lifecycle limits.
+The candidate uses image-provided bootstrap tools and runner dependencies,
+keeps root execution through the image's existing sudo configuration, and
+sets NVIDIA compute/utility capabilities explicitly. CUDA launch proof still
+precedes registration. Execution-tool installation omits recommendations.
+
+CPU-only [hosted validation](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38022358831)
+passed Ubuntu 24.04 identity, runner 2.337.0 and Node 24 startup, Python stdlib
+imports, root re-execution with the single-use configuration preserved, NVRTC
+12.8 installation/loading, and execution-tool availability. Local image
+download was slow and was stopped after this equivalent hosted validation; no
+local timing or local completion is claimed. Actual GPU launch and numerical
+compatibility remain obligations of the paid diagnostic.
+
+A fresh baseline/candidate diagnostic pair is required; the package-only
+measurements are not reused for this new candidate. The whole paid-lifetime
+metric and 10% acceptance threshold, complete-workload requirement, A/A and
+three-pair confirmation policy, non-regression and variability gates remain
+unchanged. CPU identity/load are added to the recorded host observables.
