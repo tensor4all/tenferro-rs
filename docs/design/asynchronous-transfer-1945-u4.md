@@ -42,8 +42,10 @@ Delivered:
   borrow** for the whole flight — enforced by the compiler, with a compile-fail fixture in
   `tests/ui` — so no reader, writer or dropper of the device tensor can run while the copy may
   still write it. `wait(self)` returns the source buffer for reuse.
-- `Drop` resolves the event before releasing anything; when it cannot, the buffer and the retained
-  resource are leaked rather than freed early. `mem::forget` is sound by construction: the handle
+- `Drop` detaches the record into the runtime's bounded retirement queue, which releases it once its
+  event proves completion and retains it permanently otherwise
+  ([owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)); a completion that
+  cannot be proven never frees the value or the buffers the device may still touch. `mem::forget` is sound by construction: the handle
   owns everything it uses, so forgetting it leaks (never frees early).
 
 Explicitly **not** claimed in this slice:
@@ -154,7 +156,11 @@ PendingDownload                 // owns the submitted value and the pinned buffe
 - `wait()`: `cuEventSynchronize`; on success the retained resource is released and the buffer is
   returned; on failure nothing is published and the buffer/resource are abandoned (leaked), because a
   failed copy cannot prove what the device is still touching.
-- `Drop` without `wait`: resolves the event if it can (non-blocking query, then a bounded
+- `Drop` without `wait`: detaches the record into the runtime's retirement queue (see
+  [owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)); the old note said it
+  resolved non-blockingly and then waited, which is the behaviour this package replaced. (Original
+  wording follows, kept only as a pointer: it resolves the event if it can (non-blocking query, then a
+  bounded
   synchronize), then releases; otherwise abandons.
 - `is_ready()`: `cuEventQuery`; a non-ready result is `Ok(false)`, and a device error is reported
   rather than collapsed into "not ready".

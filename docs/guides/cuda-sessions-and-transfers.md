@@ -112,10 +112,10 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
   it otherwise; forgetting the handle leaks it in place. A refused submission (wrong length, unserved
   dtype, host tensor) returns the package untouched as `TransferSubmitError::Rejected`.
 - `is_ready` queries the copy's CUDA event and distinguishes "not ready" from a device error;
-  `wait` synchronizes once and returns the buffer; dropping without `wait` resolves before releasing,
-  and a completion that cannot be proven leaks the buffers instead of freeing memory the device may
-  still touch. Forgetting a pending transfer is safe for the same reason: the handle owns everything
-  it uses.
+  `wait` synchronizes once and returns the value and the buffer; dropping without `wait` detaches the
+  record into the runtime's retirement queue, which releases it after its event proves completion and
+  retains it otherwise. Forgetting a pending transfer is safe for the same reason: the handle owns
+  everything it uses, so forgetting it leaks the record instead of handing the caller access.
 - Small copies can complete before the first poll, so an `is_ready` that already returns `true` is not
   an error.
 - The pending routes carry a fixed cost (host dispatch plus resource resolution) of roughly 20 µs on

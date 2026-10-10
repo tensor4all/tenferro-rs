@@ -105,10 +105,16 @@ benchmark and the crate exports.
 | Exclusion is compile-checked | compile-fail fixture: using the tensor after moving it into `download_pending` fails to compile, including after `mem::forget(pending)` (the value is unreachable in both cases) |
 | Detached drop | dropping an unwaited handle returns immediately (no device wait), the value is neither handed back nor freed early, a later transfer is correct, and the retirement queue drains once the event completes |
 | Pre-admission rejection | a byte-length mismatch and a rejected dtype return `TransferRejected` carrying the same source and buffer, with no enqueue |
-| Unproven completion | a fault-injected failed synchronize reports `CompletionUnproven` and releases nothing; the queue's retention is observable (the record count stays) rather than a freed alias |
-| `Drop`/`mem::forget` soundness | neither restores access to the admitted package; a forgotten handle leaks and the runtime stays usable |
+| Unproven completion | **not delivered**: a fault-injected failed synchronize is not exercised — the code path retains the record for soundness and reports `CompletionUnproven`, but no test drives it |
+| `Drop`/`mem::forget` soundness | neither restores access to the admitted package: the value is moved in (a compile-fail fixture proves it cannot be used afterwards), a forgotten handle leaks in place, and the runtime stays usable. The `mem::forget` test proves that nothing was *detached*; it does not observe that nothing was released — the stronger argument is the move-only admission plus the handle owning its fields |
 | Ordering and numerics | the existing pending tests (delayed copy observed as not-ready, exact bytes after `wait`, completion after the producing session closes, two transfers in flight) adapted to the owning signature |
+| Rejection returns the package | a byte-length mismatch, a host tensor and an unserved dtype each return `TransferSubmitError::Rejected` carrying the same value and buffer, and a retry through them succeeds |
 | No regression | the blocking `upload_tensor`/`download_tensor` routes, the CUDA test partition, the example, the guide and the benchmark are updated in the same change |
+
+Not exercised by this change, and not claimed: an enqueue or event-record failure and a failed
+completion synchronization (no fault injection), the terminal-retention path at queue capacity, and
+poisoned-lock handling. The retirement queue's capacity policy is exercised only through the
+single-record path.
 
 ## 4. What this does not fix
 

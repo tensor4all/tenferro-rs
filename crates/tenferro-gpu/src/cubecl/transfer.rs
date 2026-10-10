@@ -62,7 +62,10 @@ const OP: &str = "download_pending";
 /// # }
 /// ```
 pub struct PinnedHostBuffer {
-    runtime: CudaRuntime,
+    /// Weak so that a buffer held by the runtime's own retirement queue cannot keep the runtime
+    /// alive: without this, dropping every external handle would leave the queue's records owning a
+    /// strong reference back into the state that owns them.
+    runtime: std::sync::Weak<CudaRuntimeState>,
     ptr: *mut u8,
     len: usize,
     abandoned: bool,
@@ -115,7 +118,7 @@ impl PinnedHostBuffer {
             .result()
             .map_err(|err| crate::Error::backend_source(OP, err))?;
         Ok(Self {
-            runtime: runtime.clone(),
+            runtime: runtime.weak_state(),
             ptr: ptr.cast::<u8>(),
             len: bytes,
             abandoned: false,
@@ -182,9 +185,12 @@ impl Drop for PinnedHostBuffer {
         if self.abandoned || self.ptr.is_null() {
             return;
         }
-        if self.runtime.set_current_cuda_context(OP).is_err() {
-            // Without the owning context current the pointer cannot be freed safely, so it is
-            // leaked rather than handed to a driver call that would fail or free the wrong device.
+        let Some(state) = self.runtime.upgrade() else {
+            // The runtime is already gone, so its context cannot be selected; the pointer is leaked
+            // rather than handed to a driver call that would free the wrong device's memory.
+            return;
+        };
+        if state.set_current_cuda_context(OP).is_err() {
             return;
         }
         // SAFETY: this value owns exactly one live `cudaHostAlloc` allocation, and the context that
@@ -247,32 +253,26 @@ impl TransferRetirementQueue {
 
     /// Take ownership of a detached record, keeping the queue bounded.
     ///
-    /// At capacity the queue drains, and if that is not enough it waits for the oldest record's
-    /// event — a bounded wait, on one transfer's completion rather than on the caller's. If even that
-    /// cannot prove completion the record is retained permanently instead of being freed, which the
-    /// storage-ownership contract prescribes: releasing bindings whose completion is unknown is the
-    /// one thing that is not allowed.
+    /// A completed record is released, so the queue normally drains as work finishes. At capacity the
+    /// queue drains once; a record that is still in flight when the queue stays full is retained
+    /// permanently rather than waited for — dropping a handle never blocks on the device, and the
+    /// storage-ownership contract prefers permanent retention over releasing bindings whose completion
+    /// is unknown.
     pub(crate) fn detach(&mut self, runtime: &CudaRuntimeState, record: TransferRetirement) {
         if self.entries.len() >= DEFAULT_TRANSFER_RETIREMENT_CAPACITY {
             self.drain(runtime);
         }
         if self.entries.len() >= DEFAULT_TRANSFER_RETIREMENT_CAPACITY {
-            let oldest = self.entries.remove(0);
-            let proven = runtime
-                .set_current_cuda_context(OP)
-                .and_then(|()| {
-                    // SAFETY: the event is live and owned by this record.
-                    unsafe { cuda_result::event::synchronize(oldest.event) }
-                        .map_err(|err| crate::Error::backend_source(OP, err))
-                })
-                .is_ok();
-            if proven {
-                oldest.release(runtime);
-            } else {
-                self.leaked.push(oldest);
-            }
+            self.leaked.push(record);
+            return;
         }
         self.entries.push(record);
+    }
+
+    /// Retain a record permanently: its completion was never proven, or the event was never recorded,
+    /// so no later query may be trusted to release it.
+    pub(crate) fn retain_for_soundness(&mut self, record: TransferRetirement) {
+        self.leaked.push(record);
     }
 
     /// Number of records still waiting for completion, including the permanently retained ones.
@@ -475,7 +475,9 @@ impl PendingDownload {
     /// ```
     pub fn wait(mut self) -> Result<(Tensor, PinnedHostBuffer), CompletionUnproven> {
         if let Err(error) = self.resolve() {
-            self.detach();
+            // Unproven completion is a terminal outcome: the record is retained for soundness, never
+            // handed to the drainable queue where a later query could release it.
+            self.retain_terminal();
             return Err(CompletionUnproven { error });
         }
         match (self.source.take(), self.buffer.take()) {
@@ -505,6 +507,21 @@ impl PendingDownload {
     }
 
     /// Hand the record to the runtime's retirement queue.
+    /// Retain the record permanently, without touching the event again.
+    fn retain_terminal(&mut self) {
+        if !self.live {
+            return;
+        }
+        self.live = false;
+        self.runtime
+            .retain_transfer_for_soundness(TransferRetirement {
+                event: self.event,
+                source: self.source.take(),
+                buffer: self.buffer.take(),
+                resource: self.resource.take(),
+            });
+    }
+
     fn detach(&mut self) {
         if !self.live {
             return;
@@ -554,7 +571,7 @@ fn rejected(error: crate::Error, source: Tensor, buffer: PinnedHostBuffer) -> Tr
 ///
 /// Returns [`TransferSubmitError::Rejected`] when the transfer is refused before anything is
 /// enqueued — an unserved dtype, a buffer whose length does not match, a producer failure reported at
-/// the publication boundary, an unresolvable allocation or a full retirement queue — and carries the
+/// the publication boundary or an unresolvable allocation — and carries the
 /// unchanged value and buffer back with it. Returns [`TransferSubmitError::Unproven`] when the copy
 /// may have been enqueued but completion could not be established; the value, buffer, retention and
 /// event then stay provider-private and are never returned or released.
@@ -583,6 +600,9 @@ pub fn download_pending(
     source: Tensor,
     buffer: PinnedHostBuffer,
 ) -> Result<PendingDownload, TransferSubmitError> {
+    // Every submission drains what earlier detachments left behind, so a caller that never polls or
+    // synchronizes still bounds the queue.
+    runtime.drain_transfer_retirements();
     let (handle, byte_len) = match device_allocation(&source) {
         Ok(allocation) => allocation,
         Err(error) => return Err(rejected(error, source, buffer)),
@@ -655,7 +675,9 @@ pub fn download_pending(
     .and_then(|()| unsafe { cuda_result::event::record(event, stream) });
 
     if let Err(err) = enqueued {
-        runtime.detach_transfer(TransferRetirement {
+        // The event may not have been recorded, and an unrecorded event queries as complete, so this
+        // record must never be released by a later drain: it is retained for soundness.
+        runtime.retain_transfer_for_soundness(TransferRetirement {
             event,
             source: Some(source),
             buffer: Some(buffer),
@@ -887,6 +909,7 @@ pub fn upload_pending<'dst>(
     source: PinnedHostBuffer,
     destination: &'dst mut Tensor,
 ) -> crate::Result<PendingUpload<'dst>> {
+    runtime.drain_transfer_retirements();
     let (handle, byte_len) = device_allocation(destination)?;
     if byte_len != source.len() {
         return Err(crate::Error::invalid_argument(

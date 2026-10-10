@@ -507,6 +507,11 @@ impl CudaRuntime {
         self.inner.check_errors(op)
     }
 
+    /// A weak handle to this runtime's state, for values that must not keep it alive.
+    pub(crate) fn weak_state(&self) -> std::sync::Weak<CudaRuntimeState> {
+        Arc::downgrade(&self.inner)
+    }
+
     /// Return the opaque identity of this exact executable runtime instance.
     ///
     /// # Examples
@@ -537,6 +542,20 @@ impl CudaRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         queue.detach(&self.inner, record);
+    }
+
+    /// Retain a transfer record permanently: its completion was never proven, or its event was never
+    /// recorded, so no later query may be trusted to release it.
+    pub(crate) fn retain_transfer_for_soundness(
+        &self,
+        record: super::transfer::TransferRetirement,
+    ) {
+        let mut queue = self
+            .inner
+            .transfer_retirements
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        queue.retain_for_soundness(record);
     }
 
     /// Release detached transfers whose event already completed. Never waits for the device.

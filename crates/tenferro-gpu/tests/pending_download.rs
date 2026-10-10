@@ -76,9 +76,8 @@ fn pending_download_reports_not_ready_then_returns_the_bytes_and_the_value() {
     let (value, filled) = pending.wait().expect("wait");
     assert_eq!(filled.as_slice(), as_bytes(&data));
 
-    // The submitted value comes back and is usable: a second transfer over it is correct.
-    let retry = PinnedHostBuffer::new(&runtime, DELAYED_ELEMENTS * 8).expect("pinned buffer");
-    let (_, again) = download_pending(&runtime, value, retry)
+    // Both the value and the buffer come back and are reusable: a second transfer over them is correct.
+    let (_, again) = download_pending(&runtime, value, filled)
         .expect("second pending download")
         .wait()
         .expect("second wait");
@@ -218,6 +217,34 @@ fn a_rejected_transfer_returns_the_submitted_package() {
         }
         other => panic!("expected a pre-admission rejection, got {other:?}"),
     }
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn an_unserved_dtype_is_rejected_and_returns_the_package() {
+    let backend = backend();
+    let runtime = runtime_of(&backend);
+    let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).expect("host values");
+    let device = upload_tensor(&runtime, &host).expect("upload");
+
+    // `bool` is not served by this route; the rejection is typed and carries the value back.
+    let flags = Tensor::from_vec_col_major(vec![4], vec![true; 4]).expect("flags");
+    let buffer = PinnedHostBuffer::new(&runtime, 4).expect("pinned buffer");
+    match download_pending(&runtime, flags, buffer) {
+        Err(TransferSubmitError::Rejected(rejected)) => {
+            assert_eq!(rejected.buffer.len(), 4);
+            assert_eq!(rejected.source.shape(), &[4]);
+        }
+        other => panic!("expected an unserved dtype to be rejected, got {other:?}"),
+    }
+
+    // The runtime is unaffected.
+    let buffer = PinnedHostBuffer::new(&runtime, 4 * 8).expect("pinned buffer");
+    let (_, filled) = download_pending(&runtime, device, buffer)
+        .expect("pending download")
+        .wait()
+        .expect("wait");
+    assert_eq!(from_bytes(filled.as_slice()), vec![1.0; 4]);
 }
 
 #[test]
