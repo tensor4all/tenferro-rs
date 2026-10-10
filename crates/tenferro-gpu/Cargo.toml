@@ -103,6 +103,11 @@ path = "tests/held_cuda_session.rs"
 required-features = ["cuda"]
 
 [[test]]
+name = "pending_upload"
+path = "tests/pending_upload.rs"
+required-features = ["cuda"]
+
+[[test]]
 name = "pending_download"
 path = "tests/pending_download.rs"
 required-features = ["cuda"]
