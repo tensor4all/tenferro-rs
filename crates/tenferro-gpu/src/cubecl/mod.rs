@@ -143,6 +143,7 @@ pub(crate) mod raw;
 mod runtime;
 mod runtime_adapter;
 pub(crate) mod session_cubecl;
+mod transfer;
 mod workspace_retirement;
 
 pub use workspace_retirement::WorkspaceRetirementStats;
@@ -173,6 +174,7 @@ pub use identity::{CudaComputeCapability, CudaDeviceUuid, GpuExtensionCapability
 pub use memory::{download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};
+pub use transfer::{download_pending, PendingDownload, PinnedHostBuffer};
 
 fn op_name(
     kind: PrimitiveOpKind,

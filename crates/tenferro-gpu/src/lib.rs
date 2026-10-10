@@ -49,11 +49,12 @@ pub mod webgpu;
 pub mod cuda {
     pub use super::cubecl::{
         cuda_capabilities, cuda_devices, cuda_runtime_engine_registration,
-        cuda_runtime_hardware_class, download_tensor, gpu_available, upload_tensor,
-        with_cuda_exec_session, CudaBackend, CudaComputeCapability, CudaDeviceError, CudaDeviceId,
-        CudaDeviceInfo, CudaDeviceUuid, CudaExecSession, CudaExtensionCache,
+        cuda_runtime_hardware_class, download_pending, download_tensor, gpu_available,
+        upload_tensor, with_cuda_exec_session, CudaBackend, CudaComputeCapability, CudaDeviceError,
+        CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid, CudaExecSession, CudaExtensionCache,
         CudaExtensionCacheGuard, CudaHeldSession, CudaRuntime, CudaRuntimeIdentity,
-        CudaSessionStats, CutensorWorkspaceStats, GpuExtensionCapability, WorkspaceRetirementStats,
+        CudaSessionStats, CutensorWorkspaceStats, GpuExtensionCapability, PendingDownload,
+        PinnedHostBuffer, WorkspaceRetirementStats,
     };
 
     /// Public tenferro-wide CubeCL session (issue #1597).
