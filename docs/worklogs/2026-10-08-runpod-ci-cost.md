@@ -680,3 +680,28 @@ source identity. Both real packages passed local native NVRTC compilation;
 local GPU execution remains unavailable. Failure-path tests and all 357 CI
 helper tests pass. GPU compatibility and the unchanged whole-lifetime 10% gate
 remain pending for this new candidate; no earlier timing sample can promote it.
+
+The CUDA-12.8-filtered campaign passed its initial A/A gate (383.227 versus
+366.365 seconds, 4.60% spread, driver 570.211.01). Its first two comparison
+pairs measured 360.010 versus 346.326 seconds and 357.142 versus 330.362
+seconds (3.80% and 7.50% reductions). The seventh run passed every test and
+was deleted, but reported driver 570.195.03; the identity gate stopped the
+campaign before another Pod. It is INCONCLUSIVE, with no accepted 10% result.
+All seven Pods were deleted; their estimated GPU cost was $0.4096965.
+The CUDA capability filter narrows driver families but cannot pin patch versions.
+
+[Recorded experiment results](https://github.com/tensor4all/tenferro-benchmark/blob/43c5f37aaa15f047cd049e7d67b148e9d7febe42/result/nvidia-gpu/ci/runpod-bootstrap.md)
+retain all 15 completed paid runs so far, including unsuccessful diagnostics
+and instrumentation failures, with full protocols and individual test data.
+The NVRTC candidate's CPU-only image preflight is
+[run 38028832350](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38028832350);
+it passed both native NVRTC tiers and runner/tool preparation without a GPU.
+The final harness fetches the unchanged candidate helper by its exact Git
+commit before Pod allocation, avoiding a large source-code environment in
+every paid test step. Its [CPU-only preflight](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38029014282)
+also passed. The new frozen harness is
+`d4d63c8e8062ac772e2f2c96ae1963f0599fd2f1`, with production candidate source
+`be7eaa9d367b889172fdded463e02ef81e408dd0`. All prior timing gates and placement
+controls are retained. At most two complete campaign attempts are permitted
+for this candidate; only an INCONCLUSIVE campaign can be retried, never a
+valid primary FAIL. No prior sample is reused.
