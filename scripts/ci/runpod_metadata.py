@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import subprocess
 
+from scripts.ci.runpod_workflow_cost import report
+
 
 def snapshot(pod: dict, pod_id: str) -> dict:
     """Keep only reporting fields; Pod responses also contain runner credentials."""
@@ -19,6 +21,9 @@ def snapshot(pod: dict, pod_id: str) -> dict:
     machine = pod.get("machine")
     if isinstance(machine, dict):
         result["machine"] = {key: machine[key] for key in ("dataCenterId",) if key in machine}
+    # Validate the reporting fields with a zero-length window; no cost report
+    # is emitted here. An incomplete HTTP 200 must still try the creation record.
+    report(result, [], result["lastStartedAt"])
     return result
 
 
@@ -34,13 +39,13 @@ def main() -> int:
             "--header", f"Authorization: Bearer {os.environ['RUNPOD_API_KEY']}",
         ], check=True, capture_output=True, timeout=6)
         value = snapshot(json.loads(response.stdout), args.pod_id)
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
         # CalledProcessError/TimeoutExpired include argv (and the API key).
         print(f"::warning::Startup Pod metadata read unavailable ({type(error).__name__})")
         try:
             value = snapshot(json.loads(args.creation_record.read_text()), args.pod_id)
-        except (OSError, ValueError, TypeError) as error:
-            print(f"::warning::Creation Pod metadata unavailable: {error}")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            print(f"::warning::Creation Pod metadata unavailable ({type(error).__name__})")
             return 0
     # A small job output survives separate hosted runners, without an artifact
     # upload delaying the paid GPU job. Never publish the full provider response.

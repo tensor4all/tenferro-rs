@@ -67,6 +67,27 @@ class PodMetadataTests(unittest.TestCase):
                     self.assertEqual(request.call_args.kwargs['timeout'], 6)
                     self.assertIn('--max-time', request.call_args.args[0])
 
+    def test_incomplete_successful_get_still_uses_usable_creation_record(self):
+        invalid = ({'id': 'accepted'}, dict(POD, lastStartedAt=None),
+                   dict(POD, lastStartedAt='invalid'), dict(POD, costPerHr=0),
+                   dict(POD, costPerHr=float('nan')), dict(POD, costPerHr=True))
+        for live in invalid:
+            for creation in (POD, live):
+                with self.subTest(live=live, creation=creation), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root/'creation').write_text(json.dumps(creation))
+                    with patch('sys.argv', ['metadata', '--pod-id', 'accepted', '--creation-record', str(root/'creation')]), \
+                         patch.dict(os.environ, RUNPOD_API_KEY='key', GITHUB_OUTPUT=str(root/'output')), \
+                         patch('scripts.ci.runpod_metadata.subprocess.run', return_value=
+                               subprocess.CompletedProcess([], 0, json.dumps(live).encode())):
+                        self.assertEqual(main(), 0)
+                    if creation is POD:
+                        saved = json.loads((root/'output').read_text().removeprefix('pod_metadata='))
+                        self.assertEqual(saved, POD)
+                        self.assertEqual(report(saved, [], FINISH)['paid_seconds'], 342)
+                    else:
+                        self.assertFalse((root/'output').exists())
+
     def test_missing_startup_and_creation_data_does_not_fail_lifecycle(self):
         with tempfile.TemporaryDirectory() as directory, \
              patch('sys.argv', ['metadata', '--pod-id', 'accepted', '--creation-record', directory+'/missing']), \

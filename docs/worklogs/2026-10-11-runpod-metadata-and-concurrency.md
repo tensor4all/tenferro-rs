@@ -55,3 +55,8 @@ no CI speedup claim. Focused helper tests cover missing/malformed/wrong-Pod fina
 records, creation-response fallback, and deletion preceding best-effort reporting.
 Existing CI cost-discipline rules cover the lifecycle contract; no new rule or
 library API change is needed.
+
+A successful startup HTTP response is accepted only if its timestamp and price
+can support the existing cost reporter. Incomplete successful responses also try
+the creation record; if both lack usable fields, no snapshot is emitted. Focused
+regressions cover missing/null/malformed start times and invalid prices.
