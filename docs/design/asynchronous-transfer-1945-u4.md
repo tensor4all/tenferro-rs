@@ -160,8 +160,10 @@ PendingDownload<'a>            // 'a borrows the source tensor
 1. **Source publication and source-root handoff**: capture an immutable storage/read lease plus the
    producer frontier, end the source's numerical admission, and let the destination be entered
    afterwards. The U1 record leaves this to U4; `ManagedResource` retains an allocation but does not
-   grant or transfer read authority. This is the first blocker for a real source-publication
-   contract.
+   grant or transfer read authority. A design for it was written and rejected in review — see
+   [source-publication-1945-u4.md](./source-publication-1945-u4.md), which records the four blockers
+   (owning submission first, the safe writable-binding escape, the missing producer identity, and
+   cross-stream error masking) and the prerequisites for a second attempt.
 2. **Dependent-consumer access**: a device consumer must receive both ordering *and* authorized
    access to the pending destination. That needs a destination-access handoff in the value model, and
    tokens minted for the exact frozen event domain (not derived from a runtime handle). Cross-domain
