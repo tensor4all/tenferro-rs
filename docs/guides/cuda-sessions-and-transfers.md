@@ -92,9 +92,10 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
     // point is that `is_ready` never waits and the bytes are only handed over by `wait`.
     println!("pinned upload: observed in flight before wait = {observed_in_flight}");
 
-    // Pending download into a caller-owned pinned buffer: the bytes are readable only from `wait`.
+    // Pending download into a caller-owned pinned buffer: the value and the buffer are moved in and
+    // come back from `wait`, so the bytes exist for the caller only after completion.
     let buffer = PinnedHostBuffer::new(&runtime, bytes.len())?;
-    let filled = download_pending(&runtime, &destination, buffer)?.wait()?;
+    let (returned, filled) = download_pending(&runtime, destination, buffer)?.wait()?;
     assert_eq!(from_bytes(filled.as_slice()), host);
     assert_eq!(reusable.as_slice(), filled.as_slice());
 ```
@@ -105,8 +106,11 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
   outlive a copy it cannot control.
 - `upload_pending` borrows the destination tensor mutably for the handle's lifetime, so nothing can
   read, mutate or drop the device tensor while the copy may still write it. The compiler enforces it.
-- `download_pending` borrows the source tensor for the handle's lifetime and owns the destination
-  buffer; the bytes are only handed over by `wait`.
+- `download_pending` takes ownership of the value *and* the buffer, so neither is reachable while the
+  copy is in flight and both come back from `wait`. Dropping an unwaited handle detaches the record
+  into the runtime's retirement queue, which releases it once its event proves completion and retains
+  it otherwise; forgetting the handle leaks it in place. A refused submission (wrong length, unserved
+  dtype, host tensor) returns the package untouched as `TransferSubmitError::Rejected`.
 - `is_ready` queries the copy's CUDA event and distinguishes "not ready" from a device error;
   `wait` synchronizes once and returns the buffer; dropping without `wait` resolves before releasing,
   and a completion that cannot be proven leaks the buffers instead of freeing memory the device may

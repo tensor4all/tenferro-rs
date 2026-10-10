@@ -1,0 +1,5 @@
+error[E0614]: type `tenferro_tensor::Tensor` cannot be dereferenced
+  --> tests/ui/cuda_pending_download_moves_the_source.rs:10:24
+   |
+10 |     let _still_mine = &*source;
+   |                        ^^^^^^^ can't be dereferenced

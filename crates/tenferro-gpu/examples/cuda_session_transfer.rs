@@ -91,12 +91,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // point is that `is_ready` never waits and the bytes are only handed over by `wait`.
     println!("pinned upload: observed in flight before wait = {observed_in_flight}");
 
-    // Pending download into a caller-owned pinned buffer: the bytes are readable only from `wait`.
+    // Pending download into a caller-owned pinned buffer: the value and the buffer are moved in and
+    // come back from `wait`, so the bytes exist for the caller only after completion.
     let buffer = PinnedHostBuffer::new(&runtime, bytes.len())?;
-    let filled = download_pending(&runtime, &destination, buffer)?.wait()?;
+    let (returned, filled) = download_pending(&runtime, destination, buffer)?.wait()?;
     assert_eq!(from_bytes(filled.as_slice()), host);
     assert_eq!(reusable.as_slice(), filled.as_slice());
     // snippet-end:cuda_pinned_transfer
+    assert_eq!(returned.shape(), &[4]);
     println!("pending download: {:?}", from_bytes(filled.as_slice()));
     Ok(())
 }
