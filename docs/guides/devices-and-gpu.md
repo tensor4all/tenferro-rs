@@ -17,6 +17,10 @@ The optional XLA/PJRT path is separate from these tensor backends. It lowers
 static-shaped traced programs to StableHLO in `tenferro-xla` and loads PJRT
 plugins at runtime. See [XLA and PJRT](xla.md).
 
+For the CUDA execution shapes — one entry per stage with a held session, and
+pinned host↔device transfers whose completion the caller decides when to wait
+for — see [CUDA sessions and pinned transfers](cuda-sessions-and-transfers.md).
+
 ## Provider Matrix
 
 | Provider | Status | Feature | Notes |
