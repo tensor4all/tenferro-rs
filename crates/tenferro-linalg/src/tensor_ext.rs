@@ -2604,7 +2604,13 @@ fn norm_from_read<B: LinalgBackend + ?Sized>(
     if axes.is_empty() {
         return backend.to_contiguous_read(input);
     }
-    let reduced = if can_square_without_abs(input.dtype(), axes.len(), ord) {
+    let reduced = if ord.is_none() && axes.len() == original_shape.len() {
+        // Full Frobenius reduction: one fused `|x|^2` pass with no `abs`
+        // temporary and no leading-axis layout copy. Every backend that owns
+        // the norm surface implements the fused primitive.
+        let squared = backend.norm_squared_read(input.clone())?;
+        backend.sqrt_read(TensorRead::from_tensor(&squared))?
+    } else if can_square_without_abs(input.dtype(), axes.len(), ord) {
         frobenius_norm_read(input.clone(), &axes, backend)?
     } else if axes.len() == 2 {
         matrix_norm(input, &axes, ord, backend)?
