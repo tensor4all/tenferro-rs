@@ -670,3 +670,32 @@ correctness evidence, not a paired timing improvement. The incremental byte
 and correctness criteria passed; the additional whole-Pod 10% goal remains
 unproven. [Complete evidence and protocol](https://github.com/tensor4all/tenferro-benchmark/blob/experiment/runpod-preexpanded-wheels/result/nvidia-gpu/ci/runpod-preexpanded-wheels.md)
 retain the full logs, inventories, case identities, host and cost observations.
+
+## Hosted cuTENSOR cache footprint
+
+The next incremental target is the hosted cache, not a paid-Pod timing claim.
+Publisher run 38047788138 saved 608,291,096 compressed cuTENSOR bytes; the
+repository cache API later reported 10,564,514,068 active bytes with that entry
+absent. Run 38047804467 missed all three runtime caches. The cuTENSOR entry
+alone occupied about 5.7% of that observed cache footprint. This establishes
+meaningful avoidable storage, but does not prove why the entry disappeared or
+predict a hit-rate improvement.
+
+The installer currently extracts static and independent multi-GPU/MPI
+libraries, although runtime packaging already discards them. Extracting only
+the same `lib/libcutensor.so*` family at installation removes that redundancy
+before cache publication. Both trusted writer and read-only consumer rotate
+to the runtime-only cache key. CUDA SDKs already omit compiler/static archives;
+the neighboring toolkit cache needs its compiler for archive builds and stays
+unchanged. Existing cache-role and key-pairing contracts cover the design; no
+new repository policy is needed.
+
+The size/content screen is declared before candidate measurement: baseline
+`8fbd73d5d08e5a91e8f418728711f13a8dbb9043`, cuTENSOR 2.6.0.4 from one vendor
+archive, identical tar/zstd settings, at least 50% fewer unpacked file bytes
+and 40% fewer compressed bytes, with all retained file contents and symlink
+targets identical. File bytes are the primary metric; no timing sample or
+paid-GPU comparison is used. Real-tar regression tests cover selective
+extraction, stale destination replacement and the required nonempty, resolvable
+runtime ABI. The latter replaces a hard-coded version fallback that accepted
+broken or absent `libcutensor.so.2` links.
