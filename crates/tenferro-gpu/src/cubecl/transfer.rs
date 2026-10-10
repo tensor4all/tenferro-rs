@@ -389,9 +389,11 @@ pub fn download_pending<'source>(
         ));
     }
 
-    // Audited interop boundary: submit the producer's pending work (and its errors) before the raw
-    // copy, then retain the source allocation for the whole flight.
-    runtime.flush_cubecl(OP)?;
+    // Publication boundary: report the producer's failures and dispatch every task queued before
+    // this point to the server thread, without retiring staged bytes — so the producer's kernels are
+    // on the stream when the raw copy below is enqueued and this call does not wait for device
+    // progress. The caller's own event is the completion witness.
+    runtime.check_errors(OP)?;
     let resource = runtime
         .client()
         .get_resource(handle)
@@ -666,9 +668,9 @@ pub fn upload_pending<'dst>(
         ));
     }
 
-    // Audited interop boundary: submit the destination's pending work (and its errors) before the
-    // raw copy, then resolve the allocation's stream.
-    runtime.flush_cubecl(OP)?;
+    // Publication boundary: the same non-blocking check as `download_pending`, so pending work on
+    // the destination is on the stream before the raw copy without waiting for device progress.
+    runtime.check_errors(OP)?;
     let resource = runtime
         .client()
         .get_resource(handle)

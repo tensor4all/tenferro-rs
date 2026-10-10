@@ -23,11 +23,11 @@ tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 # revision the tenferro workspace deps pin, keeping a single CubeCL runtime
 # type across the sample and tenferro-gpu.
 [patch.crates-io]
-t4a-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "eb2c8894d585d2d119a1b76fcc3094bc44b73deb" }
-t4a-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "eb2c8894d585d2d119a1b76fcc3094bc44b73deb" }
-t4a-cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "eb2c8894d585d2d119a1b76fcc3094bc44b73deb" }
-t4a-cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "eb2c8894d585d2d119a1b76fcc3094bc44b73deb" }
-t4a-cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "eb2c8894d585d2d119a1b76fcc3094bc44b73deb" }
+t4a-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "bf20b930256823f1d9ef62a54f43bbf06dc70f46" }
+t4a-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "bf20b930256823f1d9ef62a54f43bbf06dc70f46" }
+t4a-cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "bf20b930256823f1d9ef62a54f43bbf06dc70f46" }
+t4a-cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "bf20b930256823f1d9ef62a54f43bbf06dc70f46" }
+t4a-cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "bf20b930256823f1d9ef62a54f43bbf06dc70f46" }
 
 # Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
 [profile.ci]

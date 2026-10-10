@@ -44,11 +44,13 @@ Delivered:
 
 Explicitly **not** claimed in this slice:
 
-- **Submission is not nonblocking.** The copy uses the existing audited submission path
-  (`flush_cubecl`, which also flushes producer errors — see §3). Host dispatch can block on
-  cross-stream GC backpressure, and preceding staging retirement can wait on a fence; the slice says
-  so instead of claiming device-free publication. The `get_resource`-only variant of draft 2 was
-  rejected because it silently drops producer error reporting.
+- **Publication does not wait for *its own* retirement, but a device-free publication is not claimed.**
+  The copy is published through CubeCL's `check_errors` (§3), which reports producer errors and
+  dispatches the host queue without rotating the drop queue, so the boundary no longer performs a
+  device wait of its own — the two earlier alternatives failed here: `flush` waits the previous fence,
+  and `get_resource` alone silently drops producer error reporting. What remains is host dispatch
+  (a blocking host round trip), cross-stream resource resolution (bounded GC backpressure) and a
+  preceding kernel that trips the staging policy. Those are named, not hidden.
 - **No dependent-device-consumer contract.** There is no `dependency()`: a same-domain CUDA event
   token grants ordering but no access to the pending destination, and minting an admissible token
   needs the exact frozen event-domain identity, which this API does not receive.
@@ -61,7 +63,7 @@ Explicitly **not** claimed in this slice:
 
 | Issue #1945 requirement | Slice 1 |
 | --- | --- |
-| "Pinned H2D/D2H can enqueue and return without a host wait" | **partly**: both directions return a pending handle without waiting for their copy; the submission itself is not claimed to be wait-free (§1) |
+| "Pinned H2D/D2H can enqueue and return without a host wait" | **partly**: both directions return a pending handle without waiting for their copy, and their publication boundary no longer performs its own drop-queue rotation (CubeCL's `check_errors`). Two waits remain: host dispatch is a blocking host round trip, and both cross-stream resource resolution (bounded GC backpressure) and a preceding kernel that trips the staging policy can still wait for device progress (§3, §5) |
 | "An owned/guarded pending result retains source read leases, destination allocation, pinned/staging buffers and provider/event resources" | **yes**, as owned state: `ManagedResource`, the owned pinned buffer, the `CudaRuntime` pin and the event |
 | "CPU reads/mutation cannot observe a pending or aliased buffer" | **yes**: the D2H buffer is owned by the handle until `wait()` returns it, the D2H source is borrowed for the handle's lifetime, and the H2D destination is mutably borrowed |
 | "GPU consumers import a valid stream/event dependency without host synchronization" | **no**: needs the frozen-domain admission seam (§4) |
@@ -75,36 +77,54 @@ Explicitly **not** claimed in this slice:
 
 ## 3. Measured: the pending routes against the existing blocking paths (#2009)
 
-Protocol: `crates/tenferro-gpu/benches/transfer_paths.rs`, criterion, single-threaded harness, one
-CUDA stream, 50 samples with 2 s warm-up and 5 s measurement per case, on an NVIDIA A100 80GB PCIe
-with driver 580.126.09 (no CPU pinning; the measured work is device-side). Pinned cases reuse one
-buffer across iterations — `wait` hands it back and the next iteration hands it in — so the
-measurement covers the copy and its event, not allocation. `pinned_wait` puts the enqueue in
-criterion's untimed setup, so it is the completion wait alone. Medians in µs:
+The boundary these numbers measure became non-blocking for device work in the same change that
+adopted it: tensor4all/cubecl#27 adds `Client::check_errors`, which reports a stream's producer errors
+and dispatches the host task queue **without** retiring staged bytes, and therefore without performing
+its own drop-queue rotation. Tenferro's raw-copy boundaries call it instead of `flush`. Adopting it
+needs one CubeCL revision in the whole graph, which is why tensor4all/cubek#16 and #17 bump that fork's
+pin on its release branch, and tensor4all/cubecl#28 makes the CUDA **write** path enforce the staging
+policy as well — with the boundary no longer flushing, a transfer-only workload that stages host bytes
+and runs no kernel would otherwise retain them, because the policy counters are only evaluated where
+they are checked.
 
-| case | 8 B | 4 KB | 1 MB |
-| --- | ---: | ---: | ---: |
-| download `pageable` (`download_tensor`) | 29.7 | 32.4 | 482.8 |
-| download `pinned` (`download_pending` + `wait`) | 29.6 | 29.5 | 350.3 |
-| download `pinned_wait` (wait only) | 5.18 | 6.01 | 323.3 |
-| upload `staging` (`upload_tensor`) | 3.85 | 18.2 | 3594.6 |
-| upload `pinned` (`upload_pending` + `wait`) | 29.2 | 30.9 | 1167.9 |
-| pinned allocation, 1 MB | — | — | 1703.4 |
+Protocol: `crates/tenferro-gpu/benches/transfer_paths.rs`, criterion, single-threaded harness, one CUDA
+stream, 50 samples with 2 s warm-up and 5 s measurement per case, on an NVIDIA A100 80GB PCIe with
+driver 580.126.09, no CPU pinning. Payloads are `f64` element counts; the table labels their byte
+sizes. Pinned cases reuse one buffer across iterations — `wait` hands it back and the next iteration
+hands it in — so they cover the copy and its event, not allocation. `pinned_wait` puts the enqueue in
+criterion's untimed setup. These are host wall-clock numbers that include host dispatch work, and the
+values are criterion's displayed central estimates, not medians.
+
+| case | 16 B | 64 B | 32 KiB | 8 MiB |
+| --- | ---: | ---: | ---: | ---: |
+| download `pageable` (`download_tensor`) | 22.4 -> 22.0 | 30.3 -> 29.7 | 32.5 -> 32.0 | 517.6 -> 488.5 us |
+| download `pinned` (`download_pending` + `wait`) | 30.3 -> **22.0** | 29.8 -> **21.1** | 30.6 -> **22.2** | 350.6 -> 345.8 us |
+| download `pinned_wait` (wait only) | 5.16 -> 5.18 | 5.02 -> 5.17 | 5.99 -> 6.07 | 323.1 -> 323.2 us |
+| upload `staging` (`upload_tensor`) | 3.89 -> 3.73 | 3.93 -> 3.87 | 18.68 -> 18.40 | 3.77 -> 4.15 ms |
+| upload `pinned` (`upload_pending` + `wait`) | 28.4 -> **22.0** | 29.4 -> **21.8** | 31.7 -> **23.1** | 1.10 ms -> **349.4 us** |
+| pinned allocation, 8 MiB | — | — | — | 6.35 -> 6.32 ms |
 
 What the numbers support, and what they do not:
 
-- **Large payloads favour the pinned routes**: 1 MB D2H is 350 µs pinned against 483 µs pageable
-  (~27% less) and 1 MB H2D is 1.17 ms pinned against 3.59 ms staged (~3x less). The staged upload
-  number reflects that CubeCL's staging path pays a completion wait per call, which is exactly the
-  per-call cost #2009 tracks.
-- **Small payloads do not**: the pending route carries a ≈25 µs fixed cost (audited flush, resource
-  resolution, event creation) against 3.9 µs for a staged 8 B upload, so it is not a drop-in
-  replacement for the existing paths. That is why slices 1-2 add a route rather than reroute the
-  blocking APIs.
-- **The absolute D2H rate is still below the reference**: 1 MB in 323 µs is about 3.2 GB/s against
-  #2009's 5-13 GB/s cudarc reference, so the copy itself, the submission boundary and the retirement
-  of staged bytes remain the open performance work. These numbers are not an app-level speedup
-  claim, and the pending route's point is that a caller may wait later than the copy ends.
+- **The publication path got cheaper**: the pending routes are 22-29% faster from 16 B to 32 KiB in
+  both directions, and an 8 MiB pinned upload is ~68% faster. The copy-bound 8 MiB download moves only
+  ~1.4% (the pageable variant moves 5.6%, which is the boundary's share of that path).
+- **The wait row is not pure copy time and does not attribute the change**: `pinned_wait` excludes the
+  enqueue but still includes synchronization, retention release and event teardown, and it is
+  essentially unchanged (0-3% at the small sizes, identical at 8 MiB) — which bounds the change to the
+  publication path but does not prove "exactly the boundary cost".
+- **The mechanism behind the 8 MiB upload win is not established here**: this serial
+  enqueue-then-wait benchmark cannot separate a previous-fence wait from the boundary's own overhead,
+  and a completion wait cannot overlap in this loop by construction. The observation stands; the
+  attribution does not.
+- **The copy is not below the reference**: 8 MiB in 323 us is ~26 GB/s, above #2009's 5-13 GB/s cudarc
+  reference. An earlier revision of this record claimed the opposite because the payload labels were
+  wrong by a factor of eight (element counts read as bytes); that claim is withdrawn, and the staged
+  upload path varies by up to 10% run to run, so no conclusion is drawn from its small deltas.
+- **The pending routes are still not a drop-in replacement at tiny sizes**: ~22 us at 16 B against
+  3.7 us for a staged 16 B upload, because the remainder is host dispatch and resource resolution.
+- These are device-side measurements of a route, not an app-level speedup claim: the pending route's
+  point is that the caller may wait later, which a serial enqueue-then-wait benchmark cannot show.
 
 ## 4. Ownership and failure semantics
 
@@ -117,9 +137,16 @@ PendingDownload<'a>            // 'a borrows the source tensor
   └── resolved: bool
 ```
 
-- The copy is submitted through the existing `flush_cubecl` boundary, which submits pending CubeCL
-  work *and* flushes producer errors; a producer failure therefore surfaces as the transfer's own
-  error instead of being masked by a successfully completed copy.
+- The copy is published through CubeCL's `check_errors` (tensor4all/cubecl#27): it reports the
+  stream's accumulated producer errors and dispatches every queued task to the server thread — so the
+  producer's kernels are on the stream before the raw copy — without rotating the drop queue, so the
+  call does not wait for device progress. A producer failure therefore surfaces as the transfer's own
+  error instead of being masked by a successfully completed copy, and the transfer's own CUDA event
+  is the completion witness.
+- Staged host bytes are retired by CubeCL's staging policy, which the write path enforces as well
+  (tensor4all/cubecl#28): with the boundary no longer flushing, a transfer-only workload that stages
+  bytes and runs no kernel would otherwise retain them, because the policy counters are only evaluated
+  where they are checked.
 - `wait()`: `cuEventSynchronize`; on success the retained resource is released and the buffer is
   returned; on failure nothing is published and the buffer/resource are abandoned (leaked), because a
   failed copy cannot prove what the device is still touching.
