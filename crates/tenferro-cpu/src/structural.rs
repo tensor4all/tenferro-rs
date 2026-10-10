@@ -1115,7 +1115,9 @@ where
         .diagonal_view(&[(axis_a, axis_b)])
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims().to_vec())?;
-    map_into(&mut out.as_uninit_view_mut()?, &diag, MaybeUninit::new)
+    // INVARIANT: `copy_into_uninit` fully overwrites the destination and routes a
+    // native-float strided copy to the permutation engine, serial or parallel.
+    copy_into_uninit(&mut out.as_uninit_view_mut()?, &diag)
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     // SAFETY: the successful diagonal copy writes every logical destination element.
     unsafe { out.assume_init() }
