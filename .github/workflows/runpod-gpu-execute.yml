@@ -283,14 +283,15 @@ jobs:
           # pod reaches. zstd still lands before the actions/cache restore step
           # there, which is what keeps the cache version hash compatible with
           # the zstd-equipped hosted publisher.
+          # Smoke uses the Python standard library; PJRT wheels are unpacked
+          # with zipfile. pip and its recommended compiler toolchain are unused.
           apt-get update
-          apt-get install -y \
+          apt-get install -y --no-install-recommends \
             curl \
             tar \
             gzip \
             ca-certificates \
-            python3 \
-            python3-pip
+            python3
 
           nvidia-smi
           df -h
@@ -521,7 +522,7 @@ jobs:
           set -euxo pipefail
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y \
+          apt-get install -y --no-install-recommends \
             git \
             jq \
             zstd \

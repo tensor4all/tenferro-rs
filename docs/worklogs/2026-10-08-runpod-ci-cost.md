@@ -499,3 +499,34 @@ or obsolete pods remain recoverable after failed deletion. The per-success cost
 ratio is unavailable if any pod in its GPU group has unknown cost; missing costs
 cannot lower the ratio. Historical totals above have complete pod cost evidence
 and remain unchanged.
+
+
+## Bootstrap package reduction experiment
+
+The maintainer requested a further 10% cost reduction through Pod startup and
+execution-environment preparation. The primary metric is the entire paid Pod
+lifetime, from creation through confirmed deletion. Baseline controller source
+is `ff94aeded9cc98d6c49889c8ef6fca365763d93a`. The first candidate removes
+unused pod-side pip and disables recommended APT packages in both bootstrap
+and execution-tool installation. It retains the pinned image, verified runner
+dependency installer, CUDA compile/load/launch proof, lifecycle limits, and
+all numerical tests. Hosted wheel download still uses pip.
+
+APT simulation in the pinned production image selected 144 packages for the
+existing bootstrap and 26 for the candidate. This is a package-count finding,
+not a measured paid-time improvement. Local container verification precedes
+any paid measurements.
+
+Before paid runs, freeze the harness commit and artifact identities in the
+experiment record. Use one exact GPU model without fallback, identical archived
+285-case CUDA, three-case PJRT and tutorial workloads, and fresh Pods. First
+run a diagnostic baseline/candidate pair; it is not acceptance evidence. If
+promising, run an independent baseline A/A control and three confirmation pairs
+in A/B, B/A, A/B order. Require at least 10% improvement in median paid lifetime,
+no pair regression, successful full workloads, matching driver/runtime identity,
+and within-arm maximum/minimum paid lifetime at most 1.5. A/A paid lifetime
+difference above 10% invalidates confirmation. Record host/GPU identity and
+phase durations; provider placement cannot be assumed identical. Missing costs
+or failed accepted Pods fail the campaign rather than disappearing from its
+results. Report failed-attempt spending separately as well as in total cost.
+Do not retry selected slow pairs or relax gates after seeing results.
