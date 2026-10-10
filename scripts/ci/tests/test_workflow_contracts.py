@@ -31,10 +31,13 @@ class WorkflowContractTests(unittest.TestCase):
     def test_paid_lifecycle_alone_holds_global_queue(self) -> None:
         parent = (ROOT / ".github/workflows/runpod-gpu-test.yml").read_text()
         child = (ROOT / ".github/workflows/runpod-gpu-execute.yml").read_text()
-        self.assertEqual(
-            parent.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0],
-            child.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0],
-        )
+        def shared_environment(workflow):
+            block = workflow.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0]
+            return [line for line in block.splitlines()
+                    if not line.lstrip().startswith(("#", "RUNPOD_IMAGE:"))]
+        self.assertEqual(shared_environment(parent), shared_environment(child))
+        self.assertNotIn("RUNPOD_IMAGE:", parent)
+        self.assertNotIn("RUNPOD_IMAGE:", (ROOT / ".github/workflows/runpod-gpu-runtime.yml").read_text())
         # The parent only collapses repeated deliveries for one PR head (#2002);
         # it never joins the global paid queue and never cancels a running
         # preparation.
@@ -335,23 +338,14 @@ class WorkflowContractTests(unittest.TestCase):
             text_full,
         )
         self.assertIn("PROVISION_RUNNER_GROUP_ID:", create)
-        # The build toolchain, git, jq, and zstd are installed by the test
-        # job's own first step: registration and the smoke proof must not wait
-        # for them, because every pre-registration second is billed at the GPU
-        # rate and a rejected candidate pays it too. zstd still lands before
-        # the actions/cache restore step, which is what keeps the cache version
-        # hash compatible with the zstd-equipped hosted publisher.
-        self.assertIn("RUNNER_CACHE_DIR=\"/workspace/runpod-ci-cache\"", create)
-        self.assertIn('echo "${RUNNER_SHA256}  ${RUNNER_TARBALL}" | sha256sum -c', create)
-        self.assertLess(
-            create.index('echo "${RUNNER_SHA256}  ${RUNNER_CACHED_TARBALL}"'),
-            create.index("curl -fsSL -o \"${RUNNER_TARBALL}\""),
-            "a cached runner tarball must be considered before downloading",
-        )
-        # A missing, unwritable, or stale cache must fall back to the download
-        # instead of failing the startup script under `set -e`.
-        self.assertIn("2>/dev/null || true", create)
-        self.assertIn('echo "warning: could not populate the runner tarball cache"', create)
+        # The pinned image supplies the runner and bootstrap tools. The same
+        # CUDA launch proof must finish before that runner registers.
+        self.assertIn('cd /home/runner', create)
+        self.assertIn('exec sudo -E bash -lc "$BASH_EXECUTION_STRING"', create)
+        self.assertLess(create.index('env -u RUNNER_JIT_CONFIG python3'),
+                        create.index('exec ./run.sh --jitconfig'))
+        self.assertIn('--pod-env "NVIDIA_VISIBLE_DEVICES=all"', create)
+        self.assertIn('--pod-env "NVIDIA_DRIVER_CAPABILITIES=compute,utility"', create)
         whole_job = read(".github/workflows/runpod-gpu-test.yml")
         install = whole_job.index("      - name: Install pod-side execution dependencies")
         job_install = whole_job[

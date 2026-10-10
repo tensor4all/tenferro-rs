@@ -177,9 +177,10 @@ else:
             for part in range(5):
                 self.assertIn(f'-{bundle}-part{part:02}', prep)
 
-    def test_minimal_image_installs_verified_runner_dependencies_before_registration(self):
+    def test_image_runner_registration_follows_cuda_launch_proof(self):
         child = (ROOT / '.github/workflows/runpod-gpu-execute.yml').read_text()
         startup = step_script(child, 'Provision cheapest compatible RunPod pod')
-        self.assertLess(startup.index('sha256sum -c'), startup.index('./bin/installdependencies.sh'))
-        self.assertLess(startup.index('./bin/installdependencies.sh'),
-                        startup.index('./run.sh --jitconfig'))
+        self.assertLess(startup.index('env -u RUNNER_JIT_CONFIG python3'),
+                        startup.index('exec ./run.sh --jitconfig'))
+        self.assertIn('cd /home/runner', startup)
+        self.assertNotIn('./bin/installdependencies.sh', startup)

@@ -619,3 +619,26 @@ missing evidence, wrong placement, or a failed initial A/A gate stop further
 spending and invalidate the campaign; no replacement samples are allowed.
 Reconsideration requires a fresh complete campaign. Provider image-cache
 state is uncontrolled despite fresh Pods and remains a reporting limitation.
+
+The first controlled campaign stopped after [its initial baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38023892878).
+The full workload and deletion succeeded (348.515 paid seconds, $0.0571177),
+but a newline quoting error in the experimental post-deletion placement
+recorder prevented its evidence artifact. This was a harness error, not a
+candidate failure. The run remains recorded and is excluded from acceptance
+by the predeclared missing-evidence rule. The recorder was corrected, every
+inline Python block was compiled, and the exact placement step was exercised
+with a representative Pod record before restarting the entire campaign at
+benchmark commit `c6f9a1294ec472c1fadbfbdf038c4a4b1cf299b1`. No samples or
+thresholds were replaced or relaxed.
+
+Production implementation is prepared locally, pending that confirmation:
+the image supplies runner dependencies, CUDA proof still precedes registration,
+readiness polling is two seconds, and execution tools omit recommendations.
+The image pin now has one owner in the paid workflow. The daily checker
+compares its version with stable runner releases and its OCI digest with the
+official GHCR tag; registry requests use an anonymous pull token. The existing
+14-day/two-newer-release deprecation policy is unchanged. Local focused checks,
+353 CI helper tests and the fast gate pass. Live registry comparison succeeds;
+release freshness warns about 2.338.0, published on October 6. Version 2.337.0
+is retained to keep the experiment's baseline and candidate runner identical;
+the existing freshness policy requires a follow-up bump within its window.
