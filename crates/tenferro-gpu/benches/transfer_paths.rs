@@ -3,6 +3,8 @@
 //! Compares the existing blocking transfer paths with the pinned pending handoffs added by U4
 //! slices 1-2, on one CUDA stream with criterion's default single-threaded harness:
 //!
+//! Payloads are `f64` element counts; the labels are the resulting byte sizes.
+//!
 //! | case | host copies | destination memory |
 //! | --- | --- | --- |
 //! | `download_pageable` (`download_tensor`, large payload) | 1 (device → pageable `Vec`) | pageable |
@@ -28,8 +30,14 @@ use tenferro_gpu::cuda::{
 };
 use tenferro_tensor::Tensor;
 
-/// Payload sizes: the pinned-scalar fast path, one small vector, and a large transfer.
-const SIZES: &[(usize, &str)] = &[(8, "8B"), (4096, "4KB"), (1024 * 1024, "1MB")];
+/// Payloads, as `(f64 elements, label)`: the pinned-scalar fast path (two elements, the largest
+/// payload that takes the <= 16-byte path), a small vector, a mid-size vector, and a large transfer.
+const SIZES: &[(usize, &str)] = &[
+    (2, "16B"),
+    (8, "64B"),
+    (4096, "32KiB"),
+    (1024 * 1024, "8MiB"),
+];
 
 fn backend() -> CudaBackend {
     assert!(
@@ -119,9 +127,9 @@ fn bench_download(c: &mut Criterion) {
         );
     }
 
-    group.bench_function("alloc_1MB", |bencher| {
+    group.bench_function("alloc_8MiB", |bencher| {
         bencher.iter(|| {
-            let buffer = PinnedHostBuffer::new(&runtime, 1024 * 1024).expect("pinned buffer");
+            let buffer = PinnedHostBuffer::new(&runtime, 1024 * 1024 * 8).expect("pinned buffer");
             black_box(buffer.len());
         });
     });

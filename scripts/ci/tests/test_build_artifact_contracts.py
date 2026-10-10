@@ -140,9 +140,12 @@ class BuildArtifactContracts(unittest.TestCase):
         dependencies = manifest["workspace"]["dependencies"]
 
         # Published as `t4a-cubecl* 0.10.2`: the CUDA complex-cast and complex
-        # plane warp-reduce shuffle fixes, plus the upload copy removal and the
-        # loaded-kernel-id diagnostic (#2009, #2010).
-        revision = "eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+        # plane warp-reduce shuffle fixes, the upload copy removal and the
+        # loaded-kernel-id diagnostic (#2009, #2010), plus `Client::check_errors`
+        # (tensor4all/cubecl#27), which reports producer errors without retiring
+        # staged bytes so a raw-copy publication boundary need not wait for the
+        # device.
+        revision = "bf20b930256823f1d9ef62a54f43bbf06dc70f46"
         for name in (
             "cubecl",
             "cubecl-cuda",

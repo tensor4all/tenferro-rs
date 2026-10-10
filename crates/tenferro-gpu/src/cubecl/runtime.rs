@@ -493,6 +493,16 @@ impl CudaRuntime {
         self.inner.flush_cubecl(op)
     }
 
+    /// Report the errors of work already submitted, without waiting for device progress.
+    ///
+    /// CubeCL's `flush` reports producer errors but also retires staged host bytes and arms a fence
+    /// the next submission synchronizes; a raw copy that must be ordered after pending kernels but
+    /// must not wait for the device uses this instead. The host task queue is dispatched either way,
+    /// so work queued before this call has reached the stream when it returns.
+    pub(crate) fn check_errors(&self, op: &'static str) -> crate::Result<()> {
+        self.inner.check_errors(op)
+    }
+
     /// Return the opaque identity of this exact executable runtime instance.
     ///
     /// # Examples
@@ -708,6 +718,12 @@ impl CudaRuntimeState {
     fn flush_cubecl(&self, op: &'static str) -> crate::Result<()> {
         self.client
             .flush()
+            .map_err(|err| crate::Error::backend_source(op, err))
+    }
+
+    fn check_errors(&self, op: &'static str) -> crate::Result<()> {
+        self.client
+            .check_errors()
             .map_err(|err| crate::Error::backend_source(op, err))
     }
 
