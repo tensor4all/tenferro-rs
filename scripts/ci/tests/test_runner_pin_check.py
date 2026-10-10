@@ -123,7 +123,8 @@ class RegistryTests(unittest.TestCase):
     def test_anonymous_registry_token_is_separate_from_github_api_token(self):
         responses = [self.response(b'{"token":"anonymous-pull"}'),
                      self.response(digest="sha256:" + SHA_337_0)]
-        with patch.dict(os.environ, GH_TOKEN="github-api-token"), patch(
+        # INVARIANT: these are inert fixture values, never real credentials.
+        with patch.dict(os.environ, GH_TOKEN="fake"), patch(
             "urllib.request.urlopen", side_effect=responses
         ) as opening:
             self.assertEqual(_image_digest("2.337.0"), SHA_337_0)
