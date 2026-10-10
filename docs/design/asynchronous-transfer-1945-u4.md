@@ -73,7 +73,40 @@ Explicitly **not** claimed in this slice:
 | "Reuse/batch events at producer/transfer frontiers" | **no**: one event per transfer |
 | AD is a separate layer | **yes**: plain copies only |
 
-## 3. Ownership and failure semantics
+## 3. Measured: the pending routes against the existing blocking paths (#2009)
+
+Protocol: `crates/tenferro-gpu/benches/transfer_paths.rs`, criterion, single-threaded harness, one
+CUDA stream, 50 samples with 2 s warm-up and 5 s measurement per case, on an NVIDIA A100 80GB PCIe
+with driver 580.126.09 (no CPU pinning; the measured work is device-side). Pinned cases reuse one
+buffer across iterations — `wait` hands it back and the next iteration hands it in — so the
+measurement covers the copy and its event, not allocation. `pinned_wait` puts the enqueue in
+criterion's untimed setup, so it is the completion wait alone. Medians in µs:
+
+| case | 8 B | 4 KB | 1 MB |
+| --- | ---: | ---: | ---: |
+| download `pageable` (`download_tensor`) | 29.7 | 32.4 | 482.8 |
+| download `pinned` (`download_pending` + `wait`) | 29.6 | 29.5 | 350.3 |
+| download `pinned_wait` (wait only) | 5.18 | 6.01 | 323.3 |
+| upload `staging` (`upload_tensor`) | 3.85 | 18.2 | 3594.6 |
+| upload `pinned` (`upload_pending` + `wait`) | 29.2 | 30.9 | 1167.9 |
+| pinned allocation, 1 MB | — | — | 1703.4 |
+
+What the numbers support, and what they do not:
+
+- **Large payloads favour the pinned routes**: 1 MB D2H is 350 µs pinned against 483 µs pageable
+  (~27% less) and 1 MB H2D is 1.17 ms pinned against 3.59 ms staged (~3x less). The staged upload
+  number reflects that CubeCL's staging path pays a completion wait per call, which is exactly the
+  per-call cost #2009 tracks.
+- **Small payloads do not**: the pending route carries a ≈25 µs fixed cost (audited flush, resource
+  resolution, event creation) against 3.9 µs for a staged 8 B upload, so it is not a drop-in
+  replacement for the existing paths. That is why slices 1-2 add a route rather than reroute the
+  blocking APIs.
+- **The absolute D2H rate is still below the reference**: 1 MB in 323 µs is about 3.2 GB/s against
+  #2009's 5-13 GB/s cudarc reference, so the copy itself, the submission boundary and the retirement
+  of staged bytes remain the open performance work. These numbers are not an app-level speedup
+  claim, and the pending route's point is that a caller may wait later than the copy ends.
+
+## 4. Ownership and failure semantics
 
 ```text
 PendingDownload<'a>            // 'a borrows the source tensor
@@ -95,7 +128,7 @@ PendingDownload<'a>            // 'a borrows the source tensor
 - `is_ready()`: `cuEventQuery`; a non-ready result is `Ok(false)`, and a device error is reported
   rather than collapsed into "not ready".
 
-## 4. Remaining U4 work (needs maintainer decisions)
+## 5. Remaining U4 work (needs maintainer decisions)
 
 1. **Source publication and source-root handoff**: capture an immutable storage/read lease plus the
    producer frontier, end the source's numerical admission, and let the destination be entered
@@ -114,7 +147,7 @@ PendingDownload<'a>            // 'a borrows the source tensor
 5. **#2009's measurements** (small/large, pageable/pinned/caller-output, copy bytes, event/wait cost,
    measured overlap) once the routes above exist.
 
-## 5. Open questions for maintainers
+## 6. Open questions for maintainers
 
 1. Does slice 1 belong in `tenferro-gpu`'s CUDA module only, or should the pending contract be stated
    in `tenferro-tensor` so other backends can adopt it deliberately?

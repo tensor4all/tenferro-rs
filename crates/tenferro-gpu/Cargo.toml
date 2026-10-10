@@ -135,6 +135,12 @@ harness = false
 required-features = ["cuda"]
 
 [[bench]]
+name = "transfer_paths"
+path = "benches/transfer_paths.rs"
+harness = false
+required-features = ["cuda"]
+
+[[bench]]
 name = "cutensor_plan_cache"
 path = "benches/cutensor_plan_cache.rs"
 harness = false
