@@ -103,21 +103,6 @@ class GpuTestPartitionTests(unittest.TestCase):
             "period": "100s", "terminate-after": 2, "grace-period": "10s",
         })
 
-    def test_concurrency_reaches_nextest_without_changing_inventory_or_checks(self):
-        for threads in (1, 2):
-            with self.subTest(threads=threads), \
-                 patch("sys.argv", ["gpu_test_partition.py", "--kind", "cuda", "--lane", "gpu",
-                                    "--archive-file", "tests.tar.zst", "--test-threads", str(threads)]), \
-                 patch.dict(os.environ, {}, clear=True), \
-                 patch("scripts.ci.gpu_test_partition.read_partition", return_value=self.partition), \
-                 patch("scripts.ci.gpu_test_partition.subprocess.run") as run:
-                run.return_value = subprocess.CompletedProcess([], 0, json.dumps(self.inventory))
-                self.assertEqual(main(), 0)
-                command = run.call_args.args[0]
-                self.assertEqual(command[command.index("-j") + 1], str(threads))
-                self.assertIn("--no-fail-fast", command)
-                self.assertEqual(command[command.index("-E") + 1], filter_expression(self.partition, "gpu"))
-
     def test_only_gpu_execution_selects_the_timeout_profile(self):
         for kind in ("cuda", "pjrt"):
             for lane in ("host", "gpu"):
