@@ -78,7 +78,7 @@ checks remain independent merge blockers.
 The change policy also runs this gate when its workflow, shared profile, or
 classifier changes, so CI-only edits can validate the native lane. Other
 CI-only and docs-only changes run an explicit successful no-op on
-`ubuntu-latest` instead of allocating a macOS runner. A Linux gate failure also
+`ubuntu-24.04` instead of allocating a macOS runner. A Linux gate failure also
 does not cancel an already-running macOS lane; both results remain visible and
 merge-blocking. The older Linux-hosted Apple cross-target type-check is removed
 because the real macOS workspace run compiles and executes the same
@@ -254,6 +254,25 @@ revision and required-check target rather than accepting them from the caller.
 Raw revision dispatch remains available for trusted post-merge validation, but
 cannot be combined with PR-number recovery.
 
+## Ubuntu CI baseline
+
+Repository-owned Linux jobs explicitly use `ubuntu-24.04`, including CUDA
+archive builds, cache publication, CPU/extension validation, oracle replay,
+documentation and lifecycle control jobs. Avoid the moving `ubuntu-latest`
+alias so the build and execution baseline changes deliberately. The public,
+digest-pinned Actions runner used on RunPod already has an Ubuntu 24.04 base.
+CUDA 12.6 and 12.8 installers use NVIDIA's `ubuntu2404` repository; both tiers
+are supported on that distribution. CUDA archive, toolkit/runtime and Linux
+Rust cache namespaces distinguish this migration from Ubuntu 22.04 artifacts.
+The cuTENSOR redistributable is distribution-independent and keeps its existing
+runtime-only namespace.
+
+The legacy `ubuntu-gpu` larger-runner label is managed in organization settings.
+Its job verifies Ubuntu 24.04 before downloading the newly built archives;
+changing a YAML label cannot upgrade that external image. If the check fails,
+an organization runner administrator must update its image. The regular
+RunPod route does not depend on that label or its configuration.
+
 ## Hosted GPU execution dependencies
 
 The read-only runtime preparation workflow runs on a hosted Ubuntu 24.04
@@ -271,7 +290,8 @@ checked by CI configuration tests/actionlint and verified after merge when
 the controller changes. Shared cache publication remains owned by
 ci-cache-publish on main.
 
-The digest-pinned CUDA 12.6.3 runtime image retains the 12.6 driver floor.
+The official Actions runner image keeps the existing CUDA 12.6 driver floor
+through explicit runtime selection and staged NVIDIA libraries.
 Pre-registration NVRTC compile/load/launch validation remains mandatory.
 After registration the GPU selects the driver-compatible SDK (12.8 for the
 full capability tier), transfers only that SDK and the common payload,

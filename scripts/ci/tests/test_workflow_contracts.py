@@ -28,6 +28,35 @@ def read(path: str) -> str:
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_linux_workflows_and_cuda_sources_use_ubuntu24(self) -> None:
+        for workflow in (ROOT / ".github/workflows").glob("*.yml"):
+            with self.subTest(workflow=workflow.name):
+                text = workflow.read_text()
+                self.assertNotIn("ubuntu-22.04", text)
+                self.assertNotIn("ubuntu-latest", text)
+                self.assertNotIn("ubuntu22", text)
+        for name in ("install_cuda_runtime_tree.sh", "install_cuda_toolkit_hosted.sh",
+                     "cuda_smoke_test.py"):
+            with self.subTest(installer=name):
+                text = (ROOT / "scripts/ci" / name).read_text()
+                self.assertIn("/repos/ubuntu2404/", text)
+                self.assertNotIn("ubuntu2204", text)
+        legacy = read(".github/workflows/CI_gpu.yml").split("  cuda-run:", 1)[1]
+        self.assertLess(legacy.index("Verify Ubuntu 24.04 GPU runner"),
+                        legacy.index("actions/download-artifact"))
+
+    def test_legacy_gpu_runner_requires_the_archive_os_baseline(self) -> None:
+        workflow = read(".github/workflows/CI_gpu.yml")
+        step = workflow.split("      - name: Verify Ubuntu 24.04 GPU runner\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - uses:", 1)[0])
+        for version, expected in [("24.04", 0), ("22.04", 1)]:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                release = Path(directory) / "os-release"
+                release.write_text(f'ID=ubuntu\nVERSION_ID="{version}"\n')
+                result = subprocess.run(["bash", "-c", script.replace("/etc/os-release", str(release))],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+
     def test_paid_lifecycle_alone_holds_global_queue(self) -> None:
         parent = (ROOT / ".github/workflows/runpod-gpu-test.yml").read_text()
         child = (ROOT / ".github/workflows/runpod-gpu-execute.yml").read_text()
@@ -102,7 +131,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("needs: changes", block)
         self.assertNotIn("needs: [changes, ci-gate]", block)
         self.assertIn("run_macos: ${{ steps.policy.outputs.run_macos }}", text)
-        self.assertIn("'macos-15' || 'ubuntu-latest'", block)
+        self.assertIn("'macos-15' || 'ubuntu-24.04'", block)
         self.assertIn("python3 scripts/ci/run_profile.py macos-accelerate", block)
         self.assertIn("shared-key: macos-accelerate-v1", block)
         self.assertNotIn("run_profile.py workspace-faer", block)
@@ -163,7 +192,7 @@ class WorkflowContractTests(unittest.TestCase):
             "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32",
             text,
         )
-        self.assertIn("prefix-key: v1-rust-oracle-replay-ubuntu22", text)
+        self.assertIn("prefix-key: v2-rust-oracle-replay-ubuntu24", text)
         self.assertIn("shared-key: oracle-replay-autodiff", text)
         self.assertIn("cache-all-crates: true", text)
         self.assertIn("cache-workspace-crates: true", text)
@@ -795,18 +824,18 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertEqual(key_line(consumer), key_line(publisher))
         for pair_line in (
-            "prefix-key: v8-rust-cuda-pjrt-ci-ubuntu22-ptx",
+            "prefix-key: v9-rust-cuda-pjrt-ci-ubuntu24-ptx",
             "shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}",
             "key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-runtime-v3",
         ):
             self.assertIn(pair_line, consumer)
             self.assertIn(pair_line, publisher)
         self.assertIn(
-            "key: cuda-runtime-${{ runner.os }}-x86_64-12.8-minimal-v7",
+            "key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-12.8-minimal-v8",
             consumer,
         )
         self.assertIn(
-            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v7",
+            "key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v8",
             publisher,
         )
         for env_line in (

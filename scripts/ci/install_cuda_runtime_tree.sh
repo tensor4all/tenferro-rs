@@ -27,7 +27,7 @@ if ! ls /etc/apt/sources.list.d/cuda*.list >/dev/null 2>&1; then
   tmpdir="$(mktemp -d)"
   curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
     -o "${tmpdir}/cuda-keyring.deb" \
-    https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
   as_root dpkg -i "${tmpdir}/cuda-keyring.deb"
   rm -rf "${tmpdir}"
 fi

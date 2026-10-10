@@ -18,7 +18,7 @@ permissions:
 jobs:
   delete-runpod-pod:
     name: Delete RunPod pod
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     environment: runpod-gpu
     timeout-minutes: 10
 

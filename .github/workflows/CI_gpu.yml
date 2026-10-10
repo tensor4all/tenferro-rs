@@ -50,7 +50,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name != github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - name: Manual fallback does not wait for PR checks
@@ -159,7 +159,7 @@ jobs:
     # needs [pre-gpu-gate, cuda-archive]. Runs for both fork and same-repo PRs;
     # the build result (and its cache) is reused even if a prerequisite check
     # later fails, so the only cost is cheap-runner minutes on doomed PRs.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -170,7 +170,7 @@ jobs:
         run: |
           set -euo pipefail
           rustc_hash="$(rustc --version --verbose | sha256sum | cut -c1-12)"
-          echo "key=cuda-pjrt-archive-v8-ci-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', 'docs/tutorial-code/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
+          echo "key=cuda-pjrt-archive-v9-ci-ubuntu24-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', 'docs/tutorial-code/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
       - name: Cache CUDA/PJRT test archives
         uses: actions/cache@v4
         id: cuda_archive_cache
@@ -183,7 +183,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
         with:
-          prefix-key: v1-rust-cuda-pjrt
+          prefix-key: v2-rust-cuda-pjrt-ubuntu24
           shared-key: cuda-pjrt-ci
           cache-all-crates: true
       - uses: taiki-e/install-action@nextest
@@ -273,6 +273,15 @@ jobs:
           # - gpu_vendor: rocm
           #   if: false
     steps:
+      # This label's image is configured by organization administrators, not
+      # by runs-on. Reject an older image before using Ubuntu 24.04 binaries.
+      - name: Verify Ubuntu 24.04 GPU runner
+        run: |
+          . /etc/os-release
+          if [ "${ID:-}" != ubuntu ] || [ "${VERSION_ID:-}" != 24.04 ]; then
+            echo "::error::The organization ubuntu-gpu runner must use Ubuntu 24.04 to execute these archives."
+            exit 1
+          fi
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tenferro_ref || github.ref }}
@@ -290,7 +299,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/cuda-runtime-${{ env.CUDA_RUNTIME_VERSION }}
-          key: cuda-runtime-${{ runner.os }}-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-minimal-v3
+          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-minimal-v3
       - name: Configure CUDA runtime libraries
         run: |
           set -euo pipefail
@@ -386,7 +395,7 @@ jobs:
               tmpdir="$(mktemp -d)"
               curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
                 -o "${tmpdir}/cuda-keyring.deb" \
-                https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+                https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
               sudo dpkg -i "${tmpdir}/cuda-keyring.deb"
               rm -rf "${tmpdir}"
             fi
@@ -577,7 +586,7 @@ jobs:
       always() &&
       !cancelled() &&
       github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require fork CUDA GPU tests or same-repo RunPod gate
         env:
@@ -656,7 +665,7 @@ jobs:
       always() &&
       !cancelled() &&
       github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require manual CUDA GPU tests
         env:

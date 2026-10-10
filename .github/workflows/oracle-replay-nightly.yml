@@ -20,7 +20,7 @@ concurrency:
 jobs:
   recent-commits:
     name: Check recent default-branch commits
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       run_oracle: ${{ steps.recent.outputs.run_oracle }}
       reason: ${{ steps.recent.outputs.reason }}
@@ -50,7 +50,7 @@ jobs:
     name: Root-facade oracle replay
     needs: recent-commits
     if: always()
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
@@ -64,7 +64,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         if: needs.recent-commits.result == 'success' && needs.recent-commits.outputs.run_oracle == 'true'
         with:
-          prefix-key: v1-rust-oracle-replay-ubuntu22
+          prefix-key: v2-rust-oracle-replay-ubuntu24
           shared-key: oracle-replay-autodiff
           cache-all-crates: true
           cache-workspace-crates: true
@@ -110,7 +110,7 @@ jobs:
     name: File issue on failure
     needs: [recent-commits, oracle-replay]
     if: failure() && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read

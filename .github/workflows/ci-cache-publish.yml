@@ -52,7 +52,7 @@ jobs:
     # Default-branch guard: a workflow_dispatch on any other ref must never
     # build or publish (#1403 finding: dispatch is not implicitly main-only).
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -75,7 +75,7 @@ jobs:
         run: |
           set -euo pipefail
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v16-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/PERFORMANCE_TIPS.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
+          key="cuda-pjrt-archive-v17-ci-ubuntu24.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/PERFORMANCE_TIPS.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"
@@ -112,7 +112,7 @@ jobs:
         id: toolkit_cache
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-toolkit-${{ env.CUDA_RUNTIME_VERSION }}
-          key: cuda-toolkit-${{ runner.os }}-ubuntu22-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-v1-${{ hashFiles('tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh') }}
+          key: cuda-toolkit-${{ runner.os }}-ubuntu24-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-v1-${{ hashFiles('tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh') }}
       - name: Install CUDA toolkit for archive PTX
         if: steps.archive_lookup.outputs.cache-hit != 'true'
         run: bash tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh "${CUDA_RUNTIME_VERSION}" "${TENFERRO_CI_CACHE_ROOT}/cuda-toolkit-${CUDA_RUNTIME_VERSION}"
@@ -121,7 +121,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-toolkit-${{ env.CUDA_RUNTIME_VERSION }}
-          key: cuda-toolkit-${{ runner.os }}-ubuntu22-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-v1-${{ hashFiles('tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh') }}
+          key: cuda-toolkit-${{ runner.os }}-ubuntu24-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-v1-${{ hashFiles('tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh') }}
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         if: steps.archive_lookup.outputs.cache-hit != 'true'
@@ -131,7 +131,7 @@ jobs:
           # v8 rotated the namespace when this trusted publisher took
           # ownership: v7 entries could contain PR-built target artifacts
           # saved by the previously write-capable workflow_run jobs.
-          prefix-key: v8-rust-cuda-pjrt-ci-ubuntu22-ptx
+          prefix-key: v9-rust-cuda-pjrt-ci-ubuntu24-ptx
           shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
           cache-all-crates: true
           cache-workspace-crates: true
@@ -212,7 +212,7 @@ jobs:
   publish-cuda-runtime-trees:
     name: Publish CUDA runtime tree cache (${{ matrix.cuda }})
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -232,7 +232,7 @@ jobs:
         id: runtime_lookup
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ matrix.cuda }}
-          key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v7
+          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v8
           lookup-only: true
 
       - name: Build CUDA runtime tree
@@ -249,12 +249,12 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ matrix.cuda }}
-          key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v7
+          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v8
 
   publish-cutensor:
     name: Publish cuTENSOR cache
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
