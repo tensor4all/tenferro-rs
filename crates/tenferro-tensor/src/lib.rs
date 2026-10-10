@@ -93,7 +93,7 @@ pub mod types;
 pub mod validate;
 
 pub use backend::{
-    has_active_backend_session, has_held_backend_session, with_session_entry_guard,
+    has_active_backend_session, has_held_backend_session, with_session_entry_guard, ActivationOp,
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, ContractionScalar,
     DotGeneralAccumulation, ElementwiseReadOp, HeldSessionMarker, SessionCachedDot, TensorAnalytic,
     TensorBackend, TensorBackendOps, TensorBuffer, TensorDeviceTransfer, TensorDot,

@@ -9,7 +9,7 @@ use tenferro_runtime::composite::{
     self, scalar_tensor, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce,
     CompositeUnary,
 };
-use tenferro_tensor::{CompareDir, DType, GatherConfig};
+use tenferro_tensor::{ActivationOp, CompareDir, DType, GatherConfig};
 
 use super::{EagerSession, EagerTensor};
 use crate::{Error, Result};
@@ -132,6 +132,29 @@ impl<'a> EagerSession<'a> {
         EagerComposite { session: self }
     }
 
+    /// Run a fused activation through the backend when no AD record is needed.
+    ///
+    /// Returns `Ok(None)` when the operands are tracked, semantic capture is
+    /// active, or the backend declines the fused form; the caller then records
+    /// the shared composite formulation instead.
+    fn fused_activation(
+        &mut self,
+        op: ActivationOp,
+        input: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
+        if !crate::eager_ops::untracked_fast_path_allowed(&[input]) {
+            return Ok(None);
+        }
+        let read = input.tensor_read();
+        let Some(output) = self.backend.fused_activation_read(op, read)? else {
+            return Ok(None);
+        };
+        Ok(Some(EagerTensor::new_untracked_result(
+            std::sync::Arc::clone(&input.ctx),
+            output,
+        )?))
+    }
+
     /// Logistic sigmoid `1 / (1 + exp(-x))`, overflow-free.
     ///
     /// Evaluated as `1 / (1 + e)` for `x > 0` and `e / (1 + e)` otherwise, with
@@ -160,6 +183,9 @@ impl<'a> EagerSession<'a> {
     /// input, [`Error::ContextMismatch`] for a tensor from another runtime, or a
     /// backend error.
     pub fn sigmoid(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        if let Some(out) = self.fused_activation(ActivationOp::Sigmoid, input)? {
+            return Ok(out);
+        }
         composite::sigmoid(&mut self.composite(), input)
     }
 
@@ -188,6 +214,9 @@ impl<'a> EagerSession<'a> {
     /// input, [`Error::ContextMismatch`] for a tensor from another runtime, or a
     /// backend error.
     pub fn silu(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        if let Some(out) = self.fused_activation(ActivationOp::Silu, input)? {
+            return Ok(out);
+        }
         composite::silu(&mut self.composite(), input)
     }
 
@@ -217,6 +246,9 @@ impl<'a> EagerSession<'a> {
     /// input, [`Error::ContextMismatch`] for a tensor from another runtime, or a
     /// backend error.
     pub fn softplus(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        if let Some(out) = self.fused_activation(ActivationOp::Softplus, input)? {
+            return Ok(out);
+        }
         composite::softplus(&mut self.composite(), input)
     }
 
@@ -245,6 +277,9 @@ impl<'a> EagerSession<'a> {
     /// input, [`Error::ContextMismatch`] for a tensor from another runtime, or a
     /// backend error.
     pub fn gelu(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        if let Some(out) = self.fused_activation(ActivationOp::Gelu, input)? {
+            return Ok(out);
+        }
         composite::gelu(&mut self.composite(), input)
     }
 
@@ -273,6 +308,9 @@ impl<'a> EagerSession<'a> {
     /// input, [`Error::ContextMismatch`] for a tensor from another runtime, or a
     /// backend error.
     pub fn gelu_tanh(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        if let Some(out) = self.fused_activation(ActivationOp::GeluTanh, input)? {
+            return Ok(out);
+        }
         composite::gelu_tanh(&mut self.composite(), input)
     }
 

@@ -1579,6 +1579,46 @@ pub enum ElementwiseReadOp {
     Divide,
 }
 
+/// Fused real-float activation applied in one elementwise pass.
+///
+/// The variants name the same functions the composite activation vocabulary
+/// exposes; a backend that supports the fused form computes the whole
+/// expression in one traversal instead of materializing every intermediate.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::ActivationOp;
+/// assert_eq!(ActivationOp::Sigmoid.label(), "sigmoid");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivationOp {
+    /// Logistic sigmoid `1 / (1 + exp(-x))`, overflow-free.
+    Sigmoid,
+    /// SiLU / swish `x * sigmoid(x)`.
+    Silu,
+    /// Softplus `max(x, 0) + log1p(exp(-|x|))`.
+    Softplus,
+    /// Exact GELU `x/2 * (1 + erf(x / sqrt(2)))`.
+    Gelu,
+    /// GELU tanh approximation `x/2 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 x^3)))`.
+    GeluTanh,
+}
+
+impl ActivationOp {
+    /// Stable operation label used in errors and profiling.
+    #[doc(hidden)]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sigmoid => "sigmoid",
+            Self::Silu => "silu",
+            Self::Softplus => "softplus",
+            Self::Gelu => "gelu",
+            Self::GeluTanh => "gelu_tanh",
+        }
+    }
+}
+
 impl ElementwiseReadOp {
     #[doc(hidden)]
     pub fn label(self) -> &'static str {
@@ -4131,6 +4171,41 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
             "BackendSession::norm_squared_read",
             "backend session does not implement norm_squared_read",
         ))
+    }
+
+    /// Compute a fused activation in one pass, or decline with `Ok(None)`.
+    ///
+    /// This is an optional fast path. A backend that returns `Ok(None)` keeps
+    /// the shared composite formulation of the same function, so declining is
+    /// always correct. A backend that returns `Ok(Some(output))` must produce
+    /// the value
+    /// defined by [`ActivationOp`] for an `F32`/`F64` input in one elementwise
+    /// traversal.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{ActivationOp, BackendSession, TensorRead};
+    ///
+    /// fn fused(session: &mut dyn BackendSession, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Option<tenferro_tensor::Tensor>>
+    /// {
+    ///     session.fused_activation_read(ActivationOp::Sigmoid, x)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for an unsupported dtype, a backend
+    /// error when storage cannot be read, or a kernel error from the fused
+    /// traversal. Returning `Ok(None)` declines the fast path.
+    fn fused_activation_read(
+        &mut self,
+        op: ActivationOp,
+        input: TensorRead<'_>,
+    ) -> crate::Result<Option<Tensor>> {
+        let _ = (op, input);
+        Ok(None)
     }
 
     /// Apply `y <- alpha * x + beta * y` in one pass into caller-owned storage.

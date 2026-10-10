@@ -4,8 +4,9 @@ use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
-    CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig,
-    PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TensorView, TypedTensor,
+    ActivationOp, CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp,
+    GatherConfig, PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TensorView,
+    TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
@@ -16,7 +17,7 @@ use super::backend::{elementwise_read_into_fallback_with_pool, tag_fresh_output,
 use super::indexed_plan_cache::IndexedPlanCache;
 use super::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
 use super::{
-    analytic, copy_tensor_read_into, elementwise, gemm, indexing,
+    activation, analytic, copy_tensor_read_into, elementwise, gemm, indexing,
     materialize_tensor_read_in_domain, reduction, structural,
 };
 
@@ -1149,6 +1150,17 @@ impl BackendSession for CpuExecSession<'_> {
         tenferro_tensor::backend::validate_norm_squared_read(&input)?;
         crate::blas1::validate_cpu_read("BackendSession::norm_squared_read", &input)?;
         self.run_native_fresh(|buffers| reduction::norm_squared_read(buffers, input))
+    }
+
+    fn fused_activation_read(
+        &mut self,
+        op: ActivationOp,
+        input: TensorRead<'_>,
+    ) -> crate::Result<Option<Tensor>> {
+        crate::blas1::validate_cpu_read(op.label(), &input)?;
+        self.run_native_fresh(|buffers| {
+            activation::fused_activation_read_with_pool(buffers, op, input)
+        })
     }
 
     fn axpby_read_into_accum(

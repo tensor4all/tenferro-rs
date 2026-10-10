@@ -284,7 +284,7 @@ where
     unsafe { out.assume_init() }
 }
 
-fn typed_unary_view_tensor_with_pool<T, R>(
+pub(crate) fn typed_unary_view_tensor_with_pool<T, R>(
     op: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensorView<'_, T, R>,

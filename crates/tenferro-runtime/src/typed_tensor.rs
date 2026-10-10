@@ -9,8 +9,8 @@ use tenferro_ops::broadcast::{
 };
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DotGeneralConfig, Error, Result, Tensor, TensorRead, TensorScalar,
-    ValidationError,
+    ActivationOp, BackendSession, CompareDir, DotGeneralConfig, Error, Result, Tensor, TensorRead,
+    TensorScalar, ValidationError,
 };
 
 use crate::composite;
@@ -326,6 +326,11 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     }
 
     fn sigmoid(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::Sigmoid, T::tensor_read(self))?
+        {
+            return into_typed_result("sigmoid", out);
+        }
         let out = run_session_composite(session, |ops| {
             composite::sigmoid(ops, &typed_borrowed(self))
         })?;
@@ -333,12 +338,22 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     }
 
     fn silu(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::Silu, T::tensor_read(self))?
+        {
+            return into_typed_result("silu", out);
+        }
         let out =
             run_session_composite(session, |ops| composite::silu(ops, &typed_borrowed(self)))?;
         into_typed_result("silu", out)
     }
 
     fn softplus(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::Softplus, T::tensor_read(self))?
+        {
+            return into_typed_result("softplus", out);
+        }
         let out = run_session_composite(session, |ops| {
             composite::softplus(ops, &typed_borrowed(self))
         })?;
@@ -346,12 +361,22 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     }
 
     fn gelu(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::Gelu, T::tensor_read(self))?
+        {
+            return into_typed_result("gelu", out);
+        }
         let out =
             run_session_composite(session, |ops| composite::gelu(ops, &typed_borrowed(self)))?;
         into_typed_result("gelu", out)
     }
 
     fn gelu_tanh(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::GeluTanh, T::tensor_read(self))?
+        {
+            return into_typed_result("gelu_tanh", out);
+        }
         let out = run_session_composite(session, |ops| {
             composite::gelu_tanh(ops, &typed_borrowed(self))
         })?;
