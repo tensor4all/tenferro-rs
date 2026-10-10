@@ -266,16 +266,13 @@ impl PendingDownload<'_> {
     /// # }
     /// ```
     pub fn wait(mut self) -> crate::Result<PinnedHostBuffer> {
-        match self.resolve() {
-            Ok(()) => Ok(self
-                .buffer
-                .take()
-                .expect("resolved transfer owns its buffer")),
-            Err(err) => {
-                self.abandon();
-                Err(err)
-            }
+        if let Err(err) = self.resolve() {
+            self.abandon();
+            return Err(err);
         }
+        self.buffer.take().ok_or_else(|| {
+            crate::Error::runtime_state(OP, "the pending download already completed")
+        })
     }
 
     /// Block until the event completes and release the retained source.
