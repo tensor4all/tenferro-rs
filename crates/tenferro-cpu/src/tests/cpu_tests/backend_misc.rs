@@ -790,7 +790,7 @@ fn cpu_view_materialization_uses_pool_aware_strided_copy() {
         "CPU TensorView materialization must not bypass the CPU pool with TypedTensorView::to_contiguous"
     );
     assert!(helper.contains("StridedView::new"));
-    assert!(helper.contains("map_into("));
+    assert!(helper.contains("copy_into_uninit("));
     assert!(helper.contains("PooledUninitOutput"));
     assert!(helper.contains("// SAFETY:"));
     assert!(
@@ -812,6 +812,36 @@ fn cpu_view_materialization_uses_pool_aware_strided_copy() {
             "typed materialization helper must not contain `{forbidden}`"
         );
     }
+}
+
+#[test]
+fn reshape_read_external_payload_reports_unsupported_in_parallel_session() {
+    use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+
+    // Above the serial threshold the parallel route is selected, but a
+    // caller-owned payload has no preset view, so the reshape must keep the
+    // typed refusal instead of reaching the view conversion.
+    let n = 256 * 256;
+    let payload = ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(
+            vec![256, 256],
+            vec![0.0_f64; n],
+        )
+        .unwrap(),
+    );
+    let input = Tensor::external(payload);
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    assert_eq!(backend.num_threads(), 2);
+    let err = backend
+        .with_backend_session(|session| {
+            session.reshape_read(TensorRead::from_tensor(&input), &[512, 128])
+        })
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        tenferro_tensor::Error::UnsupportedDType { .. }
+    ));
 }
 
 #[test]

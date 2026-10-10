@@ -14,7 +14,7 @@ use tenferro_tensor::{
 
 use super::backend::{elementwise_read_into_fallback_with_pool, tag_fresh_output, FreshCpuOutput};
 use super::indexed_plan_cache::IndexedPlanCache;
-use super::provider::{CpuExecutionContext, CpuOperationEntry};
+use super::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
 use super::{
     analytic, copy_tensor_read_into, elementwise, gemm, indexing,
     materialize_tensor_read_in_domain, reduction, structural,
@@ -554,6 +554,12 @@ impl TensorAnalytic for CpuExecSession<'_> {
     delegate_with_pool!(erf_read(input: TensorRead<'_>) => analytic::erf_read_with_pool);
 }
 
+/// Owned `reshape_read` element count at or below which the copy keeps the
+/// serial host path. Mirrors `strided-kernel`'s `MINTHREADLENGTH`, so a copy the
+/// strided scheduler would keep sequential also skips the engine entry and does
+/// not take a pool buffer.
+const SERIAL_RESHAPE_MAX_ELEMS: usize = strided_kernel::execution::MINTHREADLENGTH;
+
 impl TensorStructural for CpuExecSession<'_> {
     // Structural
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -588,15 +594,30 @@ impl TensorStructural for CpuExecSession<'_> {
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        match &input {
-            // INVARIANT: compact inputs take the serial host-copy path, so
-            // they must not pay the engine entry; views may materialize via
-            // strided kernels and keep the entry.
-            TensorRead::Tensor(tensor) => structural::reshape(tensor, shape),
-            TensorRead::View(_) => self.run_native_fresh(|buffers| {
-                structural::reshape_read_with_pool(buffers, input, shape)
-            }),
+        if let TensorRead::Tensor(tensor) = &input {
+            // INVARIANT: a compact input keeps the serial host copy and its typed
+            // refusal for an external payload, without the engine entry or a
+            // pool buffer, unless a parallel-capable context can run the copy
+            // above the strided scheduler's parallel threshold. Such a copy
+            // materializes on the pool; `run_native` (not `run_native_fresh`)
+            // keeps the input placement that the copy puts on the output, as the
+            // metadata-only reshape contract requires.
+            let elements = tenferro_tensor::validate::checked_shape_product(
+                "reshape",
+                "input shape",
+                tensor.shape(),
+            )?;
+            let parallel = match self.entered {
+                Some(context) => context.uses_inner_parallelism(),
+                None => self.entry.preferred_engine_mode() == ParallelMode::Inner,
+            };
+            if !parallel || elements <= SERIAL_RESHAPE_MAX_ELEMS {
+                return structural::reshape(tensor, shape);
+            }
+            return self
+                .run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape));
         }
+        self.run_native_fresh(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
     }
 
     fn broadcast_in_dim_read(
