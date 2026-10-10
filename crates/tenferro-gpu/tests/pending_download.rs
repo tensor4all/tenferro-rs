@@ -39,8 +39,10 @@ fn as_bytes(values: &[f64]) -> Vec<u8> {
 
 fn from_bytes(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|chunk| f64::from_ne_bytes(chunk.try_into().expect("eight bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| f64::from_ne_bytes(*chunk))
         .collect()
 }
 
