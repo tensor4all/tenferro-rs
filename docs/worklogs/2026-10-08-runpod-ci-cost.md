@@ -501,207 +501,115 @@ cannot lower the ratio. Historical totals above have complete pod cost evidence
 and remain unchanged.
 
 
-## Bootstrap package reduction experiment
+## Further bootstrap reduction: decision and measurement contract
 
-The maintainer requested a further 10% cost reduction through Pod startup and
+The maintainer requested another 10% reduction through Pod startup and
 execution-environment preparation. The primary metric is the entire paid Pod
-lifetime, from creation through confirmed deletion. Baseline controller source
-is `ff94aeded9cc98d6c49889c8ef6fca365763d93a`. The first candidate removes
-unused pod-side pip and disables recommended APT packages in both bootstrap
-and execution-tool installation. It retains the pinned image, verified runner
-dependency installer, CUDA compile/load/launch proof, lifecycle limits, and
-all numerical tests. Hosted wheel download still uses pip.
+lifetime, from creation through confirmed deletion. No candidate below has
+accepted performance evidence yet; production promotion remains gated.
 
-APT simulation in the pinned production image selected 144 packages for the
-existing bootstrap and 26 for the candidate. This is a package-count finding,
-not a measured paid-time improvement. Local container verification precedes
-any paid measurements.
+Baseline controller `ff94aeded9cc98d6c49889c8ef6fca365763d93a` uses the same
+source tree as tested ref `bbe7758a4efcaf866415348fe558efd02edd3bc2`. Both arms
+use immutable artifacts from run `38000490223`: 285 CUDA tests, three PJRT
+tests and the tutorial, profile `ci`, nextest concurrency one. Fresh A40 Pods
+have a $0.60/hr ceiling (observed $0.59/hr), identical archive keys, and the
+existing CUDA proof, setup/lifetime limits and deletion rules.
 
-Before paid runs, freeze the harness commit and artifact identities in the
-experiment record. Use one exact GPU model without fallback, identical archived
-285-case CUDA, three-case PJRT and tutorial workloads, and fresh Pods. First
-run a diagnostic baseline/candidate pair; it is not acceptance evidence. If
-promising, run an independent baseline A/A control and three confirmation pairs
-in A/B, B/A, A/B order. Require at least 10% improvement in median paid lifetime,
-no pair regression, successful full workloads, matching driver/runtime identity,
-and within-arm maximum/minimum paid lifetime at most 1.5. A/A paid lifetime
-difference above 10% invalidates confirmation. Record host/GPU identity and
-phase durations; provider placement cannot be assumed identical. Missing costs
-or failed accepted Pods fail the campaign rather than disappearing from its
-results. Report failed-attempt spending separately as well as in total cost.
-Do not retry selected slow pairs or relax gates after seeing results.
+Confirmation starts with two baseline A/A observations, followed by A/B,
+B/A, A/B pairs. A/A max/min must be at most 1.10; all eight observations must
+share the full driver and selected runtime. Each arm's max/min, including
+A/A, must be at most 1.5. The three comparison pairs must satisfy
+`1 - median(B) / median(A) >= 0.10`, with no paired regression. Every run
+must complete the entire workload and have confirmed deletion/cost evidence.
+Failed runs, missing evidence and validity failures stop the campaign;
+no selective replacement or threshold relaxation is permitted. A/A is excluded
+from the primary median. These are CI workflow timings, not operation latency
+benchmarks. Provider image caches remain uncontrolled despite fresh Pods.
 
-The first diagnostic used benchmark harness `bc50907` and production artifacts
-from run `38000490223`, tested ref `bbe7758a4efcaf866415348fe558efd02edd3bc2`,
-profile `ci`, nextest concurrency one, A40 at $0.59/hr, fresh Pods and identical
-read-only archive keys. Hosted artifact-only validation passed in benchmark
-run `38021049168`. Local verification passed the pinned-image runner 2.337.0
-and Node 24 startup without pip, all execution-tool commands, 350 CI helper
-tests and the fast gate; the committed-head deterministic rules review passed.
+## Candidate choice and rejected evidence
 
-Diagnostic [baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38021085175)
-and [candidate](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38021459568)
-both passed 285 CUDA cases, three PJRT cases and the tutorial, with confirmed
-Pod deletion. Paid lifetime was 348.271 versus 355.202 seconds (candidate
-1.99% longer); combined estimated GPU spending was $0.1152914. Startup/queue
-was 69.271 versus 60.202 seconds, while CUDA testing was 215 versus 227 seconds.
-The drivers differed (580.159.04 versus 580.173.02), although both selected
-CUDA 12.8. The diagnostic is INCONCLUSIVE under the driver-identity gate and
-does not establish a causal regression or a speedup. The 10% target was not
-observed, so no confirmation campaign or production promotion is justified for
-this candidate alone. Artifact identities and stage records are retained in
-the linked runs; the bootstrap package reduction remains unpromoted.
+Removing unused Pod pip and recommended packages reduced the simulated
+bootstrap package set from 144 to 26, but the diagnostic measured 348.271
+versus 355.202 paid seconds. Different drivers made it INCONCLUSIVE; the
+10% reduction was not observed. Package count alone cannot justify promotion.
 
-The next candidate investigation is the existing GitHub official runner image,
-which can avoid paid runner download/extraction and dependency installation.
-The published 2.337.0 image is Ubuntu 24.04 and resolves to index digest
+The official GitHub runner image supplies the runner and native dependencies
+before startup. The 2.337.0 image is Ubuntu 24.04, pinned by OCI digest
 `sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4`.
-Local compatibility must be checked before another paid diagnostic; this does
-not authorize or require custom image publication.
+It retains root execution through existing sudo, explicit NVIDIA compute/utility
+capabilities, and CUDA proof before registration. Execution tools omit
+recommendations. Readiness polling is two seconds, with unchanged deadlines.
+The obsolete runner tarball download/cache is removed. No custom registry
+publication is needed.
 
+The image diagnostic measured 376.778 versus 327.120 seconds (13.18% observed
+reduction), with all tests and deletion successful. Drivers differed, so it
+is INCONCLUSIVE and cannot establish the 10% goal. Confirmation narrowed both
+arms to CA-MTL-1, chosen alphabetically among available A40 sites independently
+of timings, then to `allowedCudaVersions: ["12.8"]`, the minimum full-feature
+CUDA capability. Neither control guarantees a driver patch version.
 
-## Official runner image diagnostic
+The CUDA-filtered image campaign passed A/A (383.227/366.365 seconds, driver
+570.211.01), but its first two comparison pairs improved only 3.80% and 7.50%.
+The seventh run used driver 570.195.03, making the campaign INCONCLUSIVE and
+stopping it before another allocation. All seven Pods were deleted. Earlier
+confirmation attempts stopped on placement-recorder quoting and missing
+`includeMachine=true` metadata; both completed workloads and deletion but
+lacked required evidence. A regional A/A attempt also failed driver identity.
+None of those observations is reused as acceptance evidence.
 
-The next diagnostic compares the original production bootstrap against the
-published GitHub runner image pinned above. Experimental controller
-`235be866e9ff97949f4d97c0340e9e6c62548642` in `tensor4all/tenferro-benchmark`
-contains both arms and preserves the same immutable archives from run
-`38000490223`, full workload, A40 model/price ceiling, and lifecycle limits.
-The candidate uses image-provided bootstrap tools and runner dependencies,
-keeps root execution through the image's existing sudo configuration, and
-sets NVIDIA compute/utility capabilities explicitly. CUDA launch proof still
-precedes registration. Execution-tool installation omits recommendations.
+[Complete recorded results](https://github.com/tensor4all/tenferro-benchmark/blob/2fd574932579c11620c9937ac9e8842d1b4b3bcd/result/nvidia-gpu/ci/runpod-bootstrap.md)
+retain all 23 paid runs and one preallocation failure, including unsuccessful
+diagnostics and harness failures, full protocols, controller source, phase
+costs, host observations and individual test results. All 23 Pods were deleted;
+their estimated GPU cost was $1.3662463. Every paid run passed the exact same
+288 CUDA/PJRT cases and tutorial. No failed or unfavorable observation is omitted.
 
-CPU-only [hosted validation](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38022358831)
-passed Ubuntu 24.04 identity, runner 2.337.0 and Node 24 startup, Python stdlib
-imports, root re-execution with the single-use configuration preserved, NVRTC
-12.8 installation/loading, and execution-tool availability. Local image
-download was slow and was stopped after this equivalent hosted validation; no
-local timing or local completion is claimed. Actual GPU launch and numerical
-compatibility remain obligations of the paid diagnostic.
+## NVRTC candidate and remaining validation
 
-A fresh baseline/candidate diagnostic pair is required; the package-only
-measurements are not reused for this new candidate. The whole paid-lifetime
-metric and 10% acceptance threshold, complete-workload requirement, A/A and
-three-pair confirmation policy, non-regression and variability gates remain
-unchanged. CPU identity/load are added to the recorded host observables.
+The next candidate also removes the pre-registration package-index refresh.
+It downloads the dependency-free NVIDIA NVRTC Debian package for 12.6 or
+12.8, verifies the official pinned SHA-256, and installs it with `dpkg`.
+This checksum covers the external download boundary; Git identifies source.
+The compile/load/launch/readback/VRAM proof is unchanged. Accepted execution
+still refreshes package indexes for its remaining tools. The existing image
+diagnostic establishes the startup opportunity; this incremental preparation
+change proceeds directly to independent confirmation after native validation.
 
-The official-image diagnostic [baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38022475657)
-and [candidate](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38022904055)
-both passed the complete 285 CUDA / three PJRT / tutorial workload and deleted
-their Pods. Paid lifetime was 376.778 versus 327.120 seconds, an observed
-13.18% reduction; combined estimated GPU spending was $0.1153611. Startup/queue
-was 98.778 versus 36.120 seconds; CUDA testing was 216 versus 230 seconds. Both
-reported Xeon Gold 6342 CPUs, but drivers were 580.178.04 and 580.173.02. This
-remains INCONCLUSIVE under the driver-identity gate, not accepted performance
-evidence. It justifies a controlled confirmation rather than promotion.
+Both real NVRTC packages passed local native compilation. Hosted official-image
+[validation](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38029014282)
+passed direct installation and compilation for both runtime tiers, runner and
+Node startup, root/JIT environment preservation and execution-tool preparation.
+Local GPU launch remains unavailable. All 357 CI helper tests, the fast gate
+and committed-head deterministic rules review pass; external LLM review is
+intentionally disabled. The final campaign demonstrated the full GPU workload,
+but the paid-lifetime acceptance gate remains unmet because of driver identity.
 
-Public regional availability identified CA-MTL-1 and EU-SE-1 A40 stock at
-$0.59/hr. CA-MTL-1 is selected by alphabetical order, independently of timings.
-The confirmation harness is benchmark commit
-`dd3e824a951829e46c65473133066bacfb87ba99`; it scopes both arms to CA-MTL-1,
-checks that site's current offer before allocating, and records placement
-from the existing Pod record after deletion. The candidate also reduces the
-runner-readiness polling interval from ten to two seconds, retaining the
-420-second startup timeout, 900-second setup budget, 3600-second lifetime
-budget and deletion logic. This removes avoidable readiness-detection delay;
-no independent speedup is attributed to polling. These changes are confined
-to the experiment until the complete gate passes.
+Production candidate source is `be7eaa9d367b889172fdded463e02ef81e408dd0`.
+The experimental harness fetches identical helper bytes by its exact Git
+commit before Pod allocation. Its first attempt, run `38029114443`, stopped
+before allocation because an experimental edit omitted four original environment
+entries, including `ORG_NAME`. No GPU was rented. All original environment
+entries, paid execution and cleanup jobs were restored and compared with the
+previous harness. The helper/image validation is unaffected by that restoration.
 
-The frozen confirmation order is A/A, A/B, B/A, A/B. The first two runs are
-noise controls, excluded from the primary median comparison. A/A max/min
-must be at most 1.10; all eight runs must share the exact driver and selected
-runtime and report CA-MTL-1 placement. Each arm's max/min, including A/A,
-must be at most 1.5. Acceptance requires `1 - median(B) / median(A) >= 0.10`
-for the three pairs and no paired regression. Each run must pass the entire
-workload and have a confirmed deletion/cost record. Failed/unknown runs,
-missing evidence, wrong placement, or a failed initial A/A gate stop further
-spending and invalidate the campaign; no replacement samples are allowed.
-Reconsideration requires a fresh complete campaign. Provider image-cache
-state is uncontrolled despite fresh Pods and remains a reporting limitation.
+The final attempt uses harness `c58f513f1e728388899a6a521c4323290b67a4e8` with
+unchanged thresholds, order and workload. At most two campaign attempts are
+allowed for this candidate, and only INCONCLUSIVE permits a fresh attempt;
+a valid primary FAIL cannot be retried. The final attempt's A/A observations
+(400.192/415.944 seconds, driver 570.195.03) passed. All three candidate runs
+also passed the complete GPU workload and deletion. The observed comparison
+medians were 381.896 versus 328.569 seconds (13.96% reduction); pair reductions
+were 13.96%, 21.04% and 0.24%. However, the last candidate used driver
+570.211.01 instead of 570.195.03. The whole campaign is INCONCLUSIVE under the
+predeclared identity gate, despite the observed median exceeding 10%. The last
+sample is retained and cannot be replaced. The two-attempt limit is exhausted;
+no further paid sampling is scheduled. Fixed-driver placement or a maintainer
+measurement-design decision is needed before further acceptance work.
 
-The first controlled campaign stopped after [its initial baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38023892878).
-The full workload and deletion succeeded (348.515 paid seconds, $0.0571177),
-but a newline quoting error in the experimental post-deletion placement
-recorder prevented its evidence artifact. This was a harness error, not a
-candidate failure. The run remains recorded and is excluded from acceptance
-by the predeclared missing-evidence rule. The recorder was corrected, every
-inline Python block was compiled, and the exact placement step was exercised
-with a representative Pod record before restarting the entire campaign at
-benchmark commit `c6f9a1294ec472c1fadbfbdf038c4a4b1cf299b1`. No samples or
-thresholds were replaced or relaxed.
-
-Production implementation is prepared locally, pending that confirmation:
-the image supplies runner dependencies, CUDA proof still precedes registration,
-readiness polling is two seconds, and execution tools omit recommendations.
-The image pin now has one owner in the paid workflow. The daily checker
-compares its version with stable runner releases and its OCI digest with the
-official GHCR tag; registry requests use an anonymous pull token. The existing
-14-day/two-newer-release deprecation policy is unchanged. Local focused checks,
-353 CI helper tests and the fast gate pass. Live registry comparison succeeds;
-release freshness warns about 2.338.0, published on October 6. Version 2.337.0
-is retained to keep the experiment's baseline and candidate runner identical;
-the existing freshness policy requires a follow-up bump within its window.
-
-The second confirmation attempt also stopped after [its initial baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38024401197).
-All tests and deletion succeeded (355.077 paid seconds, $0.0581932), but the
-normal Pod GET omitted the optional machine object, leaving placement unknown.
-The published RunPod OpenAPI specifies `includeMachine=true` for that object.
-The experimental harness now adds this query to its existing bounded pre-delete
-GET; it adds no request or deletion delay budget. The third complete campaign
-uses benchmark commit `76668eaef9ca0a60275e606ed26ad3bae822dcf8` with unchanged
-order, workload and acceptance gates. Neither aborted sample is reused.
-
-The third campaign's [first baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38025076627)
-and [second baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38025500323)
-passed the full workload, recorded CA-MTL-1, and deleted both Pods. Paid
-lifetimes were 400.098 and 384.674 seconds (combined $0.1286154). The A/A
-spread was 4.01%, but drivers were 570.211.01 and 580.178.04: the campaign is
-INCONCLUSIVE under the unchanged identity gate and stopped before a candidate.
-Region alone does not control driver identity. The public Pod creation API
-supports `allowedCudaVersions` but no exact machine or driver selector.
-
-A fresh campaign at benchmark commit
-`ffa3f10049bb83e54c954846d1815b1a926cfe7e` narrows both arms to
-`allowedCudaVersions: ["12.8"]`, the minimum full-feature CUDA capability,
-to reduce driver-family variation. It retains exact observed driver equality,
-all timing thresholds, order and workload; no old samples are reused. Identity
-mismatch stops immediately after evidence collection, before another allocation.
-This is experimental placement control, not a production GPU-selection change.
-
-The next candidate retains the image/readiness changes and removes the NVRTC
-package-index refresh before registration. NVIDIA publishes dependency-free
-`cuda-nvrtc` Debian packages; the helper pins the supported 12.6/12.8 package
-versions and official SHA-256 values, downloads one matching package, verifies
-it and installs it with `dpkg`. The full compile/load/launch/readback/VRAM proof
-is unchanged, and accepted execution still refreshes indexes for its tools.
-The package checksum covers the untracked NVIDIA download boundary, not Git
-source identity. Both real packages passed local native NVRTC compilation;
-local GPU execution remains unavailable. Failure-path tests and all 357 CI
-helper tests pass. GPU compatibility and the unchanged whole-lifetime 10% gate
-remain pending for this new candidate; no earlier timing sample can promote it.
-
-The CUDA-12.8-filtered campaign passed its initial A/A gate (383.227 versus
-366.365 seconds, 4.60% spread, driver 570.211.01). Its first two comparison
-pairs measured 360.010 versus 346.326 seconds and 357.142 versus 330.362
-seconds (3.80% and 7.50% reductions). The seventh run passed every test and
-was deleted, but reported driver 570.195.03; the identity gate stopped the
-campaign before another Pod. It is INCONCLUSIVE, with no accepted 10% result.
-All seven Pods were deleted; their estimated GPU cost was $0.4096965.
-The CUDA capability filter narrows driver families but cannot pin patch versions.
-
-[Recorded experiment results](https://github.com/tensor4all/tenferro-benchmark/blob/43c5f37aaa15f047cd049e7d67b148e9d7febe42/result/nvidia-gpu/ci/runpod-bootstrap.md)
-retain all 15 completed paid runs so far, including unsuccessful diagnostics
-and instrumentation failures, with full protocols and individual test data.
-The NVRTC candidate's CPU-only image preflight is
-[run 38028832350](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38028832350);
-it passed both native NVRTC tiers and runner/tool preparation without a GPU.
-The final harness fetches the unchanged candidate helper by its exact Git
-commit before Pod allocation, avoiding a large source-code environment in
-every paid test step. Its [CPU-only preflight](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38029014282)
-also passed. The new frozen harness is
-`d4d63c8e8062ac772e2f2c96ae1963f0599fd2f1`, with production candidate source
-`be7eaa9d367b889172fdded463e02ef81e408dd0`. All prior timing gates and placement
-controls are retained. At most two complete campaign attempts are permitted
-for this candidate; only an INCONCLUSIVE campaign can be retried, never a
-valid primary FAIL. No prior sample is reused.
+The daily runner checker now validates the official image tag/digest and
+retains the 14-day/two-newer-release freshness policy. Live digest validation
+passes, with a freshness warning for 2.338.0 published October 6. Version
+2.337.0 keeps baseline/candidate runner identity equal; a follow-up bump is
+required within the existing policy window. No performance promotion or PR
+has been made for this goal yet.
