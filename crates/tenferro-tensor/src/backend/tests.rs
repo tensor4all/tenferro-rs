@@ -165,3 +165,40 @@ fn with_session_entry_guard_sets_and_restores_the_flag() {
     let again = with_session_entry_guard("test backend", || 2usize).unwrap();
     assert_eq!(again, 2);
 }
+
+#[test]
+fn held_session_marker_stays_visible_for_its_whole_lifetime() {
+    assert!(!has_held_backend_session());
+    let marker = HeldSessionMarker::enter("held backend").unwrap();
+    // Unlike the callback-scoped guard, the marker does not depend on any closure being
+    // active: owners that serialize callers must see it between operations too.
+    assert!(has_held_backend_session());
+    assert_eq!(marker.backend(), "held backend");
+    drop(marker);
+    assert!(!has_held_backend_session());
+}
+
+#[test]
+fn held_session_marker_rejects_a_second_marker_and_names_the_holder() {
+    let _held = HeldSessionMarker::enter("first backend").unwrap();
+    let second = HeldSessionMarker::enter("second backend");
+    assert!(matches!(
+        second,
+        Err(SessionEntryError::Reentered {
+            backend: "first backend"
+        })
+    ));
+    // The rejected entry must not replace the live holder.
+    assert!(has_held_backend_session());
+}
+
+#[test]
+fn held_session_marker_is_cleared_on_unwind() {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _held = HeldSessionMarker::enter("held backend").unwrap();
+        panic!("boom");
+    }));
+    assert!(outcome.is_err());
+    assert!(!has_held_backend_session());
+    assert!(HeldSessionMarker::enter("next backend").is_ok());
+}

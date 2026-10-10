@@ -78,5 +78,8 @@ fn execution_session_capability_cannot_project_or_escape_owner_borrow() {
         tests.compile_fail("tests/ui/cuda_removed_runtime_engine_id.rs");
         tests.compile_fail("tests/ui/cuda_removed_runtime_engine_registration_with_id.rs");
         tests.compile_fail("tests/ui/cuda_backend_rejects_bare_integer.rs");
+        tests.compile_fail("tests/ui/cuda_held_session_is_not_send.rs");
+        tests.compile_fail("tests/ui/cuda_held_session_is_not_sync.rs");
+        tests.compile_fail("tests/ui/cuda_held_session_borrow_escape.rs");
     }
 }

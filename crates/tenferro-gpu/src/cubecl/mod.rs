@@ -166,7 +166,9 @@ use error::{unsupported_dtype, unsupported_operation};
 pub use capability::cuda_capabilities;
 pub use device::{cuda_devices, CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
 #[doc(hidden)]
-pub use exec_session::{with_cuda_exec_session, CudaExecSession};
+pub use exec_session::{
+    with_cuda_exec_session, CudaExecSession, CudaHeldSession, CudaSessionStats,
+};
 pub use identity::{CudaComputeCapability, CudaDeviceUuid, GpuExtensionCapability};
 pub use memory::{download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
@@ -351,6 +353,8 @@ struct CudaBackendState {
     // it is a diagnostic for whether the cap is set below the workload's real
     // requirement, not a per-cache statistic.
     cutensor_workspace_temporary_uses: AtomicU64,
+    /// The one held session of this backend state (#1945 U3). Shared by every clone.
+    held_session: exec_session::CudaHeldSessionSlot,
     rt: CudaRuntime,
 }
 
@@ -796,6 +800,7 @@ impl CudaBackend {
                     DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES,
                 ),
                 cutensor_workspace_temporary_uses: AtomicU64::new(0),
+                held_session: exec_session::CudaHeldSessionSlot::new(),
                 rt: CudaRuntime::new(device_id)?,
             }),
         })

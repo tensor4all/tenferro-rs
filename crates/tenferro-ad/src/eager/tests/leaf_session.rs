@@ -1161,6 +1161,23 @@ fn nested_entry_into_the_same_runtime_is_rejected_without_deadlock() -> Result<(
     Ok(())
 }
 
+/// A held backend session keeps its admission for its whole lifetime, so an eager entry on that
+/// thread must be rejected before it waits on this runtime's owner lock (#1945 U3).
+#[test]
+fn a_held_backend_session_rejects_eager_entry_before_waiting() -> Result<(), Error> {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap())?;
+    let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    let marker =
+        tenferro_tensor::HeldSessionMarker::enter("held session under test").expect("marker");
+    assert_reentered(ctx.with_eager_session(|s| s.neg(&x)).map(|_| ()));
+    assert_reentered(ctx.with_execution_session(|_| ()).map(|_| ()));
+    drop(marker);
+    // The runtime is usable again once the held session ends.
+    let y = ctx.with_eager_session(|s| s.neg(&x))?;
+    assert_eq!(y.value()?.as_slice::<f64>()?, &[-2.0]);
+    Ok(())
+}
+
 fn assert_reentered<T: std::fmt::Debug>(result: Result<T, Error>) {
     assert!(
         matches!(

@@ -98,6 +98,11 @@ name = "blas1_cuda"
 path = "tests/blas1_cuda.rs"
 
 [[test]]
+name = "held_cuda_session"
+path = "tests/held_cuda_session.rs"
+required-features = ["cuda"]
+
+[[test]]
 name = "storage_provider_cuda_progress"
 path = "tests/storage_provider_cuda_progress.rs"
 

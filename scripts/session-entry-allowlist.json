@@ -7,15 +7,15 @@
   "CpuExecSession construction": {
     "crates/tenferro-cpu/src/backend.rs::with_operation_session": "operation-view definition: builds the backend's execution state for one callback or held session (CPU session construction behind with_backend_session[_cached] and CpuHeldSession)"
   },
-  "CPU held session entry": {
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: the standalone-root shape runs the callback through a held CPU session (#1945 U1) instead of a callback-scoped session",
-    "crates/tenferro-cpu/src/backend/held_session.rs::CpuBackend::open_session": "held root entry point: the public constructor of a held CPU session, gated on Idle thread execution and a non-child handle (#1945 U2-concrete)"
-  },
   "CpuHeldSession construction": {
     "crates/tenferro-cpu/src/backend/held_session.rs::CpuBackend::adopt_held_permit": "held root entry point: turns an admitted standalone root reservation into the held session's owned checkout, owner marker and affinity guard"
   },
   "CudaExecSession construction": {
-    "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (CUDA)"
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (CUDA)",
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::CudaHeldSession::with_session": "held operation view: hands out the existing CUDA native session authority per operation, keeping extension visitation and every numerical route unchanged (#1945 U3)"
+  },
+  "CudaHeldSession construction": {
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::CudaBackend::open_session": "held root construction: builds the held CUDA session that owns the state reservation, the captured logical stream and the lifetime marker (#1945 U3)"
   },
   "WebGpuExecSession construction": {
     "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (WebGPU)"
@@ -26,6 +26,7 @@
     "crates/tenferro-ad/src/eager.rs::EagerRuntime::with_extension_execution_context": "named native-context boundary (D6/D12): owner-only extension fallback, never nested in a session",
     "crates/tenferro-ad/src/eager_backend.rs::BackendSessionHost::with_backend_session": "session host definition: EagerBackend forwards to its concrete CPU/CUDA/WebGPU host",
     "crates/tenferro-ad/src/eager_exec.rs::exec_extension_op_on_tensor_reads": "extension-only owner-context fallback of extension::apply_eager (no prepared session executor): canonicalizes inputs in one session, then runs the op on the runtime outside it",
+    "crates/tenferro-cpu/src/backend/held_session/phase.rs::run_worker_lane": "CPU phase lease (#1945 U2-concrete): one worker lane of a held session opens exactly one owner-inheriting child session for the lane, then runs the downstream callback's work items through it; the root session keeps its own reservation and checkout",
     "crates/tenferro-internal-extension-macros/src/lib.rs::expand_extension_runtime": "generated PreparedOperationExecutor::execute: native-context bridge receiving an owner context (D6 supported native-context region)",
     "crates/tenferro-runtime/src/exec.rs::eval_exec_ir_single_session_slots_with_workspace": "compiled-program execution (Runtime::run_compiled): one session per session-compatible run",
     "crates/tenferro-runtime/src/exec.rs::eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace": "compiled-program execution (Runtime::run_compiled): one session per session-compatible run",
@@ -44,8 +45,7 @@
     "crates/tenferro-tensor/src/backend.rs::BackendSessionHost::with_backend_session_cached": "default trait method: the cached host variant delegates to with_backend_session",
     "ext/bf16-proof/src/einsum.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet",
     "ext/sparse/src/extension.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet",
-    "ext/tropical/src/extension.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet",
-    "crates/tenferro-cpu/src/backend/held_session/phase.rs::run_worker_lane": "CPU phase lease (#1945 U2-concrete): one worker lane of a held session opens exactly one owner-inheriting child session for the lane, then runs the downstream callback's work items through it; the root session keeps its own reservation and checkout"
+    "ext/tropical/src/extension.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet"
   },
   "default_backend_session": {},
   "eager extension context entry": {
@@ -64,6 +64,13 @@
     "crates/tenferro-ad/src/eager.rs::semantic_eager_jvp_optional": "internal to the named jvp entry point",
     "crates/tenferro-ad/src/eager.rs::semantic_eager_vjp_many": "internal to the named vjp/backward entry points"
   },
+  "held session entry": {
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: the standalone-root shape runs the callback through a held CPU session (#1945 U1) instead of a callback-scoped session",
+    "crates/tenferro-cpu/src/backend/held_session.rs::CpuBackend::open_session": "held root entry point: the public constructor of a held CPU session, gated on Idle thread execution and a non-child handle (#1945 U2-concrete)"
+  },
+  "held session marker entry": {
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::CudaBackend::open_session": "lifetime admission marker: makes the held CUDA session visible to owners that serialize callers, for the session's whole lifetime (#1945 U3)"
+  },
   "run_backend_session_cached": {
     "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (CPU)",
     "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU, cached variant)"
@@ -72,6 +79,7 @@
   "with_execution_scope": {},
   "with_session_entry_guard": {
     "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (CUDA)",
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::CudaHeldSession::with_session": "held operation view: one callback-scoped portable guard per held operation, so nested entry behaves exactly as it does for a scoped CUDA callback (#1945 U3)",
     "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (WebGPU)"
   }
 }

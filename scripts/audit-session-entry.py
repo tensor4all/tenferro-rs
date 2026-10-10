@@ -71,11 +71,13 @@ MECHANISMS: dict[str, tuple[str, tuple[str, ...]]] = {
     "with_execution_scope": (r"\bwith_execution_scope\b", ("with_execution_scope",)),
     "with_evaluation_scope": (r"\bwith_evaluation_scope\b", ("with_evaluation_scope",)),
     "CpuExecSession construction": (r"\bCpuExecSession\s*\{", ("CpuExecSession",)),
-    "CPU held session entry": (
+    "held session entry": (
         r"\b(?:open_session|adopt_held_permit)\b",
         ("open_session", "adopt_held_permit"),
     ),
     "CpuHeldSession construction": (r"\bCpuHeldSession\s*\{", ("CpuHeldSession",)),
+    "CudaHeldSession construction": (r"\bCudaHeldSession\s*\{", ("CudaHeldSession",)),
+    "held session marker entry": (r"\bHeldSessionMarker::enter\b", ("HeldSessionMarker",)),
     "CudaExecSession construction": (r"\bCudaExecSession\s*\{", ("CudaExecSession",)),
     "WebGpuExecSession construction": (r"\bWebGpuExecSession\s*\{", ("WebGpuExecSession",)),
     "backend session entry": (
@@ -523,8 +525,9 @@ fn open_session(&self) -> Held {
 }
 
 fn adopt_held_permit(&self, permit: Permit) -> Held {
+    let marker = HeldSessionMarker::enter("backend");
     Held {
-        state: CpuHeldSession { permit },
+        state: CpuHeldSession { permit, marker },
     }
 }
 """
@@ -575,10 +578,12 @@ def self_test() -> int:
         failures.append("an `_unmarked` install helper call must be reported")
 
     held = sites(SELF_TEST_HELD_ENTRY)
-    if ("CPU held session entry", "open_session") not in held:
+    if ("held session entry", "open_session") not in held:
         failures.append("a held-session entry call must be reported with its function")
     if ("CpuHeldSession construction", "adopt_held_permit") not in held:
         failures.append("held-session construction must be reported with its function")
+    if ("held session marker entry", "adopt_held_permit") not in held:
+        failures.append("a lifetime held-session marker must be reported with its function")
 
     eager = sites(SELF_TEST_EAGER_ENTRY)
     if ("eager session entry", "einsum") not in eager:

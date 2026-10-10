@@ -972,6 +972,18 @@ where
     }
 
     fn lease_state(&self, caller: &'static str) -> Result<TensorBackendExecutorLease<'_, B>> {
+        // A held session owns execution admission across many operations, so a thread that
+        // holds one must not block here waiting for another owner: the state it would wait for
+        // may be held by work that depends on that session. Check before taking the lock,
+        // exactly as the eager owner lock does.
+        if tenferro_tensor::has_held_backend_session() {
+            return Err(Error::runtime_state(
+                caller,
+                ErrorPhase::Execution,
+                "a held backend session is active on this thread; pass the entered session \
+                 instead of leasing another executor",
+            ));
+        }
         let current = thread::current().id();
         let mut slot = self.lock_slot(caller)?;
         loop {
@@ -3781,6 +3793,51 @@ mod tests {
             observed_reentrant_error.load(Ordering::SeqCst),
             "same-thread reentrant executor call must fail immediately instead of deadlocking"
         );
+    }
+
+    #[test]
+    fn tensor_backend_executor_rejects_entry_while_a_held_session_is_live() {
+        let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
+        let prepared = Arc::new(ReentrantProbePreparedOperation {
+            binding: probe_binding(),
+            specialization: probe_specialization(),
+            executor: Arc::downgrade(&executor),
+            observed_reentrant_error: Arc::new(AtomicBool::new(false)),
+        });
+        let operations = vec![PreparedOperationPlan::executable(
+            prepared.clone(),
+            prepared,
+        )];
+
+        // A held session owns execution admission across operations; entering the executor on
+        // that thread must be reported before the state lock is taken.
+        let marker =
+            tenferro_tensor::HeldSessionMarker::enter("held session under test").expect("marker");
+        let error = ErasedTensorBackendExecutor::execute(
+            executor.as_ref(),
+            &reentrant_probe_program(),
+            &operations,
+            vec![f64_zeros(vec![2])],
+        )
+        .expect_err("a held session must reject executor entry");
+        assert!(
+            error.to_string().contains("held backend session is active"),
+            "{error}"
+        );
+        assert!(
+            executor.state.try_lock().is_ok(),
+            "the rejection must happen before the executor state lock is taken"
+        );
+        drop(marker);
+
+        let output = ErasedTensorBackendExecutor::execute(
+            executor.as_ref(),
+            &reentrant_probe_program(),
+            &operations,
+            vec![f64_zeros(vec![2])],
+        )
+        .expect("entry works once the held session ends");
+        assert_eq!(output[0].shape(), &[2]);
     }
 
     #[test]
