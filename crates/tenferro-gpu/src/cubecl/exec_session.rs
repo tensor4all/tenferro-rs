@@ -1,7 +1,9 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
+use cubecl::stream_id::StreamId;
 use num_complex::{Complex32, Complex64};
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::Mutex;
 use tenferro_tensor::backend::{
     BackendSession, BackendSessionHost, ElementwiseFusionPlan, ElementwiseReadOp, SessionCachedDot,
     TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
@@ -20,8 +22,8 @@ use tenferro_tensor::{DotGeneralAccumulation, Tensor, TensorRead, TensorWrite, T
 use super::identity::GpuExtensionCapability;
 use super::{gemm, ops, runtime::RawContextRestore};
 use super::{
-    raw, session_cubecl, CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime,
-    CudaRuntimeIdentity,
+    raw, session_cubecl, CudaBackend, CudaBackendState, CudaDeviceInfo, CudaExtensionCache,
+    CudaRuntime, CudaRuntimeIdentity,
 };
 
 /// Best-effort exit flush for a `with_cubecl` session.
@@ -734,6 +736,9 @@ impl BackendSessionHost for CudaBackend {
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
+        // A held session owns this state's execution binding: a new root would silently share
+        // the domain with it. Report the conflict before any device call.
+        self.inner.held_session.reject_root_entry()?;
         let mut session = CudaExecSession {
             backend: self,
             _not_send_sync: PhantomData,
@@ -741,5 +746,422 @@ impl BackendSessionHost for CudaBackend {
         // The portable in-session guard rejects nested entry before `f` runs;
         // the CUDA runtime must never re-enter a session closure.
         with_session_entry_guard("CudaBackend", || f(&mut session))
+    }
+}
+
+/// Backend name used by this module's session-entry vocabulary.
+const CUDA_BACKEND_NAME: &str = "CudaBackend";
+
+/// Reservation slot for the one held session of a backend state.
+///
+/// Every [`CudaBackend`] clone shares one `Arc<CudaBackendState>`, so the slot lives there and a
+/// reservation taken through one clone is visible to all of them. The check-and-set never waits:
+/// a conflicting root is reported typed instead.
+#[derive(Debug, Default)]
+pub(super) struct CudaHeldSessionSlot {
+    owner: Mutex<Option<std::thread::ThreadId>>,
+}
+
+impl CudaHeldSessionSlot {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    fn holder(&self) -> Result<Option<std::thread::ThreadId>, tenferro_tensor::SessionEntryError> {
+        self.owner.lock().map(|owner| *owner).map_err(|_| {
+            tenferro_tensor::SessionEntryError::ResourcePoisoned {
+                backend: CUDA_BACKEND_NAME,
+                resource: "CUDA held-session reservation",
+            }
+        })
+    }
+
+    /// The conflicting-root outcome for a holder seen by `thread`.
+    fn conflict(
+        holder: Option<std::thread::ThreadId>,
+        thread: std::thread::ThreadId,
+    ) -> Option<tenferro_tensor::SessionEntryError> {
+        match holder {
+            None => None,
+            Some(holder) if holder == thread => {
+                Some(tenferro_tensor::SessionEntryError::Reentered {
+                    backend: CUDA_BACKEND_NAME,
+                })
+            }
+            Some(_) => Some(tenferro_tensor::SessionEntryError::Contended {
+                backend: CUDA_BACKEND_NAME,
+                message: "a held CUDA session is open on another thread of this backend state; \
+                          pass the held session instead of opening another root"
+                    .to_string(),
+            }),
+        }
+    }
+
+    /// Reject a second root session while a held session is live.
+    pub(super) fn reject_root_entry(&self) -> Result<(), tenferro_tensor::SessionEntryError> {
+        let holder = self.holder()?;
+        match Self::conflict(holder, std::thread::current().id()) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Take the reservation for `state`, or report the conflicting root.
+    fn acquire(
+        &self,
+        state: &std::sync::Arc<CudaBackendState>,
+    ) -> Result<CudaHeldSessionOwner, tenferro_tensor::SessionEntryError> {
+        let thread = std::thread::current().id();
+        let mut owner = self.owner.lock().map_err(|_| {
+            tenferro_tensor::SessionEntryError::ResourcePoisoned {
+                backend: CUDA_BACKEND_NAME,
+                resource: "CUDA held-session reservation",
+            }
+        })?;
+        if let Some(error) = Self::conflict(*owner, thread) {
+            return Err(error);
+        }
+        *owner = Some(thread);
+        drop(owner);
+        Ok(CudaHeldSessionOwner {
+            thread,
+            state: std::sync::Arc::clone(state),
+        })
+    }
+
+    /// Release the reservation held by `thread`, if it is still the holder.
+    fn release(&self, thread: std::thread::ThreadId) {
+        if let Ok(mut owner) = self.owner.lock() {
+            if *owner == Some(thread) {
+                *owner = None;
+            }
+        }
+    }
+}
+
+/// Owns one backend state's held-session reservation until it drops.
+struct CudaHeldSessionOwner {
+    thread: std::thread::ThreadId,
+    state: std::sync::Arc<CudaBackendState>,
+}
+
+impl Drop for CudaHeldSessionOwner {
+    fn drop(&mut self) {
+        self.state.held_session.release(self.thread);
+    }
+}
+
+impl CudaBackendState {
+    /// Take this state's held-session reservation.
+    fn acquire_held_session(
+        self: &std::sync::Arc<Self>,
+    ) -> Result<CudaHeldSessionOwner, tenferro_tensor::SessionEntryError> {
+        self.held_session.acquire(self)
+    }
+}
+
+/// What the session observed. `Copy` and cheap: the counters report session-observed calls, not
+/// what the device did.
+///
+/// Substrate-internal submissions and waits (interop flushes, CubeCL's automatic staging flush,
+/// host-dispatch batches, workspace retirement barriers) are not attributed here: they happen
+/// inside shared machinery with no session identity.
+/// # Examples
+///
+/// ```no_run
+/// use tenferro_gpu::cuda::CudaBackend;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
+/// let session = backend.open_session()?;
+/// let stats = session.stats();
+/// assert_eq!(stats.held_operations, 0);
+/// session.close()?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CudaSessionStats {
+    /// `with_session` callbacks observed. This is a callback count, not a tensor-operation
+    /// count: one callback may run an arbitrary chain.
+    pub held_operations: u64,
+    /// Explicit `submit` attempts.
+    pub explicit_submits: u64,
+    /// Submission attempts performed by `close`.
+    pub close_submits: u64,
+    /// Submission attempts (`submit` or `close`) that returned an error.
+    pub failed_submits: u64,
+    /// Explicit `synchronize` attempts.
+    pub explicit_synchronizes: u64,
+    /// `synchronize` attempts that returned an error.
+    pub failed_synchronizes: u64,
+}
+
+/// Held concrete CUDA session (#1945 U3).
+///
+/// One session keeps this backend state's execution binding — the logical CubeCL stream captured
+/// when it opened — and its reservation, so a stage can run many concrete operations without
+/// re-entering the backend per operation. The operations themselves are the existing
+/// [`CudaExecSession`] authority, handed out per `with_session` call, so extension visitation
+/// (`with_cuda_exec_session`) and every numerical route are unchanged.
+///
+/// The session is `!Send + !Sync`: it binds a stream and its admission to the opening thread.
+/// While it is live, this backend state admits no second root: another `open_session` on the same
+/// state (including through a clone) and a scoped `with_backend_session` are rejected typed, and
+/// the thread carries a lifetime-visible marker that owners which serialize callers check before
+/// blocking.
+///
+/// It does **not** make submission asynchronous. `submit`/`close` use the existing flush, which
+/// dispatches on the host and waits for the previous staged batch's fence; this type records the
+/// boundaries it crosses rather than claiming they are free.
+///
+/// # Examples
+///
+/// ```no_run
+/// use tenferro_gpu::cuda::CudaBackend;
+/// use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
+/// let mut session = backend.open_session()?;
+/// let a = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+/// let value = session.with_session(|view| {
+///     view.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&a))
+/// })??;
+/// assert_eq!(value.as_slice::<f64>()?, &[2.0]);
+/// session.submit()?;
+/// let stats = session.close()?;
+/// assert_eq!(stats.held_operations, 1);
+/// # Ok(())
+/// # }
+/// ```
+pub struct CudaHeldSession<'session> {
+    backend: &'session mut CudaBackend,
+    _owner: CudaHeldSessionOwner,
+    _marker: tenferro_tensor::HeldSessionMarker,
+    stream: StreamId,
+    device_ordinal: usize,
+    stats: CudaSessionStats,
+    _not_send_sync: PhantomData<Rc<()>>,
+}
+
+impl std::fmt::Debug for CudaHeldSession<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaHeldSession")
+            .field("device_ordinal", &self.device_ordinal)
+            .field("stats", &self.stats)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CudaHeldSession<'_> {
+    /// Device ordinal whose binding this session captured.
+    pub fn device_ordinal(&self) -> usize {
+        self.device_ordinal
+    }
+
+    /// Run one operation on the held binding, through the existing CUDA session authority.
+    ///
+    /// The callback receives the same `&mut dyn BackendSession` view the scoped entry hands out,
+    /// so every concrete route and `with_cuda_exec_session` visitation work unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::SessionEntryError`] when another portable session entry is
+    /// already active on this thread, exactly as a scoped CUDA callback behaves.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use tenferro_gpu::cuda::CudaBackend;
+    /// use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
+    /// let mut session = backend.open_session()?;
+    /// let a = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let sum = session.with_session(|view| {
+    ///     view.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&a))
+    /// })??;
+    /// assert_eq!(sum.as_slice::<f64>()?, &[2.0]);
+    /// session.close()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_session<R>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
+        let stream = self.stream;
+        let backend: &mut CudaBackend = self.backend;
+        self.stats.held_operations = self.stats.held_operations.saturating_add(1);
+        stream.executes(|| {
+            let mut session = CudaExecSession {
+                backend,
+                _not_send_sync: PhantomData,
+            };
+            // The portable guard rejects nested entry before `f` runs, as it does for a scoped
+            // CUDA callback; the held marker stays set for the session's whole lifetime.
+            with_session_entry_guard(CUDA_BACKEND_NAME, || f(&mut session))
+        })
+    }
+
+    /// Submit pending device work at a caller-chosen boundary.
+    ///
+    /// Uses the existing flush: the host dispatch happens here, and from the second submission
+    /// onward this waits for the previous staged batch's fence, which is what makes reuse of the
+    /// retired staging safe. The wait is counted as a submission boundary, not hidden.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the CubeCL flush reports a
+    /// dispatch failure, and [`crate::Error::RuntimeState`] when the runtime's
+    /// own state forbids the submission.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use tenferro_gpu::cuda::CudaBackend;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
+    /// let mut session = backend.open_session()?;
+    /// session.submit()?;
+    /// session.close()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn submit(&mut self) -> crate::Result<()> {
+        let result = self.flush();
+        self.stats.explicit_submits = self.stats.explicit_submits.saturating_add(1);
+        result
+    }
+
+    /// Explicit host barrier: submit, wait for the bound stream, resolve deferred retirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the flush or the CUDA stream
+    /// synchronization fails, and [`crate::Error::RuntimeState`] when the runtime's
+    /// own state forbids the barrier.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use tenferro_gpu::cuda::CudaBackend;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
+    /// let mut session = backend.open_session()?;
+    /// session.synchronize()?;
+    /// session.close()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn synchronize(&mut self) -> crate::Result<()> {
+        let stream = self.stream;
+        let runtime = self.backend.runtime();
+        let result = stream.executes(|| runtime.synchronize());
+        self.stats.explicit_synchronizes = self.stats.explicit_synchronizes.saturating_add(1);
+        if result.is_err() {
+            self.stats.failed_synchronizes = self.stats.failed_synchronizes.saturating_add(1);
+        }
+        result
+    }
+
+    /// Counters observed by this session so far.
+    pub fn stats(&self) -> CudaSessionStats {
+        self.stats
+    }
+
+    /// Submit, release the reservation and report what the session observed.
+    ///
+    /// Submitting here is an explicit boundary, not a lifetime convenience: it is where a caller
+    /// that queued work without calling [`Self::submit`] hands it to the device. Cleanup after
+    /// this returns belongs to the substrate (CubeCL retires device allocations and staging,
+    /// tenferro keeps its workspace-retirement contract), so nothing here adds a wait for that.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the closing submission fails, and
+    /// [`crate::Error::RuntimeState`] when the runtime's own state forbids it. The
+    /// reservation is released either way; `Drop` is the path that releases it without
+    /// reporting.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use tenferro_gpu::cuda::CudaBackend;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
+    /// let held = backend.open_session()?;
+    /// let stats = held.close()?;
+    /// assert_eq!(stats.close_submits, 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn close(mut self) -> crate::Result<CudaSessionStats> {
+        let result = self.flush();
+        self.stats.close_submits = self.stats.close_submits.saturating_add(1);
+        result.map(|()| self.stats)
+    }
+
+    /// Dispatch pending host-side work on the captured stream.
+    fn flush(&mut self) -> crate::Result<()> {
+        let stream = self.stream;
+        let runtime = self.backend.runtime();
+        let result = stream.executes(|| runtime.flush_cubecl("CudaHeldSession"));
+        if result.is_err() {
+            self.stats.failed_submits = self.stats.failed_submits.saturating_add(1);
+        }
+        result
+    }
+}
+
+impl CudaBackend {
+    /// Open this backend state's held session (#1945 U3).
+    ///
+    /// The session borrows the backend, captures the logical CubeCL stream this thread currently
+    /// executes on, and holds the state's single reservation until [`CudaHeldSession::close`] or
+    /// drop. `CudaBackend` is `Clone` over one shared state, so a caller that needs its handle
+    /// back after the stage can open the session on a clone.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::SessionEntryError::Reentered`] when this thread already holds
+    /// this state's session, [`tenferro_tensor::SessionEntryError::Contended`] when another
+    /// thread holds it, and [`tenferro_tensor::SessionEntryError::ResourcePoisoned`] when the
+    /// reservation is poisoned. A thread that already holds a held session for any backend is
+    /// reported the same way.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use tenferro_gpu::cuda::CudaBackend;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
+    /// let session = backend.open_session()?;
+    /// assert_eq!(session.device_ordinal(), 0);
+    /// session.close()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn open_session(
+        &mut self,
+    ) -> Result<CudaHeldSession<'_>, tenferro_tensor::SessionEntryError> {
+        let owner = self.inner.acquire_held_session()?;
+        let marker = tenferro_tensor::HeldSessionMarker::enter(CUDA_BACKEND_NAME)?;
+        let device_ordinal = self.inner.rt.device_ordinal();
+        Ok(CudaHeldSession {
+            backend: self,
+            _owner: owner,
+            _marker: marker,
+            stream: StreamId::current(),
+            device_ordinal,
+            stats: CudaSessionStats::default(),
+            _not_send_sync: PhantomData,
+        })
     }
 }

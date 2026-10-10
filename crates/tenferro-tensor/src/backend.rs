@@ -4286,3 +4286,117 @@ pub fn with_session_entry_guard<R>(
     let _guard = InSessionGuard::enter(backend)?;
     Ok(f())
 }
+
+thread_local! {
+    /// Backend whose held session is live on this thread, if any.
+    ///
+    /// Unlike [`IN_SESSION`], which exists only for the duration of one session
+    /// closure, this marker stays set for a held session's whole lifetime so an
+    /// owner that serializes callers with a blocking lock can see the
+    /// reservation in its pre-lock check. See [`has_held_backend_session`].
+    static HELD_SESSION: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Lifetime-visible marker for a held backend session on the thread that opened it.
+///
+/// A held session keeps execution admission and a device/thread binding across many
+/// operations, so any owner that would otherwise block on a lock must be able to observe it
+/// *before* waiting. [`with_session_entry_guard`] cannot serve that purpose: it is scoped to a
+/// single callback. This marker is instead set once when the held session opens and cleared
+/// when it closes or unwinds.
+///
+/// At most one held session exists per thread; a second [`HeldSessionMarker::enter`] on the
+/// same thread is rejected typed rather than replacing the first.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{has_held_backend_session, HeldSessionMarker};
+///
+/// assert!(!has_held_backend_session());
+/// {
+///     let marker = HeldSessionMarker::enter("example")?;
+///     assert!(has_held_backend_session());
+///     assert_eq!(marker.backend(), "example");
+/// }
+/// assert!(!has_held_backend_session());
+/// # Ok::<(), tenferro_tensor::SessionEntryError>(())
+/// ```
+#[derive(Debug)]
+pub struct HeldSessionMarker {
+    backend: &'static str,
+}
+
+impl HeldSessionMarker {
+    /// Mark the current thread as holding a session for `backend` for the returned marker's
+    /// lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionEntryError::Reentered`] when this thread already holds one, naming the
+    /// backend that holds it rather than the one being requested.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{HeldSessionMarker, SessionEntryError};
+    ///
+    /// let _first = HeldSessionMarker::enter("first")?;
+    /// let second = HeldSessionMarker::enter("second");
+    /// assert!(matches!(
+    ///     second,
+    ///     Err(SessionEntryError::Reentered { backend: "first" })
+    /// ));
+    /// # Ok::<(), SessionEntryError>(())
+    /// ```
+    pub fn enter(backend: &'static str) -> Result<Self, SessionEntryError> {
+        if let Some(holder) = HELD_SESSION.with(|held| held.get()) {
+            return Err(SessionEntryError::Reentered { backend: holder });
+        }
+        HELD_SESSION.with(|held| held.set(Some(backend)));
+        Ok(Self { backend })
+    }
+
+    /// Backend this marker was entered for.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::HeldSessionMarker;
+    ///
+    /// let marker = HeldSessionMarker::enter("example")?;
+    /// assert_eq!(marker.backend(), "example");
+    /// # Ok::<(), tenferro_tensor::SessionEntryError>(())
+    /// ```
+    pub fn backend(&self) -> &'static str {
+        self.backend
+    }
+}
+
+impl Drop for HeldSessionMarker {
+    fn drop(&mut self) {
+        HELD_SESSION.with(|held| held.set(None));
+    }
+}
+
+/// Whether a held session is live on the current thread.
+///
+/// Owners that serialize callers with a blocking lock consult this in their pre-lock check, so
+/// that a thread holding a held session never waits for a lock the session may need. The
+/// callback-scoped counterpart is [`has_active_backend_session`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{has_held_backend_session, HeldSessionMarker};
+///
+/// assert!(!has_held_backend_session());
+/// let marker = HeldSessionMarker::enter("example")?;
+/// drop(marker);
+/// assert!(!has_held_backend_session());
+/// # Ok::<(), tenferro_tensor::SessionEntryError>(())
+/// ```
+pub fn has_held_backend_session() -> bool {
+    HELD_SESSION.with(|held| held.get().is_some())
+}

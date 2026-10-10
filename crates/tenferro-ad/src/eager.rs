@@ -2978,6 +2978,7 @@ impl EagerRuntime {
         // F1). Report the reentry before blocking instead.
         if EnteredRuntimeScope::any_entered()
             || tenferro_tensor::has_active_backend_session()
+            || tenferro_tensor::has_held_backend_session()
             || tenferro_cpu::current_cpu_execution() == tenferro_cpu::CpuThreadExecution::Active
         {
             return Err(tenferro_tensor::SessionEntryError::Reentered {
