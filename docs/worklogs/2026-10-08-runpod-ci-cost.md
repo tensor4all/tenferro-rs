@@ -699,3 +699,13 @@ paid-GPU comparison is used. Real-tar regression tests cover selective
 extraction, stale destination replacement and the required nonempty, resolvable
 runtime ABI. The latter replaces a hard-coded version fallback that accepted
 broken or absent `libcutensor.so.2` links.
+
+Candidate `615e6af97014aa613f55d3de00bd31b1e2f344a5` passed the complete
+screen: unpacked regular-file bytes fell from 1,497,546,900 to 478,410,136
+(68.05%), and compressed bytes from 610,823,965 to 238,093,023 (61.02%).
+The shared library and both soname links match the baseline exactly. These
+controlled local tar sizes are compared to each other, not to the separately
+observed hosted archive size. All 360 CI helper tests and the fast gate pass;
+the committed deterministic rules review passes. [Full protocol and evidence](https://github.com/tensor4all/tenferro-benchmark/blob/experiment/cutensor-runtime-cache/result/nvidia-gpu/ci/cutensor-runtime-cache.md)
+retain both inventories and reproduction settings. Trusted-main publication
+still needs post-merge verification; reduced eviction or paid time is unproven.
