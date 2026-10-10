@@ -149,6 +149,26 @@ fn direct_tensor_read_reshape_preserves_remote_storage_affinity() {
 }
 
 #[test]
+fn parallel_owned_reshape_above_threshold_preserves_remote_affinity() {
+    // Above the serial threshold a two-thread session materializes the owned
+    // reshape on the pool; the output must keep the input placement rather than
+    // being retagged with the session domain.
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    assert_eq!(backend.num_threads(), 2);
+    let selected = backend.domain_id_for_test();
+    let remote = remote_domain(selected);
+    let n = 256 * 256;
+    let input = placed_f64(vec![256, 256], (0..n).map(|i| i as f64).collect(), remote);
+
+    let output = backend
+        .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[512, 128]))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(output.placement().cpu_affinity, Some(remote));
+}
+
+#[test]
 fn session_tensor_read_reshape_preserves_remote_storage_affinity() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let selected = backend.domain_id_for_test();

@@ -74,7 +74,7 @@ impl<'a> CpuExecutionContext<'a> {
         }
     }
 
-    fn uses_inner_parallelism(self) -> bool {
+    pub(crate) fn uses_inner_parallelism(self) -> bool {
         self.parallel_mode == ParallelMode::Inner
             && self.thread_budget().get() > 1
             && self.domain.rayon_pool().is_some()

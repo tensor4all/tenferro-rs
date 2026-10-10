@@ -59,6 +59,44 @@ fn test_reshape() {
 }
 
 #[test]
+fn reshape_read_owned_input_above_parallel_threshold_preserves_order() {
+    // 256 x 256 is above the strided parallel threshold, so a two-thread
+    // session materializes the owned reshape through the pool instead of the
+    // serial host copy. Column-major order must be preserved element for
+    // element.
+    let n = 256 * 256;
+    let data: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let input = Tensor::from_vec_col_major(vec![256, 256], data.clone()).unwrap();
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    assert_eq!(backend.num_threads(), 2);
+    let out = backend
+        .with_backend_session(|session| {
+            session.reshape_read(TensorRead::from_tensor(&input), &[512, 128])
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(out.shape(), &[512, 128]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), data.as_slice());
+}
+
+#[test]
+fn reshape_read_owned_input_below_threshold_keeps_serial_copy() {
+    // At or below the threshold the owned input keeps the serial host copy; the
+    // result is still a fresh, correctly ordered tensor.
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let input = Tensor::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let out = backend
+        .with_backend_session(|session| {
+            session.reshape_read(TensorRead::from_tensor(&input), &[3, 2])
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(out.shape(), &[3, 2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), data.as_slice());
+}
+
+#[test]
 fn test_add_mul() {
     let a = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),

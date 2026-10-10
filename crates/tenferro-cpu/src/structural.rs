@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use std::mem::MaybeUninit;
 use strided_kernel::{
-    col_major_strides, copy_into, map_into, Identity, StridedView, StridedViewMut,
+    col_major_strides, copy_into, copy_into_uninit, map_into, Identity, StridedView, StridedViewMut,
 };
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -266,7 +266,11 @@ where
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
     let mut out = PooledUninitOutput::<T>::new(buffers, view.shape().to_vec())?;
-    map_into(&mut out.as_uninit_view_mut()?, &src, MaybeUninit::new)
+    // INVARIANT: `copy_into_uninit` is the full-overwrite entry: it selects the
+    // blocked permutation copy on native floats in a sequential context and
+    // the element-wise map elsewhere, so the destination is written completely
+    // before typed exposure either way.
+    copy_into_uninit(&mut out.as_uninit_view_mut()?, &src)
         .map_err(|err| crate::Error::backend_source(op, err))?;
     // SAFETY: the successful copy replay writes every logical destination element.
     let mut out = unsafe { out.assume_init_as_recycled::<R>()? };
@@ -380,12 +384,20 @@ pub(crate) fn reshape_read_with_pool(
     input: TensorRead<'_>,
     shape: &[usize],
 ) -> crate::Result<Tensor> {
-    match input {
-        TensorRead::Tensor(input) => reshape(input, shape),
-        TensorRead::View(input) => dispatch_tensor_view_unary_result!(input, |view| {
-            typed_reshape_view_with_pool(buffers, &view, shape)
-        }),
+    // A caller-owned payload has no preset view, so keep its typed refusal
+    // instead of converting it to a view.
+    if let TensorRead::Tensor(tensor) = &input {
+        if matches!(tensor.dtype(), DType::External(_)) {
+            return reshape(tensor, shape);
+        }
     }
+    // Owned compact inputs and strided views share one materializing copy: the
+    // destination element order is the logical source order, so routing the
+    // owned case through the strided entry keeps the same result while letting
+    // a multi-thread context run the copy on its pool.
+    dispatch_tensor_view_unary_result!(input.tensor_view(), |view| {
+        typed_reshape_view_with_pool(buffers, &view, shape)
+    })
 }
 
 #[cfg(test)]
@@ -824,7 +836,9 @@ where
         .map_err(|err| crate::Error::backend_source("transpose", err))?;
     checked_shape_product("transpose", "output shape", permuted.dims())?;
     let mut out = PooledUninitOutput::<T>::new(buffers, permuted.dims().to_vec())?;
-    map_into(&mut out.as_uninit_view_mut()?, &permuted, MaybeUninit::new)
+    // INVARIANT: `copy_into_uninit` fully overwrites the destination and selects
+    // the blocked permutation engine for a sequential native-float copy.
+    copy_into_uninit(&mut out.as_uninit_view_mut()?, &permuted)
         .map_err(|err| crate::Error::backend_source("transpose", err))?;
     // SAFETY: the successful transpose copy writes every logical destination element.
     let mut out = unsafe { out.assume_init()? };
@@ -856,10 +870,10 @@ pub fn typed_reshape<T: Clone + TensorScalar + 'static>(
     // INVARIANT: `typed_reshape` returns an independently owned tensor while
     // the borrowed input remains live; sharing its move-only root would violate
     // the single-owner contract, so this explicit host duplicate is required.
-    // TODO(perf): for large tensors, consider a parallel host copy (strided
-    // kernel / Rayon par-chunks) instead of the serial to_vec(); if a parallel
-    // path lands, revisit whether the entry-skip fast paths in backend.rs /
-    // exec_session.rs should pay the engine entry for large inputs.
+    // The session entry routes large inputs through `reshape_read_with_pool`
+    // instead, which copies on the configured pool; this serial fallback serves
+    // inputs at or below the strided-rs parallel threshold and any context that
+    // cannot parallelize the copy.
     let mut output = TypedTensor::from_vec_col_major(shape.to_vec(), tensor.host_data()?.to_vec())?;
     output.set_placement(tensor.placement().clone());
     Ok(output)
@@ -894,7 +908,9 @@ where
         0,
     )
     .map_err(|err| crate::Error::backend_source("reshape", err))?;
-    map_into(&mut copy_target, &src, MaybeUninit::new)
+    // INVARIANT: `copy_into_uninit` fully overwrites the destination and selects
+    // the blocked permutation engine for a sequential native-float copy.
+    copy_into_uninit(&mut copy_target, &src)
         .map_err(|err| crate::Error::backend_source("reshape", err))?;
     // SAFETY: the successful reshape copy writes every logical destination element.
     let mut out = unsafe { out.assume_init()? };
