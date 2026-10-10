@@ -27,10 +27,14 @@ Delivered:
   and returned by it, so no caller borrow has to outlive a DMA it cannot control. Dropping the
   buffer frees it; a transfer that cannot prove completion abandons it instead (§3). Bytes can be
   initialized (`as_mut_slice`) before a H2D and inspected (`as_slice`) after a D2H.
-- `download_pending(rt, src: &Tensor, buffer: PinnedHostBuffer) -> PendingDownload<'_>`: one
-  `cuMemcpyDtoHAsync_v2` into that buffer, an event recorded on the copy's stream, and the source
-  allocation retained (`ManagedResource`) for the whole flight. `src` is borrowed for the handle's
-  lifetime, so the source cannot be dropped or mutated while the copy may read it.
+- `download_pending(rt, source: Tensor, buffer: PinnedHostBuffer) -> Result<PendingDownload, TransferSubmitError>`:
+  one `cuMemcpyDtoHAsync_v2` into that buffer, an event recorded on the copy's stream, and the source
+  allocation retained (`ManagedResource`) for the whole flight. The value and the buffer are **moved
+  in** — the owning admission described in
+  [owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md) — so neither is
+  reachable while the copy may read or write them; `wait` hands both back, a refused submission returns
+  the package untouched, dropping an unwaited handle detaches the record into the runtime's retirement
+  queue, and forgetting the handle leaks it in place.
 - `PendingDownload::{is_ready, wait}`: `is_ready` queries the event and distinguishes not-ready from
   a device error; `wait(self)` synchronizes the event once and returns the filled buffer.
 - `upload_pending(rt, source: PinnedHostBuffer, dst: &mut Tensor) -> PendingUpload<'_>`: the mirror
@@ -38,8 +42,10 @@ Delivered:
   borrow** for the whole flight — enforced by the compiler, with a compile-fail fixture in
   `tests/ui` — so no reader, writer or dropper of the device tensor can run while the copy may
   still write it. `wait(self)` returns the source buffer for reuse.
-- `Drop` resolves the event before releasing anything; when it cannot, the buffer and the retained
-  resource are leaked rather than freed early. `mem::forget` is sound by construction: the handle
+- `Drop` detaches the record into the runtime's bounded retirement queue, which releases it once its
+  event proves completion and retains it permanently otherwise
+  ([owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)); a completion that
+  cannot be proven never frees the value or the buffers the device may still touch. `mem::forget` is sound by construction: the handle
   owns everything it uses, so forgetting it leaks (never frees early).
 
 Explicitly **not** claimed in this slice:
@@ -65,11 +71,11 @@ Explicitly **not** claimed in this slice:
 | --- | --- |
 | "Pinned H2D/D2H can enqueue and return without a host wait" | **partly**: both directions return a pending handle without waiting for their copy, and their publication boundary no longer performs its own drop-queue rotation (CubeCL's `check_errors`). Two waits remain: host dispatch is a blocking host round trip, and both cross-stream resource resolution (bounded GC backpressure) and a preceding kernel that trips the staging policy can still wait for device progress (§3, §5) |
 | "An owned/guarded pending result retains source read leases, destination allocation, pinned/staging buffers and provider/event resources" | **yes**, as owned state: `ManagedResource`, the owned pinned buffer, the `CudaRuntime` pin and the event |
-| "CPU reads/mutation cannot observe a pending or aliased buffer" | **yes**: the D2H buffer is owned by the handle until `wait()` returns it, the D2H source is borrowed for the handle's lifetime, and the H2D destination is mutably borrowed |
+| "CPU reads/mutation cannot observe a pending or aliased buffer" | **yes for device→host**: the value and buffer are owned by the handle until `wait()` returns them. The host→device direction is still borrowed (destination `&mut`, source buffer owned) and is converted next. |
 | "GPU consumers import a valid stream/event dependency without host synchronization" | **no**: needs the frozen-domain admission seam (§4) |
 | "Completion errors surface at poll/wait/dependency admission; failed outputs are not published as ready" | **partly**: `is_ready`/`wait` report errors and `wait` publishes nothing on failure; there is no dependency admission |
 | "Pending-handle drop/cancellation does not release buffers while DMA/kernels may access them" | **yes** (§1) |
-| "Reusable caller-owned pinned buffers/output buffers use lifetime guards through completion" | **yes** in both directions: the source/destination buffer is owned by the handle and returned to the caller on `wait`, and the H2D destination is exclusively borrowed |
+| "Reusable caller-owned pinned buffers/output buffers use lifetime guards through completion" | **yes for device→host** (owned until `wait`); the host→device direction still relies on its destination borrow |
 | "Staging is bounded/chunked with backpressure and no tensor-sized zero-fill or redundant pageable copies" | **partly**: the pinned buffer is caller-sized and reused; chunking and the pageable route are open (§4) |
 | "Source publication, not mandatory host export" | **no** (§4) |
 | "Reuse/batch events at producer/transfer frontiers" | **no**: one event per transfer |
@@ -129,7 +135,7 @@ What the numbers support, and what they do not:
 ## 4. Ownership and failure semantics
 
 ```text
-PendingDownload<'a>            // 'a borrows the source tensor
+PendingDownload                 // owns the submitted value and the pinned buffer
   ├── runtime: CudaRuntime     // provider pin: context and stream stay alive
   ├── buffer: PinnedHostBuffer // owned destination
   ├── resource: ManagedResource<GpuResource>   // source allocation retention
@@ -150,7 +156,11 @@ PendingDownload<'a>            // 'a borrows the source tensor
 - `wait()`: `cuEventSynchronize`; on success the retained resource is released and the buffer is
   returned; on failure nothing is published and the buffer/resource are abandoned (leaked), because a
   failed copy cannot prove what the device is still touching.
-- `Drop` without `wait`: resolves the event if it can (non-blocking query, then a bounded
+- `Drop` without `wait`: detaches the record into the runtime's retirement queue (see
+  [owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)); the old note said it
+  resolved non-blockingly and then waited, which is the behaviour this package replaced. (Original
+  wording follows, kept only as a pointer: it resolves the event if it can (non-blocking query, then a
+  bounded
   synchronize), then releases; otherwise abandons.
 - `is_ready()`: `cuEventQuery`; a non-ready result is `Ok(false)`, and a device error is reported
   rather than collapsed into "not ready".

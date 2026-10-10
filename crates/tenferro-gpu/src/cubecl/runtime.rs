@@ -225,6 +225,9 @@ pub(crate) struct CudaRuntimeState {
     // Vendor workspaces whose CubeCL handle may only return to the pool after
     // their stream reaches the event recorded at retirement time.
     workspace_retirements: Mutex<super::workspace_retirement::WorkspaceRetirementQueue>,
+    // Transfers whose caller detached observation; released once their event completes, and
+    // retained permanently when completion cannot be proven.
+    transfer_retirements: Mutex<super::transfer::TransferRetirementQueue>,
 }
 
 /// One cached cuBLAS handle bound to a fixed CUDA stream.
@@ -369,6 +372,7 @@ impl CudaRuntime {
                     ptr: std::ptr::null_mut(),
                 }),
                 workspace_retirements: Mutex::new(Default::default()),
+                transfer_retirements: Mutex::new(Default::default()),
             }),
         })
     }
@@ -503,6 +507,11 @@ impl CudaRuntime {
         self.inner.check_errors(op)
     }
 
+    /// A weak handle to this runtime's state, for values that must not keep it alive.
+    pub(crate) fn weak_state(&self) -> std::sync::Weak<CudaRuntimeState> {
+        Arc::downgrade(&self.inner)
+    }
+
     /// Return the opaque identity of this exact executable runtime instance.
     ///
     /// # Examples
@@ -523,6 +532,56 @@ impl CudaRuntime {
 
     pub(crate) fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
         self.inner.set_current_cuda_context(op)
+    }
+
+    /// Detach a transfer record: the runtime keeps it until its event proves completion.
+    pub(crate) fn detach_transfer(&self, record: super::transfer::TransferRetirement) {
+        let mut queue = self
+            .inner
+            .transfer_retirements
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        queue.detach(&self.inner, record);
+    }
+
+    /// Retain a transfer record permanently: its completion was never proven, or its event was never
+    /// recorded, so no later query may be trusted to release it.
+    pub(crate) fn retain_transfer_for_soundness(
+        &self,
+        record: super::transfer::TransferRetirement,
+    ) {
+        let mut queue = self
+            .inner
+            .transfer_retirements
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        queue.retain_for_soundness(record);
+    }
+
+    /// Release detached transfers whose event already completed. Never waits for the device.
+    pub(crate) fn drain_transfer_retirements(&self) {
+        let mut queue = self
+            .inner
+            .transfer_retirements
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        queue.drain(&self.inner);
+    }
+
+    /// Number of detached transfers still awaiting a completion witness.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let runtime: tenferro_gpu::cuda::CudaRuntime = unimplemented!();
+    /// let _pending = runtime.pending_transfer_retirements();
+    /// ```
+    pub fn pending_transfer_retirements(&self) -> usize {
+        self.inner
+            .transfer_retirements
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending()
     }
 
     pub(crate) fn workspace_retirements(
@@ -739,6 +798,15 @@ impl CudaRuntimeState {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .drain_blocking(self);
+        // Same for transfers whose caller detached observation: after a barrier their events have
+        // completed, so the records release their value, buffer, retention and event.
+        {
+            let mut queue = self
+                .transfer_retirements
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            queue.drain(self);
+        }
         Ok(())
     }
 

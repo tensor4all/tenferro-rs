@@ -83,48 +83,46 @@ fn bench_download(c: &mut Criterion) {
             },
         );
 
-        group.bench_with_input(
-            BenchmarkId::new("pinned", label),
-            &device,
-            |bencher, device| {
-                let buffer = RefCell::new(Some(
-                    PinnedHostBuffer::new(&runtime, bytes).expect("pinned buffer"),
-                ));
-                bencher.iter(|| {
-                    let taken = buffer.borrow_mut().take().expect("reused pinned buffer");
-                    let filled = download_pending(&runtime, device, taken)
-                        .expect("pending download")
-                        .wait()
-                        .expect("wait");
-                    black_box(filled.as_slice().len());
-                    *buffer.borrow_mut() = Some(filled);
-                });
-            },
-        );
+        // The owning route moves the value and its buffer in and takes them back from `wait`, so both
+        // circulate between iterations.
+        let pinned_value = RefCell::new(Some(
+            upload_tensor(&runtime, &host_vector(elements)).expect("device payload"),
+        ));
+        let pinned_buffer = RefCell::new(Some(
+            PinnedHostBuffer::new(&runtime, bytes).expect("pinned buffer"),
+        ));
+        group.bench_function(BenchmarkId::new("pinned", label), |bencher| {
+            bencher.iter(|| {
+                let value = pinned_value.borrow_mut().take().expect("reused value");
+                let buffer = pinned_buffer.borrow_mut().take().expect("reused buffer");
+                let (value, filled) = download_pending(&runtime, value, buffer)
+                    .expect("pending download")
+                    .wait()
+                    .expect("wait");
+                black_box(filled.as_slice().len());
+                *pinned_value.borrow_mut() = Some(value);
+                *pinned_buffer.borrow_mut() = Some(filled);
+            });
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("pinned_wait", label),
-            &device,
-            |bencher, device| {
-                let buffer = RefCell::new(Some(
-                    PinnedHostBuffer::new(&runtime, bytes).expect("pinned buffer"),
-                ));
-                bencher.iter_batched(
-                    || {
-                        let taken = buffer.borrow_mut().take().expect("reused pinned buffer");
-                        download_pending(&runtime, device, taken).expect("pending download")
-                    },
-                    |pending| {
-                        let filled = pending.wait().expect("wait");
-                        black_box(filled.as_slice().len());
-                        *buffer.borrow_mut() = Some(filled);
-                    },
-                    // The setup (enqueue) must run once per iteration: the routine hands the
-                    // buffer back, so a batched setup would find it already taken.
-                    criterion::BatchSize::PerIteration,
-                );
-            },
-        );
+        group.bench_function(BenchmarkId::new("pinned_wait", label), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let value = pinned_value.borrow_mut().take().expect("reused value");
+                    let buffer = pinned_buffer.borrow_mut().take().expect("reused buffer");
+                    download_pending(&runtime, value, buffer).expect("pending download")
+                },
+                |pending| {
+                    let (value, filled) = pending.wait().expect("wait");
+                    black_box(filled.as_slice().len());
+                    *pinned_value.borrow_mut() = Some(value);
+                    *pinned_buffer.borrow_mut() = Some(filled);
+                },
+                // The setup (enqueue) must run once per iteration: the routine hands both back, so a
+                // batched setup would find them already taken.
+                criterion::BatchSize::PerIteration,
+            );
+        });
     }
 
     group.bench_function("alloc_8MiB", |bencher| {

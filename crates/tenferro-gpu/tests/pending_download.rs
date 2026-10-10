@@ -1,18 +1,17 @@
 #![cfg(feature = "cuda")]
 
-//! Pending device→host handoff contract (#1945 U4, slice 1).
+//! Owning device→host transfer contract (#1945 U4 item 3).
 //!
-//! These tests pin the owned-buffer pending download: the handle reports not-ready while a
-//! deliberately delayed copy is in flight, `wait` returns the bytes only after completion, the
-//! transfer survives its producing session closing, and a forgotten handle leaks rather than frees
-//! memory the device may still write. They are ignored by default; explicitly running them requires
-//! a CUDA device and fails if none is available.
+//! These tests pin the owning pending download: the value and the pinned buffer are moved into the
+//! transfer and come back only from `wait`; a rejected submission returns them unchanged; dropping or
+//! forgetting the handle detaches observation into the runtime's retirement queue instead of
+//! releasing anything. They are ignored by default; explicitly running them requires a CUDA device.
 
 use tenferro_gpu::cuda::{
     download_pending, gpu_available, upload_tensor, CudaBackend, CudaDeviceId, CudaRuntime,
-    PinnedHostBuffer,
+    PinnedHostBuffer, TransferSubmitError,
 };
-use tenferro_tensor::{Tensor, TensorRead};
+use tenferro_tensor::Tensor;
 
 /// Big enough that a copy of it cannot complete before an immediate poll observes the queue.
 const DELAYED_ELEMENTS: usize = 8 * 1024 * 1024;
@@ -52,17 +51,16 @@ fn runtime_of(backend: &CudaBackend) -> CudaRuntime {
 
 #[test]
 #[ignore = "requires a CUDA device"]
-fn pending_download_reports_not_ready_then_returns_the_bytes() {
+fn pending_download_reports_not_ready_then_returns_the_bytes_and_the_value() {
     let backend = backend();
     let runtime = runtime_of(&backend);
     let data = values(DELAYED_ELEMENTS);
-    let device = upload_tensor(&runtime, &vector(&data)).expect("upload");
+    let device = upload_tensor(&runtime, &vector(&data)).expect("device payload");
 
     let buffer = PinnedHostBuffer::new(&runtime, DELAYED_ELEMENTS * 8).expect("pinned buffer");
-    let mut pending = download_pending(&runtime, &device, buffer).expect("pending download");
+    let mut pending = download_pending(&runtime, device, buffer).expect("pending download");
 
-    // The copy of a payload this size cannot have completed before this immediate poll, so at least
-    // one observation must be "not ready" rather than "already done".
+    // The copy of a payload this size cannot have completed before this immediate poll.
     let mut observed_not_ready = false;
     for _ in 0..8 {
         if !pending.is_ready().expect("event query") {
@@ -75,14 +73,15 @@ fn pending_download_reports_not_ready_then_returns_the_bytes() {
         "a delayed copy must be observable as not ready before it completes"
     );
 
-    let filled = pending.wait().expect("wait");
-    let bytes = filled.as_slice();
-    assert_eq!(bytes.len(), DELAYED_ELEMENTS * 8);
-    assert_eq!(
-        bytes,
-        as_bytes(&data),
-        "the completed copy holds the source values"
-    );
+    let (value, filled) = pending.wait().expect("wait");
+    assert_eq!(filled.as_slice(), as_bytes(&data));
+
+    // Both the value and the buffer come back and are reusable: a second transfer over them is correct.
+    let (_, again) = download_pending(&runtime, value, filled)
+        .expect("second pending download")
+        .wait()
+        .expect("second wait");
+    assert_eq!(again.as_slice(), as_bytes(&data));
 }
 
 #[test]
@@ -91,26 +90,24 @@ fn pending_download_completes_after_its_producing_session_closes() {
     let mut backend = backend();
     let runtime = runtime_of(&backend);
     let data = values(4096);
-    let host = vector(&data);
-    let device = upload_tensor(&runtime, &host).expect("upload");
+    let device = upload_tensor(&runtime, &vector(&data)).expect("upload");
 
-    // Produce inside a held session (U3), then close it while the transfer is still in flight.
     let mut session = backend.open_session().expect("open");
     let produced = session
         .with_session(|view| {
             view.add_read(
-                TensorRead::from_tensor(&device),
-                TensorRead::from_tensor(&device),
+                tenferro_tensor::TensorRead::from_tensor(&device),
+                tenferro_tensor::TensorRead::from_tensor(&device),
             )
         })
         .expect("held callback")
         .expect("held add");
 
     let buffer = PinnedHostBuffer::new(&runtime, 4096 * 8).expect("pinned buffer");
-    let pending = download_pending(&runtime, &produced, buffer).expect("pending download");
+    let pending = download_pending(&runtime, produced, buffer).expect("pending download");
     session.close().expect("close the producing session");
 
-    let filled = pending.wait().expect("wait");
+    let (_, filled) = pending.wait().expect("wait");
     let doubled = from_bytes(filled.as_slice());
     let expected: Vec<f64> = data.iter().map(|value| value * 2.0).collect();
     assert_eq!(doubled, expected, "the copy outlives its producing session");
@@ -118,41 +115,34 @@ fn pending_download_completes_after_its_producing_session_closes() {
 
 #[test]
 #[ignore = "requires a CUDA device"]
-fn forgetting_a_pending_download_never_releases_the_buffer_or_source() {
-    let backend = backend();
-    let runtime = runtime_of(&backend);
-    let data = values(1024);
-    let device = upload_tensor(&runtime, &vector(&data)).expect("upload");
-    let buffer = PinnedHostBuffer::new(&runtime, 1024 * 8).expect("pinned buffer");
-
-    let pending = download_pending(&runtime, &device, buffer).expect("pending download");
-    // `mem::forget` must be safe: the handle owns everything it uses, so forgetting it leaks the
-    // buffer and the retained source instead of freeing memory the copy may still write.
-    std::mem::forget(pending);
-
-    // The runtime stays usable and a later transfer is correct.
-    let buffer = PinnedHostBuffer::new(&runtime, 1024 * 8).expect("second pinned buffer");
-    let filled = download_pending(&runtime, &device, buffer)
-        .expect("second pending download")
-        .wait()
-        .expect("wait");
-    assert_eq!(from_bytes(filled.as_slice()), data);
-}
-
-#[test]
-#[ignore = "requires a CUDA device"]
-fn dropping_a_pending_download_resolves_before_releasing() {
+fn dropping_a_pending_download_detaches_into_the_retirement_queue() {
     let backend = backend();
     let runtime = runtime_of(&backend);
     let data = values(2048);
-    let device = upload_tensor(&runtime, &vector(&data)).expect("upload");
+    let device = upload_tensor(&runtime, &vector(&data)).expect("device payload");
     let buffer = PinnedHostBuffer::new(&runtime, 2048 * 8).expect("pinned buffer");
 
-    let pending = download_pending(&runtime, &device, buffer).expect("pending download");
+    let before = runtime.pending_transfer_retirements();
+    let pending = download_pending(&runtime, device, buffer).expect("pending download");
     drop(pending);
+    assert!(
+        runtime.pending_transfer_retirements() > before,
+        "a detached transfer is retained until its event proves completion"
+    );
 
-    let buffer = PinnedHostBuffer::new(&runtime, 2048 * 8).expect("second pinned buffer");
-    let filled = download_pending(&runtime, &device, buffer)
+    // An explicit barrier resolves completion, so the record releases value, buffer, retention and
+    // event instead of leaking them.
+    runtime.synchronize().expect("synchronize");
+    assert_eq!(
+        runtime.pending_transfer_retirements(),
+        0,
+        "a completed detached transfer is released exactly once"
+    );
+
+    // The runtime stays usable.
+    let device = upload_tensor(&runtime, &vector(&data)).expect("second device payload");
+    let buffer = PinnedHostBuffer::new(&runtime, 2048 * 8).expect("pinned buffer");
+    let (_, filled) = download_pending(&runtime, device, buffer)
         .expect("second pending download")
         .wait()
         .expect("wait");
@@ -161,42 +151,100 @@ fn dropping_a_pending_download_resolves_before_releasing() {
 
 #[test]
 #[ignore = "requires a CUDA device"]
-fn pending_download_rejects_a_mismatched_buffer_and_a_host_tensor() {
+fn forgetting_a_pending_download_leaks_it_without_releasing_anything() {
+    let backend = backend();
+    let runtime = runtime_of(&backend);
+    let data = values(1024);
+    let device = upload_tensor(&runtime, &vector(&data)).expect("device payload");
+    let buffer = PinnedHostBuffer::new(&runtime, 1024 * 8).expect("pinned buffer");
+
+    let before = runtime.pending_transfer_retirements();
+    let pending = download_pending(&runtime, device, buffer).expect("pending download");
+    // `mem::forget` does not run `Drop`, so nothing is detached: the handle's value, buffer, retention
+    // and event are leaked in place. That is the soundness property: forgetting reduces liveness and
+    // cannot hand the caller access to the admitted package or reclaim its buffers early.
+    std::mem::forget(pending);
+    assert_eq!(
+        runtime.pending_transfer_retirements(),
+        before,
+        "a forgotten handle is leaked in place rather than detached"
+    );
+    runtime.synchronize().expect("synchronize");
+    assert_eq!(runtime.pending_transfer_retirements(), before);
+
+    let device = upload_tensor(&runtime, &vector(&data)).expect("second device payload");
+    let buffer = PinnedHostBuffer::new(&runtime, 1024 * 8).expect("pinned buffer");
+    let (_, filled) = download_pending(&runtime, device, buffer)
+        .expect("second pending download")
+        .wait()
+        .expect("wait");
+    assert_eq!(from_bytes(filled.as_slice()), data);
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn a_rejected_transfer_returns_the_submitted_package() {
     let backend = backend();
     let runtime = runtime_of(&backend);
     let data = values(64);
     let host = vector(&data);
+    let device = upload_tensor(&runtime, &host).expect("upload");
 
-    let buffer = PinnedHostBuffer::new(&runtime, 64 * 8 + 8).expect("pinned buffer");
-    let mismatch = download_pending(&runtime, &host, buffer);
-    assert!(mismatch.is_err(), "a short buffer must be rejected");
+    // A buffer of the wrong length is refused before anything is enqueued, and the caller keeps both
+    // the value and the buffer.
+    let short = PinnedHostBuffer::new(&runtime, 64 * 8 + 8).expect("pinned buffer");
+    match download_pending(&runtime, device, short) {
+        Err(TransferSubmitError::Rejected(rejected)) => {
+            assert_eq!(rejected.source.shape(), &[64]);
+            assert_eq!(rejected.buffer.len(), 64 * 8 + 8);
+            // Both are usable again: retry with a correctly sized buffer.
+            let source = rejected.source;
+            let exact = PinnedHostBuffer::new(&runtime, 64 * 8).expect("pinned buffer");
+            let (_, filled) = download_pending(&runtime, source, exact)
+                .expect("retry")
+                .wait()
+                .expect("wait");
+            assert_eq!(from_bytes(filled.as_slice()), data);
+        }
+        other => panic!("expected a pre-admission rejection, got {other:?}"),
+    }
 
+    // A host tensor is refused the same way rather than uploaded implicitly.
     let buffer = PinnedHostBuffer::new(&runtime, 64 * 8).expect("pinned buffer");
-    let uploaded = upload_tensor(&runtime, &host).expect("upload");
-    let buffer_two = PinnedHostBuffer::new(&runtime, 64 * 8).expect("pinned buffer");
-    assert!(
-        download_pending(&runtime, &uploaded, buffer_two).is_ok(),
-        "a device tensor is accepted"
-    );
-    let host_attempt = download_pending(&runtime, &host, buffer);
-    assert!(
-        host_attempt.is_err(),
-        "a host tensor must fail typed rather than upload implicitly"
-    );
+    match download_pending(&runtime, host, buffer) {
+        Err(TransferSubmitError::Rejected(rejected)) => {
+            assert_eq!(rejected.buffer.len(), 64 * 8);
+        }
+        other => panic!("expected a pre-admission rejection, got {other:?}"),
+    }
 }
 
 #[test]
 #[ignore = "requires a CUDA device"]
-fn pinned_host_buffers_are_owned_and_reusable() {
+fn an_unserved_dtype_is_rejected_and_returns_the_package() {
     let backend = backend();
     let runtime = runtime_of(&backend);
-    for bytes in [8, 4096, 1 << 20] {
-        let buffer = PinnedHostBuffer::new(&runtime, bytes).expect("pinned buffer");
-        assert_eq!(buffer.len(), bytes);
-        assert!(!buffer.is_empty());
+    let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).expect("host values");
+    let device = upload_tensor(&runtime, &host).expect("upload");
+
+    // `bool` is not served by this route; the rejection is typed and carries the value back.
+    let flags = Tensor::from_vec_col_major(vec![4], vec![true; 4]).expect("flags");
+    let buffer = PinnedHostBuffer::new(&runtime, 4).expect("pinned buffer");
+    match download_pending(&runtime, flags, buffer) {
+        Err(TransferSubmitError::Rejected(rejected)) => {
+            assert_eq!(rejected.buffer.len(), 4);
+            assert_eq!(rejected.source.shape(), &[4]);
+        }
+        other => panic!("expected an unserved dtype to be rejected, got {other:?}"),
     }
-    let zero = PinnedHostBuffer::new(&runtime, 0);
-    assert!(zero.is_err(), "a zero-length pinned buffer is rejected");
+
+    // The runtime is unaffected.
+    let buffer = PinnedHostBuffer::new(&runtime, 4 * 8).expect("pinned buffer");
+    let (_, filled) = download_pending(&runtime, device, buffer)
+        .expect("pending download")
+        .wait()
+        .expect("wait");
+    assert_eq!(from_bytes(filled.as_slice()), vec![1.0; 4]);
 }
 
 #[test]
@@ -211,14 +259,11 @@ fn two_pending_downloads_in_flight_complete_independently() {
 
     let first_buffer = PinnedHostBuffer::new(&runtime, 4096 * 8).expect("pinned buffer");
     let second_buffer = PinnedHostBuffer::new(&runtime, 8192 * 8).expect("pinned buffer");
-    let first_pending = download_pending(&runtime, &first, first_buffer).expect("first pending");
-    let second_pending =
-        download_pending(&runtime, &second, second_buffer).expect("second pending");
+    let first_pending = download_pending(&runtime, first, first_buffer).expect("first pending");
+    let second_pending = download_pending(&runtime, second, second_buffer).expect("second pending");
 
-    let first_filled = first_pending.wait().expect("first wait");
-    let second_filled = second_pending.wait().expect("second wait");
-    let first_bytes = from_bytes(first_filled.as_slice());
-    let second_bytes = from_bytes(second_filled.as_slice());
-    assert_eq!(first_bytes, first_data);
-    assert_eq!(second_bytes, second_data);
+    let (_, first_filled) = first_pending.wait().expect("first wait");
+    let (_, second_filled) = second_pending.wait().expect("second wait");
+    assert_eq!(from_bytes(first_filled.as_slice()), first_data);
+    assert_eq!(from_bytes(second_filled.as_slice()), second_data);
 }
