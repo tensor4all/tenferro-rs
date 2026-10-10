@@ -800,12 +800,15 @@ jobs:
             echo "Missing PJRT archive: ${PJRT_ARCHIVE}"
             exit 1
           fi
-          wheel_dir="${RUNNER_TEMP}/openxla-pjrt-wheels"
-          unpack_dir="${RUNNER_TEMP}/openxla-pjrt"
-          rm -rf "${wheel_dir}" "${unpack_dir}"
-          mkdir -p "${wheel_dir}" "${unpack_dir}"
-          cp /opt/ci-cost-runtime/wheels/*.whl "${wheel_dir}/"
-          python3 - <<'PY'
+          unpack_dir=/opt/ci-cost-runtime/wheels-unpacked
+          if [ ! -d "${unpack_dir}" ]; then
+            # Recovery of older tested refs still supplies complete wheel ZIPs.
+            wheel_dir="${RUNNER_TEMP}/openxla-pjrt-wheels"
+            unpack_dir="${RUNNER_TEMP}/openxla-pjrt"
+            rm -rf "${wheel_dir}" "${unpack_dir}"
+            mkdir -p "${wheel_dir}" "${unpack_dir}"
+            cp /opt/ci-cost-runtime/wheels/*.whl "${wheel_dir}/"
+            python3 - <<'PY'
           import os
           import pathlib
           import zipfile
@@ -817,6 +820,7 @@ jobs:
               with zipfile.ZipFile(wheel) as archive:
                   archive.extractall(target)
           PY
+          fi
           plugin_path="$(find "${unpack_dir}" -path '*/jax_plugins/xla_cuda12/xla_cuda_plugin.so' -print -quit)"
           cudnn_lib="$(find "${unpack_dir}" -path '*/nvidia/cudnn/lib' -type d -print -quit)"
           cuda_nvcc_dir="$(find "${unpack_dir}" -path '*/nvidia/cuda_nvcc' -type d -print -quit)"

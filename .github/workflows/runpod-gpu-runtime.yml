@@ -94,7 +94,7 @@ jobs:
         timeout-minutes: 15
         run: |
           echo "GPU runtime preparation source: $(git rev-parse HEAD)"
-          bash scripts/ci/prepare_gpu_execution_payload.sh
+          bash scripts/ci/prepare_gpu_execution_payload.sh --unpack-pjrt-wheels
       - name: Upload runtime common part 00
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

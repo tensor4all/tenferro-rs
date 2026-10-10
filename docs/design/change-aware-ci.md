@@ -204,7 +204,13 @@ and commit identity, allowing equivalent automatic and recovery runs to reuse
 the hosted cache while still uploading a per-run artifact for the external
 runner. Hosted archive builds produce separate `cuda-tests.tar.zst` and
 `pjrt-tests.tar.zst` nextest archives; the GPU node runs both from archive and
-does not compile Rust (PJRT plugin wheels remain a runtime download). The
+does not compile Rust. The hosted runtime prerequisite downloads the pinned
+PJRT, cuDNN and NVCC wheels and stages their complete extracted contents in
+`wheels-unpacked/<wheel-stem>`. The Pod consumes that directory directly,
+avoiding wheel copies and ZIP extraction on the GPU clock. The trusted runtime
+workflow opts into this format with `--unpack-pjrt-wheels`; helpers invoked by
+older controllers still emit wheel ZIPs. Execution also accepts those ZIPs for
+recovery of older tested refs. Payload checksums cover either format. The
 CUDA tutorial uses the workspace `ci` profile and is archived from `target/ci`,
 so it does not create a separate release-profile rebuild.
 

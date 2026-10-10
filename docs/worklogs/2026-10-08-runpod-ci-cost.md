@@ -621,3 +621,36 @@ a change to the general performance policy. The 10% reduction remains unproven;
 all samples and the original acceptance decision are retained. No further paid
 comparison is requested as part of this landing. Normal PR correctness checks
 and branch protection still apply.
+
+## Incremental preparation with the public official runner
+
+The maintainer selected the existing public official runner and requested
+incremental improvements ("できることから"). The custom prepared-image route is
+set aside: its human-triggered publication succeeded in benchmark run
+38045071110, but anonymous access remains unavailable. No paid comparison was
+started for that image. Registry publication or permission changes are not
+prerequisites for this replacement path.
+
+This smaller change moves complete PJRT/cuDNN/NVCC wheel extraction to hosted
+runtime preparation. It keeps the official runner digest, all runtime versions,
+CUDA SDKs, compression level, test archives and numerical checks unchanged.
+The earlier [offline screen](https://github.com/tensor4all/tenferro-benchmark/blob/77dd5dcf541b7d280471653b05ab9fd676e2579e/result/nvidia-gpu/ci/runpod-prepared-runtime-screen.md)
+found a 9.36% common-payload reduction at unchanged zstd level 3, with every
+retained file identical. Common/SDK preparation previously occupied 27–28 paid
+seconds (7.60–9.03%), exceeding the original 5% need threshold. The separate
+19.64% result requires stronger compression and is not claimed for this change.
+
+The scope of this incremental step is removing repeated ZIP copies/extraction
+and reducing transfer bytes; the whole-Pod additional 10% goal remains unproven.
+Validation requires at least 5% fewer common-payload bytes, exact preservation
+of every file and symlink after transport, executable NVCC tools, both payload
+formats working, and the complete frozen GPU workload. A single GPU validation
+will establish correctness only, not an elapsed-time improvement. No old failed
+or inconclusive paired experiment is reinterpreted as passing.
+
+The trusted runtime workflow explicitly opts into pre-extraction. With no
+argument, a new preparation helper still emits the ZIP layout expected by the
+old trusted controller used to validate the PR. The execution workflow accepts
+that old layout for recovery of historical tested refs. Both producers retain
+the same artifact checksums and five-part transport. This supports the actual
+controller/tested-ref version boundary rather than changing numerical behavior.
