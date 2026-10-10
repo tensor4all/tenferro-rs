@@ -79,6 +79,8 @@ def main() -> int:
     parser.add_argument("--lane", required=True, choices=("host", "gpu"))
     parser.add_argument("--archive-file", required=True, type=Path)
     parser.add_argument("--workspace-remap", type=Path, default=Path.cwd())
+    parser.add_argument("--test-threads", type=int, choices=(1, 2), default=1,
+                        help="Bound nextest process concurrency (default: serial)")
     args = parser.parse_args()
     partition = read_partition(Path(__file__).with_name(f"{args.kind}_test_partition.tsv"))
     with tempfile.TemporaryDirectory(prefix="tenferro-tests-") as temporary:
@@ -114,7 +116,7 @@ def main() -> int:
             ]
         subprocess.run([
             "cargo", "nextest", "run", *timeout_profile, *reuse, "--run-ignored", "all",
-            "--no-fail-fast", "-j", "1", "-E", filter_expression(partition, args.lane),
+            "--no-fail-fast", "-j", str(args.test_threads), "-E", filter_expression(partition, args.lane),
         ], check=True, env=env)
     return 0
 
