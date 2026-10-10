@@ -611,5 +611,13 @@ The daily runner checker now validates the official image tag/digest and
 retains the 14-day/two-newer-release freshness policy. Live digest validation
 passes, with a freshness warning for 2.338.0 published October 6. Version
 2.337.0 keeps baseline/candidate runner identity equal; a follow-up bump is
-required within the existing policy window. No performance promotion or PR
-has been made for this goal yet.
+required within the existing policy window.
+
+After reviewing the observed improvement, unchanged workload and driver-related
+uncertainty, the maintainer explicitly requested landing this candidate on main
+("OK main に反映"). This is a task-specific authorization to adopt the bootstrap
+changes despite inconclusive performance evidence, not a passed experiment or
+a change to the general performance policy. The 10% reduction remains unproven;
+all samples and the original acceptance decision are retained. No further paid
+comparison is requested as part of this landing. Normal PR correctness checks
+and branch protection still apply.
