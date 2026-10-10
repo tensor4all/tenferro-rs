@@ -585,3 +585,37 @@ measurements are not reused for this new candidate. The whole paid-lifetime
 metric and 10% acceptance threshold, complete-workload requirement, A/A and
 three-pair confirmation policy, non-regression and variability gates remain
 unchanged. CPU identity/load are added to the recorded host observables.
+
+The official-image diagnostic [baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38022475657)
+and [candidate](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38022904055)
+both passed the complete 285 CUDA / three PJRT / tutorial workload and deleted
+their Pods. Paid lifetime was 376.778 versus 327.120 seconds, an observed
+13.18% reduction; combined estimated GPU spending was $0.1153611. Startup/queue
+was 98.778 versus 36.120 seconds; CUDA testing was 216 versus 230 seconds. Both
+reported Xeon Gold 6342 CPUs, but drivers were 580.178.04 and 580.173.02. This
+remains INCONCLUSIVE under the driver-identity gate, not accepted performance
+evidence. It justifies a controlled confirmation rather than promotion.
+
+Public regional availability identified CA-MTL-1 and EU-SE-1 A40 stock at
+$0.59/hr. CA-MTL-1 is selected by alphabetical order, independently of timings.
+The confirmation harness is benchmark commit
+`dd3e824a951829e46c65473133066bacfb87ba99`; it scopes both arms to CA-MTL-1,
+checks that site's current offer before allocating, and records placement
+from the existing Pod record after deletion. The candidate also reduces the
+runner-readiness polling interval from ten to two seconds, retaining the
+420-second startup timeout, 900-second setup budget, 3600-second lifetime
+budget and deletion logic. This removes avoidable readiness-detection delay;
+no independent speedup is attributed to polling. These changes are confined
+to the experiment until the complete gate passes.
+
+The frozen confirmation order is A/A, A/B, B/A, A/B. The first two runs are
+noise controls, excluded from the primary median comparison. A/A max/min
+must be at most 1.10; all eight runs must share the exact driver and selected
+runtime and report CA-MTL-1 placement. Each arm's max/min, including A/A,
+must be at most 1.5. Acceptance requires `1 - median(B) / median(A) >= 0.10`
+for the three pairs and no paired regression. Each run must pass the entire
+workload and have a confirmed deletion/cost record. Failed/unknown runs,
+missing evidence, wrong placement, or a failed initial A/A gate stop further
+spending and invalidate the campaign; no replacement samples are allowed.
+Reconsideration requires a fresh complete campaign. Provider image-cache
+state is uncontrolled despite fresh Pods and remains a reporting limitation.
