@@ -195,16 +195,23 @@ Delivered in `crates/tenferro-cpu/src/backend/held_session/phase/tests.rs`:
 | Session usable after a caught lane failure | `phase_leaves_the_session_usable_after_a_caught_lane_failure` |
 | Unrelated non-waiting owner rejected while inherited child numerical work succeeds | `unrelated_owner_is_rejected_while_lanes_run` |
 | `!Send + !Sync` lease | `phase_lease_is_neither_send_nor_sync` |
+| More lanes than work items: every lane runs, unclaimed lanes find an empty queue, and a lane 64x larger than its peers still completes | `phase_with_empty_and_skewed_lanes_completes` |
+| Concurrent lane execution within the thread budget, observed inside the lanes around their numerical work, with every lane on a worker of the context pool | `phase_bounds_concurrent_lane_execution_by_the_thread_budget` |
+| A lane runs contraction, transpose, reshape and reduction routes and agrees with the single-threaded values | `phase_lane_runs_concrete_route_families` |
+
+Two items in the previous revision of this list are closed by the tests above: lane counts
+larger than the task count with empty and skewed queues, and representative concrete routes
+inside a lane. What the bound test does *not* claim is the fan-out of one lane into the lower
+libraries: a lane bounds that only through the token this crate passes to its session, so
+observing kernel-internal thread counts would need instrumentation in those crates.
 
 Still open, and not claimed:
 
-- Lane counts larger than the task count, a wholly empty queue, and skewed distribution.
-- A bound observed inside actual numerical partitions, rather than per-lane callbacks; the
-  tests exercise one contraction per lane.
 - A worker that arrives after cancellation, and numerical work still in flight when
   cancellation is set.
-- An unwind inside private N-ary scratch, and recovery from it.
-- Representative N-ary, linalg and structured routes inside a lane.
+- An unwind inside private N-ary scratch, and recovery from it. The N-ary einsum and linalg
+  routes that use that scratch belong to the extension crates, which depend on this one, so
+  they are not reachable from this crate's tests; they are exercised in their own crates.
 - `cargo fmt`, clippy `-D warnings`, the whole `tenferro-cpu` suite, doctests and
   `scripts/audit-session-entry.py --check` all pass with the new authorized caller recorded in
   the session-entry allowlist.

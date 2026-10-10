@@ -3,7 +3,7 @@ use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tenferro_tensor::{Tensor, TensorRead};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead};
 
 use super::*;
 use crate::context::CpuContext;
@@ -459,4 +459,169 @@ fn phase_lease_is_neither_send_nor_sync() {
         impl<T: ?Sized + Sync> AmbiguousIfImpl<InvalidSync> for T {}
         let _ = <CpuPhase<'static> as AmbiguousIfImpl<_>>::item;
     };
+}
+
+/// More lanes than work items: every lane runs, the unclaimed ones find nothing, and a lane
+/// whose work is much larger than its peers' still completes.
+#[test]
+fn phase_with_empty_and_skewed_lanes_completes() {
+    let backend = backend(4);
+    let work = Arc::new(Mutex::new(vec![0usize, 0, 0, 0]));
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let mut session = backend.open_session().expect("held session");
+
+    session
+        .phase(
+            |phase| -> Result<(), PhaseRunError<std::convert::Infallible>> {
+                assert_eq!(phase.lanes(), 4);
+                phase.run(|index, _lane| {
+                    runs.lock().expect("runs lock").push(index);
+                    // Only lane 0 pulls work; the queue is empty for the rest.
+                    if index == 0 {
+                        for _ in 0..64 {
+                            work.lock().expect("work lock")[0] += 1;
+                        }
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .expect("phase starts")
+        .expect("phase runs");
+
+    let mut runs = runs.lock().expect("runs lock").clone();
+    runs.sort_unstable();
+    assert_eq!(
+        runs,
+        vec![0, 1, 2, 3],
+        "an empty queue still reaches every lane"
+    );
+    assert_eq!(work.lock().expect("work lock")[0], 64);
+    session.close().expect("affinity restores");
+}
+
+/// Concurrent lane execution stays within the context's thread budget, observed inside the
+/// lanes around their numerical work.
+///
+/// The bound is a lane-level one: how many *lower-library* threads a lane fans out to is the
+/// lower libraries' own contract, which this crate bounds only through the token it passes.
+#[test]
+fn phase_bounds_concurrent_lane_execution_by_the_thread_budget() {
+    let budget = 2;
+    let backend = backend(budget);
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let workers = Arc::new(Mutex::new(Vec::new()));
+    let lhs = vector(3.0);
+    let rhs = vector(4.0);
+
+    let mut session = backend.open_session().expect("held session");
+    let (active_in_lane, peak_in_lane, workers_in_lane) =
+        (Arc::clone(&active), Arc::clone(&peak), Arc::clone(&workers));
+    let lhs_in_lane = &lhs;
+    let rhs_in_lane = &rhs;
+    session
+        .phase(
+            move |phase| -> Result<(), PhaseRunError<std::convert::Infallible>> {
+                phase.run(move |_index, lane| {
+                    let now = active_in_lane.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak_in_lane.fetch_max(now, Ordering::SeqCst);
+                    workers_in_lane
+                        .lock()
+                        .expect("workers lock")
+                        .push(rayon::current_thread_index());
+
+                    let product = lane
+                        .session()
+                        .add_read(
+                            TensorRead::from_tensor(lhs_in_lane),
+                            TensorRead::from_tensor(rhs_in_lane),
+                        )
+                        .expect("lane numerical work");
+                    assert_eq!(product.as_slice::<f64>().expect("f64 payload"), &[7.0]);
+
+                    active_in_lane.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            },
+        )
+        .expect("phase starts")
+        .expect("phase runs");
+
+    assert!(
+        peak.load(Ordering::SeqCst) <= budget,
+        "at most one numerical lane per budgeted worker"
+    );
+    let workers = workers.lock().expect("workers lock").clone();
+    assert_eq!(workers.len(), budget);
+    assert!(
+        workers.iter().all(Option::is_some),
+        "every lane ran on a worker of the context pool"
+    );
+    session.close().expect("affinity restores");
+}
+
+/// A lane runs the concrete route families, not only one primitive: contraction, reduction,
+/// transpose and reshape all work inside a lane and agree with their single-threaded values.
+#[test]
+fn phase_lane_runs_concrete_route_families() {
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+    let backend = backend(2);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).expect("matrix");
+    let ones = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).expect("matrix");
+    let mut session = backend.open_session().expect("held session");
+
+    let sums = Mutex::new(Vec::new());
+    session
+        .phase(
+            |phase| -> Result<(), PhaseRunError<std::convert::Infallible>> {
+                phase.run(|_index, lane| {
+                    let product = lane
+                        .session()
+                        .dot_general_read(
+                            TensorRead::from_tensor(&a),
+                            TensorRead::from_tensor(&ones),
+                            &config,
+                        )
+                        .expect("lane contraction");
+                    assert_eq!(product.shape(), &[2, 3]);
+
+                    let transposed = lane
+                        .session()
+                        .transpose_read(TensorRead::from_tensor(&product), &[1, 0])
+                        .expect("lane transpose");
+                    assert_eq!(transposed.shape(), &[3, 2]);
+
+                    let reshaped = lane
+                        .session()
+                        .reshape_read(TensorRead::from_tensor(&transposed), &[6])
+                        .expect("lane reshape");
+                    assert_eq!(reshaped.shape(), &[6]);
+
+                    let total = lane
+                        .session()
+                        .reduce_sum_read(TensorRead::from_tensor(&reshaped), &[0])
+                        .expect("lane reduction");
+                    sums.lock()
+                        .expect("sums lock")
+                        .push(total.as_slice::<f64>().expect("f64 payload")[0]);
+                    Ok(())
+                })
+            },
+        )
+        .expect("phase starts")
+        .expect("phase runs");
+
+    // `A` is `[[1, 3], [2, 4]]` column-major, so `A * ones(2, 3)` is `[[4, 4, 4], [6, 6, 6]]`.
+    let sums = sums.into_inner().expect("sums");
+    assert_eq!(sums.len(), 2);
+    for sum in sums {
+        assert!((sum - 30.0).abs() < 1e-12, "got {sum}");
+    }
+    session.close().expect("affinity restores");
 }
