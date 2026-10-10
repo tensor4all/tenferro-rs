@@ -46,8 +46,9 @@ copy was pinned to a serial host copy.
   it cannot drift from the scheduler it mirrors.
 - **Not taken here.**
   - `extract_diagonal` (#2038) measured no gain from `copy_into_uninit` (its
-    diagonal view is a large-stride gather, not a permutation) and the reported
-    2.3x gap did not reproduce on the available host; left unchanged.
+    diagonal view is a large-stride gather, not a permutation); the gap is real
+    and larger on this host (76.7 ms at 4T against the JAX reference's 14.5 ms),
+    so it needs a different kernel rather than this copy entry.
   - Metadata-only view construction (#2040) is already allocation-free for
     ranks <= 8 and its comparison is against a compile-time Julia operation;
     the absolute cost is a few hundred ns and the fix direction is the storage
@@ -72,18 +73,24 @@ copy was pinned to a serial host copy.
 - Measurements come from the frozen issue harness
   (`tenferro-benchmark` `mwe/cpu_followup` at `59ed19bd`) and two local probes,
   built in release with OpenBLAS (no MKL on the host). Host: AMD EPYC 7713P, 64
-  cores, Linux, rustc 1.97.1; strided-rs pin `12ff2de9`.
+  cores, Linux, rustc 1.97.1; strided-rs pin `12ff2de9`. The fixed cases use the
+  harness's own Rust `strided-rs` arm; the Python/Julia reference arms exist
+  locally (`tenferro-benchmark` `.venv` with torch 2.12.0+cu130 and jax 0.10.1,
+  Julia 1.12.5) but were not run for this record except for the `#2038` JAX
+  number above. oneMKL is not installed, so the `#2039` DFTI reference is not
+  reproducible here.
 - **These are exploratory before/after comparisons, not a performance-gated
   paired experiment.** The issue rows predeclare the workload and the >=1.2x
   need, but no complete AB/BA run with predeclared thresholds, A/A noise floor,
   pinned-core idle observations, or confidence intervals was captured: the host
-  is shared (1-minute load average around 2-4 during these runs) and the
-  external JAX/PyTorch/Julia/MKL reference arms are not available here. The
-  tables are per-operation medians, and the direction and rough size are the
-  claim; the exact ratios are not. Effective degrees were verified in-process:
-  the probes report `requested=1 effective=1` and `requested=4 effective=4` via
+  is shared (1-minute load average around 2-4 during these runs). The tables
+  are per-operation medians, and the direction and rough size are the claim; the
+  exact ratios are not. Effective degrees were verified in-process: the probes
+  report `requested=1 effective=1` and `requested=4 effective=4` via
   `CpuBackend::num_threads`, and the harness arms construct one backend per
-  process with an explicit degree.
+  process with an explicit degree. The Python/Julia reference arms are not part
+  of these fixed-case measurements because both fixed cases are compared against
+  a Rust arm (strided-rs) or a plain memcpy.
 
   Permutation/transpose materialization, 1 thread, median ms (before → after,
   with the strided-rs reference for scale):
