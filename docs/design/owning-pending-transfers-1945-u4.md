@@ -7,7 +7,7 @@ delivered routes use.
 
 It supersedes the first revision of this design, which kept blocking resolution in `Drop` and
 inherited the borrowed API's error carrier; an independent review rejected both as contract
-discrepancies. The first slice is device→host; the host→device direction follows.
+discrepancies. Both directions are delivered: device→host first, then the host→device mirror.
 
 ## 1. Why, and what is dropped
 
@@ -28,6 +28,12 @@ pub fn download_pending(
     source: Tensor,
     buffer: PinnedHostBuffer,
 ) -> Result<PendingDownload, TransferSubmitError>;
+
+pub fn upload_pending(
+    runtime: &CudaRuntime,
+    source: PinnedHostBuffer,
+    destination: Tensor,
+) -> Result<PendingUpload, TransferSubmitError>;
 
 pub struct PendingDownload { /* owns §3 */ }
 
@@ -118,8 +124,6 @@ single-record path.
 
 ## 4. What this does not fix
 
-- **The host→device direction** stays borrowed in this slice and is converted next, with the same
-  rules.
 - **The safe writable-binding escape** (`Session::tensor_binding` + `Client::with_server` +
   `ComputeServer::write`) still allows safe code to write into storage it does not own. That is a
   pre-existing boundary defect recorded in [source-publication-1945-u4.md](./source-publication-1945-u4.md);

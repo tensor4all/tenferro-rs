@@ -68,6 +68,8 @@ pub struct PinnedHostBuffer {
     runtime: std::sync::Weak<CudaRuntimeState>,
     ptr: *mut u8,
     len: usize,
+    /// Set when the allocation must not be freed: the owning transfer retains the buffers it moved
+    /// in, so this is only for a buffer whose owning runtime is already gone.
     abandoned: bool,
 }
 
@@ -173,11 +175,6 @@ impl PinnedHostBuffer {
     fn as_mut_ptr(&self) -> *mut u8 {
         self.ptr
     }
-
-    /// Give up ownership without freeing: the device may still be writing here.
-    fn abandon(&mut self) {
-        self.abandoned = true;
-    }
 }
 
 impl Drop for PinnedHostBuffer {
@@ -209,7 +206,7 @@ impl Drop for PinnedHostBuffer {
 /// safe for the admitted package.
 pub(crate) struct TransferRetirement {
     event: CUevent,
-    source: Option<Tensor>,
+    value: Option<Tensor>,
     buffer: Option<PinnedHostBuffer>,
     resource: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -220,7 +217,7 @@ impl TransferRetirement {
         let _ = runtime.set_current_cuda_context(OP);
         // SAFETY: the event is live and owned by this record, and its work has completed.
         let _ = unsafe { cuda_result::event::destroy(self.event) };
-        self.source.take();
+        self.value.take();
         self.buffer.take();
         self.resource.take();
     }
@@ -299,7 +296,7 @@ pub struct TransferRejected {
     /// Why the transfer was refused.
     pub error: crate::Error,
     /// The submitted value, unchanged.
-    pub source: Tensor,
+    pub value: Tensor,
     /// The submitted pinned buffer, unchanged.
     pub buffer: PinnedHostBuffer,
 }
@@ -516,7 +513,7 @@ impl PendingDownload {
         self.runtime
             .retain_transfer_for_soundness(TransferRetirement {
                 event: self.event,
-                source: self.source.take(),
+                value: self.source.take(),
                 buffer: self.buffer.take(),
                 resource: self.resource.take(),
             });
@@ -529,7 +526,7 @@ impl PendingDownload {
         self.live = false;
         let record = TransferRetirement {
             event: self.event,
-            source: self.source.take(),
+            value: self.source.take(),
             buffer: self.buffer.take(),
             resource: self.resource.take(),
         };
@@ -551,14 +548,23 @@ fn report_pinned_release_error(error: &impl std::fmt::Debug) {
 }
 
 /// Refuse a transfer before anything is enqueued, returning the submitted package.
-fn rejected(error: crate::Error, source: Tensor, buffer: PinnedHostBuffer) -> TransferSubmitError {
+fn rejected(error: crate::Error, value: Tensor, buffer: PinnedHostBuffer) -> TransferSubmitError {
     // Boxed so the error channel stays small on the common success path; the rejected package itself
     // is carried unchanged.
     TransferSubmitError::Rejected(Box::new(TransferRejected {
         error,
-        source,
+        value,
         buffer,
     }))
+}
+
+/// The same, for a submission whose tensor is the destination of a host→device copy.
+fn rejected_up(
+    error: crate::Error,
+    buffer: PinnedHostBuffer,
+    value: Tensor,
+) -> TransferSubmitError {
+    rejected(error, value, buffer)
 }
 
 /// Start a device→host copy, taking ownership of `source` and `buffer`.
@@ -679,7 +685,7 @@ pub fn download_pending(
         // record must never be released by a later drain: it is retained for soundness.
         runtime.retain_transfer_for_soundness(TransferRetirement {
             event,
-            source: Some(source),
+            value: Some(source),
             buffer: Some(buffer),
             resource: Some(Box::new(resource)),
         });
@@ -727,14 +733,10 @@ fn device_allocation_typed<T: CubeElement + TensorScalar + 'static>(
 
 /// A pinned host→device copy in flight.
 ///
-/// Owns the source buffer, the provider pin, the source allocation retention and the copy's event,
-/// and holds the destination tensor **mutably** for its lifetime, so the device tensor cannot be
-/// read, mutated or dropped while the copy may still write it. [`Self::wait`] returns the source
-/// buffer for reuse; the destination borrow ends when the handle is consumed.
-///
-/// The mutable borrow is enforced by the compiler (see
-/// `tests/ui/cuda_pending_upload_borrows_the_destination.rs`), so a caller cannot read, mutate or
-/// drop the device tensor while the copy is in flight.
+/// Owns the source buffer, the destination value, the provider pin, the allocation retention and the
+/// copy's event. [`Self::wait`] is the only way to get them back; dropping the handle detaches the
+/// record into the runtime's retirement queue, which releases it once its event proves completion and
+/// retains it otherwise.
 ///
 /// # Examples
 ///
@@ -743,27 +745,30 @@ fn device_allocation_typed<T: CubeElement + TensorScalar + 'static>(
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # let runtime: tenferro_gpu::cuda::CudaRuntime = unimplemented!();
-/// # let mut device: tenferro_tensor::Tensor = unimplemented!();
+/// # let device: tenferro_tensor::Tensor = unimplemented!();
 /// let bytes = device.shape().iter().product::<usize>() * 8;
 /// let source = PinnedHostBuffer::new(&runtime, bytes)?;
-/// let mut pending = upload_pending(&runtime, source, &mut device)?;
+/// let mut pending = upload_pending(&runtime, source, device).map_err(|err| err.to_string())?;
 /// if pending.is_ready()? {
-///     let reusable = pending.wait()?;
-///     assert_eq!(reusable.len(), bytes);
+///     let (device, source) = pending.wait().map_err(|err| err.to_string())?;
+///     assert_eq!(source.len(), bytes);
+///     assert_eq!(device.shape().iter().product::<usize>() * 8, bytes);
 /// }
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Debug)]
-pub struct PendingUpload<'dst> {
+pub struct PendingUpload {
     runtime: CudaRuntime,
     source: Option<PinnedHostBuffer>,
+    destination: Option<Tensor>,
     event: CUevent,
     resource: Option<Box<dyn std::any::Any + Send>>,
-    destination: Option<&'dst mut Tensor>,
+    /// Whether this handle still owns the live event (see `PendingDownload`).
+    live: bool,
 }
 
-impl PendingUpload<'_> {
+impl PendingUpload {
     /// Whether the copy's event has completed.
     ///
     /// # Errors
@@ -778,16 +783,17 @@ impl PendingUpload<'_> {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime: tenferro_gpu::cuda::CudaRuntime = unimplemented!();
-    /// # let mut device: tenferro_tensor::Tensor = unimplemented!();
+    /// # let device: tenferro_tensor::Tensor = unimplemented!();
     /// let bytes = device.shape().iter().product::<usize>() * 8;
     /// let source = PinnedHostBuffer::new(&runtime, bytes)?;
-    /// let mut pending = upload_pending(&runtime, source, &mut device)?;
+    /// let mut pending = upload_pending(&runtime, source, device).map_err(|err| err.to_string())?;
     /// let _ready: bool = pending.is_ready()?;
-    /// let _ = pending.wait()?;
+    /// let _ = pending.wait().map_err(|err| err.to_string())?;
     /// # Ok(())
     /// # }
     /// ```
     pub fn is_ready(&mut self) -> crate::Result<bool> {
+        self.runtime.drain_transfer_retirements();
         if self.source.is_none() {
             return Ok(true);
         }
@@ -800,13 +806,13 @@ impl PendingUpload<'_> {
         }
     }
 
-    /// Wait for the copy and return the source buffer for reuse.
+    /// Wait for the copy and return the destination value and the source buffer.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::BackendSource`] when the context cannot be selected or the event
-    /// synchronization fails. On failure the destination must be discarded: an unproven copy
-    /// cannot establish that its contents are valid.
+    /// Returns [`CompletionUnproven`] when the event synchronization reports a device failure: the
+    /// destination value and the source buffer are then retained by the runtime, neither returned nor
+    /// released.
     ///
     /// # Examples
     ///
@@ -815,25 +821,32 @@ impl PendingUpload<'_> {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime: tenferro_gpu::cuda::CudaRuntime = unimplemented!();
-    /// # let mut device: tenferro_tensor::Tensor = unimplemented!();
+    /// # let device: tenferro_tensor::Tensor = unimplemented!();
     /// let bytes = device.shape().iter().product::<usize>() * 8;
     /// let source = PinnedHostBuffer::new(&runtime, bytes)?;
-    /// let reusable = upload_pending(&runtime, source, &mut device)?.wait()?;
-    /// assert_eq!(reusable.len(), bytes);
+    /// let (device, source) = upload_pending(&runtime, source, device)
+    ///     .map_err(|err| err.to_string())?
+    ///     .wait()
+    ///     .map_err(|err| err.to_string())?;
+    /// assert_eq!(source.len(), bytes);
+    /// assert_eq!(device.shape().iter().product::<usize>() * 8, bytes);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn wait(mut self) -> crate::Result<PinnedHostBuffer> {
-        if let Err(err) = self.resolve() {
-            self.abandon();
-            return Err(err);
+    pub fn wait(mut self) -> Result<(Tensor, PinnedHostBuffer), CompletionUnproven> {
+        if let Err(error) = self.resolve() {
+            self.retain_terminal();
+            return Err(CompletionUnproven { error });
         }
-        self.source
-            .take()
-            .ok_or_else(|| crate::Error::runtime_state(OP, "the pending upload already completed"))
+        match (self.destination.take(), self.source.take()) {
+            (Some(destination), Some(source)) => Ok((destination, source)),
+            _ => Err(CompletionUnproven {
+                error: crate::Error::runtime_state(OP, "the pending upload already completed"),
+            }),
+        }
     }
 
-    /// Block until the event completes and release the retention.
+    /// Block until the event completes, then release the retention exactly once.
     fn resolve(&mut self) -> crate::Result<()> {
         if self.source.is_none() {
             return Ok(());
@@ -844,50 +857,60 @@ impl PendingUpload<'_> {
             .map_err(|err| crate::Error::backend_source(OP, err))?;
         self.resource.take();
         // SAFETY: the event is live, owned, and no longer needed.
-        if let Err(err) = unsafe { cuda_result::event::destroy(self.event) } {
-            return Err(crate::Error::backend_source(OP, err));
-        }
+        let _ = unsafe { cuda_result::event::destroy(self.event) };
+        self.live = false;
         Ok(())
     }
 
-    /// Drop the source buffer without freeing it.
-    fn abandon(&mut self) {
-        if let Some(mut buffer) = self.source.take() {
-            buffer.abandon();
-        }
-        if let Some(resource) = self.resource.take() {
-            std::mem::forget(resource);
-        }
-    }
-}
-
-impl Drop for PendingUpload<'_> {
-    fn drop(&mut self) {
-        if self.source.is_none() {
+    /// Retain the record permanently, without touching the event again.
+    fn retain_terminal(&mut self) {
+        if !self.live {
             return;
         }
-        // Resolve before releasing the destination borrow, so the caller never receives a tensor
-        // whose producer is still running.
-        if self.resolve().is_err() {
-            self.abandon();
+        self.live = false;
+        self.runtime
+            .retain_transfer_for_soundness(TransferRetirement {
+                event: self.event,
+                value: self.destination.take(),
+                buffer: self.source.take(),
+                resource: self.resource.take(),
+            });
+    }
+
+    /// Hand the record to the runtime's retirement queue.
+    fn detach(&mut self) {
+        if !self.live {
+            return;
         }
-        self.destination.take();
+        self.live = false;
+        self.runtime.detach_transfer(TransferRetirement {
+            event: self.event,
+            value: self.destination.take(),
+            buffer: self.source.take(),
+            resource: self.resource.take(),
+        });
     }
 }
 
-/// Start a pinned host→device copy into `destination` and return its pending handle.
+impl Drop for PendingUpload {
+    fn drop(&mut self) {
+        // Detached drop: no device wait here (see `PendingDownload`).
+        self.detach();
+    }
+}
+
+/// Start a pinned host→device copy, taking ownership of `source` and `destination`.
 ///
-/// The copy is enqueued through the same audited interop submission as
-/// [`download_pending`], and `destination` is borrowed mutably for the handle's lifetime: a device
-/// consumer reads it through the caller after [`PendingUpload::wait`], never while the copy is in
-/// flight. Strided views are not accepted; a caller holding one materializes it first.
+/// The copy is published through the same non-blocking boundary as [`download_pending`] and the
+/// destination allocation is retained for the whole flight.
 ///
 /// # Errors
 ///
-/// Returns [`crate::Error::InvalidArgument`] when the source buffer length does not match the
-/// destination's byte length, [`crate::Error::Unsupported`] for a dtype this route does not serve,
-/// [`crate::Error::RuntimeState`] when the destination is not a CubeCL device buffer, and
-/// [`crate::Error::BackendSource`] when the submission, the resource lookup or the copy fails.
+/// Returns [`TransferSubmitError::Rejected`] when the transfer is refused before anything is enqueued
+/// — an unserved dtype, a host tensor destination, a buffer whose length does not match, a producer
+/// failure reported at the publication boundary or an unresolvable allocation — and carries the
+/// unchanged buffer and destination back with it. Returns [`TransferSubmitError::Unproven`] when the
+/// copy may have been enqueued but completion could not be established.
 ///
 /// # Examples
 ///
@@ -896,54 +919,87 @@ impl Drop for PendingUpload<'_> {
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # let runtime: tenferro_gpu::cuda::CudaRuntime = unimplemented!();
-/// # let mut device: tenferro_tensor::Tensor = unimplemented!();
+/// # let device: tenferro_tensor::Tensor = unimplemented!();
 /// let bytes = device.shape().iter().product::<usize>() * 8;
 /// let source = PinnedHostBuffer::new(&runtime, bytes)?;
-/// let reusable = upload_pending(&runtime, source, &mut device)?.wait()?;
-/// assert_eq!(reusable.len(), bytes);
+/// let (_device, source) = upload_pending(&runtime, source, device)
+///     .map_err(|err| err.to_string())?
+///     .wait()
+///     .map_err(|err| err.to_string())?;
+/// assert_eq!(source.len(), bytes);
 /// # Ok(())
 /// # }
 /// ```
-pub fn upload_pending<'dst>(
+pub fn upload_pending(
     runtime: &CudaRuntime,
     source: PinnedHostBuffer,
-    destination: &'dst mut Tensor,
-) -> crate::Result<PendingUpload<'dst>> {
+    destination: Tensor,
+) -> Result<PendingUpload, TransferSubmitError> {
     runtime.drain_transfer_retirements();
-    let (handle, byte_len) = device_allocation(destination)?;
+    let (handle, byte_len) = match device_allocation(&destination) {
+        Ok(allocation) => allocation,
+        Err(error) => return Err(rejected_up(error, source, destination)),
+    };
     if byte_len != source.len() {
-        return Err(crate::Error::invalid_argument(
-            OP,
-            "source",
-            format!(
-                "the pinned buffer holds {} bytes but the destination holds {byte_len}",
-                source.len()
+        return Err(rejected_up(
+            crate::Error::invalid_argument(
+                OP,
+                "source",
+                format!(
+                    "the pinned buffer holds {} bytes but the destination holds {byte_len}",
+                    source.len()
+                ),
             ),
+            source,
+            destination,
         ));
     }
 
-    // Publication boundary: the same non-blocking check as `download_pending`, so pending work on
-    // the destination is on the stream before the raw copy without waiting for device progress.
-    runtime.check_errors(OP)?;
-    let resource = runtime
-        .client()
-        .get_resource(handle)
-        .map_err(|err| crate::Error::backend_source(OP, err))?;
+    if let Err(error) = runtime.check_errors(OP) {
+        return Err(rejected_up(error, source, destination));
+    }
+    let resource = match runtime.client().get_resource(handle) {
+        Ok(resource) => resource,
+        Err(err) => {
+            return Err(rejected_up(
+                crate::Error::backend_source(OP, err),
+                source,
+                destination,
+            ));
+        }
+    };
     let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
     if available < byte_len {
-        return Err(crate::Error::Internal(format!(
-            "{OP}: upload of {byte_len} bytes exceeds the {available}-byte allocation"
-        )));
+        return Err(rejected_up(
+            crate::Error::Internal(format!(
+                "{OP}: upload of {byte_len} bytes exceeds the {available}-byte allocation"
+            )),
+            source,
+            destination,
+        ));
     }
 
-    runtime.set_current_cuda_context(OP)?;
-    let stream = runtime.raw_cuda_stream()? as usize as CUstream;
-    let event = cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING)
-        .map_err(|err| crate::Error::backend_source(OP, err))?;
+    let stream = match runtime
+        .set_current_cuda_context(OP)
+        .and_then(|()| runtime.raw_cuda_stream())
+    {
+        Ok(stream) => stream as usize as CUstream,
+        Err(error) => return Err(rejected_up(error, source, destination)),
+    };
+    let event = match cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING) {
+        Ok(event) => event,
+        Err(err) => {
+            return Err(rejected_up(
+                crate::Error::backend_source(OP, err),
+                source,
+                destination,
+            ));
+        }
+    };
     let dst = resource.resource().ptr;
     // SAFETY: `dst` is the device address of a live CubeCL allocation of at least `byte_len` bytes
-    // (checked above); `source` owns `byte_len` bytes of pinned host memory; `stream` is the CubeCL
-    // stream `get_resource` ordered the allocation on.
+    // (checked above) retained by `resource`; `source` owns `byte_len` bytes of pinned host memory;
+    // `stream` is the CubeCL stream the publication boundary ordered the allocation on.
     let enqueued = unsafe {
         cudarc::driver::sys::cuMemcpyHtoDAsync_v2(dst, source.as_mut_ptr().cast(), byte_len, stream)
     }
@@ -951,18 +1007,25 @@ pub fn upload_pending<'dst>(
     .and_then(|()| unsafe { cuda_result::event::record(event, stream) });
 
     if let Err(err) = enqueued {
-        let mut source = source;
-        source.abandon();
-        std::mem::forget(resource);
-        let _ = unsafe { cuda_result::event::destroy(event) };
-        return Err(crate::Error::backend_source(OP, err));
+        // The event may not have been recorded, and an unrecorded event queries as complete, so this
+        // record must never be released by a later drain: it is retained for soundness.
+        runtime.retain_transfer_for_soundness(TransferRetirement {
+            event,
+            value: Some(destination),
+            buffer: Some(source),
+            resource: Some(Box::new(resource)),
+        });
+        return Err(TransferSubmitError::Unproven {
+            error: crate::Error::backend_source(OP, err),
+        });
     }
 
     Ok(PendingUpload {
         runtime: runtime.clone(),
         source: Some(source),
+        destination: Some(destination),
         event,
         resource: Some(Box::new(resource)),
-        destination: Some(destination),
+        live: true,
     })
 }
