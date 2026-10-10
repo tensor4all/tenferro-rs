@@ -12,8 +12,8 @@ use num_complex::Complex64;
 use tenferro_ops::broadcast::{broadcast_error_to_validation, broadcast_shape, broadcast_shapes};
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, DotGeneralConfig, Error, GatherConfig, PadConfig, Result,
-    ScatterConfig, SliceConfig, TensorRead,
+    ActivationOp, BackendSession, CompareDir, DType, DotGeneralConfig, Error, GatherConfig,
+    PadConfig, Result, ScatterConfig, SliceConfig, TensorRead,
 };
 
 use crate::typed_tensor::{broadcast_to_in_read, ReadInput};
@@ -347,22 +347,47 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn sigmoid(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::Sigmoid, TensorRead::from_tensor(self))?
+        {
+            return Ok(out);
+        }
         run_session_composite(session, |ops| composite::sigmoid(ops, &borrowed(self)))
     }
 
     fn silu(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::Silu, TensorRead::from_tensor(self))?
+        {
+            return Ok(out);
+        }
         run_session_composite(session, |ops| composite::silu(ops, &borrowed(self)))
     }
 
     fn softplus(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::Softplus, TensorRead::from_tensor(self))?
+        {
+            return Ok(out);
+        }
         run_session_composite(session, |ops| composite::softplus(ops, &borrowed(self)))
     }
 
     fn gelu(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::Gelu, TensorRead::from_tensor(self))?
+        {
+            return Ok(out);
+        }
         run_session_composite(session, |ops| composite::gelu(ops, &borrowed(self)))
     }
 
     fn gelu_tanh(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        if let Some(out) =
+            session.fused_activation_read(ActivationOp::GeluTanh, TensorRead::from_tensor(self))?
+        {
+            return Ok(out);
+        }
         run_session_composite(session, |ops| composite::gelu_tanh(ops, &borrowed(self)))
     }
 

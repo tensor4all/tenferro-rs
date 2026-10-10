@@ -20,6 +20,17 @@ use crate::eager_exec::{
 };
 use crate::error::{Error, Result};
 
+/// Whether an untracked fast path may skip AD recording for `tensors`.
+///
+/// Mirrors the eligibility test in [`EagerTensor::nary_op_in_session`]: a fused
+/// kernel may run directly only when no gradient or semantic-trace recording
+/// would be lost. Tracked operands, or active semantic capture, keep the
+/// recorded primitive path.
+pub(crate) fn untracked_fast_path_allowed(tensors: &[&EagerTensor]) -> bool {
+    !eager_grad_recording_enabled()
+        || (!eager_capture_active() && !tensors.iter().any(|tensor| tensor.requires_grad))
+}
+
 pub(crate) fn broadcast_binary_in_session(
     op: &'static str,
     lhs: &EagerTensor,

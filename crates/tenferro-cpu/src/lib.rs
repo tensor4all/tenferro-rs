@@ -164,6 +164,7 @@ compile_error!(
 ))]
 compile_error!("provider-inject cannot be combined with explicit BLAS provider features");
 
+mod activation;
 pub mod affinity;
 mod analytic;
 mod arbiter;
