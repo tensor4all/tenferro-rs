@@ -143,7 +143,7 @@ class SetupWatchdogTests(unittest.TestCase):
         from scripts.ci.tests.test_runpod_cost_contracts import job
         child = (Path(__file__).resolve().parents[3] / '.github/workflows/runpod-gpu-execute.yml').read_text()
         guard = job(child, 'setup-watchdog')
-        self.assertIn('runs-on: ubuntu-latest', guard)
+        self.assertIn('runs-on: ubuntu-24.04', guard)
         self.assertIn('actions: write', guard)
         self.assertIn('--budget-seconds 900 --lifetime-seconds 3600', guard)
         self.assertIn('ref: ${{ github.workflow_sha }}', guard)

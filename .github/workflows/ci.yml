@@ -18,7 +18,7 @@ env:
 jobs:
   policy:
     name: Classify CI change
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       run_rust: ${{ steps.policy.outputs.run_rust }}
       run_blas: ${{ steps.policy.outputs.run_blas }}
@@ -46,7 +46,7 @@ jobs:
     name: rustfmt
     needs: policy
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
@@ -71,7 +71,7 @@ jobs:
     name: clippy
     needs: policy
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
@@ -83,6 +83,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        with:
+          prefix-key: v1-rust-ubuntu24
       - name: Test public Result error documentation audit
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: python3 scripts/test-check-public-error-docs.py
@@ -123,7 +125,7 @@ jobs:
     name: cargo test (blas inject)
     needs: policy
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
@@ -131,6 +133,8 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
       - uses: Swatinem/rust-cache@v2
         if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
+        with:
+          prefix-key: v1-rust-ubuntu24
       - name: Run inject tests for tenferro-cpu
         if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
         run: python3 scripts/ci/run_profile.py blas-inject
@@ -148,7 +152,7 @@ jobs:
     name: tensor core dependency boundary
     needs: policy
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
@@ -169,7 +173,7 @@ jobs:
     name: coverage
     needs: policy
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
@@ -179,6 +183,8 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        with:
+          prefix-key: v1-rust-ubuntu24
       - uses: taiki-e/install-action@v2
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
@@ -209,7 +215,7 @@ jobs:
     name: docs-site
     needs: policy
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
@@ -217,6 +223,8 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
       - uses: Swatinem/rust-cache@v2
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
+        with:
+          prefix-key: v1-rust-ubuntu24
       - name: Install Quarto
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
         uses: quarto-dev/quarto-actions/setup@v2
@@ -250,7 +258,7 @@ jobs:
     name: CI configuration checks
     needs: policy
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'

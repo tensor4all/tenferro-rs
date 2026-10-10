@@ -37,6 +37,7 @@ class InstallNvrtcTests(unittest.TestCase):
                 archive = Path(args[args.index("-o") + 1])
                 archive.write_bytes(content)
                 archive_paths.append(archive)
+                self.assertIn("/repos/ubuntu2404/x86_64/", args[-1])
                 self.assertTrue(args[-1].endswith("cuda-nvrtc-12-8_12.8.93-1_amd64.deb"))
             else:
                 self.assertEqual(args[:2], ["dpkg", "-i"])

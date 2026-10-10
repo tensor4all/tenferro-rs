@@ -71,7 +71,7 @@ jobs:
           SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-12.6
-          key: cuda-runtime-${{ runner.os }}-x86_64-12.6-minimal-v7
+          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-12.6-minimal-v8
       - name: Restore hosted CUDA 12.8 runtime
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         timeout-minutes: 3
@@ -80,7 +80,7 @@ jobs:
           SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-12.8
-          key: cuda-runtime-${{ runner.os }}-x86_64-12.8-minimal-v7
+          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-12.8-minimal-v8
       - name: Restore cuTENSOR redistributable
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         timeout-minutes: 3

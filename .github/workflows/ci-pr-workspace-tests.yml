@@ -18,7 +18,7 @@ concurrency:
 jobs:
   changes:
     name: Select validation matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       backends: ${{ steps.select.outputs.backends }}
       run_workspace: ${{ steps.policy.outputs.run_rust }}
@@ -61,7 +61,7 @@ jobs:
     name: CI (fork PR / github-hosted)
     needs: changes
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.changes.outputs.run_workspace == 'true'
@@ -69,6 +69,8 @@ jobs:
         if: needs.changes.outputs.run_workspace == 'true'
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.run_workspace == 'true'
+        with:
+          prefix-key: v1-rust-ubuntu24
       - uses: taiki-e/install-action@nextest
         if: needs.changes.outputs.run_workspace == 'true'
       - name: Run workspace faer profile
@@ -84,7 +86,7 @@ jobs:
     name: CI (same-repo / heavy / ${{ matrix.cfg.backend }})
     needs: changes
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -101,6 +103,7 @@ jobs:
         id: rust_cache
         if: matrix.cfg.profile != ''
         with:
+          prefix-key: v1-rust-ubuntu24
           # Cargo writes to CARGO_TARGET_DIR outside the checkout. Without
           # this mapping rust-cache restores ./target and misses faer and
           # strided-rs dependency artifacts in the real target tree.
@@ -159,7 +162,7 @@ jobs:
   ext-samples:
     name: Extension and sample tests
     needs: changes
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: needs.changes.outputs.run_extensions == 'true'
@@ -169,6 +172,7 @@ jobs:
         if: needs.changes.outputs.run_extensions == 'true'
         uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: v1-rust-ubuntu24
           workspaces: |
             ext/tropical
             ext/sparse
@@ -187,7 +191,7 @@ jobs:
     name: CI gate (PR workspace tests)
     needs: [changes, ci-fork, ci-maintainer, ext-samples]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require selected workspace and extension tests
         env:
@@ -216,7 +220,7 @@ jobs:
     name: macOS workspace tests
     needs: changes
     if: always()
-    runs-on: ${{ needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true' && 'macos-15' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true' && 'macos-15' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v5
         if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'

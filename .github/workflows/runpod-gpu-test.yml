@@ -126,7 +126,7 @@ jobs:
   authorize:
     name: Authorize RunPod GPU run
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.status == 'in_progress')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     outputs:
@@ -356,7 +356,7 @@ jobs:
     name: Validate RunPod request contract
     needs: authorize
     if: needs.authorize.outputs.gpu_required == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -371,7 +371,7 @@ jobs:
     name: Wait for rustfmt and clippy
     needs: authorize
     if: needs.authorize.outputs.gpu_required == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
 
     steps:
@@ -475,7 +475,7 @@ jobs:
       - authorize
       - runpod-contract
     if: needs.authorize.outputs.gpu_required == 'true'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     # actions: read lets this job locate an existing per-key archive artifact
@@ -519,7 +519,7 @@ jobs:
           # archive build commands or toolkit selection change; unrelated
           # workflow edits must not invalidate the key (#1403).
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v16-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/PERFORMANCE_TIPS.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
+          key="cuda-pjrt-archive-v17-ci-ubuntu24.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/PERFORMANCE_TIPS.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"
@@ -593,7 +593,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-toolkit-${{ env.CUDA_RUNTIME_VERSION }}
-          key: cuda-toolkit-${{ runner.os }}-ubuntu22-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-v1-${{ hashFiles('tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh') }}
+          key: cuda-toolkit-${{ runner.os }}-ubuntu24-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-v1-${{ hashFiles('tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh') }}
       - name: Install CUDA toolkit for archive PTX
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
         run: bash tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh "${CUDA_RUNTIME_VERSION}" "${TENFERRO_CI_CACHE_ROOT}/cuda-toolkit-${CUDA_RUNTIME_VERSION}"
@@ -604,7 +604,7 @@ jobs:
           # v8 rotated the namespace when ci-cache-publish took ownership:
           # v7 entries could contain PR-built target artifacts saved by the
           # previously write-capable workflow_run jobs.
-          prefix-key: v8-rust-cuda-pjrt-ci-ubuntu22-ptx
+          prefix-key: v9-rust-cuda-pjrt-ci-ubuntu24-ptx
           shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
           cache-all-crates: true
           cache-workspace-crates: true
@@ -833,7 +833,7 @@ jobs:
         )
       )
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     permissions:

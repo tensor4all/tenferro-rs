@@ -176,6 +176,6 @@ class ReaperTests(unittest.TestCase):
         self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
         self.assertIn("ref: ${{ github.workflow_sha }}", workflow)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("runs-on: ubuntu-latest", workflow)
+        self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("self-hosted", workflow)
         self.assertNotIn("pull_request", workflow)

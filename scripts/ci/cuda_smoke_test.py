@@ -39,8 +39,8 @@ SMOKE_KERNEL = (
 KERNEL_NAME = b"tenferro_smoke"
 EXPECTED_OUTPUT = 42
 
-# Published SHA256 values from NVIDIA's ubuntu2204/x86_64/Packages.gz:
-# https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/
+# Published SHA256 values from NVIDIA's ubuntu2404/x86_64/Packages.gz:
+# https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/
 # These dependency-free packages belong to the staged SDK's NVRTC family.
 # Pin the download boundary so a changed or incomplete package cannot install.
 NVRTC_PACKAGES = {
@@ -100,7 +100,7 @@ def install_nvrtc(runtime: tuple[int, int]) -> None:
     filename = f"{nvrtc_package(runtime)}_{version}_amd64.deb"
     url = (
         "https://developer.download.nvidia.com/compute/cuda/repos/"
-        f"ubuntu2204/x86_64/{filename}"
+        f"ubuntu2404/x86_64/{filename}"
     )
     with tempfile.TemporaryDirectory(prefix="tenferro-nvrtc-") as directory:
         archive = Path(directory) / filename

@@ -83,7 +83,7 @@ env:
 jobs:
   start-runpod:
     name: Start RunPod org runner
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Bounded provision attempts may create, smoke-test, and delete several
     # candidate pods before one is accepted. Must exceed the worst case of
     # max_provision_attempts x (create_deadline_seconds +
@@ -390,7 +390,7 @@ jobs:
       needs.start-runpod.result == 'success' &&
       needs.start-runpod.outputs.pod_id != '' &&
       needs.start-runpod.outputs.paid_path_skipped != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 65
     permissions:
       contents: read
@@ -859,7 +859,7 @@ jobs:
 
     if: always()
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read

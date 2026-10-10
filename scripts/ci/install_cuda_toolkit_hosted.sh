@@ -95,7 +95,7 @@ if [ -z "${cuda_path}" ]; then
     tmpdir="$(mktemp -d)"
     curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
       -o "${tmpdir}/cuda-keyring.deb" \
-      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
     sudo dpkg -i "${tmpdir}/cuda-keyring.deb"
     rm -rf "${tmpdir}"
   fi
