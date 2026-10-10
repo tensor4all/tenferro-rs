@@ -321,6 +321,18 @@ class TelemetryTests(unittest.TestCase):
         self.assertIn("steps.delete_pod.outputs.deleted_at != ''", checkout)
         self.assertIn("continue-on-error: true", checkout)
 
+    def test_startup_snapshot_reaches_report_without_delaying_cleanup(self) -> None:
+        workflow = text(CHILD)
+        capture = step(workflow, "Preserve accepted Pod metadata")
+        self.assertIn("continue-on-error: true", capture)
+        self.assertIn("scripts.ci.runpod_metadata", capture)
+        self.assertIn("--creation-record /tmp/runpod-response.json", capture)
+        self.assertIn("pod_metadata: ${{ steps.pod_metadata.outputs.pod_metadata }}", workflow)
+        reporting = step(workflow, "Report paid GPU CI cost by stage")
+        self.assertIn("RUNPOD_STARTUP_METADATA: ${{ needs.start-runpod.outputs.pod_metadata }}", reporting)
+        self.assertIn('--fallback-pod-json "${RUNPOD_STARTUP_METADATA}"', reporting)
+        self.assertIn('--pod-id "${POD_ID}"', reporting)
+
     def test_failed_cost_record_read_still_deletes_pod(self) -> None:
         script = step_script(text(CHILD), "Read pod record for cost reporting")
         script += "\n" + step_script(text(CHILD), "Delete RunPod pod")

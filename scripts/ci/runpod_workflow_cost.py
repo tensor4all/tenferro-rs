@@ -73,6 +73,20 @@ def report(pod: dict, jobs: list[dict], deleted_at: str, gpu_type_id: str = "") 
                        for name, value in totals.items()}}
 
 
+def select_pod_record(path: Path, fallback: str, pod_id: str, deleted_at: str) -> tuple[dict, str]:
+    """Prefer the final provider record; retain startup evidence on read failure."""
+    for source in ("pre_delete", "startup"):
+        try:
+            pod = json.loads(path.read_text() if source == "pre_delete" else fallback)
+            if not isinstance(pod, dict) or (pod_id and pod.get("id") != pod_id):
+                raise ValueError("Pod metadata does not match the accepted Pod")
+            report(pod, [], deleted_at)  # Check the timestamp and price without inventing either.
+            return pod, source
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            print(f"::warning::RunPod {source} cost metadata unavailable: {error}")
+    raise ValueError("Neither final nor startup Pod metadata can support a cost estimate")
+
+
 def markdown(value: dict) -> str:
     lines = ["### RunPod paid GPU cost by stage", "",
              f"Estimated GPU cost: ${value['estimated_gpu_cost']:.5f} for {value['paid_seconds']:.1f}s at ${value['price_per_hour']:.2f}/hour.",
@@ -87,6 +101,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pod", type=Path, required=True)
     parser.add_argument("--jobs", type=Path, required=True)
+    parser.add_argument("--fallback-pod-json", default="")
+    parser.add_argument("--pod-id", default="")
     parser.add_argument("--deleted-at", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--gpu-type-id", default="")
@@ -99,7 +115,13 @@ def main() -> int:
         payload = json.loads(args.jobs.read_text())
         # gh api --paginate --slurp produces an array of job-list pages.
         jobs = [job for page in payload for job in page["jobs"]]
-        value = report(json.loads(args.pod.read_text()), jobs, args.deleted_at, args.gpu_type_id)
+        pod, source = select_pod_record(args.pod, args.fallback_pod_json, args.pod_id, args.deleted_at)
+        value = report(pod, jobs, args.deleted_at, args.gpu_type_id)
+        value["pod_record_source"] = source
+        value["placement"] = {
+            "machine_id": pod.get("machineId"),
+            "data_center_id": (pod.get("machine") or {}).get("dataCenterId"),
+        }
         value["tested_ref"] = args.tested_ref
         value["cache_hits"] = {
             name: {"true": True, "false": False}.get(hit)

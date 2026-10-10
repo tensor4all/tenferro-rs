@@ -101,6 +101,7 @@ jobs:
       gpu_type_id: ${{ steps.create_pod.outputs.gpu_type_id }}
       gpu_tier: ${{ steps.create_pod.outputs.gpu_tier }}
       gpu_cost_per_hr: ${{ steps.create_pod.outputs.gpu_cost_per_hr }}
+      pod_metadata: ${{ steps.pod_metadata.outputs.pod_metadata }}
       # True when this PR must not spend: merged or closed, a recorded local GPU
       # run, or a change classification that does not need GPU validation.
       paid_path_skipped: ${{ steps.paid_path.outputs.run_paid_path == 'false' }}
@@ -337,6 +338,18 @@ jobs:
             --pod-env "SMOKE_MIN_RUNTIME_VERSION=${CUDA_MIN_RUNTIME_VERSION}" \
             --pod-env "SMOKE_FULL_RUNTIME_VERSION=${CUDA_RUNTIME_VERSION}" \
             --pod-env "SMOKE_MIN_VRAM_GB=${smoke_min_vram_gb}"
+
+      - name: Preserve accepted Pod metadata
+        id: pod_metadata
+        if: steps.create_pod.outputs.pod_id != ''
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          POD_ID: ${{ steps.create_pod.outputs.pod_id }}
+        run: |
+          python3 -m scripts.ci.runpod_metadata \
+            --pod-id "${POD_ID}" --creation-record /tmp/runpod-response.json
 
       - name: Record intentionally retained startup failures
         if: always() && steps.create_pod.outputs.retained_pod_ids != ''
@@ -880,13 +893,13 @@ jobs:
           set -euo pipefail
           get_status="$(
             curl -sS --connect-timeout 2 --max-time 5 \
-              --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
+              --url "https://rest.runpod.io/v1/pods/${POD_ID}?includeMachine=true" \
               --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
               --output /tmp/runpod-pod.json \
               --write-out "%{http_code}"
           )" || get_status=000
           if [ "$get_status" -lt 200 ] || [ "$get_status" -ge 300 ]; then
-            echo "::warning::RunPod pod record unavailable (HTTP ${get_status}); no cost estimate."
+            echo "::warning::RunPod pod record unavailable (HTTP ${get_status}); will try the saved startup record after deletion."
           fi
 
       - name: Delete RunPod pod
@@ -943,6 +956,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DELETED_AT: ${{ steps.delete_pod.outputs.deleted_at }}
+          POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
+          RUNPOD_STARTUP_METADATA: ${{ needs.start-runpod.outputs.pod_metadata }}
           GPU_TYPE_ID: ${{ needs.start-runpod.outputs.gpu_type_id }}
           TESTED_REF: ${{ inputs.tenferro_ref }}
           ARCHIVE_CACHE_HIT: ${{ needs.run-gpu-tests.outputs.archive_cache_hit }}
@@ -953,6 +968,7 @@ jobs:
           gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" > /tmp/runpod-jobs.json
           python3 -m scripts.ci.runpod_workflow_cost \
             --pod /tmp/runpod-pod.json --jobs /tmp/runpod-jobs.json \
+            --pod-id "${POD_ID}" --fallback-pod-json "${RUNPOD_STARTUP_METADATA}" \
             --deleted-at "${DELETED_AT}" --gpu-type-id "${GPU_TYPE_ID}" \
             --tested-ref "${TESTED_REF}" --archive-cache-hit "${ARCHIVE_CACHE_HIT}" \
             --cutensor-cache-hit "${CUTENSOR_CACHE_HIT}" --cuda-runtime-cache-hit "${CUDA_RUNTIME_CACHE_HIT}" \
