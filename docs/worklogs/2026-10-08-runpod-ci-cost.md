@@ -530,3 +530,31 @@ phase durations; provider placement cannot be assumed identical. Missing costs
 or failed accepted Pods fail the campaign rather than disappearing from its
 results. Report failed-attempt spending separately as well as in total cost.
 Do not retry selected slow pairs or relax gates after seeing results.
+
+The first diagnostic used benchmark harness `bc50907` and production artifacts
+from run `38000490223`, tested ref `bbe7758a4efcaf866415348fe558efd02edd3bc2`,
+profile `ci`, nextest concurrency one, A40 at $0.59/hr, fresh Pods and identical
+read-only archive keys. Hosted artifact-only validation passed in benchmark
+run `38021049168`. Local verification passed the pinned-image runner 2.337.0
+and Node 24 startup without pip, all execution-tool commands, 350 CI helper
+tests and the fast gate; the committed-head deterministic rules review passed.
+
+Diagnostic [baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38021085175)
+and [candidate](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38021459568)
+both passed 285 CUDA cases, three PJRT cases and the tutorial, with confirmed
+Pod deletion. Paid lifetime was 348.271 versus 355.202 seconds (candidate
+1.99% longer); combined estimated GPU spending was $0.1152914. Startup/queue
+was 69.271 versus 60.202 seconds, while CUDA testing was 215 versus 227 seconds.
+The drivers differed (580.159.04 versus 580.173.02), although both selected
+CUDA 12.8. The diagnostic is INCONCLUSIVE under the driver-identity gate and
+does not establish a causal regression or a speedup. The 10% target was not
+observed, so no confirmation campaign or production promotion is justified for
+this candidate alone. Artifact identities and stage records are retained in
+the linked runs; the bootstrap package reduction remains unpromoted.
+
+The next candidate investigation is the existing GitHub official runner image,
+which can avoid paid runner download/extraction and dependency installation.
+The published 2.337.0 image is Ubuntu 24.04 and resolves to index digest
+`sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4`.
+Local compatibility must be checked before another paid diagnostic; this does
+not authorize or require custom image publication.
