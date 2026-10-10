@@ -69,6 +69,7 @@ website:
           - guides/autodiff.md
           - guides/complex-ad.md
           - guides/devices-and-gpu.md
+          - guides/cuda-sessions-and-transfers.md
           - guides/xla.md
           - guides/memory-order.md
           - text: "CPU Execution and NUMA"

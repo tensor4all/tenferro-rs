@@ -84,6 +84,10 @@ trybuild.workspace = true
 name = "cuda_quickstart"
 required-features = ["cuda"]
 
+[[example]]
+name = "cuda_session_transfer"
+required-features = ["cuda"]
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
