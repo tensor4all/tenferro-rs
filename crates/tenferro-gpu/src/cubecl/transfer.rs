@@ -68,9 +68,6 @@ pub struct PinnedHostBuffer {
     runtime: std::sync::Weak<CudaRuntimeState>,
     ptr: *mut u8,
     len: usize,
-    /// Set when the allocation must not be freed: the owning transfer retains the buffers it moved
-    /// in, so this is only for a buffer whose owning runtime is already gone.
-    abandoned: bool,
 }
 
 impl std::fmt::Debug for PinnedHostBuffer {
@@ -78,7 +75,6 @@ impl std::fmt::Debug for PinnedHostBuffer {
         formatter
             .debug_struct("PinnedHostBuffer")
             .field("len", &self.len)
-            .field("abandoned", &self.abandoned)
             .finish_non_exhaustive()
     }
 }
@@ -115,7 +111,8 @@ impl PinnedHostBuffer {
         runtime.set_current_cuda_context(OP)?;
         let mut ptr = std::ptr::null_mut();
         // SAFETY: the primary context is current on this thread, and the allocation is released by
-        // `Drop` (or deliberately abandoned) before the runtime it belongs to is dropped.
+        // `Drop` before the runtime it belongs to is dropped; a transfer that owns this buffer keeps
+        // it alive for as long as the copy may need it.
         unsafe { cuda_sys::cudaHostAlloc(&mut ptr, bytes, cuda_sys::cudaHostAllocDefault) }
             .result()
             .map_err(|err| crate::Error::backend_source(OP, err))?;
@@ -123,7 +120,6 @@ impl PinnedHostBuffer {
             runtime: runtime.weak_state(),
             ptr: ptr.cast::<u8>(),
             len: bytes,
-            abandoned: false,
         })
     }
 
@@ -179,7 +175,7 @@ impl PinnedHostBuffer {
 
 impl Drop for PinnedHostBuffer {
     fn drop(&mut self) {
-        if self.abandoned || self.ptr.is_null() {
+        if self.ptr.is_null() {
             return;
         }
         let Some(state) = self.runtime.upgrade() else {
@@ -275,6 +271,30 @@ impl TransferRetirementQueue {
     /// Number of records still waiting for completion, including the permanently retained ones.
     pub(crate) fn pending(&self) -> usize {
         self.entries.len() + self.leaked.len()
+    }
+
+    /// Retain every record permanently: used when the runtime cannot prove that its streams are done.
+    pub(crate) fn retain_all(&mut self) {
+        for record in self.entries.drain(..) {
+            self.leaked.push(record);
+        }
+    }
+
+    /// Final handling at runtime teardown.
+    ///
+    /// Records whose completion was never proven (or whose event was never recorded) are retained
+    /// permanently: `mem::forget` keeps their tensors, buffers, retention and events alive instead of
+    /// letting the runtime's own destruction free memory the device may still touch. Records that are
+    /// still merely in flight are released best effort, and their events destroyed, because the
+    /// runtime has already retired its streams by this point.
+    pub(crate) fn release_at_teardown(&mut self, runtime: &CudaRuntimeState) {
+        self.drain(runtime);
+        for record in self.entries.drain(..) {
+            record.release(runtime);
+        }
+        for record in self.leaked.drain(..) {
+            std::mem::forget(record);
+        }
     }
 }
 
@@ -556,15 +576,6 @@ fn rejected(error: crate::Error, value: Tensor, buffer: PinnedHostBuffer) -> Tra
         value,
         buffer,
     }))
-}
-
-/// The same, for a submission whose tensor is the destination of a host→device copy.
-fn rejected_up(
-    error: crate::Error,
-    buffer: PinnedHostBuffer,
-    value: Tensor,
-) -> TransferSubmitError {
-    rejected(error, value, buffer)
 }
 
 /// Start a device→host copy, taking ownership of `source` and `buffer`.
@@ -938,10 +949,10 @@ pub fn upload_pending(
     runtime.drain_transfer_retirements();
     let (handle, byte_len) = match device_allocation(&destination) {
         Ok(allocation) => allocation,
-        Err(error) => return Err(rejected_up(error, source, destination)),
+        Err(error) => return Err(rejected(error, destination, source)),
     };
     if byte_len != source.len() {
-        return Err(rejected_up(
+        return Err(rejected(
             crate::Error::invalid_argument(
                 OP,
                 "source",
@@ -950,32 +961,32 @@ pub fn upload_pending(
                     source.len()
                 ),
             ),
-            source,
             destination,
+            source,
         ));
     }
 
     if let Err(error) = runtime.check_errors(OP) {
-        return Err(rejected_up(error, source, destination));
+        return Err(rejected(error, destination, source));
     }
     let resource = match runtime.client().get_resource(handle) {
         Ok(resource) => resource,
         Err(err) => {
-            return Err(rejected_up(
+            return Err(rejected(
                 crate::Error::backend_source(OP, err),
-                source,
                 destination,
+                source,
             ));
         }
     };
     let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
     if available < byte_len {
-        return Err(rejected_up(
+        return Err(rejected(
             crate::Error::Internal(format!(
                 "{OP}: upload of {byte_len} bytes exceeds the {available}-byte allocation"
             )),
-            source,
             destination,
+            source,
         ));
     }
 
@@ -984,15 +995,15 @@ pub fn upload_pending(
         .and_then(|()| runtime.raw_cuda_stream())
     {
         Ok(stream) => stream as usize as CUstream,
-        Err(error) => return Err(rejected_up(error, source, destination)),
+        Err(error) => return Err(rejected(error, destination, source)),
     };
     let event = match cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING) {
         Ok(event) => event,
         Err(err) => {
-            return Err(rejected_up(
+            return Err(rejected(
                 crate::Error::backend_source(OP, err),
-                source,
                 destination,
+                source,
             ));
         }
     };
