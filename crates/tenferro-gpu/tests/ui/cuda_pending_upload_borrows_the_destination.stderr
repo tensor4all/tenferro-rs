@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `*device` as mutable more than once at a time
+  --> tests/ui/cuda_pending_upload_borrows_the_destination.rs:9:19
+   |
+ 8 |     let pending = upload_pending(runtime, source, device).expect("pending upload");
+   |                                                   ------ first mutable borrow occurs here
+ 9 |     let _second = &mut *device;
+   |                   ^^^^^^^^^^^^ second mutable borrow occurs here
+10 |     drop(pending);
+   |          ------- first borrow later used here

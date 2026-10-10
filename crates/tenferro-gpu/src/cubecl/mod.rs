@@ -174,7 +174,9 @@ pub use identity::{CudaComputeCapability, CudaDeviceUuid, GpuExtensionCapability
 pub use memory::{download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};
-pub use transfer::{download_pending, PendingDownload, PinnedHostBuffer};
+pub use transfer::{
+    download_pending, upload_pending, PendingDownload, PendingUpload, PinnedHostBuffer,
+};
 
 fn op_name(
     kind: PrimitiveOpKind,

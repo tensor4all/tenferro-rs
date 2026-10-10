@@ -7,6 +7,8 @@ exactly which requirements remain open and why.
 Downstream consumer: [tensor4all-rs #859](https://github.com/tensor4all/tensor4all-rs/issues/859)
 milestone B2. Performance tracker: [#2009](https://github.com/tensor4all/tenferro-rs/issues/2009).
 
+Two slices are delivered: the D2H handoff and its H2D mirror.
+
 Revision history: draft 1 proposed a generic `PendingTransfer<T>` framework submitted through
 `client.flush`; review round 1 falsified its API shape and its publication claim. Draft 2 replaced
 the flush with the `get_resource`/host-dispatch boundary and borrowed its DMA storage; review round 2
@@ -17,19 +19,25 @@ same-domain token grants no access to the pending destination, and that `get_res
 `ignore: true, flush: false` mode bypasses producer-error reporting. What follows is the slice the
 review recommended.
 
-## 1. Slice 1: owned-buffer pending device→host handoff
+## 1. Delivered: owned-buffer pending handoffs (slices 1 and 2)
 
 Delivered:
 
 - `PinnedHostBuffer`: owned pinned host storage (`cudaHostAlloc`), handed to a transfer **by value**
   and returned by it, so no caller borrow has to outlive a DMA it cannot control. Dropping the
-  buffer frees it; a transfer that cannot prove completion abandons it instead (§3).
+  buffer frees it; a transfer that cannot prove completion abandons it instead (§3). Bytes can be
+  initialized (`as_mut_slice`) before a H2D and inspected (`as_slice`) after a D2H.
 - `download_pending(rt, src: &Tensor, buffer: PinnedHostBuffer) -> PendingDownload<'_>`: one
   `cuMemcpyDtoHAsync_v2` into that buffer, an event recorded on the copy's stream, and the source
   allocation retained (`ManagedResource`) for the whole flight. `src` is borrowed for the handle's
   lifetime, so the source cannot be dropped or mutated while the copy may read it.
 - `PendingDownload::{is_ready, wait}`: `is_ready` queries the event and distinguishes not-ready from
   a device error; `wait(self)` synchronizes the event once and returns the filled buffer.
+- `upload_pending(rt, source: PinnedHostBuffer, dst: &mut Tensor) -> PendingUpload<'_>`: the mirror
+  copy on the same submission and event discipline. The handle holds the destination's **mutable
+  borrow** for the whole flight — enforced by the compiler, with a compile-fail fixture in
+  `tests/ui` — so no reader, writer or dropper of the device tensor can run while the copy may
+  still write it. `wait(self)` returns the source buffer for reuse.
 - `Drop` resolves the event before releasing anything; when it cannot, the buffer and the retained
   resource are leaked rather than freed early. `mem::forget` is sound by construction: the handle
   owns everything it uses, so forgetting it leaks (never frees early).
@@ -53,13 +61,13 @@ Explicitly **not** claimed in this slice:
 
 | Issue #1945 requirement | Slice 1 |
 | --- | --- |
-| "Pinned H2D/D2H can enqueue and return without a host wait" | **partly**: D2H returns a pending handle without waiting for the copy; the submission itself is not claimed to be wait-free (§1) |
+| "Pinned H2D/D2H can enqueue and return without a host wait" | **partly**: both directions return a pending handle without waiting for their copy; the submission itself is not claimed to be wait-free (§1) |
 | "An owned/guarded pending result retains source read leases, destination allocation, pinned/staging buffers and provider/event resources" | **yes**, as owned state: `ManagedResource`, the owned pinned buffer, the `CudaRuntime` pin and the event |
-| "CPU reads/mutation cannot observe a pending or aliased buffer" | **yes**: the buffer is owned by the handle until `wait()` returns it, and the source is borrowed for the handle's lifetime |
+| "CPU reads/mutation cannot observe a pending or aliased buffer" | **yes**: the D2H buffer is owned by the handle until `wait()` returns it, the D2H source is borrowed for the handle's lifetime, and the H2D destination is mutably borrowed |
 | "GPU consumers import a valid stream/event dependency without host synchronization" | **no**: needs the frozen-domain admission seam (§4) |
 | "Completion errors surface at poll/wait/dependency admission; failed outputs are not published as ready" | **partly**: `is_ready`/`wait` report errors and `wait` publishes nothing on failure; there is no dependency admission |
 | "Pending-handle drop/cancellation does not release buffers while DMA/kernels may access them" | **yes** (§1) |
-| "Reusable caller-owned pinned buffers/output buffers use lifetime guards through completion" | **yes**, by ownership transfer rather than a guard |
+| "Reusable caller-owned pinned buffers/output buffers use lifetime guards through completion" | **yes** in both directions: the source/destination buffer is owned by the handle and returned to the caller on `wait`, and the H2D destination is exclusively borrowed |
 | "Staging is bounded/chunked with backpressure and no tensor-sized zero-fill or redundant pageable copies" | **partly**: the pinned buffer is caller-sized and reused; chunking and the pageable route are open (§4) |
 | "Source publication, not mandatory host export" | **no** (§4) |
 | "Reuse/batch events at producer/transfer frontiers" | **no**: one event per transfer |
