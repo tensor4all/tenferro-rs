@@ -30,7 +30,7 @@
 
 ## Guides
 
-- [CPU Session Entry and Rayon Dispatch Cost](https://tensor4all.org/tenferro-rs/guides/session-entry-cost.html): Measured external Rayon install (~26 us at 18 workers on M5 Max), same-pool fast path, session amortization, tiny-call alternatives and reproducible probes; timings are machine-specific.
+- [CPU Session Entry and Rayon Dispatch Cost](https://tensor4all.org/tenferro-rs/guides/session-entry-cost.html): Measured external Rayon install (~26 us at 18 workers on M5 Max), same-pool fast path, scoped versus held session entry, allocation versus reused output buffer, phase-lane pool lending, tiny-call alternatives and reproducible probes; timings are machine-specific.
 
 - [Ordinary calls and prepared execution](https://tensor4all.org/tenferro-rs/guides/ordinary-and-prepared-execution.html): Choosing ordinary einsum, compatible ConcreteEinsumPlan reuse and programmatic labels, with scoped historical Linux measurements.
 

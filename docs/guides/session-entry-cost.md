@@ -111,7 +111,10 @@ Do not combine its component timings with these numbers.
    one explicit session callback. Use the borrowed session for each operation;
    do not open a backend/session again inside the callback or a spawned task.
    See the public examples in [session-oriented concrete APIs](../design/session-oriented-concrete-apis.md)
-   and the [typed non-AD tutorial](../tutorials/typed-tensor-non-ad.md).
+   and the [typed non-AD tutorial](../tutorials/typed-tensor-non-ad.md). For a
+   stage, hold one session instead of opening one per operation: see
+   [Holding one session across a stage](#holding-one-session-across-a-stage)
+   and `crates/tenferro-cpu/examples/held_session_driver.rs`.
 2. For many tiny matrices, prefer a batched operation or a sequence in one
    session. One 26 us entry spread over 100 operations contributes about
    0.26 us per operation; over 1,000, about 0.026 us. These are amortization
@@ -141,6 +144,48 @@ hypothetical faer API accepting a pool would save the initial handoff only if
 its scheduling implementation changed, not if it merely wrapped `install`.
 Parallel work has coordination costs, but there is no universal 20–26 us tax
 on every parallel operation.
+
+## Holding one session across a stage
+
+`with_backend_session` opens one session for one callback. A stage that keeps
+its execution domain open - a fit loop, a sweep, a batched driver - can hold a
+session instead: `CpuBackend::open_session` returns a `CpuHeldSession` that
+hands out the same borrowed view through `with_session`, so routes do not
+change with the entry shape and the entry is paid once. It is `!Send + !Sync`,
+opens and closes on its opening thread, and closing restores that thread's
+affinity. `CpuHeldSession::phase` lends the session's own pool to a phase
+driver: each lane runs on a worker of the context's pool with its own child
+session over the same routes, lanes are joined before the call returns on the
+success, error and panic paths, and the phase is opened from a thread that is
+not a worker of that pool. A runnable driver is
+`crates/tenferro-cpu/examples/held_session_driver.rs`.
+
+Measured with the same protocol as the tables above, on AMD EPYC 7713P,
+Linux 6.8.0, rustc 1.97.1, faer 0.24.4, **one worker**
+(`CpuBackend::with_threads(1)`) pinned with `taskset -c 0`, release build,
+100 samples, 2 s warm-up and 5 s measurement per case:
+
+| case | median |
+| --- | ---: |
+| entry, scoped empty callback | 537.7 ns |
+| entry, held open and close | 321.1 ns |
+| `size x size` by `size x 1` f64 contraction, `size = 95`, scoped | 13.52 us |
+| the same contraction, held | 12.70 us |
+| the same contraction into a reused output buffer, held | 6.74 us |
+
+Holding removes the per-operation session entry, and passing an output buffer
+removes the result allocation independently of it: at `size = 256`, a held
+contraction into a reused buffer is 17.08 us against 54.34 us for the scoped
+allocation-returning call. Neither number is a claim about kernel time - both
+are dispatch, allocation and zero-fill.
+[held-cpu-session-1945-u2-concrete.md](../design/held-cpu-session-1945-u2-concrete.md)
+records the full table, its `chain16` arms, and the fixed cost that remains in
+the in-session dispatch path ([#1904](https://github.com/tensor4all/tenferro-rs/issues/1904),
+[#2033-#2038](https://github.com/tensor4all/tenferro-rs/issues/2033)).
+
+Do not hold a session across an unrelated wait: the hold retains execution
+resources and permission for its whole duration, and a phase lends the same
+pool to work the caller controls.
 
 ## Reproduce the dispatch measurements
 
