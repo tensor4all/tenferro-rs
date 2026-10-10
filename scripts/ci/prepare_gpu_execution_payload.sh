@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Prepare execution dependencies on the hosted runner before GPU allocation.
 set -euo pipefail
+# Old trusted controllers call a newer tested helper without arguments during
+# PR validation. Keep their ZIP payload until the controller opts into the
+# prepared layout; new consumers also accept old immutable runtime artifacts.
+case "${1:-}" in
+  ''|--unpack-pjrt-wheels) ;;
+  *) echo 'Usage: prepare_gpu_execution_payload.sh [--unpack-pjrt-wheels]' >&2; exit 2 ;;
+esac
 payload="$PWD/runtime-payload"
 mkdir -p "$payload/bin" "$payload/wheels" "$payload/opt/tenferro-ci" "$payload/usr/local"
 cp "$(rustup which cargo)" "$payload/bin/cargo"
@@ -17,6 +24,21 @@ cp -a "$cutensor_root"/lib/libcutensor.so* "$payload/opt/tenferro-ci/cutensor-$C
 python3 -m pip download --only-binary=:all: --no-deps --python-version 312 --platform manylinux_2_27_x86_64 --platform manylinux2014_x86_64 --implementation cp --abi cp312 \
   --dest "$payload/wheels" "jax-cuda12-pjrt==$JAX_CUDA12_PJRT_VERSION" \
   "nvidia-cudnn-cu12==$NVIDIA_CUDNN_CU12_VERSION" "nvidia-cuda-nvcc-cu12==$NVIDIA_CUDA_NVCC_CU12_VERSION"
+if [ "${1:-}" = --unpack-pjrt-wheels ]; then
+  python3 - "$payload" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+payload = pathlib.Path(sys.argv[1])
+for wheel in (payload / "wheels").glob("*.whl"):
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(payload / "wheels-unpacked" / wheel.stem)
+for executable in (payload / "wheels-unpacked").glob("*/nvidia/cuda_nvcc/bin/*"):
+    executable.chmod(executable.stat().st_mode | 0o111)
+PY
+  rm -rf "$payload/wheels"
+fi
 cuda_tree_ready() {
   local root="$1" lib
   test -f "$root/.seed-complete" || return 1

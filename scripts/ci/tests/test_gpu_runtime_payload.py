@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from scripts.ci.tests.test_runpod_cost_contracts import step_script
@@ -47,16 +48,20 @@ touch "$2/.seed-complete"
                 'cargo': '#!/bin/sh\nexit 0\n',
                 'rustup': f'#!/bin/sh\nprintf "%s\\n" "{binaries}/cargo"\n',
                 'python3': f'''#!{os.sys.executable}
-import pathlib,sys
+import os,pathlib,sys,zipfile
 args=sys.argv[1:]
 if args[:3]==['-m','pip','download']:
     dest=pathlib.Path(args[args.index('--dest')+1])
     for package in args[-3:]:
-        (dest/(package.split('==')[0]+'.whl')).write_bytes(b'pinned-wheel')
+        with zipfile.ZipFile(dest/(package.split('==')[0]+'.whl'), 'w') as archive:
+            archive.writestr('all-members.txt', package)
+            archive.writestr('nvidia/cuda_nvcc/bin/ptxas', b'fixture executable')
 elif args[0]=='scripts/ci/check_cuda_headers.py':
     root=pathlib.Path(args[args.index('--cuda-root')+1])
     assert (root/'.seed-complete').is_file()
     assert (root/'include/cuda_runtime.h').is_file()
+elif args[0]=='-':
+    os.execv(sys.executable, [sys.executable, *args])
 else:
     raise SystemExit('unexpected command')
 ''',
@@ -129,6 +134,7 @@ else:
             # Reusing a complete restored tree must not invoke either installer.
             # Missing markers, libraries, and headers rebuild only the bad tier.
             scenarios = [
+                ('prepared-wheels', None, []),
                 ('warm', None, []),
                 ('cutensor-miss', 'cutensor-2.6.0.4/lib/libcutensor.so.2', ['cutensor']),
                 ('marker-miss', 'cuda-runtime-12.6/.seed-complete', ['cuda-12.6']),
@@ -144,10 +150,68 @@ else:
                     work.mkdir()
                     shutil.copytree(scripts, work / 'scripts/ci')
                     result = subprocess.run(
-                        ['bash', str(ROOT / 'scripts/ci/prepare_gpu_execution_payload.sh')],
+                        ['bash', str(ROOT / 'scripts/ci/prepare_gpu_execution_payload.sh'),
+                         *(['--unpack-pjrt-wheels'] if name == 'prepared-wheels' else [])],
                         cwd=work, env=environment, capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(install_log.read_text().splitlines(), expected_installs)
+                    if name == 'prepared-wheels':
+                        payload = work / 'runtime-payload'
+                        self.assertFalse((payload / 'wheels').exists())
+                        for package, version in [('jax-cuda12-pjrt', '0.10.2'),
+                                                 ('nvidia-cudnn-cu12', '9.23.2.1'),
+                                                 ('nvidia-cuda-nvcc-cu12', '12.9.86')]:
+                            unpacked = payload / 'wheels-unpacked' / package
+                            self.assertEqual((unpacked / 'all-members.txt').read_text(),
+                                             f'{package}=={version}')
+                            executable = unpacked / 'nvidia/cuda_nvcc/bin/ptxas'
+                            self.assertEqual(executable.read_bytes(), b'fixture executable')
+                            self.assertTrue(os.access(executable, os.X_OK))
+
+
+    def test_pjrt_consumer_accepts_prepared_and_legacy_payloads(self):
+        workflow = (ROOT / '.github/workflows/runpod-gpu-execute.yml').read_text()
+        script = step_script(workflow, 'Run OpenXLA PJRT E2E tests from archive')
+        # Execute the real dependency preparation, stopping before GPU execution.
+        script = script[:script.index('# Runtime-only plugin setup;')]
+        for prepared in (False, True):
+            with self.subTest(prepared=prepared), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                payload = root / 'payload'
+                wheels = payload / 'wheels'
+                wheels.mkdir(parents=True)
+                members = {'jax_plugins/xla_cuda12/xla_cuda_plugin.so': b'plugin',
+                           'nvidia/cudnn/lib/libcudnn.so.9': b'cudnn',
+                           'nvidia/cuda_nvcc/bin/ptxas': b'ptxas',
+                           'nvidia/cuda_nvcc/nvvm/libdevice/libdevice.10.bc': b'bitcode'}
+                wheel = wheels / 'fixture.whl'
+                with zipfile.ZipFile(wheel, 'w') as archive:
+                    for name, data in members.items():
+                        archive.writestr(name, data)
+                if prepared:
+                    with zipfile.ZipFile(wheel) as archive:
+                        archive.extractall(payload / 'wheels-unpacked/fixture')
+                    shutil.rmtree(wheels)
+                binary = root / 'bin'
+                binary.mkdir()
+                nm = binary / 'nm'
+                nm.write_text('#!/bin/sh\nprintf "GetPjrtApi\\n"\n')
+                nm.chmod(0o755)
+                (root / 'pjrt-tests.tar.zst').touch()
+                result = subprocess.run(['bash', '-c', script.replace(
+                    '/opt/ci-cost-runtime', str(payload))], cwd=root,
+                    env=dict(os.environ, RUNNER_TEMP=str(root / 'temp'),
+                             PJRT_ARCHIVE='pjrt-tests.tar.zst',
+                             PATH=f'{binary}:{os.environ["PATH"]}'),
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                target = (payload / 'wheels-unpacked' if prepared else
+                          root / 'temp/openxla-pjrt') / 'fixture'
+                for name, data in members.items():
+                    self.assertEqual((target / name).read_bytes(), data)
+                self.assertTrue(os.access(target / 'nvidia/cuda_nvcc/bin/ptxas', os.X_OK))
+                if prepared:
+                    self.assertFalse((root / 'temp').exists())
 
     def test_preparation_is_a_required_read_only_hosted_prerequisite(self):
         parent = (ROOT / '.github/workflows/runpod-gpu-test.yml').read_text()
