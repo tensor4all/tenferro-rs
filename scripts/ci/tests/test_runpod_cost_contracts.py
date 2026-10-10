@@ -398,7 +398,7 @@ class RunnerPinCheckWorkflowTests(unittest.TestCase):
 
     def test_runbook_is_linked_from_the_pin(self) -> None:
         child = text(CHILD)
-        pin = child[child.index("# Keep this pin current") : child.index('RUNNER_VERSION="')]
+        pin = child[child.index("# Keep this pin current") : child.index('  RUNPOD_IMAGE:')]
         self.assertIn("runner-pin-check.yml", pin)
         self.assertIn("Runner pin runbook", pin)
         self.assertIn("## Runner pin runbook", text("docs/design/runpod-gpu-provisioning.md"))

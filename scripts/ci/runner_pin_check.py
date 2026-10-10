@@ -2,17 +2,16 @@
 """Report a stale or deprecated pinned GitHub Actions runner for RunPod pods.
 
 RunPod pods register a JIT runner from the release pinned in
-`.github/workflows/runpod-gpu-execute.yml` (`RUNNER_VERSION` and
-`RUNNER_SHA256`). GitHub stops queueing jobs to runners that fall too far
-behind, and a rejected runner is only noticed when a paid provision ladder
+`.github/workflows/runpod-gpu-execute.yml` (`RUNPOD_IMAGE`). GitHub stops
+queueing jobs to runners that fall too far behind, and a rejected runner is only noticed when a paid provision ladder
 fails: pods start, pass the CUDA smoke proof, and never register (#1921,
 2026-09-24..26). This check compares the pin against `actions/runner`
 releases so the next deprecation is reported by a free scheduled job.
 
 Policy (conservative; the exact GitHub rule is not published per release):
 
-- the pin must be a published, non-prerelease release whose `linux-x64`
-  checksum in the release notes equals `RUNNER_SHA256`;
+- the pin must be a published, non-prerelease release whose official image
+  tag resolves to the pinned OCI digest;
 - a newer release makes the check warn;
 - it fails once a newer release is `--max-lag-days` old (default 14), or two
   or more newer releases exist. Observed: 2.335.1 kept working for 66 days
@@ -38,10 +37,10 @@ PIN_FILE = Path(".github/workflows/runpod-gpu-execute.yml")
 RELEASES_URL = "https://api.github.com/repos/actions/runner/releases?per_page=100"
 DEFAULT_MAX_LAG_DAYS = 14
 
-_VERSION_PIN = re.compile(r'^\s*RUNNER_VERSION="(?P<value>[0-9]+\.[0-9]+\.[0-9]+)"\s*$', re.M)
-_SHA_PIN = re.compile(r'^\s*RUNNER_SHA256="(?P<value>[0-9a-f]{64})"\s*$', re.M)
-_RELEASE_SHA = re.compile(
-    r"<!-- BEGIN SHA linux-x64 -->(?P<value>[0-9a-f]{64})<!-- END SHA linux-x64 -->"
+_IMAGE_PIN = re.compile(
+    r"^\s*RUNPOD_IMAGE:\s+ghcr\.io/actions/actions-runner:"
+    r"(?P<version>[0-9]+\.[0-9]+\.[0-9]+)@sha256:(?P<digest>[0-9a-f]{64})\s*$",
+    re.M,
 )
 
 Fetch = Callable[[str], Any]
@@ -52,16 +51,12 @@ class PinCheckError(RuntimeError):
 
 
 def read_pin(text: str) -> tuple[str, str]:
-    """Return (version, sha256) pinned in the workflow text."""
+    """Return the version and OCI digest pinned in RUNPOD_IMAGE."""
 
-    versions = _VERSION_PIN.findall(text)
-    shas = _SHA_PIN.findall(text)
-    if len(versions) != 1 or len(shas) != 1:
-        raise PinCheckError(
-            f"expected exactly one RUNNER_VERSION and RUNNER_SHA256 pin, found "
-            f"{len(versions)} and {len(shas)}"
-        )
-    return versions[0], shas[0]
+    pins = _IMAGE_PIN.findall(text)
+    if len(pins) != 1:
+        raise PinCheckError(f"expected exactly one version/digest RUNPOD_IMAGE pin, found {len(pins)}")
+    return pins[0]
 
 
 def _version_key(version: str) -> tuple[int, ...]:
@@ -84,10 +79,12 @@ def _published(release: Mapping[str, Any]) -> datetime.datetime:
 
 def evaluate(
     pin_version: str,
-    pin_sha: str,
+    pin_digest: str,
     releases: Iterable[Mapping[str, Any]],
     now: datetime.datetime,
     max_lag_days: int = DEFAULT_MAX_LAG_DAYS,
+    *,
+    published_digest: str,
 ) -> tuple[str, list[str]]:
     """Return ("ok" | "warn" | "fail", messages) for the pin."""
 
@@ -103,14 +100,10 @@ def evaluate(
     pinned = by_version.get(pin_version)
     if pinned is None:
         return "fail", [f"Pinned runner {pin_version} is not a published stable actions/runner release."]
-    body = pinned.get("body") if isinstance(pinned.get("body"), str) else ""
-    published_sha = _RELEASE_SHA.search(body)
-    if published_sha is None:
-        messages.append(f"::warning::Release v{pin_version} notes carry no linux-x64 SHA-256 to compare.")
-    elif published_sha.group("value") != pin_sha:
+    if published_digest != pin_digest:
         return "fail", [
-            f"RUNNER_SHA256 {pin_sha} does not match the published linux-x64 "
-            f"checksum {published_sha.group('value')} of v{pin_version}."
+            f"RUNPOD_IMAGE digest {pin_digest} does not match the published image "
+            f"digest {published_digest} of v{pin_version}."
         ]
 
     newer = sorted(
@@ -134,7 +127,7 @@ def evaluate(
     )
     if len(newer) >= 2 or lag_days >= max_lag_days:
         messages.append(
-            f"{summary} Bump RUNNER_VERSION and RUNNER_SHA256 in {PIN_FILE} "
+            f"{summary} Bump the version and digest of RUNPOD_IMAGE in {PIN_FILE} "
             "before GitHub stops queueing jobs to it (see "
             "docs/design/runpod-gpu-provisioning.md, Runner pin runbook)."
         )
@@ -159,6 +152,36 @@ def _fetch_json(url: str) -> Any:
         raise PinCheckError(f"GET {url} failed: {error}") from error
 
 
+def _image_digest(version: str) -> str:
+    """Read the official image tag's OCI digest without registry credentials."""
+
+    headers = {"User-Agent": "tenferro-ci-runner-pin-check/1", "Accept": "application/json"}
+    token_url = "https://ghcr.io/token?scope=repository:actions/actions-runner:pull"
+    try:
+        token_request = urllib.request.Request(token_url, headers=headers)
+        with urllib.request.urlopen(token_request, timeout=30.0) as response:
+            token = json.load(response)["token"]
+        # The GitHub API token belongs only to _fetch_json's releases request.
+        # GHCR uses its own anonymous pull token, never GH_TOKEN.
+        request = urllib.request.Request(
+            f"https://ghcr.io/v2/actions/actions-runner/manifests/{version}",
+            headers={
+                "User-Agent": headers["User-Agent"],
+                "Accept": ("application/vnd.oci.image.index.v1+json, "
+                           "application/vnd.docker.distribution.manifest.list.v2+json"),
+                "Authorization": f"Bearer {token}",
+            },
+            method="HEAD",
+        )
+        with urllib.request.urlopen(request, timeout=30.0) as response:
+            digest = response.headers.get("Docker-Content-Digest", "")
+    except (urllib.error.URLError, ValueError, KeyError) as error:
+        raise PinCheckError(f"Official runner image v{version} could not be read: {error}") from error
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise PinCheckError(f"Official runner image v{version} has no SHA-256 manifest digest")
+    return digest.removeprefix("sha256:")
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pin-file", type=Path, default=PIN_FILE)
@@ -167,6 +190,7 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         help="Read the actions/runner release list from this file (offline dry run)",
     )
+    parser.add_argument("--image-digest", help="Published image digest without sha256: (offline dry run)")
     parser.add_argument("--max-lag-days", type=int, default=DEFAULT_MAX_LAG_DAYS)
     parser.add_argument("--now", help="ISO-8601 time to evaluate at (tests)")
     return parser.parse_args()
@@ -175,11 +199,12 @@ def _parse_args() -> argparse.Namespace:
 def main(fetch: Fetch = _fetch_json) -> int:
     args = _parse_args()
     try:
-        version, sha = read_pin(args.pin_file.read_text(encoding="utf-8"))
+        version, digest = read_pin(args.pin_file.read_text(encoding="utf-8"))
         if args.releases_json is not None:
             releases = json.loads(args.releases_json.read_text(encoding="utf-8"))
         else:
             releases = fetch(RELEASES_URL)
+        published_digest = args.image_digest or _image_digest(version)
         if not isinstance(releases, list):
             raise PinCheckError("release listing is not a JSON array")
     except (OSError, ValueError, PinCheckError) as error:
@@ -191,7 +216,8 @@ def main(fetch: Fetch = _fetch_json) -> int:
         else datetime.datetime.now(datetime.timezone.utc)
     )
     verdict, messages = evaluate(
-        version, sha, (r for r in releases if isinstance(r, Mapping)), now, args.max_lag_days
+        version, digest, (r for r in releases if isinstance(r, Mapping)), now, args.max_lag_days,
+        published_digest=published_digest
     )
     for message in messages:
         prefix = "::error::" if verdict == "fail" and not message.startswith("::") else ""

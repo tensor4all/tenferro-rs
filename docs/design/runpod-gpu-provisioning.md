@@ -91,19 +91,29 @@ nothing was paid for and they do not count toward the early stop.
 
 Every second between pod creation and runner registration is billed at the
 GPU rate, and a rejected candidate pays it too, so the startup script keeps
-only what registration and the smoke proof need:
+only what registration and the smoke proof need. The official GitHub
+`actions/actions-runner` Ubuntu 24.04 image is pinned by version and OCI
+digest in `runpod-gpu-execute.yml`. It supplies Python, download tools, the
+runner and its native dependencies before the paid startup script begins.
+The script uses the image's passwordless sudo to retain root execution,
+downloads and verifies a pinned driver-compatible NVRTC package, proves a
+CUDA kernel can run,
+and only then registers the preinstalled runner. NVIDIA compute/utility
+capabilities are passed explicitly because this is not a CUDA base image.
 
-- the driver/VRAM check, the CUDA smoke proof, and the runner bootstrap;
-- the build toolchain, `git`, `jq`, and `zstd` are installed by the test
-  job's first step, which runs after registration and only on the accepted
-  pod. `zstd` still lands before the `actions/cache` restore step there,
-  which is what keeps the cache version hash compatible with the
-  zstd-equipped hosted publisher;
-- the pinned actions-runner tarball is served from the pod's persistent
-  volume (`/workspace/runpod-ci-cache`) when an earlier pod populated it,
-  and its SHA-256 still decides whether the cached copy is usable. Every
-  step of the cache path degrades to the normal download, so a missing,
-  unwritable, or stale cache cannot fail startup.
+`cuda_smoke_test.py` owns the NVRTC 12.6/12.8 Debian package versions and
+SHA-256 values from NVIDIA's official repository. These packages have no
+package dependencies and are installed directly with `dpkg`, avoiding a
+package-index refresh before registration. A download or checksum failure
+stops startup before registration. When changing a supported runtime tier,
+update this pin, verify native compilation and the full GPU proof, and keep
+the staged execution SDK's runtime selection aligned.
+
+The accepted job installs its remaining execution tools without recommended
+packages. `zstd` lands before archive cache restore, retaining compatibility
+with hosted cache writers. Readiness is polled every two seconds; startup,
+setup and lifetime deadlines and failed-candidate deletion remain bounded.
+There is no pod-side runner archive download or persistent tarball cache.
 
 ## One paid pod per tested merge ref
 
@@ -272,33 +282,31 @@ the spend when the provider is down.
 
 ## Runner pin runbook
 
-The pod registers a JIT runner from the `actions/runner` release pinned as
-`RUNNER_VERSION` / `RUNNER_SHA256` in `runpod-gpu-execute.yml`. GitHub stops
-queueing jobs to runners that fall too far behind; a rejected runner looks like
-a pod that passes the CUDA smoke proof and never registers, and the provision
-ladder pays for every candidate (#1921: 2.335.1 was rejected on 2026-09-24,
-29 days after 2.337.0 and 66 days after 2.336.0 shipped).
+The pod registers the runner preinstalled in the official GitHub image,
+pinned as `RUNPOD_IMAGE` (version tag plus OCI digest) in
+`runpod-gpu-execute.yml`. GitHub stops queueing jobs to runners that fall too
+far behind; a rejected runner looks like a pod that passes the CUDA smoke
+proof and never registers (#1921: 2.335.1 was rejected on 2026-09-24).
 
-`.github/workflows/runner-pin-check.yml` runs `runner_pin_check.py` daily (and on
-PRs that touch the pin or the check). It needs no secret. It fails when the pin
-is not a published stable release, when `RUNNER_SHA256` differs from the
-`linux-x64` checksum in the release notes, when two or more newer releases
-exist, or when a newer release is at least 14 days old; one younger newer
-release only warns. The check is not a required PR check.
+`.github/workflows/runner-pin-check.yml` runs `runner_pin_check.py` daily and
+on PRs that touch the pin or check. It verifies that the version is a published
+stable release and the official GHCR version tag resolves to the pinned OCI
+digest. It fails when two or more newer stable releases exist, or one newer
+release is at least 14 days old; one younger release warns. GitHub release
+lookup uses the repository's read-only token; GHCR lookup uses an anonymous
+pull token. The check is not a required PR check.
 
 To bump the pin:
 
-1. `gh api repos/actions/runner/releases/latest --jq '.tag_name, .body'` and
-   take the `actions-runner-linux-x64-<version>.tar.gz` SHA-256 from the
-   "SHA-256 Checksums" section.
-2. Update `RUNNER_VERSION` and `RUNNER_SHA256` together in
-   `runpod-gpu-execute.yml`.
-3. `python3 scripts/ci/runner_pin_check.py` locally must print `verdict=ok`;
-   the PR also runs the check.
-4. Registration is proven by the next paid run: its `start-runpod` log shows
-   `Runner ... online` for the accepted pod. The persistent-volume tarball
-   cache is keyed by version and checksum, so the new tarball is downloaded
-   once and cached again.
+1. Read the latest stable release with
+   `gh api repos/actions/runner/releases/latest --jq '.tag_name'`.
+2. Inspect `ghcr.io/actions/actions-runner:<version>` with
+   `docker buildx imagetools inspect` and update the version and image index
+   digest together in `RUNPOD_IMAGE`.
+3. `python3 scripts/ci/runner_pin_check.py` must report `verdict=ok`.
+4. Verify the image's runner/native dependencies, Python and NVRTC setup,
+   then run the full paid CUDA/PJRT/tutorial validation. Its startup log must
+   show the accepted runner online after the CUDA launch proof.
 
 ## Security invariants (unchanged)
 

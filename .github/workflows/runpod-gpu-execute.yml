@@ -76,7 +76,9 @@ env:
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
   NVIDIA_CUDNN_CU12_VERSION: "9.23.2.1"
   NVIDIA_CUDA_NVCC_CU12_VERSION: "12.9.86"
-  RUNPOD_IMAGE: nvidia/cuda:12.6.3-runtime-ubuntu24.04@sha256:92906d87596d638d35015c6353053121bd299d25943b875763321653884ba924
+  # Keep this pin current: runner-pin-check.yml checks the release and image.
+  # See the Runner pin runbook in docs/design/runpod-gpu-provisioning.md.
+  RUNPOD_IMAGE: ghcr.io/actions/actions-runner:2.337.0@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4
 
 jobs:
   start-runpod:
@@ -273,24 +275,17 @@ jobs:
           cat > /tmp/runpod-startup.sh <<'EOS'
           set -euo pipefail
 
+          # The official runner image starts as its passwordless-sudo runner
+          # user. Preserve the single-use JIT configuration for root execution.
+          if [ "$(id -u)" -ne 0 ]; then
+            exec sudo -E bash -lc "$BASH_EXECUTION_STRING"
+          fi
           export DEBIAN_FRONTEND=noninteractive
           export RUNNER_ALLOW_RUNASROOT=1
 
-          # Only what runner registration and the smoke proof need runs before
-          # the runner exists. Every second here is billed at the GPU rate, and
-          # a rejected candidate pays it too. Execution tools, git, jq and
-          # zstd belong to the test job, which only the accepted
-          # pod reaches. zstd still lands before the actions/cache restore step
-          # there, which is what keeps the cache version hash compatible with
-          # the zstd-equipped hosted publisher.
-          apt-get update
-          apt-get install -y \
-            curl \
-            tar \
-            gzip \
-            ca-certificates \
-            python3 \
-            python3-pip
+          # The pinned image supplies the runner and its dependencies. The
+          # smoke helper installs only the driver-compatible NVRTC package.
+          command -v curl tar gzip python3
 
           nvidia-smi
           df -h
@@ -322,65 +317,8 @@ jobs:
             --full-runtime-version "${SMOKE_FULL_RUNTIME_VERSION}" \
             --min-vram-gb "${SMOKE_MIN_VRAM_GB}"
 
-          cd /tmp
-          rm -rf actions-runner
-          mkdir actions-runner
-          cd actions-runner
-
-          # Pinned actions/runner release (see issue #1, finding 5): resolving
-          # "latest" at pod-startup time means an attacker who can publish (or
-          # a bad actor who can compromise) a runner release gets to run code
-          # on every pod we create the moment it lands. Bump both values
-          # together after checking the new release's published SHA-256:
-          #   gh api repos/actions/runner/releases/latest \
-          #     --jq '.tag_name, .body' | less
-          # (the sha256 for actions-runner-linux-x64-<version>.tar.gz is in
-          # the "SHA-256 Checksums" section of the release body).
-          # Keep this pin current: GitHub rejects deprecated runner versions
-          # before they can receive a job, even after CUDA smoke succeeds.
-          # .github/workflows/runner-pin-check.yml checks this pin daily
-          # against actions/runner releases; the bump procedure is the
-          # "Runner pin runbook" in docs/design/runpod-gpu-provisioning.md.
-          RUNNER_VERSION="2.337.0"
-          RUNNER_SHA256="70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
-          RUNNER_TARBALL="actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
-
-          # A persistent volume mount makes the pinned tarball a local read on
-          # later pods instead of a GitHub download at the GPU rate. The
-          # checksum decides whether a cached copy is usable, and every step of
-          # the cache path is optional: a missing, unwritable, or stale cache
-          # falls back to the normal download instead of failing startup.
-          RUNNER_CACHE_DIR="/workspace/runpod-ci-cache"
-          RUNNER_CACHED_TARBALL="${RUNNER_CACHE_DIR}/${RUNNER_TARBALL}"
-          runner_cached=0
-          if [ -d /workspace ]; then
-            mkdir -p "${RUNNER_CACHE_DIR}" 2>/dev/null || true
-            if [ -f "${RUNNER_CACHED_TARBALL}" ] \
-              && echo "${RUNNER_SHA256}  ${RUNNER_CACHED_TARBALL}" \
-                | sha256sum -c - >/dev/null 2>&1 \
-              && cp "${RUNNER_CACHED_TARBALL}" "${RUNNER_TARBALL}" 2>/dev/null; then
-              runner_cached=1
-              echo "Using the cached ${RUNNER_TARBALL} from ${RUNNER_CACHE_DIR}"
-            fi
-          fi
-          if [ "${runner_cached}" = 0 ]; then
-            curl -fsSL -o "${RUNNER_TARBALL}" \
-              "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/${RUNNER_TARBALL}"
-            if [ -d /workspace ]; then
-              cp "${RUNNER_TARBALL}" "${RUNNER_CACHE_DIR}/" 2>/dev/null \
-                || echo "warning: could not populate the runner tarball cache"
-            fi
-          fi
-
-          echo "${RUNNER_SHA256}  ${RUNNER_TARBALL}" | sha256sum -c
-
-          tar xzf "${RUNNER_TARBALL}"
-
-          # Minimal CUDA images lack the ICU/runtime libraries required by
-          # Runner.Listener. Install from the verified runner distribution.
-          ./bin/installdependencies.sh
-
-          ./run.sh --jitconfig "${RUNNER_JIT_CONFIG}"
+          cd /home/runner
+          exec ./run.sh --jitconfig "${RUNNER_JIT_CONFIG}"
           EOS
 
           # The provision loop orders reviewed candidates by live Secure
@@ -394,6 +332,8 @@ jobs:
             --startup-script /tmp/runpod-startup.sh \
             --image-name "${RUNPOD_IMAGE}" \
             --response-file /tmp/runpod-response.json \
+            --pod-env "NVIDIA_VISIBLE_DEVICES=all" \
+            --pod-env "NVIDIA_DRIVER_CAPABILITIES=compute,utility" \
             --pod-env "SMOKE_MIN_RUNTIME_VERSION=${CUDA_MIN_RUNTIME_VERSION}" \
             --pod-env "SMOKE_FULL_RUNTIME_VERSION=${CUDA_RUNTIME_VERSION}" \
             --pod-env "SMOKE_MIN_VRAM_GB=${smoke_min_vram_gb}"
@@ -521,7 +461,7 @@ jobs:
           set -euxo pipefail
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y \
+          apt-get install -y --no-install-recommends \
             git \
             jq \
             zstd \

@@ -499,3 +499,125 @@ or obsolete pods remain recoverable after failed deletion. The per-success cost
 ratio is unavailable if any pod in its GPU group has unknown cost; missing costs
 cannot lower the ratio. Historical totals above have complete pod cost evidence
 and remain unchanged.
+
+
+## Further bootstrap reduction: decision and measurement contract
+
+The maintainer requested another 10% reduction through Pod startup and
+execution-environment preparation. The primary metric is the entire paid Pod
+lifetime, from creation through confirmed deletion. No candidate below has
+accepted performance evidence yet; production promotion remains gated.
+
+Baseline controller `ff94aeded9cc98d6c49889c8ef6fca365763d93a` uses the same
+source tree as tested ref `bbe7758a4efcaf866415348fe558efd02edd3bc2`. Both arms
+use immutable artifacts from run `38000490223`: 285 CUDA tests, three PJRT
+tests and the tutorial, profile `ci`, nextest concurrency one. Fresh A40 Pods
+have a $0.60/hr ceiling (observed $0.59/hr), identical archive keys, and the
+existing CUDA proof, setup/lifetime limits and deletion rules.
+
+Confirmation starts with two baseline A/A observations, followed by A/B,
+B/A, A/B pairs. A/A max/min must be at most 1.10; all eight observations must
+share the full driver and selected runtime. Each arm's max/min, including
+A/A, must be at most 1.5. The three comparison pairs must satisfy
+`1 - median(B) / median(A) >= 0.10`, with no paired regression. Every run
+must complete the entire workload and have confirmed deletion/cost evidence.
+Failed runs, missing evidence and validity failures stop the campaign;
+no selective replacement or threshold relaxation is permitted. A/A is excluded
+from the primary median. These are CI workflow timings, not operation latency
+benchmarks. Provider image caches remain uncontrolled despite fresh Pods.
+
+## Candidate choice and rejected evidence
+
+Removing unused Pod pip and recommended packages reduced the simulated
+bootstrap package set from 144 to 26, but the diagnostic measured 348.271
+versus 355.202 paid seconds. Different drivers made it INCONCLUSIVE; the
+10% reduction was not observed. Package count alone cannot justify promotion.
+
+The official GitHub runner image supplies the runner and native dependencies
+before startup. The 2.337.0 image is Ubuntu 24.04, pinned by OCI digest
+`sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4`.
+It retains root execution through existing sudo, explicit NVIDIA compute/utility
+capabilities, and CUDA proof before registration. Execution tools omit
+recommendations. Readiness polling is two seconds, with unchanged deadlines.
+The obsolete runner tarball download/cache is removed. No custom registry
+publication is needed.
+
+The image diagnostic measured 376.778 versus 327.120 seconds (13.18% observed
+reduction), with all tests and deletion successful. Drivers differed, so it
+is INCONCLUSIVE and cannot establish the 10% goal. Confirmation narrowed both
+arms to CA-MTL-1, chosen alphabetically among available A40 sites independently
+of timings, then to `allowedCudaVersions: ["12.8"]`, the minimum full-feature
+CUDA capability. Neither control guarantees a driver patch version.
+
+The CUDA-filtered image campaign passed A/A (383.227/366.365 seconds, driver
+570.211.01), but its first two comparison pairs improved only 3.80% and 7.50%.
+The seventh run used driver 570.195.03, making the campaign INCONCLUSIVE and
+stopping it before another allocation. All seven Pods were deleted. Earlier
+confirmation attempts stopped on placement-recorder quoting and missing
+`includeMachine=true` metadata; both completed workloads and deletion but
+lacked required evidence. A regional A/A attempt also failed driver identity.
+None of those observations is reused as acceptance evidence.
+
+[Complete recorded results](https://github.com/tensor4all/tenferro-benchmark/blob/2fd574932579c11620c9937ac9e8842d1b4b3bcd/result/nvidia-gpu/ci/runpod-bootstrap.md)
+retain all 23 paid runs and one preallocation failure, including unsuccessful
+diagnostics and harness failures, full protocols, controller source, phase
+costs, host observations and individual test results. All 23 Pods were deleted;
+their estimated GPU cost was $1.3662463. Every paid run passed the exact same
+288 CUDA/PJRT cases and tutorial. No failed or unfavorable observation is omitted.
+
+## NVRTC candidate and remaining validation
+
+The next candidate also removes the pre-registration package-index refresh.
+It downloads the dependency-free NVIDIA NVRTC Debian package for 12.6 or
+12.8, verifies the official pinned SHA-256, and installs it with `dpkg`.
+This checksum covers the external download boundary; Git identifies source.
+The compile/load/launch/readback/VRAM proof is unchanged. Accepted execution
+still refreshes package indexes for its remaining tools. The existing image
+diagnostic establishes the startup opportunity; this incremental preparation
+change proceeds directly to independent confirmation after native validation.
+
+Both real NVRTC packages passed local native compilation. Hosted official-image
+[validation](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38029014282)
+passed direct installation and compilation for both runtime tiers, runner and
+Node startup, root/JIT environment preservation and execution-tool preparation.
+Local GPU launch remains unavailable. All 357 CI helper tests, the fast gate
+and committed-head deterministic rules review pass; external LLM review is
+intentionally disabled. The final campaign demonstrated the full GPU workload,
+but the paid-lifetime acceptance gate remains unmet because of driver identity.
+
+Production candidate source is `be7eaa9d367b889172fdded463e02ef81e408dd0`.
+The experimental harness fetches identical helper bytes by its exact Git
+commit before Pod allocation. Its first attempt, run `38029114443`, stopped
+before allocation because an experimental edit omitted four original environment
+entries, including `ORG_NAME`. No GPU was rented. All original environment
+entries, paid execution and cleanup jobs were restored and compared with the
+previous harness. The helper/image validation is unaffected by that restoration.
+
+The final attempt uses harness `c58f513f1e728388899a6a521c4323290b67a4e8` with
+unchanged thresholds, order and workload. At most two campaign attempts are
+allowed for this candidate, and only INCONCLUSIVE permits a fresh attempt;
+a valid primary FAIL cannot be retried. The final attempt's A/A observations
+(400.192/415.944 seconds, driver 570.195.03) passed. All three candidate runs
+also passed the complete GPU workload and deletion. The observed comparison
+medians were 381.896 versus 328.569 seconds (13.96% reduction); pair reductions
+were 13.96%, 21.04% and 0.24%. However, the last candidate used driver
+570.211.01 instead of 570.195.03. The whole campaign is INCONCLUSIVE under the
+predeclared identity gate, despite the observed median exceeding 10%. The last
+sample is retained and cannot be replaced. The two-attempt limit is exhausted;
+no further paid sampling is scheduled. Fixed-driver placement or a maintainer
+measurement-design decision is needed before further acceptance work.
+
+The daily runner checker now validates the official image tag/digest and
+retains the 14-day/two-newer-release freshness policy. Live digest validation
+passes, with a freshness warning for 2.338.0 published October 6. Version
+2.337.0 keeps baseline/candidate runner identity equal; a follow-up bump is
+required within the existing policy window.
+
+After reviewing the observed improvement, unchanged workload and driver-related
+uncertainty, the maintainer explicitly requested landing this candidate on main
+("OK main に反映"). This is a task-specific authorization to adopt the bootstrap
+changes despite inconclusive performance evidence, not a passed experiment or
+a change to the general performance policy. The 10% reduction remains unproven;
+all samples and the original acceptance decision are retained. No further paid
+comparison is requested as part of this landing. Normal PR correctness checks
+and branch protection still apply.

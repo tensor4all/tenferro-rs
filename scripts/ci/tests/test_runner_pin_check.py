@@ -1,4 +1,8 @@
 import datetime
+import io
+import os
+import urllib.error
+from unittest.mock import patch
 import json
 import subprocess
 import sys
@@ -6,12 +10,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ci.runner_pin_check import PinCheckError, evaluate, read_pin
+from scripts.ci.runner_pin_check import PinCheckError, evaluate, read_pin, _image_digest
 
 ROOT = Path(__file__).resolve().parents[3]
 UTC = datetime.timezone.utc
 SHA_335_1 = "4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf"
-SHA_337_0 = "70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
+SHA_337_0 = "e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4"
 
 
 def release(version: str, published: str, sha: str | None = None, **extra) -> dict:
@@ -49,7 +53,9 @@ class ReadPinTests(unittest.TestCase):
         self.assertRegex(sha, r"^[0-9a-f]{64}$")
 
     def test_requires_exactly_one_pin(self) -> None:
-        for text in ("", 'RUNNER_VERSION="1.2.3"\n', 'RUNNER_VERSION="1.2.3"\nRUNNER_VERSION="1.2.4"\nRUNNER_SHA256="' + "a" * 64 + '"\n'):
+        for text in ("", "RUNPOD_IMAGE: ghcr.io/actions/actions-runner:1.2.3\n",
+                     "RUNPOD_IMAGE: ghcr.io/actions/actions-runner:latest@sha256:" + "a" * 64,
+                     ("RUNPOD_IMAGE: ghcr.io/actions/actions-runner:1.2.3@sha256:" + "a" * 64 + "\n") * 2):
             with self.subTest(text=text):
                 with self.assertRaises(PinCheckError):
                     read_pin(text)
@@ -57,7 +63,7 @@ class ReadPinTests(unittest.TestCase):
 
 class EvaluateTests(unittest.TestCase):
     def test_latest_pin_is_ok(self) -> None:
-        verdict, _ = evaluate("2.337.0", SHA_337_0, HISTORY, at("2026-10-06"))
+        verdict, _ = evaluate("2.337.0", SHA_337_0, HISTORY, at("2026-10-06"), published_digest=SHA_337_0)
         self.assertEqual(verdict, "ok")
 
     def test_the_2026_09_outage_is_reported_before_it_happened(self) -> None:
@@ -73,24 +79,24 @@ class EvaluateTests(unittest.TestCase):
         ):
             with self.subTest(day=day):
                 now = at(day)
-                verdict, messages = evaluate("2.335.1", SHA_335_1, visible(now), now)
+                verdict, messages = evaluate("2.335.1", SHA_335_1, visible(now), now, published_digest=SHA_335_1)
                 self.assertEqual(verdict, expected, messages)
 
     def test_two_newer_releases_fail_immediately(self) -> None:
-        verdict, messages = evaluate("2.335.1", SHA_335_1, HISTORY, at("2026-08-27"))
+        verdict, messages = evaluate("2.335.1", SHA_335_1, HISTORY, at("2026-08-27"), published_digest=SHA_335_1)
         self.assertEqual(verdict, "fail")
         self.assertIn("behind 2 newer release(s)", messages[-1])
 
     def test_checksum_mismatch_fails(self) -> None:
-        verdict, messages = evaluate("2.337.0", "f" * 64, HISTORY, at("2026-10-06"))
+        verdict, messages = evaluate("2.337.0", "f" * 64, HISTORY, at("2026-10-06"), published_digest=SHA_337_0)
         self.assertEqual(verdict, "fail")
         self.assertIn("does not match", messages[0])
 
     def test_unknown_or_prerelease_pin_fails(self) -> None:
-        verdict, _ = evaluate("2.999.0", SHA_337_0, HISTORY, at("2026-10-06"))
+        verdict, _ = evaluate("2.999.0", SHA_337_0, HISTORY, at("2026-10-06"), published_digest=SHA_337_0)
         self.assertEqual(verdict, "fail")
         pre = [release("2.338.0", "2026-10-01T00:00:00Z", "3" * 64, prerelease=True)] + HISTORY
-        verdict, _ = evaluate("2.338.0", "3" * 64, pre, at("2026-10-06"))
+        verdict, _ = evaluate("2.338.0", "3" * 64, pre, at("2026-10-06"), published_digest=SHA_337_0)
         self.assertEqual(verdict, "fail")
 
     def test_prereleases_and_drafts_do_not_count_as_newer(self) -> None:
@@ -98,26 +104,60 @@ class EvaluateTests(unittest.TestCase):
             release("2.338.0", "2026-09-01T00:00:00Z", "3" * 64, prerelease=True),
             release("2.339.0", "2026-09-02T00:00:00Z", "4" * 64, draft=True),
         ]
-        verdict, _ = evaluate("2.337.0", SHA_337_0, extra + HISTORY, at("2026-10-06"))
+        verdict, _ = evaluate("2.337.0", SHA_337_0, extra + HISTORY, at("2026-10-06"), published_digest=SHA_337_0)
         self.assertEqual(verdict, "ok")
 
-    def test_missing_checksum_in_notes_only_warns(self) -> None:
+    def test_release_notes_are_not_used_as_an_image_digest(self) -> None:
         history = [release("2.337.0", "2026-08-26T14:33:29Z")] + HISTORY[1:]
-        verdict, messages = evaluate("2.337.0", SHA_337_0, history, at("2026-10-06"))
+        verdict, _ = evaluate("2.337.0", SHA_337_0, history, at("2026-10-06"),
+                              published_digest=SHA_337_0)
         self.assertEqual(verdict, "ok")
-        self.assertTrue(messages[0].startswith("::warning::"))
+
+
+class RegistryTests(unittest.TestCase):
+    def response(self, body=b"", digest=None):
+        response = io.BytesIO(body)
+        response.headers = {} if digest is None else {"Docker-Content-Digest": digest}
+        return response
+
+    def test_anonymous_registry_token_is_separate_from_github_api_token(self):
+        responses = [self.response(b'{"token":"anonymous-pull"}'),
+                     self.response(digest="sha256:" + SHA_337_0)]
+        # INVARIANT: these are inert fixture values, never real credentials.
+        with patch.dict(os.environ, GH_TOKEN="fake"), patch(
+            "urllib.request.urlopen", side_effect=responses
+        ) as opening:
+            self.assertEqual(_image_digest("2.337.0"), SHA_337_0)
+        first, second = [call.args[0] for call in opening.call_args_list]
+        self.assertIsNone(first.get_header("Authorization"))
+        self.assertEqual(second.get_header("Authorization"), "Bearer anonymous-pull")
+        self.assertEqual(second.get_method(), "HEAD")
+        self.assertEqual(second.full_url, "https://ghcr.io/v2/actions/actions-runner/manifests/2.337.0")
+
+    def test_missing_or_malformed_manifest_digest_fails(self):
+        for digest in (None, "", "sha256:short", "sha512:" + "a" * 64):
+            with self.subTest(digest=digest), patch("urllib.request.urlopen", side_effect=[
+                self.response(b'{"token":"anonymous-pull"}'), self.response(digest=digest)
+            ]):
+                with self.assertRaises(PinCheckError):
+                    _image_digest("2.337.0")
+
+    def test_registry_failure_is_reported(self):
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("unavailable")):
+            with self.assertRaisesRegex(PinCheckError, "could not be read"):
+                _image_digest("2.337.0")
 
 
 class CliTests(unittest.TestCase):
     def run_cli(self, pin_version: str, pin_sha: str, now: str) -> subprocess.CompletedProcess:
         with tempfile.TemporaryDirectory() as directory:
             pin = Path(directory) / "pin.yml"
-            pin.write_text(f'  RUNNER_VERSION="{pin_version}"\n  RUNNER_SHA256="{pin_sha}"\n')
+            pin.write_text(f'  RUNPOD_IMAGE: ghcr.io/actions/actions-runner:{pin_version}@sha256:{pin_sha}\n')
             releases = Path(directory) / "releases.json"
             releases.write_text(json.dumps(HISTORY))
             return subprocess.run(
                 [sys.executable, "scripts/ci/runner_pin_check.py", "--pin-file", str(pin),
-                 "--releases-json", str(releases), "--now", now],
+                 "--releases-json", str(releases), "--image-digest", pin_sha, "--now", now],
                 cwd=ROOT, capture_output=True, text=True,
             )
 

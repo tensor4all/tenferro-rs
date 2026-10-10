@@ -26,15 +26,27 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
+from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 SMOKE_KERNEL = (
     'extern "C" __global__ void tenferro_smoke(int *out) { out[0] = 42; }'
 )
 KERNEL_NAME = b"tenferro_smoke"
 EXPECTED_OUTPUT = 42
+
+# Published SHA256 values from NVIDIA's ubuntu2204/x86_64/Packages.gz:
+# https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/
+# These dependency-free packages belong to the staged SDK's NVRTC family.
+# Pin the download boundary so a changed or incomplete package cannot install.
+NVRTC_PACKAGES = {
+    (12, 6): ("12.6.85-1", "4607ccbc2cee1f5c84ea79f1eaa6f6f3f29ef084a784446810e56b34c6bcb295"),
+    (12, 8): ("12.8.93-1", "0b97fd1c36434f55292ca1c069247cd38a8709750820214c3aa45deac168db60"),
+}
 
 
 class SmokeFailure(RuntimeError):
@@ -80,36 +92,33 @@ def nvrtc_arch_option(cc_major: int, cc_minor: int) -> bytes:
 
 
 def install_nvrtc(runtime: tuple[int, int]) -> None:
-    """Install only the NVRTC package for the selected runtime tier."""
+    """Install the pinned NVRTC package without refreshing package indexes."""
 
-    keyring_check = subprocess.run(
-        "ls /etc/apt/sources.list.d/cuda*.list",
-        shell=True,
-        capture_output=True,
+    if runtime not in NVRTC_PACKAGES:
+        raise SmokeFailure(f"no pinned NVRTC package for runtime {runtime}")
+    version, expected_sha = NVRTC_PACKAGES[runtime]
+    filename = f"{nvrtc_package(runtime)}_{version}_amd64.deb"
+    url = (
+        "https://developer.download.nvidia.com/compute/cuda/repos/"
+        f"ubuntu2204/x86_64/{filename}"
     )
-    if keyring_check.returncode != 0:
+    with tempfile.TemporaryDirectory(prefix="tenferro-nvrtc-") as directory:
+        archive = Path(directory) / filename
         subprocess.run(
-            "tmpdir=$(mktemp -d) && "
-            "curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "
-            "-o \"${tmpdir}/cuda-keyring.deb\" "
-            "https://developer.download.nvidia.com/compute/cuda/repos/"
-            "ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && "
-            "dpkg -i \"${tmpdir}/cuda-keyring.deb\" && rm -rf \"${tmpdir}\"",
-            shell=True,
+            ["curl", "-fsSL", "--connect-timeout", "10", "--max-time", "60",
+             "--retry", "2", "--retry-delay", "2", "--retry-all-errors",
+             "-o", str(archive), url],
             check=True,
         )
-    subprocess.run(["apt-get", "update"], check=True)
-    subprocess.run(
-        [
-            "apt-get",
-            "install",
-            "-y",
-            "--no-install-recommends",
-            nvrtc_package(runtime),
-        ],
-        check=True,
-        env={"DEBIAN_FRONTEND": "noninteractive", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"},
-    )
+        with archive.open("rb") as package:
+            actual_sha = hashlib.file_digest(package, "sha256").hexdigest()
+        if actual_sha != expected_sha:
+            raise SmokeFailure(f"NVRTC package checksum mismatch: {filename}")
+        print(f"Installing verified NVRTC package {filename}", flush=True)
+        subprocess.run(
+            ["dpkg", "-i", str(archive)], check=True,
+            env={"DEBIAN_FRONTEND": "noninteractive", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"},
+        )
 
 
 def _load_library(names: list[str]) -> ctypes.CDLL:
