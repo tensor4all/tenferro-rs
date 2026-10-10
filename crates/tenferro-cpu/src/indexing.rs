@@ -855,9 +855,27 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     unsafe { out.assume_init() }
 }
 
-struct IndexTensor {
+/// Index values for one gather, scatter, or dynamic-slice call.
+///
+/// An `I64` index tensor is borrowed in place; every other supported index dtype
+/// is converted once into an owned `i64` buffer because the kernel reads `i64`.
+enum IndexValues<'a> {
+    Borrowed(&'a [i64]),
+    Converted(Vec<i64>),
+}
+
+impl IndexValues<'_> {
+    fn as_slice(&self) -> &[i64] {
+        match self {
+            Self::Borrowed(values) => values,
+            Self::Converted(values) => values,
+        }
+    }
+}
+
+struct IndexTensor<'a> {
     shape: Vec<usize>,
-    values: Vec<i64>,
+    values: IndexValues<'a>,
 }
 
 /// Maximum exact integer representable by f32 (2^24).
@@ -904,7 +922,7 @@ fn unsupported_index_dtype(complex: bool) -> crate::Error {
     )
 }
 
-fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
+fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor<'_>> {
     match tensor.dtype() {
         DType::I32 => {
             let t = tensor
@@ -912,19 +930,23 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 .ok_or_else(|| unsupported_index_dtype(false))?;
             Ok(IndexTensor {
                 shape: t.shape().to_vec(),
-                values: typed_host_data("index_tensor", t)?
-                    .iter()
-                    .map(|&value| value as i64)
-                    .collect(),
+                values: IndexValues::Converted(
+                    typed_host_data("index_tensor", t)?
+                        .iter()
+                        .map(|&value| value as i64)
+                        .collect(),
+                ),
             })
         }
         DType::I64 => {
             let t = tensor
                 .as_typed::<i64>()
                 .ok_or_else(|| unsupported_index_dtype(false))?;
+            // Borrow the index storage instead of copying it per call; the
+            // kernel only reads `i64` and the caller keeps the tensor alive.
             Ok(IndexTensor {
                 shape: t.shape().to_vec(),
-                values: typed_host_data("index_tensor", t)?.to_vec(),
+                values: IndexValues::Borrowed(typed_host_data("index_tensor", t)?),
             })
         }
         DType::F32 => {
@@ -937,7 +959,7 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 .collect();
             Ok(IndexTensor {
                 shape: t.shape().to_vec(),
-                values: values?,
+                values: IndexValues::Converted(values?),
             })
         }
         DType::F64 => {
@@ -950,7 +972,7 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 .collect();
             Ok(IndexTensor {
                 shape: t.shape().to_vec(),
-                values: values?,
+                values: IndexValues::Converted(values?),
             })
         }
         DType::Bool => Err(unsupported_index_dtype(false)),
@@ -1234,7 +1256,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             index_dtype,
-            typed_bytes(&start_indices.values),
+            typed_bytes(start_indices.values.as_slice()),
             &start_indices.shape,
             &index_strides,
             0,
@@ -1506,7 +1528,7 @@ where
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             index_dtype,
-            typed_bytes(&scatter_indices.values),
+            typed_bytes(scatter_indices.values.as_slice()),
             &scatter_indices.shape,
             &index_strides,
             0,
@@ -1581,13 +1603,13 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
             "starts must be a rank-1 tensor",
         ));
     }
-    if starts.values.len() != input_shape.len() {
+    if starts.values.as_slice().len() != input_shape.len() {
         return Err(crate::Error::invalid_argument(
             "dynamic_slice",
             "starts",
             format!(
                 "starts length {} must match input rank {}",
-                starts.values.len(),
+                starts.values.as_slice().len(),
                 input_shape.len()
             ),
         ));
@@ -1596,7 +1618,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     for axis in 0..input_shape.len() {
         let _ = clamp_window_start(
             "dynamic_slice",
-            starts.values[axis],
+            starts.values.as_slice()[axis],
             input_shape[axis],
             slice_sizes[axis],
         )?;
@@ -1654,7 +1676,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             index_dtype,
-            typed_bytes(&starts.values),
+            typed_bytes(starts.values.as_slice()),
             &starts.shape,
             &start_strides,
             0,
@@ -1708,13 +1730,13 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
             "starts must be a rank-1 tensor",
         ));
     }
-    if starts.values.len() != operand_shape.len() {
+    if starts.values.as_slice().len() != operand_shape.len() {
         return Err(crate::Error::invalid_argument(
             "dynamic_update_slice",
             "configuration",
             format!(
                 "starts length {} must match operand rank {}",
-                starts.values.len(),
+                starts.values.as_slice().len(),
                 operand_shape.len()
             ),
         ));
@@ -1723,7 +1745,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     for axis in 0..operand_shape.len() {
         let _ = clamp_window_start(
             "dynamic_update_slice",
-            starts.values[axis],
+            starts.values.as_slice()[axis],
             operand_shape[axis],
             update_shape[axis],
         )?;
@@ -1802,7 +1824,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             index_dtype,
-            typed_bytes(&starts.values),
+            typed_bytes(starts.values.as_slice()),
             &starts.shape,
             &start_strides,
             0,
