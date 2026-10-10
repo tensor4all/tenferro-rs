@@ -96,9 +96,18 @@ only what registration and the smoke proof need. The official GitHub
 digest in `runpod-gpu-execute.yml`. It supplies Python, download tools, the
 runner and its native dependencies before the paid startup script begins.
 The script uses the image's passwordless sudo to retain root execution,
-installs the driver-compatible NVRTC package, proves a CUDA kernel can run,
+downloads and verifies a pinned driver-compatible NVRTC package, proves a
+CUDA kernel can run,
 and only then registers the preinstalled runner. NVIDIA compute/utility
 capabilities are passed explicitly because this is not a CUDA base image.
+
+`cuda_smoke_test.py` owns the NVRTC 12.6/12.8 Debian package versions and
+SHA-256 values from NVIDIA's official repository. These packages have no
+package dependencies and are installed directly with `dpkg`, avoiding a
+package-index refresh before registration. A download or checksum failure
+stops startup before registration. When changing a supported runtime tier,
+update this pin, verify native compilation and the full GPU proof, and keep
+the staged execution SDK's runtime selection aligned.
 
 The accepted job installs its remaining execution tools without recommended
 packages. `zstd` lands before archive cache restore, retaining compatibility

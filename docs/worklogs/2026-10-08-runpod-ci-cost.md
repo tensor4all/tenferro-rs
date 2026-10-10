@@ -642,3 +642,41 @@ official GHCR tag; registry requests use an anonymous pull token. The existing
 release freshness warns about 2.338.0, published on October 6. Version 2.337.0
 is retained to keep the experiment's baseline and candidate runner identical;
 the existing freshness policy requires a follow-up bump within its window.
+
+The second confirmation attempt also stopped after [its initial baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38024401197).
+All tests and deletion succeeded (355.077 paid seconds, $0.0581932), but the
+normal Pod GET omitted the optional machine object, leaving placement unknown.
+The published RunPod OpenAPI specifies `includeMachine=true` for that object.
+The experimental harness now adds this query to its existing bounded pre-delete
+GET; it adds no request or deletion delay budget. The third complete campaign
+uses benchmark commit `76668eaef9ca0a60275e606ed26ad3bae822dcf8` with unchanged
+order, workload and acceptance gates. Neither aborted sample is reused.
+
+The third campaign's [first baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38025076627)
+and [second baseline](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38025500323)
+passed the full workload, recorded CA-MTL-1, and deleted both Pods. Paid
+lifetimes were 400.098 and 384.674 seconds (combined $0.1286154). The A/A
+spread was 4.01%, but drivers were 570.211.01 and 580.178.04: the campaign is
+INCONCLUSIVE under the unchanged identity gate and stopped before a candidate.
+Region alone does not control driver identity. The public Pod creation API
+supports `allowedCudaVersions` but no exact machine or driver selector.
+
+A fresh campaign at benchmark commit
+`ffa3f10049bb83e54c954846d1815b1a926cfe7e` narrows both arms to
+`allowedCudaVersions: ["12.8"]`, the minimum full-feature CUDA capability,
+to reduce driver-family variation. It retains exact observed driver equality,
+all timing thresholds, order and workload; no old samples are reused. Identity
+mismatch stops immediately after evidence collection, before another allocation.
+This is experimental placement control, not a production GPU-selection change.
+
+The next candidate retains the image/readiness changes and removes the NVRTC
+package-index refresh before registration. NVIDIA publishes dependency-free
+`cuda-nvrtc` Debian packages; the helper pins the supported 12.6/12.8 package
+versions and official SHA-256 values, downloads one matching package, verifies
+it and installs it with `dpkg`. The full compile/load/launch/readback/VRAM proof
+is unchanged, and accepted execution still refreshes indexes for its tools.
+The package checksum covers the untracked NVIDIA download boundary, not Git
+source identity. Both real packages passed local native NVRTC compilation;
+local GPU execution remains unavailable. Failure-path tests and all 357 CI
+helper tests pass. GPU compatibility and the unchanged whole-lifetime 10% gate
+remain pending for this new candidate; no earlier timing sample can promote it.

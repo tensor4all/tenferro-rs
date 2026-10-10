@@ -1,7 +1,14 @@
+import hashlib
+from pathlib import Path
+import subprocess
 import unittest
+from unittest.mock import patch
+
+from scripts.ci import cuda_smoke_test
 
 from scripts.ci.cuda_smoke_test import (
     EXPECTED_OUTPUT,
+    install_nvrtc,
     nvrtc_builtins_candidates,
     nvrtc_library_candidates,
     SmokeFailure,
@@ -17,6 +24,52 @@ SMI_OUTPUT = (
     "| NVIDIA-SMI 550.127.05    Driver Version: 550.127.05    "
     "CUDA Version: 12.4     |"
 )
+
+
+class InstallNvrtcTests(unittest.TestCase):
+    def test_verified_package_installs_without_apt_and_temp_file_is_removed(self):
+        content = b"test NVRTC package"
+        digest = hashlib.sha256(content).hexdigest()
+        archive_paths = []
+
+        def execute(args, **kwargs):
+            if args[0] == "curl":
+                archive = Path(args[args.index("-o") + 1])
+                archive.write_bytes(content)
+                archive_paths.append(archive)
+                self.assertTrue(args[-1].endswith("cuda-nvrtc-12-8_12.8.93-1_amd64.deb"))
+            else:
+                self.assertEqual(args[:2], ["dpkg", "-i"])
+                self.assertEqual(Path(args[2]).read_bytes(), content)
+            self.assertTrue(kwargs["check"])
+
+        with patch.dict(cuda_smoke_test.NVRTC_PACKAGES, {(12, 8): ("12.8.93-1", digest)}), \
+             patch.object(cuda_smoke_test.subprocess, "run", side_effect=execute) as run:
+            install_nvrtc((12, 8))
+        self.assertEqual(run.call_count, 2)
+        self.assertFalse(archive_paths[0].exists())
+
+    def test_corrupt_download_never_installs(self):
+        def download(args, **kwargs):
+            Path(args[args.index("-o") + 1]).write_bytes(b"incomplete download")
+
+        with patch.object(cuda_smoke_test.subprocess, "run", side_effect=download) as run:
+            with self.assertRaisesRegex(SmokeFailure, "checksum mismatch"):
+                install_nvrtc((12, 8))
+        self.assertEqual(run.call_count, 1)
+
+    def test_download_failure_never_installs(self):
+        with patch.object(cuda_smoke_test.subprocess, "run",
+                          side_effect=subprocess.CalledProcessError(22, "curl")) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                install_nvrtc((12, 8))
+        self.assertEqual(run.call_count, 1)
+
+    def test_unknown_runtime_fails_before_download(self):
+        with patch.object(cuda_smoke_test.subprocess, "run") as run:
+            with self.assertRaisesRegex(SmokeFailure, "no pinned NVRTC"):
+                install_nvrtc((99, 0))
+        run.assert_not_called()
 
 
 class VersionLogicTests(unittest.TestCase):
