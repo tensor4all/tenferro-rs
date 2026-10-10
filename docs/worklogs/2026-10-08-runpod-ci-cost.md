@@ -670,3 +670,42 @@ correctness evidence, not a paired timing improvement. The incremental byte
 and correctness criteria passed; the additional whole-Pod 10% goal remains
 unproven. [Complete evidence and protocol](https://github.com/tensor4all/tenferro-benchmark/blob/experiment/runpod-preexpanded-wheels/result/nvidia-gpu/ci/runpod-preexpanded-wheels.md)
 retain the full logs, inventories, case identities, host and cost observations.
+
+## Hosted cuTENSOR cache footprint
+
+The next incremental target is the hosted cache, not a paid-Pod timing claim.
+Publisher run 38047788138 saved 608,291,096 compressed cuTENSOR bytes; the
+repository cache API later reported 10,564,514,068 active bytes with that entry
+absent. Run 38047804467 missed all three runtime caches. The cuTENSOR entry
+alone occupied about 5.7% of that observed cache footprint. This establishes
+meaningful avoidable storage, but does not prove why the entry disappeared or
+predict a hit-rate improvement.
+
+The installer currently extracts static and independent multi-GPU/MPI
+libraries, although runtime packaging already discards them. Extracting only
+the same `lib/libcutensor.so*` family at installation removes that redundancy
+before cache publication. Both trusted writer and read-only consumer rotate
+to the runtime-only cache key. CUDA SDKs already omit compiler/static archives;
+the neighboring toolkit cache needs its compiler for archive builds and stays
+unchanged. Existing cache-role and key-pairing contracts cover the design; no
+new repository policy is needed.
+
+The size/content screen is declared before candidate measurement: baseline
+`8fbd73d5d08e5a91e8f418728711f13a8dbb9043`, cuTENSOR 2.6.0.4 from one vendor
+archive, identical tar/zstd settings, at least 50% fewer unpacked file bytes
+and 40% fewer compressed bytes, with all retained file contents and symlink
+targets identical. File bytes are the primary metric; no timing sample or
+paid-GPU comparison is used. Real-tar regression tests cover selective
+extraction, stale destination replacement and the required nonempty, resolvable
+runtime ABI. The latter replaces a hard-coded version fallback that accepted
+broken or absent `libcutensor.so.2` links.
+
+Candidate `615e6af97014aa613f55d3de00bd31b1e2f344a5` passed the complete
+screen: unpacked regular-file bytes fell from 1,497,546,900 to 478,410,136
+(68.05%), and compressed bytes from 610,823,965 to 238,093,023 (61.02%).
+The shared library and both soname links match the baseline exactly. These
+controlled local tar sizes are compared to each other, not to the separately
+observed hosted archive size. All 360 CI helper tests and the fast gate pass;
+the committed deterministic rules review passes. [Full protocol and evidence](https://github.com/tensor4all/tenferro-benchmark/blob/experiment/cutensor-runtime-cache/result/nvidia-gpu/ci/cutensor-runtime-cache.md)
+retain both inventories and reproduction settings. Trusted-main publication
+still needs post-merge verification; reduced eviction or paid time is unproven.

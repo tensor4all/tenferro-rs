@@ -269,7 +269,7 @@ jobs:
         id: cutensor_lookup
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cutensor-${{ env.CUTENSOR_VERSION }}
-          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2
+          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-runtime-v3
           lookup-only: true
 
       - name: Download cuTENSOR redistributable
@@ -286,4 +286,4 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cutensor-${{ env.CUTENSOR_VERSION }}
-          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2
+          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-runtime-v3

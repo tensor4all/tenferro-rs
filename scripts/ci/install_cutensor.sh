@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Download and extract the cuTENSOR redistributable for CUDA 12 into the
-# requested destination directory (lib/ subdirectory holds the libraries).
+# Download the cuTENSOR redistributable for CUDA 12 and extract its single-GPU
+# shared runtime into the requested destination directory (lib/ subdirectory).
 #
 # Usage: install_cutensor.sh <cutensor-version> <dest-dir>
 set -euo pipefail
@@ -33,17 +33,19 @@ if [ "${archive_bytes}" -lt "${cutensor_min_bytes}" ]; then
 fi
 as_root rm -rf "${DEST_DIR}"
 as_root mkdir -p "${DEST_DIR}"
+# Match the family already selected by prepare_gpu_execution_payload.sh.
+# Static archives and independent multi-GPU/MPI providers are never used by
+# this CI path; excluding them here also keeps them out of the hosted cache.
 as_root tar -xJf "${archive_path}" -C "${DEST_DIR}" \
-  --strip-components=1 \
-  "libcutensor-linux-x86_64-${CUTENSOR_VERSION}_cuda12-archive/lib"
+  --strip-components=1 --wildcards --no-wildcards-match-slash \
+  "libcutensor-linux-x86_64-${CUTENSOR_VERSION}_cuda12-archive/lib/libcutensor.so*"
 rm -rf "${tmpdir}"
 if [ "$(id -u)" -ne 0 ]; then
   sudo chown -R "$(id -u):$(id -g)" "${DEST_DIR}"
 fi
 
-if [ ! -e "${DEST_DIR}/lib/libcutensor.so.2" ] && \
-   [ ! -e "${DEST_DIR}/lib/libcutensor.so.2.6.0" ]; then
-  echo "cuTENSOR shared library not found after redistributable install."
+if [ ! -s "${DEST_DIR}/lib/libcutensor.so.2" ]; then
+  echo "cuTENSOR runtime ABI libcutensor.so.2 missing or empty after redistributable install."
   ls -la "${DEST_DIR}/lib" 2>/dev/null || echo "Missing directory: ${DEST_DIR}/lib"
   exit 1
 fi

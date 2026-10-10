@@ -89,7 +89,7 @@ jobs:
           SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cutensor-${{ env.CUTENSOR_VERSION }}
-          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2
+          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-runtime-v3
       - name: Prepare GPU execution payloads
         timeout-minutes: 15
         run: |

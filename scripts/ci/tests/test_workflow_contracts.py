@@ -797,7 +797,7 @@ class WorkflowContractTests(unittest.TestCase):
         for pair_line in (
             "prefix-key: v8-rust-cuda-pjrt-ci-ubuntu22-ptx",
             "shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}",
-            "key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2",
+            "key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-runtime-v3",
         ):
             self.assertIn(pair_line, consumer)
             self.assertIn(pair_line, publisher)

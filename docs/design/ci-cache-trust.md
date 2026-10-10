@@ -81,10 +81,17 @@ the occasional spurious rebuild is accepted in exchange for the simpler
 key with byte-identical expressions over an identical checkout layout;
 a contract test compares the two lines.
 
-The pod-side cuTENSOR and CUDA-runtime-tree caches key on OS, architecture,
-component version, and a manual `vN`. Their paths live under the fixed root
-`/opt/tenferro-ci` so absolute paths restored from hosted-runner saves line
-up on the pod.
+The cuTENSOR and CUDA-runtime-tree caches key on OS, architecture, component
+version, and a manual `vN`. Hosted preparation restores them under the fixed
+root `/opt/tenferro-ci`, then stages immutable runtime artifacts for the Pod.
+The cuTENSOR `cuda12-runtime-v3` namespace contains only `lib/libcutensor.so*`,
+the single-GPU shared ABI already selected by runtime packaging. Static
+archives and independent multi-GPU/MPI providers are excluded at installation,
+before cache publication; restoring them just to discard them wastes cache
+quota and transfer bytes. The installer requires a nonempty, resolvable
+`libcutensor.so.2`. A cache miss downloads the same vendor redistributable.
+Reader and writer keys rotate together, with no fallback to the larger v2
+cache. CUDA runtime trees already exclude compiler/static archives.
 
 The hosted toolkit cache contains the relocatable nvcc/include/library tree for
 the exact requested CUDA major.minor version. Its key includes Ubuntu version,
@@ -141,8 +148,8 @@ no Cargo compilation happens on the retry path.
   verifies restored `faer` and `strided-rs` dependency artifacts under the
   actual target path; a cache-hit message alone is not treated as evidence.
 
-- The pod logs cuTENSOR and runtime-tree cache hit state before falling back
-  to direct downloads.
+- Hosted preparation logs cuTENSOR and runtime-tree cache hit state before
+  falling back to direct downloads; the Pod receives the prepared artifacts.
 - The publisher logs whether a key was already published (no-op) or built.
 - Artifacts retain for 7 days; caches use GitHub's 7-day LRU eviction with a
   weekly scheduled publish refresh. Denied writes cannot occur silently:
