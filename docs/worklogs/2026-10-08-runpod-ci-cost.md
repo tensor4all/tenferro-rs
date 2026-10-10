@@ -654,3 +654,19 @@ old trusted controller used to validate the PR. The execution workflow accepts
 that old layout for recovery of historical tested refs. Both producers retain
 the same artifact checksums and five-part transport. This supports the actual
 controller/tested-ref version boundary rather than changing numerical behavior.
+
+The actual producer passed local reconstruction with 1,084,483,318 common
+bytes (9.36176% below the original). Hosted reconstruction produced
+1,080,710,232 bytes (9.67711% lower); both preserved all 79 files/links and used
+unchanged compression settings. All 358 CI helper tests, the fast gate and
+committed deterministic rules review passed. The official image starts the
+staged Cargo/nextest/NVCC tools.
+
+[Full frozen GPU validation](https://github.com/tensor4all/tenferro-benchmark/actions/runs/38046438056)
+passed all 288 exact CUDA/PJRT case identities and the tutorial on an A40 with
+CUDA 12.8, driver 570.195.03, in CA-MTL-1. Pod deletion returned HTTP 204.
+The single paid lifetime was 352.480 seconds (estimated $0.0577676); this is
+correctness evidence, not a paired timing improvement. The incremental byte
+and correctness criteria passed; the additional whole-Pod 10% goal remains
+unproven. [Complete evidence and protocol](https://github.com/tensor4all/tenferro-benchmark/blob/experiment/runpod-preexpanded-wheels/result/nvidia-gpu/ci/runpod-preexpanded-wheels.md)
+retain the full logs, inventories, case identities, host and cost observations.
