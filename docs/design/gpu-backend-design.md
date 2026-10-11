@@ -600,13 +600,17 @@ let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 
 Each explicit transfer crosses host memory once on the host side (#2009):
 
-- **Borrowed upload** (`upload_tensor(&Tensor)`): CubeCL's `create_from_slice`
-  copies the caller's buffer exactly once, into an owned aligned staging buffer,
-  before the asynchronous device write is queued. That staging copy is the
-  lifetime guarantee that lets the caller reuse or drop its buffer as soon as
-  the call returns, without a barrier. It is not removed until a
-  lifetime-safe alternative exists (a pinned staging pool, or a synchronous
-  upload that waits for the copy).
+- **Borrowed upload** (`upload_tensor(&Tensor)`): below the staging chunk (8 MiB),
+  CubeCL's `create_from_slice` copies the caller's buffer exactly once, into an
+  owned aligned staging buffer, before the asynchronous device write is queued.
+  That staging copy is the lifetime guarantee that lets the caller reuse or drop
+  its buffer as soon as the call returns, without a barrier. Above the chunk the
+  runtime's pinned staging lease replaces it: the payload moves chunk by chunk
+  through one pinned buffer, the device reads pinned memory instead of the
+  pageable transport, and the call waits for its own chunks - a borrowed source
+  and a reused staging buffer cannot stay safe behind an early return. See
+  [large-transfer-staging-1945-u4.md](./large-transfer-staging-1945-u4.md); the
+  measured effect is 6.9x at 256 MiB. The owned paths below are unchanged.
 - **Owned upload** (tenferro-internal paths that build their own host vector,
   such as `upload_typed_tensor` and the `Bool` byte conversion): the vector's
   allocation is handed to CubeCL with `ComputeClient::create(Bytes::from_elems)`

@@ -1504,13 +1504,25 @@ fn cubecl_runtime_initializes_context_before_client_and_retires_streams_on_drop(
         ],
     );
 
-    let drop_source = source_section(&runtime_source, "impl Drop for CudaRuntimeState", "}");
+    // The section runs to the end of the body, not to the first closing brace, so the
+    // permanent-retention branch is inside it.
+    let drop_source = source_section(
+        &runtime_source,
+        "impl Drop for CudaRuntimeState",
+        "// On retirement failure",
+    );
     assert_ordered_needles(
         "CudaRuntime::drop",
         drop_source,
         &[
-            "if self.retire_initialized_streams()",
+            // Retirement is classified once: asking twice could turn a failed retirement into a
+            // successful-looking one and skip the permanent-retention branch.
+            "let retired = self.retire_initialized_streams();",
             "self.release_cuda_library_resources();",
+            // A cached staging buffer may still be in use when streams are not confirmed done, and
+            // records kept for soundness must be forgotten rather than freed by field destruction.
+            "std::mem::forget(buffer);",
+            ".forget_all();",
         ],
     );
 }

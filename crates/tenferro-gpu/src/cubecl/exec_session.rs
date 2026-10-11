@@ -973,10 +973,10 @@ impl CudaHeldSession<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_gpu::cuda::PublicationAdmissionError::Rejected`] when the value cannot be
+    /// Returns [`crate::cuda::PublicationAdmissionError::Rejected`] when the value cannot be
     /// published - an unserved dtype, a host tensor, an unresolvable allocation or a producer failure
     /// reported at the dispatch boundary - and hands the value back with it. Returns
-    /// [`tenferro_gpu::cuda::PublicationAdmissionError::Unproven`] when the frontier could not be
+    /// [`crate::cuda::PublicationAdmissionError::Unproven`] when the frontier could not be
     /// recorded after a possible enqueue; the value, allocation and provider pin are then retained for
     /// soundness and never returned.
     ///
