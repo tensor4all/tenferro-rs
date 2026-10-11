@@ -196,6 +196,42 @@ protocol, `transfer_large` group, 32 Mi `f64` elements = 256 MiB:
 - These are device-side measurements of a route, not an app-level speedup claim: the pending route's
   point is that the caller may wait later, which a serial enqueue-then-wait benchmark cannot show.
 
+### 3.3 Producer/consumer overlap, with a controlled schedule
+
+The `transfer_overlap` group measures the claim the pending routes exist for: that a caller can enqueue a
+copy and do host work while it runs. Three arms over the same 8 MiB pinned device-to-host copy and the same
+compute-bound host workload (64-element working set, 6000 iterations, so the host does not compete for the
+memory bus), in one run on the local A100:
+
+| arm | schedule | 8 MiB |
+| --- | --- | ---: |
+| `copy_only` | enqueue the pending copy and wait | 345.5 us |
+| `host_only` | the host workload alone | 313.4 us |
+| `serial` | copy, wait, then the host work | 661.7 us |
+| `overlapped` | enqueue, run the host workload, then wait | **348.1 us** |
+
+- **The host workload is hidden behind the copy**: the overlapped arm is 348.1 us against a *measured* serial
+  arm of 661.7 us for the same schedule, i.e. within 2.6 us of the copy alone (345.5 us). The serial arm
+  agrees with the additive estimate (345.5 + 313.4 = 658.9 us), which is why the comparison does not rest on
+  summing two central estimates. The pending copy proceeds while the host computes, which is what "the
+  caller may wait later" means in practice.
+- **This is a schedule, not a poll.** The arms differ only in where the host work sits relative to the
+  enqueue and the wait, and `copy_only` measures the same operation as the `transfer_download/pinned` row
+  (345.5 us against 345.9 us in a shared run), so the route cost is sanity-checked against the existing
+  group. That agreement is a sanity check, not an independent validation of overlap.
+- **Validation**: each copy arm smoke-checks three positions per iteration, poisoned before submission so a
+  skipped copy fails, and the full payload is compared once per copy schedule outside the timed region from a
+  destination that does not already hold it. The smoke check is a smoke check: it cannot prove every element
+  of every iteration, which is why the untimed full comparison exists.
+- **The host workload is compute-bound with 512 bytes of state**, chosen to minimize host-memory bandwidth
+  demand. That is a choice, not a measurement: elapsed time does not show cache residency or exclude
+  shared-resource effects, and no bandwidth claim is made.
+- **What this does not show**: kernel/transfer overlap across two device streams (one copy is scheduled
+  against host work; a second CUDA stream is not reachable through the public surface), any overlap for the
+  pageable routes, wait-free publication in general, overlap behind an active producer kernel or dependent
+  GPU-consumer access, and any claim about other payload sizes or the upload direction. "Producer/consumer
+  overlap" here means device-to-host transfer against independent host computation.
+
 ## 4. Ownership and failure semantics
 
 ```text
