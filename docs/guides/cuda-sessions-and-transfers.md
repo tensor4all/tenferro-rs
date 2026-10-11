@@ -102,6 +102,11 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
 - `PinnedHostBuffer` owns pinned host memory (`cudaHostAlloc`), is filled or read through
   `as_mut_slice`/`as_slice`, and is handed to a transfer **by value** so no caller borrow has to
   outlive a copy it cannot control.
+- **Reuse the buffer; do not allocate one per transfer.** A fresh 8 MiB pinned allocation costs about
+  7 ms on an A100 against 343 us for the 8 MiB DMA it enables, so `PinnedHostBuffer::new` inside a
+  transfer loop dominates everything else. Every route here hands the buffer back (`wait` returns it, a
+  refused submission returns it, a dropped handle retains it), which is what makes reuse the intended
+  shape rather than a workaround.
 - `upload_pending` takes ownership of the source buffer *and* the destination value, so nothing can
   read, mutate or drop the device tensor while the copy may still write it, and `wait` returns the
   destination and the buffer together.
