@@ -1,7 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use std::mem::MaybeUninit;
-use strided_kernel::{map_into, reduce, zip_map2_into, StridedView};
+use strided_kernel::{map_into, map_into_uninit_with_kernel, reduce, zip_map2_into, StridedView};
 use tenferro_core_ops::PrimitiveOpKind;
 
 #[cfg(test)]
@@ -264,35 +264,17 @@ fn map_unary<T: Copy + PoolScalar + 'static>(
     f: impl Fn(T) -> T + Copy + Sync,
     vector: VectorKernel,
 ) -> crate::Result<()> {
-    let len = input.dims().iter().product::<usize>();
-    // The vectorized kernel runs on one thread, so it must not pre-empt the fanout that
-    // `map_into` would otherwise choose. `parallel_threads_for_len` is that decision, asked
-    // rather than reimplemented: taking the kernel only where there is nothing to fan out to
-    // keeps the single-threaded win without paying for it with the multi-threaded one. The
-    // question disappears once `strided_kernel::map_into_uninit_with_kernel` is reachable, since
-    // it offers the kernel the blocks of the parallel path itself; the strided revision this
-    // workspace is pinned to predates it.
-    if vector != VectorKernel::None
-        && input.dims() == output.dims()
-        && strided_kernel::execution::parallel_threads_for_len(len) <= 1
-        && simd_math::is_compact_column_major(input.dims(), input.strides())
-        && simd_math::is_compact_column_major(output.dims(), output.strides())
-    {
-        // SAFETY: both views are compact column-major over the same shape, so the flat slices cover
-        // exactly the logical elements in the same order; `output` is a full-overwrite destination,
-        // so no element is read before the kernel writes it.
-        let (src, dst) = unsafe {
-            (
-                std::slice::from_raw_parts(input.ptr(), len),
-                std::slice::from_raw_parts_mut(output.as_mut_ptr(), len),
-            )
-        };
-        if simd_math::apply(vector, src, dst) {
-            return Ok(());
-        }
-    }
-    map_into(output, input, |x| MaybeUninit::new(f(x)))
-        .map_err(|err| crate::Error::backend_source(op, err))
+    // `strided-kernel` owns the layout and the fanout: it hands the kernel the flat runs it already
+    // knows about — the whole buffer when the operation runs sequentially, one block at a time on
+    // the parallel path — and leaves everything else, including a run the kernel declines, to `f`.
+    // A dtype without a kernel declines every run, which is how `C32`/`C64` keep the scalar path.
+    map_into_uninit_with_kernel(
+        output,
+        input,
+        |src, dst| simd_math::apply(vector, src, dst),
+        f,
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 fn typed_unary_view_with_pool<T, R>(

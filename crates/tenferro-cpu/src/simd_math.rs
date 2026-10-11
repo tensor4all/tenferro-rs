@@ -2,11 +2,14 @@
 //!
 //! `tenferro-cpu` evaluates `exp`/`log`/`sin`/`cos`/`tanh`/`expm1`/`log1p` one element at a time
 //! through `strided_kernel::map_into`, and Rust does not vectorize calls into libm, so those paths
-//! run at the speed of the scalar C library. When both the input and the output of an operation are
-//! compact column-major buffers, this module hands the flat slices to `elem-simd-math`, which
-//! selects the best SIMD level for the running CPU. Every other layout keeps the `map_into` path
-//! unchanged, so the two agree element for element; only the rounding differs, by at most the error
-//! bound documented for the kernel (1.0 ULP for these operations).
+//! run at the speed of the scalar C library. This module maps an operation onto `elem-simd-math`,
+//! which selects the best SIMD level for the running CPU.
+//!
+//! `strided_basic::map_into_uninit_with_kernel` owns everything else: which flat runs exist, how
+//! the destination slices are built, and how many threads run the operation. It calls back here
+//! once per run, so the kernel sits inside the parallel leaf rather than beside it. Every other
+//! layout keeps the `map_into` path, so the two agree element for element; only the rounding
+//! differs, by at most the bound documented for the kernel (1.0 ULP for these operations).
 //!
 //! `pow` is deliberately absent. SLEEF's `pow` — the source of `elem-simd-math` — is slower than the
 //! platform `libm`, and glibc's is also correctly rounded, so `pow` keeps the scalar path. The
@@ -29,22 +32,6 @@ pub(crate) enum VectorKernel {
     Tanh,
     Expm1,
     Log1p,
-}
-
-/// Whether `dims`/`strides` describe a compact column-major buffer, i.e. whether the flat buffer
-/// order equals the logical element order.
-pub(crate) fn is_compact_column_major(dims: &[usize], strides: &[isize]) -> bool {
-    let mut expected = 1isize;
-    for (&dim, &stride) in dims.iter().zip(strides.iter()) {
-        if stride != expected {
-            return false;
-        }
-        match expected.checked_mul(dim as isize) {
-            Some(next) => expected = next,
-            None => return false,
-        }
-    }
-    true
 }
 
 /// Applies `kernel` to `src`, writing `dst`.
@@ -112,25 +99,6 @@ mod tests {
         VectorKernel::Expm1,
         VectorKernel::Log1p,
     ];
-
-    #[test]
-    fn compact_column_major_separates_compact_from_strided_layouts() {
-        // `[2, 3]` column-major is the layout the CPU backend allocates.
-        assert!(is_compact_column_major(&[2, 3], &[1, 2]));
-        // Row-major strides over the same shape are not compact.
-        assert!(!is_compact_column_major(&[2, 3], &[3, 1]));
-        // Scalar and size-1 dims are trivially compact.
-        assert!(is_compact_column_major(&[], &[]));
-        assert!(is_compact_column_major(&[1], &[1]));
-        assert!(is_compact_column_major(&[7], &[1]));
-        // A broadcast stride is not compact.
-        assert!(!is_compact_column_major(&[4, 4], &[1, 0]));
-        // A shape whose flat extent does not fit in `isize` is rejected rather than wrapping.
-        assert!(!is_compact_column_major(
-            &[isize::MAX as usize, 2],
-            &[1, isize::MAX]
-        ));
-    }
 
     /// `src` is positive, so `log` and `log1p` are defined over all of it.
     fn samples<T: Copy>(lift: fn(f64) -> T) -> Vec<T> {
