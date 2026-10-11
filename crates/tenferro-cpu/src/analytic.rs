@@ -8,6 +8,7 @@ use tenferro_core_ops::PrimitiveOpKind;
 use super::typed_view;
 use super::{typed_view_from_view, PooledUninitOutput};
 use crate::buffer_pool::{BufferPool, PoolScalar};
+use crate::simd_math::{self, VectorKernel};
 use tenferro_tensor::{
     BackendId, CapabilityAxis, DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
     TypedTensor, TypedTensorView,
@@ -253,12 +254,35 @@ fn read_as_analytic_view(input: TensorRead<'_>) -> crate::Result<AnalyticReadVie
 }
 
 // Share the traversal for owned/read entrypoints while keeping F statically known.
-fn map_unary<T: Copy + PoolScalar>(
+//
+// When `vector` names a kernel and both sides are compact column-major buffers over the same
+// shape, the flat slices go to `simd_math` instead; `f` then only serves the general strided path.
+fn map_unary<T: Copy + PoolScalar + 'static>(
     op: &'static str,
     output: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
     input: &StridedView<'_, T>,
     f: impl Fn(T) -> T + Copy + Sync,
+    vector: VectorKernel,
 ) -> crate::Result<()> {
+    if vector != VectorKernel::None
+        && input.dims() == output.dims()
+        && simd_math::is_compact_column_major(input.dims(), input.strides())
+        && simd_math::is_compact_column_major(output.dims(), output.strides())
+    {
+        let len = input.dims().iter().product::<usize>();
+        // SAFETY: both views are compact column-major over the same shape, so the flat slices cover
+        // exactly the logical elements in the same order; `output` is a full-overwrite destination,
+        // so no element is read before the kernel writes it.
+        let (src, dst) = unsafe {
+            (
+                std::slice::from_raw_parts(input.ptr(), len),
+                std::slice::from_raw_parts_mut(output.as_mut_ptr(), len),
+            )
+        };
+        if simd_math::apply(vector, src, dst) {
+            return Ok(());
+        }
+    }
     map_into(output, input, |x| MaybeUninit::new(f(x)))
         .map_err(|err| crate::Error::backend_source(op, err))
 }
@@ -268,6 +292,7 @@ fn typed_unary_view_with_pool<T, R>(
     buffers: &mut BufferPool,
     input: &TypedTensorView<'_, T, R>,
     f: impl Fn(T) -> T + Copy + Sync,
+    vector: VectorKernel,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + PoolScalar + 'static,
@@ -279,6 +304,7 @@ where
         &mut out.as_uninit_view_mut()?,
         &typed_view_from_view(op, input)?,
         f,
+        vector,
     )?;
     // SAFETY: the successful map replay writes every logical destination element.
     unsafe { out.assume_init() }
@@ -289,12 +315,13 @@ pub(crate) fn typed_unary_view_tensor_with_pool<T, R>(
     buffers: &mut BufferPool,
     input: &TypedTensorView<'_, T, R>,
     f: impl Fn(T) -> T + Copy + Sync,
+    vector: VectorKernel,
 ) -> crate::Result<Tensor>
 where
     T: Copy + PoolScalar + TensorScalar + 'static,
     R: TensorRank,
 {
-    let out = typed_unary_view_with_pool(op, buffers, input, f)?;
+    let out = typed_unary_view_with_pool(op, buffers, input, f, vector)?;
     Ok(T::typed_tensor_into_tensor(out))
 }
 
@@ -438,16 +465,17 @@ where
 }
 
 macro_rules! define_unary_analytic_dispatch {
-    ($dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
+    ($dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident, $vec:expr) => {
         define_unary_analytic_dispatch!(
             $dispatch_fn,
             $dispatch_read_with_pool_fn,
             $op_kind,
             UnaryAnalyticElem::$elem_fn,
-            float_complex
+            float_complex,
+            $vec
         );
     };
-    ($dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem:path, $dtypes:ident) => {
+    ($dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem:path, $dtypes:ident, $vec:expr) => {
         #[cfg(test)]
         pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
             with_test_pool(|buffers| {
@@ -477,6 +505,7 @@ macro_rules! define_unary_analytic_dispatch {
                         buffers,
                         &view,
                         $elem,
+                        $vec,
                     )
                 }
             )
@@ -484,21 +513,54 @@ macro_rules! define_unary_analytic_dispatch {
     };
 }
 
-define_unary_analytic_dispatch!(exp, exp_read_with_pool, Exp, exp_elem);
-define_unary_analytic_dispatch!(log, log_read_with_pool, Log, log_elem);
-define_unary_analytic_dispatch!(sin, sin_read_with_pool, Sin, sin_elem);
-define_unary_analytic_dispatch!(cos, cos_read_with_pool, Cos, cos_elem);
-define_unary_analytic_dispatch!(tanh, tanh_read_with_pool, Tanh, tanh_elem);
-define_unary_analytic_dispatch!(sqrt, sqrt_read_with_pool, Sqrt, sqrt_elem);
-define_unary_analytic_dispatch!(rsqrt, rsqrt_read_with_pool, Rsqrt, rsqrt_elem);
-define_unary_analytic_dispatch!(expm1, expm1_read_with_pool, Expm1, expm1_elem);
-define_unary_analytic_dispatch!(log1p, log1p_read_with_pool, Log1p, log1p_elem);
+define_unary_analytic_dispatch!(exp, exp_read_with_pool, Exp, exp_elem, VectorKernel::Exp);
+define_unary_analytic_dispatch!(log, log_read_with_pool, Log, log_elem, VectorKernel::Log);
+define_unary_analytic_dispatch!(sin, sin_read_with_pool, Sin, sin_elem, VectorKernel::Sin);
+define_unary_analytic_dispatch!(cos, cos_read_with_pool, Cos, cos_elem, VectorKernel::Cos);
+define_unary_analytic_dispatch!(
+    tanh,
+    tanh_read_with_pool,
+    Tanh,
+    tanh_elem,
+    VectorKernel::Tanh
+);
+// `sqrt`/`rsqrt`/`erf` have no kernel here: the hardware square root is already vectorized by LLVM
+// and `erf` needs SLEEF's `u15` tier, which is not worth the code size for this dtype set.
+define_unary_analytic_dispatch!(
+    sqrt,
+    sqrt_read_with_pool,
+    Sqrt,
+    sqrt_elem,
+    VectorKernel::None
+);
+define_unary_analytic_dispatch!(
+    rsqrt,
+    rsqrt_read_with_pool,
+    Rsqrt,
+    rsqrt_elem,
+    VectorKernel::None
+);
+define_unary_analytic_dispatch!(
+    expm1,
+    expm1_read_with_pool,
+    Expm1,
+    expm1_elem,
+    VectorKernel::Expm1
+);
+define_unary_analytic_dispatch!(
+    log1p,
+    log1p_read_with_pool,
+    Log1p,
+    log1p_elem,
+    VectorKernel::Log1p
+);
 define_unary_analytic_dispatch!(
     erf,
     erf_read_with_pool,
     Erf,
     RealAnalyticElem::erf_elem,
-    float_only
+    float_only,
+    VectorKernel::None
 );
 
 #[cfg(test)]

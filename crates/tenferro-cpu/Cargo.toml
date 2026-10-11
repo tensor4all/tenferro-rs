@@ -53,6 +53,7 @@ tenferro-cpu-fused = { path = "../tenferro-cpu-fused", version = "0.7.1" }
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.1" }
 cpueinsum.workspace = true
+elem-simd-math.workspace = true
 cpueinsum-blas = { workspace = true, optional = true }
 libm.workspace = true
 num-complex.workspace = true
