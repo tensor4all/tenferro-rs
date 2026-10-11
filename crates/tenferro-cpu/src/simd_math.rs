@@ -102,6 +102,17 @@ pub(crate) fn apply<T: 'static>(
 mod tests {
     use super::*;
 
+    /// Every kernel the module offers, so that each `match` arm in `apply` is exercised.
+    const KERNELS: [VectorKernel; 7] = [
+        VectorKernel::Exp,
+        VectorKernel::Log,
+        VectorKernel::Sin,
+        VectorKernel::Cos,
+        VectorKernel::Tanh,
+        VectorKernel::Expm1,
+        VectorKernel::Log1p,
+    ];
+
     #[test]
     fn compact_column_major_separates_compact_from_strided_layouts() {
         // `[2, 3]` column-major is the layout the CPU backend allocates.
@@ -114,17 +125,72 @@ mod tests {
         assert!(is_compact_column_major(&[7], &[1]));
         // A broadcast stride is not compact.
         assert!(!is_compact_column_major(&[4, 4], &[1, 0]));
+        // A shape whose flat extent does not fit in `isize` is rejected rather than wrapping.
+        assert!(!is_compact_column_major(
+            &[isize::MAX as usize, 2],
+            &[1, isize::MAX]
+        ));
+    }
+
+    /// `src` is positive, so `log` and `log1p` are defined over all of it.
+    fn samples<T: Copy>(lift: fn(f64) -> T) -> Vec<T> {
+        (0..64).map(|i| lift(0.125 + i as f64 * 0.03125)).collect()
+    }
+
+    /// Compares a kernel result with a scalar one within a few ULP of the element type.
+    #[track_caller]
+    fn check<T: Copy>(kernel: VectorKernel, got: T, want: f64, eps: f64, widen: fn(T) -> f64) {
+        let got = widen(got);
+        let tolerance = 4.0 * eps * want.abs().max(1.0);
+        assert!(
+            (got - want).abs() <= tolerance,
+            "{kernel:?}: got {got}, want {want}"
+        );
     }
 
     #[test]
-    fn apply_matches_the_scalar_definition_over_a_compact_buffer() {
-        let src: Vec<f64> = (0..64).map(|i| (i as f64) * 0.125 - 3.0).collect();
-        let mut dst = vec![MaybeUninit::<f64>::uninit(); src.len()];
-        assert!(apply(VectorKernel::Exp, &src, &mut dst));
-        for (i, &x) in src.iter().enumerate() {
-            // SAFETY: `apply` returned `true`, so every element was written.
-            let got = unsafe { dst[i].assume_init() };
-            assert!((got - x.exp()).abs() <= 4.0 * f64::EPSILON * got.abs().max(1.0));
+    fn f64_kernels_match_the_scalar_definition_over_a_compact_buffer() {
+        let src: Vec<f64> = samples(|x| x);
+        let scalar: [fn(f64) -> f64; 7] = [
+            f64::exp,
+            f64::ln,
+            f64::sin,
+            f64::cos,
+            f64::tanh,
+            f64::exp_m1,
+            f64::ln_1p,
+        ];
+        for (&kernel, &f) in KERNELS.iter().zip(scalar.iter()) {
+            let mut dst = vec![MaybeUninit::<f64>::uninit(); src.len()];
+            assert!(apply(kernel, &src, &mut dst));
+            for (i, &x) in src.iter().enumerate() {
+                // SAFETY: `apply` returned `true`, so every element was written.
+                let got = unsafe { dst[i].assume_init() };
+                check(kernel, got, f(x), f64::EPSILON, |v| v);
+            }
+        }
+    }
+
+    #[test]
+    fn f32_kernels_match_the_scalar_definition_over_a_compact_buffer() {
+        let src: Vec<f32> = samples(|x| x as f32);
+        let scalar: [fn(f32) -> f32; 7] = [
+            f32::exp,
+            f32::ln,
+            f32::sin,
+            f32::cos,
+            f32::tanh,
+            f32::exp_m1,
+            f32::ln_1p,
+        ];
+        for (&kernel, &f) in KERNELS.iter().zip(scalar.iter()) {
+            let mut dst = vec![MaybeUninit::<f32>::uninit(); src.len()];
+            assert!(apply(kernel, &src, &mut dst));
+            for (i, &x) in src.iter().enumerate() {
+                // SAFETY: as above.
+                let got = unsafe { dst[i].assume_init() };
+                check(kernel, got, f(x) as f64, f32::EPSILON as f64, |v| v as f64);
+            }
         }
     }
 
