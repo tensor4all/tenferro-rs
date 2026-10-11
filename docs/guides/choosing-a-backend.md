@@ -56,7 +56,7 @@ tenferro's per-operation thread-count control.
 
 | Provider family | Required library | Cargo feature | Thread ownership and scope | Guidance |
 | --- | --- | --- | --- | --- |
-| faer / cpueinsum / tprims / tlinalg | None beyond the Rust dependencies | `native` | tenferro-owned Rayon pool; the budget is per selected CPU domain | Default choice when placement, reproducibility, and predictable nesting matter |
+| faer / cpueinsum / tcontract / tlinalg | None beyond the Rust dependencies | `native` | tenferro-owned Rayon pool; the budget is per selected CPU domain | Default choice when placement, reproducibility, and predictable nesting matter |
 | OpenBLAS | OpenBLAS and its CBLAS/LAPACK entry points | `blas`, `blas-openblas` | OpenBLAS-owned pool; settings such as `OPENBLAS_NUM_THREADS` are provider/process-wide | Use for peak BLAS/LAPACK throughput; use `CpuPlacement::Auto` and avoid outer oversubscription |
 | Intel MKL | MKL and its BLAS/LAPACK entry points | `blas`, `blas-mkl` | MKL-owned pool; `MKL_NUM_THREADS` and related OpenMP settings are provider/process-wide | Use when the deployment already standardizes on MKL; tenferro confines its own workers to the domain CPU set but cannot bound the provider's fan-out |
 | Apple Accelerate | Apple Accelerate BLAS/LAPACK | `blas`, `blas-accelerate` | Accelerate-owned pool; `VECLIB_MAXIMUM_THREADS` is provider/process-wide | Use for Apple-native deployments; explicit NUMA placement is not a tenferro guarantee |

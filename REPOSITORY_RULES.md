@@ -680,7 +680,7 @@ Tests follow implementation ownership.
 - Tensor-sized CPU kernels run through the repository CPU threading policy.
   `strided-kernel` is compiled with its `parallel` feature for elementwise,
   reduction, and structural materialization kernels. CPU contraction and
-  linalg call the lower numerical libraries (cpueinsum/tprims, tlinalg,
+  linalg call the lower numerical libraries (cpueinsum/tcontract, tlinalg,
   tlinalg-blas) with one parallelism token from the owning
   `CpuExecutionContext`: `Sequential`, or the selected pool with a thread
   budget. The lower library owns lane selection within that budget.

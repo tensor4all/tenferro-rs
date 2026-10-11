@@ -1,6 +1,6 @@
 //! Host-owned CPU contraction validation and the non-floating elementwise path.
 //!
-//! Numerical plans, scheduling and lane selection belong to cpueinsum/tprims and
+//! Numerical plans, scheduling and lane selection belong to cpueinsum/tcontract and
 //! tlinalg; tenferro keeps only the tensor-semantic checks it owns plus the
 //! integer/all-batch elementwise contraction.
 

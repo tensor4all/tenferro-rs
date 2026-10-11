@@ -6,7 +6,7 @@ pub use workspaces::ContractionWorkspaces;
 pub(crate) use workspaces::WorkspaceLease;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
-use cpueinsum::tprims_contract::{
+use cpueinsum::tcontract::{
     api::{DotGeneral, LayoutSpec, OperandSpec, Problem},
     PlanConfig,
 };
@@ -44,8 +44,8 @@ pub(crate) trait LowerContractionError {
     fn into_crate_error(self, op: &'static str) -> crate::Error;
 }
 
-/// A bare tprims API failure already carries the same decline classification.
-impl LowerContractionError for cpueinsum::tprims_contract::Error {
+/// A bare tcontract API failure already carries the same decline classification.
+impl LowerContractionError for cpueinsum::tcontract::Error {
     fn into_crate_error(self, op: &'static str) -> crate::Error {
         if self.is_unsupported() {
             return crate::Error::unsupported(
@@ -174,7 +174,7 @@ impl Layout {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Key {
-    dtype: cpueinsum::tprims_contract::api::DType,
+    dtype: cpueinsum::tcontract::api::DType,
     lhs: Layout,
     rhs: Layout,
     out: Layout,
@@ -356,7 +356,7 @@ fn key<T: Scalar>(
     accumulation: DotGeneralAccumulation,
 ) -> Key {
     Key {
-        dtype: <T as cpueinsum::tprims_contract::api::Scalar>::STORAGE,
+        dtype: <T as cpueinsum::tcontract::api::Scalar>::STORAGE,
         lhs: Layout::new(lhs.shape(), lhs.strides(), lhs.offset()),
         rhs: Layout::new(rhs.shape(), rhs.strides(), rhs.offset()),
         out,

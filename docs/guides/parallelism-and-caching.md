@@ -146,7 +146,7 @@ configurations.
 
 There is one CPU resource contract for both compiled providers: tenferro passes
 `Sequential` or the selected pool with a thread budget to the lower numerical
-library (cpueinsum, tprims, tlinalg, tlinalg-blas), and the lower library
+library (cpueinsum, tcontract, tlinalg, tlinalg-blas), and the lower library
 decides its own lanes within that budget. Vendor-internal parallelism is
 outside tenferro's resource contract.
 

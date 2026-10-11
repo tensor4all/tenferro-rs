@@ -69,7 +69,7 @@ the normalizations) keeps this as its specification and reference.
 The CPU backend is the main complete backend. Exactly one CPU provider feature
 must be enabled:
 
-- `native` (the default) for faer-backed GEMM/linalg plus cpueinsum/tprims,
+- `native` (the default) for faer-backed GEMM/linalg plus cpueinsum/tcontract,
 - `blas` for the same stack with the `cpueinsum-blas`/`tlinalg-blas` adapters.
 
 Elementwise, reductions, structural operations, indexing, `dot_general`, and

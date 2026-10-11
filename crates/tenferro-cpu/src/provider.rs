@@ -1,7 +1,7 @@
 //! The CPU execution-context seam shared with the lower numerical libraries.
 //!
 //! tenferro owns tensor semantics, placement and resource lifetime; cpueinsum,
-//! tprims and tlinalg own numerical execution, lane selection and scheduling.
+//! tcontract and tlinalg own numerical execution, lane selection and scheduling.
 //! [`CpuExecutionContext`] is the one narrow, owner-scoped interop seam through
 //! which those libraries receive the caller's selected pool and budget. It
 //! exposes immutable domain facts and never lets a callee install a callback

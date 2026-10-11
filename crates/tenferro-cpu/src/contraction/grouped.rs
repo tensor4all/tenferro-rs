@@ -7,7 +7,7 @@ use super::{
 use crate::contraction::LowerContractionError;
 #[cfg(any(feature = "native", feature = "blas"))]
 use crate::contraction::Scalar;
-use cpueinsum::tprims_contract::api::Op;
+use cpueinsum::tcontract::api::Op;
 #[cfg(feature = "native")]
 use cpueinsum::GroupedPlan;
 #[cfg(feature = "blas")]
@@ -18,7 +18,7 @@ use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 const OP: &str = "grouped_gemm";
 
 struct Entry {
-    dtype: cpueinsum::tprims_contract::api::DType,
+    dtype: cpueinsum::tcontract::api::DType,
     jobs: Vec<GroupedGemmJob>,
     ops: [Op; 3],
     plan: Box<dyn Any + Send + Sync>,
@@ -100,7 +100,7 @@ impl GroupCache {
             },
             Op::Identity,
         ];
-        let dtype = <T as cpueinsum::tprims_contract::api::Scalar>::STORAGE;
+        let dtype = <T as cpueinsum::tcontract::api::Scalar>::STORAGE;
         let prepare = || {
             // Constructors intentionally differ: host out/lhs/rhs, lower lhs/rhs/out.
             let jobs: Vec<_> = config
