@@ -37,11 +37,10 @@ Delivered:
   queue, and forgetting the handle leaks it in place.
 - `PendingDownload::{is_ready, wait}`: `is_ready` queries the event and distinguishes not-ready from
   a device error; `wait(self)` synchronizes the event once and returns the filled buffer.
-- `upload_pending(rt, source: PinnedHostBuffer, dst: &mut Tensor) -> PendingUpload<'_>`: the mirror
-  copy on the same submission and event discipline. The handle holds the destination's **mutable
-  borrow** for the whole flight — enforced by the compiler, with a compile-fail fixture in
-  `tests/ui` — so no reader, writer or dropper of the device tensor can run while the copy may
-  still write it. `wait(self)` returns the source buffer for reuse.
+- `upload_pending(rt, source: PinnedHostBuffer, destination: Tensor) -> Result<PendingUpload, TransferSubmitError>`:
+  the mirror copy on the same submission, ownership and event discipline: the buffer and the
+  destination are **moved in**, `wait` returns both, a refusal returns them unchanged, and a
+  compile-fail fixture proves the destination cannot be used after the move.
 - `Drop` detaches the record into the runtime's bounded retirement queue, which releases it once its
   event proves completion and retains it permanently otherwise
   ([owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)); a completion that
@@ -71,11 +70,11 @@ Explicitly **not** claimed in this slice:
 | --- | --- |
 | "Pinned H2D/D2H can enqueue and return without a host wait" | **partly**: both directions return a pending handle without waiting for their copy, and their publication boundary no longer performs its own drop-queue rotation (CubeCL's `check_errors`). Two waits remain: host dispatch is a blocking host round trip, and both cross-stream resource resolution (bounded GC backpressure) and a preceding kernel that trips the staging policy can still wait for device progress (§3, §5) |
 | "An owned/guarded pending result retains source read leases, destination allocation, pinned/staging buffers and provider/event resources" | **yes**, as owned state: `ManagedResource`, the owned pinned buffer, the `CudaRuntime` pin and the event |
-| "CPU reads/mutation cannot observe a pending or aliased buffer" | **yes for device→host**: the value and buffer are owned by the handle until `wait()` returns them. The host→device direction is still borrowed (destination `&mut`, source buffer owned) and is converted next. |
+| "CPU reads/mutation cannot observe a pending or aliased buffer" | **yes in both directions**: the value and the buffer are owned by the handle until `wait()` returns them |
 | "GPU consumers import a valid stream/event dependency without host synchronization" | **no**: needs the frozen-domain admission seam (§4) |
 | "Completion errors surface at poll/wait/dependency admission; failed outputs are not published as ready" | **partly**: `is_ready`/`wait` report errors and `wait` publishes nothing on failure; there is no dependency admission |
 | "Pending-handle drop/cancellation does not release buffers while DMA/kernels may access them" | **yes** (§1) |
-| "Reusable caller-owned pinned buffers/output buffers use lifetime guards through completion" | **yes for device→host** (owned until `wait`); the host→device direction still relies on its destination borrow |
+| "Reusable caller-owned pinned buffers/output buffers use lifetime guards through completion" | **yes in both directions**: the buffer and the value are owned until `wait` hands them back |
 | "Staging is bounded/chunked with backpressure and no tensor-sized zero-fill or redundant pageable copies" | **partly**: the pinned buffer is caller-sized and reused; chunking and the pageable route are open (§4) |
 | "Source publication, not mandatory host export" | **no** (§4) |
 | "Reuse/batch events at producer/transfer frontiers" | **no**: one event per transfer |
@@ -178,9 +177,12 @@ PendingDownload                 // owns the submitted value and the pinned buffe
    access to the pending destination. That needs a destination-access handoff in the value model, and
    tokens minted for the exact frozen event domain (not derived from a runtime handle). Cross-domain
    admission currently host-waits source-domain dependencies.
-3. **Owning asynchronous submission** as the repository's storage-ownership contract requires, with
-   the publication boundary shown not to block on device progress (cross-stream GC backpressure and
-   staging retirement both can today).
+3. **Owning asynchronous submission** as the repository's storage-ownership contract requires: both
+   transfer directions now own their admitted package, detach on drop and leak on `mem::forget`
+   ([owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)). What stays open is
+   the publication boundary: it no longer performs its own drop-queue rotation (CubeCL's
+   `check_errors`), but host dispatch, cross-stream GC backpressure and a preceding kernel that trips
+   the staging policy can still wait for device progress.
 4. **Bounded chunked staging, event amortization, and the route capability model** (including why
    P2P is unavailable on a given device pair).
 5. **#2009's measurements** (small/large, pageable/pinned/caller-output, copy bytes, event/wait cost,

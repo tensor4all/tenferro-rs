@@ -7,7 +7,7 @@ delivered routes use.
 
 It supersedes the first revision of this design, which kept blocking resolution in `Drop` and
 inherited the borrowed API's error carrier; an independent review rejected both as contract
-discrepancies. The first slice is device→host; the host→device direction follows.
+discrepancies. Both directions are delivered: device→host first, then the host→device mirror.
 
 ## 1. Why, and what is dropped
 
@@ -28,6 +28,12 @@ pub fn download_pending(
     source: Tensor,
     buffer: PinnedHostBuffer,
 ) -> Result<PendingDownload, TransferSubmitError>;
+
+pub fn upload_pending(
+    runtime: &CudaRuntime,
+    source: PinnedHostBuffer,
+    destination: Tensor,
+) -> Result<PendingUpload, TransferSubmitError>;
 
 pub struct PendingDownload { /* owns §3 */ }
 
@@ -54,7 +60,7 @@ pub enum TransferSubmitError {
 #[derive(Debug)]
 pub struct TransferRejected {
     pub error: crate::Error,
-    pub source: Tensor,
+    pub value: Tensor,
     pub buffer: PinnedHostBuffer,
 }
 
@@ -75,7 +81,9 @@ Rules:
    immediately; there is no device wait in `Drop`. The queue is drained non-blockingly on every
    subsequent transfer and on `synchronize`, releases each record exactly once after its event
    completes, and falls back to a bounded blocking drain (and, if even that fails, permanent retention)
-   exactly as the existing workspace-retirement queue does for its own records. A dropped transfer's
+   exactly as the existing workspace-retirement queue does for its own records. Dropping never waits
+   for the device: at capacity the queue drains once and a record that is still in flight is then
+   retained permanently rather than waited for. A dropped transfer's
    value and buffer are therefore never handed back, and never freed while the device may touch them.
    `mem::forget` never runs `Drop`, so a forgotten handle is not detached: its record — value, buffer,
    retention and event — is leaked in place, which is the same guarantee with less liveness, and is the
@@ -116,10 +124,17 @@ completion synchronization (no fault injection), the terminal-retention path at 
 poisoned-lock handling. The retirement queue's capacity policy is exercised only through the
 single-record path.
 
+The host→device mirror establishes narrower evidence than the device→host slice: its round trip checks
+the exact values and the reuse of the returned destination and buffer, its detached-drop test checks
+queue insertion and release on `synchronize` (not prompt return or the individual destructors), and its
+rejection tests retry the returned buffer with a fresh destination. It has no unserved-dtype case and no
+held-session case, and its two-transfer test shows two outstanding handles with correct results rather
+than two copies provably unfinished at once. Dropping the *last* owner of a runtime still runs that
+runtime's own teardown, which synchronizes its streams: that is the documented destruction boundary, not
+a claim that every drop is wait-free.
+
 ## 4. What this does not fix
 
-- **The host→device direction** stays borrowed in this slice and is converted next, with the same
-  rules.
 - **The safe writable-binding escape** (`Session::tensor_binding` + `Client::with_server` +
   `ComputeServer::write`) still allows safe code to write into storage it does not own. That is a
   pre-existing boundary defect recorded in [source-publication-1945-u4.md](./source-publication-1945-u4.md);

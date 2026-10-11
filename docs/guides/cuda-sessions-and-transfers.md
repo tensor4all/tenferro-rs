@@ -76,10 +76,10 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
 ```rust
     let host = vec![2.0, 4.0, 6.0, 8.0];
     let bytes = as_bytes(&host);
-    let mut destination = upload_tensor(&runtime, &vector(&[0.0; 4])?).expect("device destination");
+    let destination = upload_tensor(&runtime, &vector(&[0.0; 4])?).expect("device destination");
     let mut source = PinnedHostBuffer::new(&runtime, bytes.len())?;
     source.as_mut_slice().copy_from_slice(&bytes);
-    let mut pending_upload = upload_pending(&runtime, source, &mut destination)?;
+    let mut pending_upload = upload_pending(&runtime, source, destination)?;
     let mut observed_in_flight = false;
     for _ in 0..64 {
         if !pending_upload.is_ready()? {
@@ -87,13 +87,11 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
             break;
         }
     }
-    let reusable = pending_upload.wait()?;
+    let (destination, reusable) = pending_upload.wait()?;
     // A 32-byte copy can finish before the first poll, so either answer is correct here; the
-    // point is that `is_ready` never waits and the bytes are only handed over by `wait`.
+    // point is that `is_ready` never waits and the values are only handed over by `wait`.
     println!("pinned upload: observed in flight before wait = {observed_in_flight}");
 
-    // Pending download into a caller-owned pinned buffer: the value and the buffer are moved in and
-    // come back from `wait`, so the bytes exist for the caller only after completion.
     let buffer = PinnedHostBuffer::new(&runtime, bytes.len())?;
     let (returned, filled) = download_pending(&runtime, destination, buffer)?.wait()?;
     assert_eq!(from_bytes(filled.as_slice()), host);
@@ -104,8 +102,9 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
 - `PinnedHostBuffer` owns pinned host memory (`cudaHostAlloc`), is filled or read through
   `as_mut_slice`/`as_slice`, and is handed to a transfer **by value** so no caller borrow has to
   outlive a copy it cannot control.
-- `upload_pending` borrows the destination tensor mutably for the handle's lifetime, so nothing can
-  read, mutate or drop the device tensor while the copy may still write it. The compiler enforces it.
+- `upload_pending` takes ownership of the source buffer *and* the destination value, so nothing can
+  read, mutate or drop the device tensor while the copy may still write it, and `wait` returns the
+  destination and the buffer together.
 - `download_pending` takes ownership of the value *and* the buffer, so neither is reachable while the
   copy is in flight and both come back from `wait`. Dropping an unwaited handle detaches the record
   into the runtime's retirement queue, which releases it once its event proves completion and retains

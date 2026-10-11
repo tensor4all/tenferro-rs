@@ -195,10 +195,10 @@ fn a_rejected_transfer_returns_the_submitted_package() {
     let short = PinnedHostBuffer::new(&runtime, 64 * 8 + 8).expect("pinned buffer");
     match download_pending(&runtime, device, short) {
         Err(TransferSubmitError::Rejected(rejected)) => {
-            assert_eq!(rejected.source.shape(), &[64]);
+            assert_eq!(rejected.value.shape(), &[64]);
             assert_eq!(rejected.buffer.len(), 64 * 8 + 8);
             // Both are usable again: retry with a correctly sized buffer.
-            let source = rejected.source;
+            let source = rejected.value;
             let exact = PinnedHostBuffer::new(&runtime, 64 * 8).expect("pinned buffer");
             let (_, filled) = download_pending(&runtime, source, exact)
                 .expect("retry")
@@ -233,7 +233,7 @@ fn an_unserved_dtype_is_rejected_and_returns_the_package() {
     match download_pending(&runtime, flags, buffer) {
         Err(TransferSubmitError::Rejected(rejected)) => {
             assert_eq!(rejected.buffer.len(), 4);
-            assert_eq!(rejected.source.shape(), &[4]);
+            assert_eq!(rejected.value.shape(), &[4]);
         }
         other => panic!("expected an unserved dtype to be rejected, got {other:?}"),
     }

@@ -1155,9 +1155,23 @@ impl Drop for CudaRuntimeState {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .drain_blocking(self);
+            // Transfers whose caller detached observation are released best effort; the ones whose
+            // completion was never proven are retained permanently instead of being freed here.
+            self.transfer_retirements
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .release_at_teardown(self);
             // Retirement left the primary context current; release CUDA
             // library resources before the retained primary context drops.
             self.release_cuda_library_resources();
+        }
+        // A transfer whose completion was never proven is retained permanently either way: on
+        // retirement failure the streams are not known to be done, so nothing it owns may be freed.
+        if !self.retire_initialized_streams() {
+            self.transfer_retirements
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .retain_all();
         }
         // On retirement failure, raw library resources intentionally leak:
         // their pointer-only owners have no Drop implementation, so Rust does

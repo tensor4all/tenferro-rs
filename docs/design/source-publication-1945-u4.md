@@ -73,12 +73,12 @@ provider-seam speculation.
 
 ## 3. What is not claimed
 
-Nothing in this record is implemented. The pending transfer routes delivered in
-[asynchronous-transfer-1945-u4.md](./asynchronous-transfer-1945-u4.md) keep their documented ownership
-rules: the destination borrow of `upload_pending`, the source borrow of `download_pending`, retention,
-the completion event, and the abandon-on-unproven-completion policy. Their "no source publication"
-limitation stays open, and no caller should build a session-independent consumption path on the
-assumption that a borrowed transfer makes the source immutable.
+Nothing in this record is implemented. The pending transfer routes were subsequently converted to
+owning admission in both directions (see
+[owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)), which removes the
+borrow-based hole this record identified but not the writable-binding escape or the missing producer
+identity. Their "no source publication" limitation stays open, and no caller should build a
+session-independent consumption path on the assumption that a transfer makes the source immutable.
 
 ## 4. Recommendation
 

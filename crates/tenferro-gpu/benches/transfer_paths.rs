@@ -154,17 +154,25 @@ fn bench_upload(c: &mut Criterion) {
             },
         );
 
+        // Owning admission: the destination and the buffer are moved in and come back from `wait`.
+        let upload_destination = RefCell::new(Some(
+            upload_tensor(&runtime, &host).expect("device destination"),
+        ));
+        let upload_source = RefCell::new(Some(pinned_source(&backend, elements)));
         group.bench_function(BenchmarkId::new("pinned", label), |bencher| {
-            let mut destination = upload_tensor(&runtime, &host).expect("device destination");
-            let source = RefCell::new(Some(pinned_source(&backend, elements)));
             bencher.iter(|| {
-                let taken = source.borrow_mut().take().expect("reused pinned buffer");
-                let returned = upload_pending(&runtime, taken, &mut destination)
+                let destination = upload_destination
+                    .borrow_mut()
+                    .take()
+                    .expect("reused destination");
+                let source = upload_source.borrow_mut().take().expect("reused buffer");
+                let (destination, source) = upload_pending(&runtime, source, destination)
                     .expect("pending upload")
                     .wait()
                     .expect("wait");
-                black_box(returned.len());
-                *source.borrow_mut() = Some(returned);
+                black_box(source.len());
+                *upload_destination.borrow_mut() = Some(destination);
+                *upload_source.borrow_mut() = Some(source);
             });
         });
     }

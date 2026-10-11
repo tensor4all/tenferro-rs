@@ -1,0 +1,9 @@
+error[E0382]: borrow of moved value: `destination`
+ --> tests/ui/cuda_pending_upload_moves_the_destination.rs:9:23
+  |
+7 | fn use_after_move(runtime: &CudaRuntime, source: PinnedHostBuffer, destination: Tensor) {
+  |                                                                    ----------- move occurs because `destination` has type `tenferro_tensor::Tensor`, which does not implement the `Copy` trait
+8 |     let _pending = upload_pending(runtime, source, destination).expect("submitted");
+  |                                                    ----------- value moved here
+9 |     let _still_mine = destination.shape().len();
+  |                       ^^^^^^^^^^^ value borrowed here after move
