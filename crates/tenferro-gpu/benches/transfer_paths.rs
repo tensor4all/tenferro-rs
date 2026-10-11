@@ -7,10 +7,10 @@
 //!
 //! | case | host copies | destination memory |
 //! | --- | --- | --- |
-//! | `download_pageable` (`download_tensor`, large payload) | 1 (device → pageable `Vec`) | pageable |
+//! | `download_pageable` (`download_tensor`, large payload) | 1 (device straight into the result `Vec`) | pageable |
 //! | `download_pinned` (`download_pending` + `wait`) | 1 (device → pinned buffer owned by the handle) | pinned |
 //! | `download_small` (`download_tensor`, ≤ `PINNED_SCALAR_BYTES`) | 2 (device → pinned staging, staging → `Vec`) | pageable result |
-//! | `upload_staging` (`upload_tensor`) | 1 (borrowed host → CubeCL staging) | — |
+//! | `upload_staging` (`upload_tensor`) | 2 (borrowed host → owned copy; then the write itself) | — |
 //! | `upload_pinned` (`upload_pending` + `wait`) | 0 on the host side (device reads the pinned buffer) | — |
 //!
 //! The pinned cases reuse one buffer across iterations: `wait` hands it back and the next iteration

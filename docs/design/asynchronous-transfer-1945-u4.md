@@ -144,9 +144,13 @@ of the same bench; 8 MiB payloads:
   owned storage (with its own unit test), `Client::staging` converts that pageable `Bytes` to pinned
   memory once, and `do_create` hands the already-owned `Bytes` to the device server without re-copying
   it (tensor4all/cubecl, "stop re-copying uploads in `ComputeClient::create*`").
-- **Host passes over an 8 MiB payload**: staged upload 3 (own copy, staging copy, DMA), pinned upload 1
-  (the device reads the caller's pinned buffer), staged download 2 (DMA into pageable, then the result
-  `Vec`), pinned download 1 (DMA straight into the caller's buffer).
+- **Host passes over an 8 MiB payload, as the source actually routes them**: staged upload 2 (the
+  ownership copy `staged_bytes` makes, then DMA; `do_create`'s `staging(..., file_only = true)` leaves
+  `Native` storage alone, so there is no substrate staging copy), pinned upload 1 (the device reads the
+  caller's pinned buffer), numeric download 1 (the device writes straight into the result vector; the
+  `reserve_cpu` staging branch is not taken), pinned download 1 (DMA straight into the caller's buffer).
+  The earlier revision of this bullet listed two extra copies for the staged and download routes; that
+  list was wrong about the pinned substrate and is corrected here.
 - **Buffer reuse is not an optimization, it is the contract.** A fresh 8 MiB pinned allocation costs
   7.01 ms, twenty times the 343 us DMA it enables. That is why `wait` hands the buffer back and why the
   pending routes exist: allocating a fresh pinned buffer per iteration costs far more than the transfer.
@@ -156,11 +160,10 @@ of the same bench; 8 MiB payloads:
   revision, and the earlier "varies by up to 10% run to run" statement is therefore withdrawn rather
   than stretched to cover it. The current numbers are the ones to reuse; the pinned columns agree
   across both passes (345 us vs 349 us at 8 MiB, 324 us vs 323 us for the wait-only row).
-### 3.2 Large payloads fall off the substrate's small-transfer policy (256 MiB)
+### 3.2 Large payloads: pageable transport against pinned transport (256 MiB)
 
-A 256 MiB case (above the substrate's 100 MB pinned-staging threshold) shows what the blocking routes do
-once the payload stops fitting that policy. Same protocol, `transfer_large` group, 32 Mi
-`f64` elements = 256 MiB:
+A 256 MiB case, in both directions for both families, isolates the transport from the payload. Same
+protocol, `transfer_large` group, 32 Mi `f64` elements = 256 MiB:
 
 | case | 256 MiB | effective |
 | --- | ---: | ---: |
