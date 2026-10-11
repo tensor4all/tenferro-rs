@@ -171,6 +171,14 @@ impl PinnedHostBuffer {
     fn as_mut_ptr(&self) -> *mut u8 {
         self.ptr
     }
+
+    /// Address of this buffer's allocation.
+    ///
+    /// A witness for the runtime's staging slot tests, which have to tell reuse from a fresh
+    /// allocation rather than assume it.
+    pub(crate) fn address(&self) -> usize {
+        self.ptr as usize
+    }
 }
 
 impl Drop for PinnedHostBuffer {
@@ -216,6 +224,25 @@ impl TransferRetirement {
         self.value.take();
         self.buffer.take();
         self.resource.take();
+    }
+}
+
+/// Build the retirement record for a staging package whose completion was never proven.
+///
+/// The event was never recorded, or its record failed, so no later query may authorize releasing the
+/// buffer or the device resource: the runtime retains the record permanently instead of releasing it.
+/// This is the only route a chunked transfer's staging lease may take on failure - the query-drainable
+/// detach path would release a buffer the device may still be reading or writing.
+pub(crate) fn staging_retirement(
+    event: CUevent,
+    buffer: PinnedHostBuffer,
+    resource: Option<Box<dyn std::any::Any + Send>>,
+) -> TransferRetirement {
+    TransferRetirement {
+        event,
+        value: None,
+        buffer: Some(buffer),
+        resource,
     }
 }
 

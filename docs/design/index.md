@@ -31,7 +31,6 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [eager-semantic-promotion-recording.md](./eager-semantic-promotion-recording.md) | Shared eager execution/semantic input-promotion planning for AD-safe mixed dtypes (#1698) |
 | [eager-semantic-metadata-scope-retention.md](./eager-semantic-metadata-scope-retention.md) | Metadata-scope lifetime transfer across eager semantic helper nodes (#1700) |
 | [gpu-backend-design.md](./gpu-backend-design.md) | GPU backend architecture |
-| [large-transfer-staging-1945-u4.md](./large-transfer-staging-1945-u4.md) | Design (revision 2, after pre-review) for bounded chunked staging on the blocking transfer routes: corrected diagnosis, readiness change, failure retention, and the measurement plan |
 | [1945-release-capability-matrix.md](./1945-release-capability-matrix.md) | What #1945 has released, deferred or left unmeasured at the pinned revisions, the guidance naming each capability, and the downstream adoption gates |
 | [cubecl-fork-exit-1945.md](./cubecl-fork-exit-1945.md) | What the pinned cubecl fork carries for #1945, why the checked-launch write-authority hole stays upstream, and the priced own-backend contingency |
 | [xla-backend.md](./xla-backend.md) | Experimental StableHLO lowering and PJRT plugin-loading peer executor over static `CompiledGraph` values |
