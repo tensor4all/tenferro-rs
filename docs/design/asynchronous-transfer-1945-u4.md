@@ -156,6 +156,34 @@ of the same bench; 8 MiB payloads:
   revision, and the earlier "varies by up to 10% run to run" statement is therefore withdrawn rather
   than stretched to cover it. The current numbers are the ones to reuse; the pinned columns agree
   across both passes (345 us vs 349 us at 8 MiB, 324 us vs 323 us for the wait-only row).
+### 3.2 Large payloads fall off the substrate's small-transfer policy (256 MiB)
+
+A 256 MiB case (above the substrate's 100 MB pinned-staging threshold) shows what the blocking routes do
+once the payload stops fitting that policy. Same protocol, `transfer_large` group, 32 Mi
+`f64` elements = 256 MiB:
+
+| case | 256 MiB | effective |
+| --- | ---: | ---: |
+| download `pageable` (`download_tensor`) | 176.9 ms | 1.41 GiB/s |
+| download `pinned` (`download_pending` + `wait`) | 10.46 ms | 23.9 GiB/s |
+| upload `staging` (`upload_tensor`) | 166.7 ms | 1.50 GiB/s |
+| upload `pinned` (`upload_pending` + `wait`) | 10.08 ms | 24.8 GiB/s |
+
+- **The gap is the transport, not the payload, the direction or PCIe.** Same payload, both directions,
+  same host and device: pageable 1.41/1.50 GiB/s against pinned 23.9/24.8 GiB/s, about 17x. Both blocking
+  routes hand the driver pageable memory - the borrowed upload owns a native (pageable) copy and
+  `do_create`'s `staging(..., file_only = true)` policy leaves `Native` storage alone, while the numeric
+  download writes straight into its result `Vec<T>`.
+- **An earlier revision of this paragraph attributed the gap to the substrate's 100 MB threshold, and that
+  account is withdrawn.** Neither route takes that branch: the numeric download above 16 bytes never calls
+  `reserve_cpu` (it allocates its result vector and copies into it), and the borrowed upload is pageable at
+  every size rather than only above 100 MB.
+- **Which share of the 166-177 ms is pageable DMA, host page population, queue dispatch, or staging
+  retirement is not attributed here.** The measurements above are observations; the causal split is
+  something the implementation of `docs/design/large-transfer-staging-1945-u4.md` has to measure on this
+  same group rather than inherit. What the numbers do fix is the size of the prize: a pinned DMA of this
+  payload is ~10 ms and a host-side payload copy is ~8.3 ms.
+
 - **The copy is not below the reference**: 8 MiB in 323 us is ~26 GB/s, above #2009's 5-13 GB/s cudarc
   reference. An earlier revision of this record claimed the opposite because the payload labels were
   wrong by a factor of eight (element counts read as bytes); that claim is withdrawn, and the staged

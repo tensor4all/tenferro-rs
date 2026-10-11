@@ -23,6 +23,10 @@
 //! end to end. The pieces then show whether a route pays for a copy it does not need. Measured values
 //! for the 8 MiB payload are recorded in `docs/design/asynchronous-transfer-1945-u4.md` §3.1.
 //!
+//! `transfer_large` runs a 256 MiB payload through both directions of each family, so the blocking
+//! routes' pageable transport can be compared with the owning routes' pinned transport on the same host,
+//! device and payload; §3.2 of the same record holds those numbers.
+//!
 //! These are device/PCIe measurements, not an app-level speedup claim: they do not include the
 //! caller's own bookkeeping, and a pending transfer's point is that the caller may wait later.
 
@@ -241,6 +245,81 @@ fn bench_host_copies(c: &mut Criterion) {
     group.finish();
 }
 
+/// A payload above the substrate's 100 MB pinned-staging threshold.
+///
+/// The pending routes take a caller-owned pinned buffer, so this group shows what the blocking routes do
+/// when the payload stops fitting the small-transfer policy: whether the staged route's cost per byte
+/// stays where the 8 MiB case put it, and what the blocking pinned route costs when its buffer is
+/// allocated fresh for a payload this size.
+fn bench_large(c: &mut Criterion) {
+    let backend = backend();
+    let runtime = backend.runtime().clone();
+    let mut group = c.benchmark_group("transfer_large");
+
+    let elements = 32 * 1024 * 1024;
+    let bytes = elements * size_of::<f64>();
+    group.throughput(Throughput::Bytes(bytes as u64));
+    let host = host_vector(elements);
+
+    let device = upload_tensor(&runtime, &host).expect("device payload");
+    group.bench_with_input(
+        BenchmarkId::new("download_pageable", "256MiB"),
+        &device,
+        |bencher, device| {
+            bencher.iter(|| black_box(download_tensor(&runtime, device).expect("download")));
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("upload_staging", "256MiB"),
+        &host,
+        |bencher, host| {
+            bencher.iter(|| black_box(upload_tensor(&runtime, host).expect("upload")));
+        },
+    );
+
+    // The blocking routes are pageable in both directions (the borrowed upload owns a native copy;
+    // the download writes straight into its result vector), so this pair shows whether the gap is the
+    // pageable DMA itself or the staging work around it.
+    let pinned_value = RefCell::new(Some(
+        upload_tensor(&runtime, &host).expect("device payload"),
+    ));
+    let pinned_buffer = RefCell::new(Some(
+        PinnedHostBuffer::new(&runtime, bytes).expect("pinned buffer"),
+    ));
+    group.bench_function(BenchmarkId::new("download_pinned", "256MiB"), |bencher| {
+        bencher.iter(|| {
+            let value = pinned_value.borrow_mut().take().expect("reused value");
+            let buffer = pinned_buffer.borrow_mut().take().expect("reused buffer");
+            let (value, filled) = download_pending(&runtime, value, buffer)
+                .expect("pending download")
+                .wait()
+                .expect("wait");
+            black_box(filled.as_slice().len());
+            *pinned_value.borrow_mut() = Some(value);
+            *pinned_buffer.borrow_mut() = Some(filled);
+        });
+    });
+
+    let destination = RefCell::new(Some(device));
+    let source = RefCell::new(Some(pinned_source(&backend, elements)));
+    group.bench_function(BenchmarkId::new("upload_pinned", "256MiB"), |bencher| {
+        bencher.iter(|| {
+            let value = destination.borrow_mut().take().expect("reused destination");
+            let buffer = source.borrow_mut().take().expect("reused buffer");
+            let (value, buffer) = upload_pending(&runtime, buffer, value)
+                .expect("pending upload")
+                .wait()
+                .expect("wait");
+            black_box(buffer.len());
+            *destination.borrow_mut() = Some(value);
+            *source.borrow_mut() = Some(buffer);
+        });
+    });
+
+    group.finish();
+}
+
 fn criterion_config() -> Criterion {
     Criterion::default()
         .warm_up_time(std::time::Duration::from_secs(2))
@@ -251,6 +330,6 @@ fn criterion_config() -> Criterion {
 criterion_group! {
     name = benches;
     config = criterion_config();
-    targets = bench_download, bench_upload, bench_host_copies
+    targets = bench_download, bench_upload, bench_host_copies, bench_large
 }
 criterion_main!(benches);
