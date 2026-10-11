@@ -518,6 +518,7 @@ where
         // kernel writes only into those buffers.
         let packed_arg = unsafe { cubecl.tensor_binding(&packed, op) }?;
         let coeff_arg = unsafe { cubecl.tensor_binding(&coeff, op) }?;
+        // SAFETY: the bindings in this block are created for tensors this call owns.
         let packed_q_arg = unsafe { cubecl.tensor_binding(packed_q, op) }?;
         let coeff_q_arg = unsafe { cubecl.tensor_binding(coeff_q, op) }?;
         let folded_arg = unsafe { cubecl.tensor_binding(folded_r, op) }?;
