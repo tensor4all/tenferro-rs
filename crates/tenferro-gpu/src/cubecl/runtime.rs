@@ -1168,10 +1168,12 @@ impl Drop for CudaRuntimeState {
         // A transfer whose completion was never proven is retained permanently either way: on
         // retirement failure the streams are not known to be done, so nothing it owns may be freed.
         if !self.retire_initialized_streams() {
+            // Records kept for soundness must not be freed by field destruction either, so they are
+            // forgotten rather than merely moved between queues.
             self.transfer_retirements
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .retain_all();
+                .forget_all();
         }
         // On retirement failure, raw library resources intentionally leak:
         // their pointer-only owners have no Drop implementation, so Rust does

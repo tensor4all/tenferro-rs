@@ -20,6 +20,7 @@ use tenferro_tensor::{
 use tenferro_tensor::{DotGeneralAccumulation, Tensor, TensorRead, TensorWrite, TypedTensor};
 
 use super::identity::GpuExtensionCapability;
+use super::transfer::{publish_in_stream, PublicationAdmissionError, SourcePublication};
 use super::{gemm, ops, runtime::RawContextRestore};
 use super::{
     raw, session_cubecl, CudaBackend, CudaBackendState, CudaDeviceInfo, CudaExtensionCache,
@@ -955,6 +956,64 @@ impl std::fmt::Debug for CudaHeldSession<'_> {
 }
 
 impl CudaHeldSession<'_> {
+    /// Publish a value whose production is ordered before this session's captured stream.
+    ///
+    /// The publication owns the value, retains its allocation and records a producer frontier on the
+    /// stream this session captured when it opened, so the value can be consumed after the session is
+    /// closed - without host export and without holding the session open.
+    ///
+    /// # Safety
+    ///
+    /// The caller asserts that every outstanding write to the value's storage is ordered before this
+    /// session's captured stream: the value must have been produced (or last written) through this
+    /// session, or through work already ordered before it. A value written through another stream does
+    /// not satisfy the contract, because neither the allocation handle nor the session can prove who
+    /// wrote last - CubeCL records the stream where storage was *created*. Every write that may still
+    /// be outstanding must be covered, including one performed through a descriptor obtained earlier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_gpu::cuda::PublicationAdmissionError::Rejected`] when the value cannot be
+    /// published - an unserved dtype, a host tensor, an unresolvable allocation or a producer failure
+    /// reported at the dispatch boundary - and hands the value back with it. Returns
+    /// [`tenferro_gpu::cuda::PublicationAdmissionError::Unproven`] when the frontier could not be
+    /// recorded after a possible enqueue; the value, allocation and provider pin are then retained for
+    /// soundness and never returned.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use tenferro_gpu::cuda::CudaBackend;
+    /// use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
+    /// let runtime = backend.runtime().clone();
+    /// let mut session = backend.open_session()?;
+    /// // A device operand must be uploaded: a raw host tensor is not a device value.
+    /// let host = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let seed = tenferro_gpu::cuda::upload_tensor(&runtime, &host)?;
+    /// // The value is produced through this session, so the caller can assert the contract.
+    /// let value = session.with_session(|view| {
+    ///     view.add_read(TensorRead::from_tensor(&seed), TensorRead::from_tensor(&seed))
+    /// })??;
+    /// let publication = unsafe { session.publish(value) }?;
+    /// assert_eq!(publication.bytes(), 8);
+    /// session.close()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub unsafe fn publish(
+        &mut self,
+        value: tenferro_tensor::Tensor,
+    ) -> Result<SourcePublication, PublicationAdmissionError> {
+        let stream = self.stream;
+        let runtime = self.backend.runtime().clone();
+        // Everything the publication does - the dispatch, the resource resolution and the frontier
+        // record - happens on the captured stream, not on whatever stream is current here.
+        stream.executes(|| publish_in_stream(&runtime, stream, value))
+    }
+
     /// Device ordinal whose binding this session captured.
     pub fn device_ordinal(&self) -> usize {
         self.device_ordinal
