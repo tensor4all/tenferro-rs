@@ -1340,7 +1340,7 @@ host	tenferro-ad::integration	nn_composites::typed_session_composites_match_the_
 gpu	tenferro-gpu	cubecl::runtime::tests::a_pinned_staging_lease_is_taken_out_of_the_slot_and_reused_once_proven
 gpu	tenferro-gpu	cubecl::runtime::tests::an_unproven_pinned_staging_lease_is_retained_and_the_slot_stays_empty
 gpu	tenferro-gpu	cubecl::runtime::tests::dropping_an_unproven_pinned_staging_lease_leaks_it_in_place
-gpu	tenferro-gpu	cubecl::runtime::tests::a_populated_staging_slot_is_released_when_the_runtime_is_dropped
+gpu	tenferro-gpu	cubecl::runtime::tests::runtime_teardown_releases_the_cached_staging_buffer
 gpu	tenferro-gpu::chunked_staging	a_payload_exactly_one_chunk_long_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_one_element_under_the_chunk_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_one_element_over_the_chunk_round_trips

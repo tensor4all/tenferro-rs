@@ -320,8 +320,6 @@ fn bench_large(c: &mut Criterion) {
     group.finish();
 }
 
-<<<<<<< HEAD
-=======
 /// The routing boundary: the same payload either side of the staging chunk.
 ///
 /// `STAGING_CHUNK_BYTES` is 8 MiB, so a payload at the chunk takes the previous route and one element
@@ -349,7 +347,6 @@ fn bench_chunk_boundary(c: &mut Criterion) {
     group.finish();
 }
 
->>>>>>> 30f317335 (perf(cuda): stage large blocking uploads through a bounded pinned lease (#1945 U4 item 4))
 fn criterion_config() -> Criterion {
     Criterion::default()
         .warm_up_time(std::time::Duration::from_secs(2))
@@ -360,10 +357,6 @@ fn criterion_config() -> Criterion {
 criterion_group! {
     name = benches;
     config = criterion_config();
-<<<<<<< HEAD
-    targets = bench_download, bench_upload, bench_host_copies, bench_large
-=======
     targets = bench_download, bench_upload, bench_host_copies, bench_large, bench_chunk_boundary
->>>>>>> 30f317335 (perf(cuda): stage large blocking uploads through a bounded pinned lease (#1945 U4 item 4))
 }
 criterion_main!(benches);

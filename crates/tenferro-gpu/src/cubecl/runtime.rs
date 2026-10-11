@@ -269,6 +269,11 @@ struct PinnedStagingSlot {
 /// it, exactly like the buffer it holds.
 pub(crate) struct PinnedStagingLease {
     buffer: Option<super::transfer::PinnedHostBuffer>,
+    /// The chunk loop's retained `get_resource` guard, so an unwind after a possible enqueue cannot
+    /// drop retention for storage the device may still be writing.
+    resource: Option<Box<dyn std::any::Any + Send>>,
+    /// Device address of that resource, captured so the loop needs no separate copy.
+    resource_ptr: u64,
     /// Set before every possible enqueue and cleared only by a wait that proved completion.
     unproven: bool,
     runtime: std::sync::Weak<CudaRuntimeState>,
@@ -312,14 +317,36 @@ impl PinnedStagingLease {
 
     /// Return the buffer to the runtime's slot after a proven completion.
     ///
-    /// A lease that is still unproven is leaked instead of freed, because its chunks may be in flight;
-    /// the slot then stays empty and the next transfer allocates a replacement.
+    /// Releasing an unproven lease would hand back a buffer a chunk may still be writing, so it is
+    /// leaked instead - in release builds as well, not only under the debug assertion - and the slot
+    /// stays empty for the next transfer to allocate a replacement.
     pub(crate) fn release(mut self) {
-        debug_assert!(
-            !self.unproven,
-            "a proven lease is released, an unproven one is retired"
-        );
+        if self.unproven {
+            // A caller that releases an unproven lease would return a buffer a chunk may still be
+            // writing: leak it and the resource instead of trusting the caller's bookkeeping.
+            self.leak();
+            return;
+        }
         self.restore();
+    }
+
+    /// Attach the chunk loop's retained device resource to this lease.
+    ///
+    /// `runtime_handle` is only used for the address; the resource itself stays here so that the
+    /// lease owns everything a chunk may still touch.
+    pub(crate) fn into_chunk_lease(
+        mut self,
+        resource: Option<Box<dyn std::any::Any + Send>>,
+        address: u64,
+    ) -> Self {
+        self.resource = resource;
+        self.resource_ptr = address;
+        self
+    }
+
+    /// Device address of the retained resource.
+    pub(crate) fn resource_ptr(&self) -> u64 {
+        self.resource_ptr
     }
 
     /// Retire a lease whose completion was never proven.
@@ -331,9 +358,11 @@ impl PinnedStagingLease {
         event: CUevent,
         resource: Option<Box<dyn std::any::Any + Send>>,
     ) {
+        let resource = resource.or_else(|| self.resource.take());
         let Some(buffer) = self.buffer.take() else {
             // An event whose record may not have happened must never be destroyed: `CUevent` is a raw
             // pointer, so dropping it here *is* leaving it to the device, and no destructor runs.
+            std::mem::forget(resource);
             let _ = event;
             return;
         };
@@ -346,6 +375,15 @@ impl PinnedStagingLease {
             return;
         };
         state.retain_staging_for_soundness(event, buffer, resource);
+    }
+
+    fn leak(&mut self) {
+        if let Some(buffer) = self.buffer.take() {
+            std::mem::forget(buffer);
+        }
+        if let Some(resource) = self.resource.take() {
+            std::mem::forget(resource);
+        }
     }
 
     fn restore(&mut self) {
@@ -366,17 +404,17 @@ impl PinnedStagingLease {
         if slot.buffer.is_none() {
             slot.buffer = Some(buffer);
         }
+        self.resource = None;
     }
 }
 
 impl Drop for PinnedStagingLease {
     fn drop(&mut self) {
         if self.unproven {
-            // Unwinding between an enqueue and its proven wait: the buffer may still be the source or
-            // destination of a DMA, so it is leaked rather than freed, and it never returns to the slot.
-            if let Some(buffer) = self.buffer.take() {
-                std::mem::forget(buffer);
-            }
+            // Unwinding between an enqueue and its proven wait: the buffer and the retained resource
+            // may still be part of a DMA, so they are leaked rather than freed, and the buffer never
+            // returns to the slot.
+            self.leak();
             return;
         }
         self.restore();
@@ -545,6 +583,8 @@ impl CudaRuntime {
         };
         Ok(PinnedStagingLease {
             buffer: Some(buffer),
+            resource: None,
+            resource_ptr: 0,
             unproven: false,
             runtime: self.weak_state(),
         })
@@ -1231,7 +1271,9 @@ impl CudaRuntimeState {
     ///
     /// Called from `Drop` after all initialized streams have retired, which
     /// leaves the primary context current on the dropping thread.
-    fn release_cuda_library_resources(&mut self) {
+    /// Takes `&self`: every resource it releases is behind one of this state's mutexes, and a shared
+    /// receiver keeps it callable from the tests that have to observe the release.
+    fn release_cuda_library_resources(&self) {
         for cached in &self.cublas_handles {
             if let Ok(mut handle) = cached.lock() {
                 let Some(handle) = handle.take() else {
@@ -1253,9 +1295,20 @@ impl CudaRuntimeState {
             }
         }
         // A buffer in the staging slot is only ever populated by a proven completion, so it is as safe
-        // to free here as the scalar slot; a retired lease never returns to the slot.
+        // to free here as the scalar slot; a retired lease never returns to the slot. The release is
+        // explicit because the buffer's own `Drop` cannot upgrade its weak runtime reference while this
+        // state is being destroyed, and would leak the allocation.
         if let Ok(mut slot) = self.pinned_staging.lock() {
-            drop(slot.buffer.take());
+            let cached = slot.buffer.take();
+            drop(slot);
+            if let Some(buffer) = cached {
+                if self.set_current_cuda_context("runtime teardown").is_ok() {
+                    // SAFETY: the primary context is retained and was just made current.
+                    unsafe { buffer.release_in_current_context() };
+                } else {
+                    std::mem::forget(buffer);
+                }
+            }
         }
     }
 }
@@ -1336,8 +1389,11 @@ impl Drop for CudaRuntimeState {
     fn drop(&mut self) {
         // Drop cannot surface errors, but the runtime must not release the
         // primary context while queued kernels on any initialized slot may
-        // still reference it.
-        if self.retire_initialized_streams() {
+        // still reference it. Retirement is asked once: a second call could turn
+        // a failed retirement into a successful-looking one and skip the
+        // permanent-retention branch below.
+        let retired = self.retire_initialized_streams();
+        if retired {
             // Every stream is retired, so queued workspace retirements are
             // complete and their handles can return to the pool.
             self.workspace_retirements
@@ -1354,11 +1410,11 @@ impl Drop for CudaRuntimeState {
             // library resources before the retained primary context drops.
             self.release_cuda_library_resources();
         }
-        // A transfer whose completion was never proven is retained permanently either way: on
-        // retirement failure the streams are not known to be done, so nothing it owns may be freed.
-        if !self.retire_initialized_streams() {
-            // Streams are not known to be done, so a cached staging buffer may still be in use: leak it
-            // rather than let field destruction free it.
+        // Streams are not confirmed done, so nothing they may still touch may be freed: a cached
+        // staging buffer is leaked, and the retirement queue's records - in flight and already retained
+        // alike - are forgotten rather than handed to field destruction. A record's `value` and
+        // `resource` guards are device storage, which is exactly what must survive here.
+        if !retired {
             if let Ok(mut slot) = self.pinned_staging.lock() {
                 if let Some(buffer) = slot.buffer.take() {
                     std::mem::forget(buffer);

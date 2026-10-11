@@ -188,6 +188,29 @@ impl PinnedHostBuffer {
     }
 }
 
+impl PinnedHostBuffer {
+    /// Release the allocation now, in the context the caller has already made current.
+    ///
+    /// For the runtime's own teardown, where the weak runtime reference cannot upgrade any more because
+    /// the state is being destroyed: [`Drop`] would return before `cudaFreeHost` and leak the
+    /// allocation. The caller owns the context authority here.
+    ///
+    /// # Safety
+    ///
+    /// The CUDA context that created this allocation must be current on the calling thread.
+    pub(crate) unsafe fn release_in_current_context(mut self) {
+        if self.ptr.is_null() {
+            return;
+        }
+        // SAFETY: the caller guarantees the creating context is current, and this value owns exactly
+        // one live `cudaHostAlloc` allocation.
+        if let Err(err) = unsafe { cuda_sys::cudaFreeHost(self.ptr.cast()) }.result() {
+            report_pinned_release_error(&err);
+        }
+        self.ptr = std::ptr::null_mut();
+    }
+}
+
 impl Drop for PinnedHostBuffer {
     fn drop(&mut self) {
         if self.ptr.is_null() {
@@ -234,20 +257,10 @@ impl TransferRetirement {
     }
 }
 
-/// Bytes a chunked blocking transfer stages at a time.
-///
-/// Deliberately the same fixed capacity the runtime's staging slot allocates, so the lease's buffer is
-/// never grown and the chunk loop performs no allocation of its own.
-const CHUNKED_STAGING_BYTES: usize = super::runtime::STAGING_CHUNK_BYTES;
-
-/// Whether a blocking upload of `byte_len` should stage in chunks.
-///
-/// The routing cutoff is the chunk size. Above it the pageable blocking route loses its bandwidth
-/// (measured at 17x on 256 MiB, `docs/design/asynchronous-transfer-1945-u4.md` §3.2) and the chunked
-/// route pays: 256 MiB uploads drop from 166.7 ms to 23.2 ms. Below it host dispatch dominates. The
-/// same route does not pay for downloads, which is why only uploads are routed through it.
-pub(crate) fn uses_chunked_staging(byte_len: usize) -> bool {
-    byte_len > CHUNKED_STAGING_BYTES
+/// Destroy a chunked transfer's event after its last chunk proved complete.
+fn destroy_call_event(event: CUevent) {
+    // SAFETY: the event is live, owned by the call, and its recorded work has completed.
+    let _ = unsafe { cuda_result::event::destroy(event) };
 }
 
 /// Upload a payload larger than the staging chunk into an already allocated device buffer.
@@ -279,8 +292,19 @@ pub(crate) fn upload_tensor_chunked(
         .and_then(|()| runtime.raw_cuda_stream())? as usize as CUstream;
     let event = cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING)
         .map_err(|err| crate::Error::backend_source(op, err))?;
-    let mut lease = runtime.acquire_pinned_staging()?;
-    let dst = resource.resource().ptr;
+    // The lease takes the device resource too, so an unwind after a possible enqueue cannot drop a
+    // retention guard for storage the device may still be writing; `retire` hands it on with the
+    // buffer, and `Drop` forgets it while the lease is unproven.
+    let resource_address = resource.resource().ptr;
+    let mut lease = match runtime.acquire_pinned_staging() {
+        Ok(lease) => lease.into_chunk_lease(Some(Box::new(resource)), resource_address),
+        Err(error) => {
+            // Nothing was enqueued, so the unused event is destroyed rather than retained.
+            destroy_call_event(event);
+            return Err(error);
+        }
+    };
+    let dst = lease.resource_ptr();
 
     let mut offset = 0usize;
     while offset < byte_len {
@@ -300,17 +324,21 @@ pub(crate) fn upload_tensor_chunked(
         .result()
         .and_then(|()| unsafe { cuda_result::event::record(event, stream) });
         if let Err(err) = enqueued {
-            lease.retire(event, Some(Box::new(resource)));
+            lease.retire(event, None);
             return Err(crate::Error::backend_source(op, err));
         }
+        // The wait is what makes one lease safe: the next chunk must not overwrite the buffer before
+        // the device read this one, and the host must not reuse the source bytes either.
         if let Err(err) = unsafe { cuda_result::event::synchronize(event) } {
-            lease.retire(event, Some(Box::new(resource)));
+            lease.retire(event, None);
             return Err(crate::Error::backend_source(op, err));
         }
         lease.end_chunk();
         offset += len;
     }
     lease.release();
+    // The last chunk proved complete, so the call's event is destroyed rather than left to the device.
+    destroy_call_event(event);
     Ok(())
 }
 
@@ -387,7 +415,8 @@ impl TransferRetirementQueue {
         self.entries.len() + self.leaked.len()
     }
 
-    /// Forget every retained and in-flight record, so that runtime field destruction cannot free one.
+    /// Forget every record, in flight or already retained, so that field destruction cannot free
+    /// device storage the runtime could not prove is done.
     pub(crate) fn forget_all(&mut self) {
         for record in self.leaked.drain(..) {
             std::mem::forget(record);

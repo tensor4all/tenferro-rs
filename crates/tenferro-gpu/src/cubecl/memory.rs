@@ -140,7 +140,10 @@ fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     // 17x lives for these sizes (#1945 U4 item 4). Chunked uploads also wait for their own chunks,
     // because a reused staging buffer and a borrowed host source cannot stay safe behind an early
     // return.
-    let handle = if super::transfer::uses_chunked_staging(byte_len) {
+    // The routing cutoff is the staging chunk: above it the pageable blocking route loses its
+    // bandwidth (17x at 256 MiB) and this route pays, measured at 6.9x for a 256 MiB upload. Only
+    // uploads are routed through it - a chunked download does not pay on this hardware.
+    let handle = if byte_len > super::runtime::STAGING_CHUNK_BYTES {
         let handle = client.empty(byte_len);
         super::transfer::upload_tensor_chunked(
             rt,

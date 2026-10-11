@@ -119,8 +119,10 @@ fn an_unproven_pinned_staging_lease_is_retained_and_the_slot_stays_empty() {
 
     let mut lease = runtime.acquire_pinned_staging().expect("lease");
     let retired_address = lease.buffer().address();
-    // Marked unproven before the enqueue that never happened, then retired with the event whose record
-    // was never attempted.
+    // A first chunk that completed, then a second that did not: the reused event's earlier success must
+    // not be readable as the second chunk's completion, so the lease is retired, not released.
+    lease.begin_chunk();
+    lease.end_chunk();
     lease.begin_chunk();
     lease.retire(unrecorded_event(), None);
 
@@ -164,13 +166,34 @@ fn dropping_an_unproven_pinned_staging_lease_leaks_it_in_place() {
     replacement.release();
 }
 
+/// Whether `address` is still a live pinned host allocation of this device.
+fn is_pinned_host_allocation(address: usize) -> bool {
+    let mut flags = 0u32;
+    // SAFETY: the query only reads the allocation's flags.
+    unsafe { cudarc::runtime::sys::cudaHostGetFlags(&mut flags, address as *mut _) }
+        .result()
+        .is_ok()
+}
+
 #[test]
 #[ignore = "requires CUDA"]
-fn a_populated_staging_slot_is_released_when_the_runtime_is_dropped() {
+fn runtime_teardown_releases_the_cached_staging_buffer() {
     let runtime = staging_runtime();
     let lease = runtime.acquire_pinned_staging().expect("lease");
+    let address = lease.buffer().address();
     lease.release();
-    // The cached buffer is freed by the runtime's own teardown while its primary context is still
-    // retained; this exercises that path with a populated slot rather than an empty one.
-    drop(runtime);
+    assert!(
+        is_pinned_host_allocation(address),
+        "the slot holds the released buffer"
+    );
+
+    // The teardown path is the one a dropping runtime takes while its primary context is still
+    // retained. Calling it directly is what makes the release observable: the buffer's own `Drop`
+    // cannot upgrade a weak runtime reference during the state's own destruction, so a release that
+    // goes through the context authority has to be visible here.
+    runtime.inner.release_cuda_library_resources();
+    assert!(
+        !is_pinned_host_allocation(address),
+        "teardown must free the cached staging buffer, not leak it"
+    );
 }
