@@ -67,8 +67,8 @@ Until that package is released, the root workspace excludes it and does not
 publish any crate that depends on it.
 
 `tenferro-cpu` does not depend on `tblis-ffi` or `t4a-tblis-src`, and it has no
-tprims or linalg dependency of its own. CPU `dot_general`, grouped GEMM, and
-N-ary concrete einsum delegate to `cpueinsum` (which uses tprims internally),
+tcontract or linalg dependency of its own. CPU `dot_general`, grouped GEMM, and
+N-ary concrete einsum delegate to `cpueinsum` (which uses tcontract internally),
 and CPU linalg delegates to the extracted `tlinalg`/`tlinalg-blas` crates.
 The former external-provider example crates (`ext/tenferro-cpu-tblis`,
 `ext/tenferro-cpu-tprims`) and `third_party/t4a-tblis-src` were removed by

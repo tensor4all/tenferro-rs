@@ -12,7 +12,7 @@ No code may reinterpret node IDs as dense indexes or widen process affinity.
 
 Exactly one CPU backend is compiled: `native` (the default) or `blas`.
 
-- `native` uses faer-backed tlinalg plus cpueinsum/tprims.
+- `native` uses faer-backed tlinalg plus cpueinsum/tcontract.
 - `blas` adds the `cpueinsum-blas` and `tlinalg-blas` adapters and keeps the
   native path for steps those adapters decline.
 
@@ -62,7 +62,7 @@ reentry rejection does not depend on pool-wide registration.
 
 ## The Lower-Library Seam
 
-`CpuExecutionContext` is the one owner-scoped interop seam. cpueinsum, tprims,
+`CpuExecutionContext` is the one owner-scoped interop seam. cpueinsum, tcontract,
 and tlinalg receive one parallelism token: `Sequential`, or the selected pool
 with a thread budget. The lower library owns lane selection, vendor batching,
 scratch, and scheduling within that budget; tenferro owns tensor semantics,

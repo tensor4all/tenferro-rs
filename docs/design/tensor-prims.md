@@ -74,7 +74,7 @@ does not support. Higher layers must not silently fall back across devices.
 
 `tenferro_cpu::CpuBackend` is present when exactly one CPU provider feature is enabled:
 
-- `native` (the default) for faer-backed GEMM/linalg plus cpueinsum/tprims,
+- `native` (the default) for faer-backed GEMM/linalg plus cpueinsum/tcontract,
 - `blas` for the same stack with the `cpueinsum-blas`/`tlinalg-blas` adapters.
 
 CPU execution uses the split strided-rs families: shared traversal and light
