@@ -1,4 +1,9 @@
-//! Pending device→host handoff with owned pinned storage (#1945 U4, slice 1).
+//! Pending transfers, and the publication of a produced value (#1945 U4).
+//!
+//! The pending routes move a value between host and device with owned admission; `exec_session`'s
+//! `CudaHeldSession::publish` builds a [`SourcePublication`], which keeps an owned value, its retained
+//! allocation address and a frontier recorded on the producing session's stream, so a stage can publish
+//! now and consume after its session and backend handle are gone.
 //!
 //! This is the first slice of the asynchronous transfer package. It owns everything one copy needs
 //! — the destination pinned buffer, the source allocation retention, the provider pin and a CUDA
@@ -31,6 +36,7 @@
 //! ```
 
 use cubecl::prelude::CubeElement;
+use cubecl::stream_id::StreamId;
 use cudarc::driver::result as cuda_result;
 use cudarc::driver::sys::{CUevent, CUevent_flags, CUresult, CUstream};
 use cudarc::runtime::sys as cuda_sys;
@@ -273,10 +279,13 @@ impl TransferRetirementQueue {
         self.entries.len() + self.leaked.len()
     }
 
-    /// Retain every record permanently: used when the runtime cannot prove that its streams are done.
-    pub(crate) fn retain_all(&mut self) {
+    /// Forget every retained and in-flight record, so that runtime field destruction cannot free one.
+    pub(crate) fn forget_all(&mut self) {
+        for record in self.leaked.drain(..) {
+            std::mem::forget(record);
+        }
         for record in self.entries.drain(..) {
-            self.leaked.push(record);
+            std::mem::forget(record);
         }
     }
 
@@ -1038,5 +1047,520 @@ pub fn upload_pending(
         event,
         resource: Some(Box::new(resource)),
         live: true,
+    })
+}
+
+/// Refuse a publication before anything is enqueued, returning the value.
+fn publication_rejected(error: crate::Error, value: Tensor) -> PublicationAdmissionError {
+    PublicationAdmissionError::Rejected(Box::new(PublicationRejected { error, value }))
+}
+
+/// A consuming copy that could not be enqueued, or whose publication is terminal.
+///
+/// # Examples
+///
+/// ```no_run
+/// use tenferro_gpu::cuda::PublicationError;
+///
+/// fn describe(error: PublicationError) -> String {
+///     match error {
+///         PublicationError::Rejected { error, .. } => error.to_string(),
+///         PublicationError::Unproven { error } => error.to_string(),
+///     }
+/// }
+/// let _ = describe;
+/// ```
+#[derive(Debug)]
+pub enum PublicationError {
+    /// Nothing was enqueued: the publication and the buffer come back unchanged, so the caller can fix
+    /// the buffer and retry, or await the frontier it still owns.
+    Rejected {
+        /// Why the copy was refused.
+        error: crate::Error,
+        /// The publication, unchanged.
+        publication: Box<SourcePublication>,
+        /// The submitted buffer, unchanged.
+        buffer: PinnedHostBuffer,
+    },
+    /// The copy may have been enqueued: nothing is returned, and the value, buffer, allocation and
+    /// provider pin stay provider-private.
+    Unproven {
+        /// The failure that prevented completion from being proven.
+        error: crate::Error,
+    },
+}
+
+impl std::fmt::Display for PublicationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected { error, .. } => write!(formatter, "published copy rejected: {error}"),
+            Self::Unproven { error } => write!(formatter, "published copy unproven: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for PublicationError {}
+
+/// A publication that could not be admitted, or whose completion could not be proven.
+///
+/// # Examples
+///
+/// ```no_run
+/// use tenferro_gpu::cuda::PublicationAdmissionError;
+///
+/// fn describe(error: PublicationAdmissionError) -> String {
+///     match error {
+///         PublicationAdmissionError::Rejected(rejected) => rejected.error.to_string(),
+///         PublicationAdmissionError::Unproven { error } => error.to_string(),
+///     }
+/// }
+/// let _ = describe;
+/// ```
+#[derive(Debug)]
+pub enum PublicationAdmissionError {
+    /// Nothing was enqueued, so the caller keeps the value.
+    ///
+    /// Boxed so the error channel stays small on the common success path; the rejected value itself is
+    /// carried unchanged.
+    Rejected(Box<PublicationRejected>),
+    /// The enqueue may have happened, or the publication already failed terminally: no owner is returned.
+    Unproven {
+        /// The failure that prevented completion from being proven.
+        error: crate::Error,
+    },
+}
+
+/// A publication that was refused before anything was enqueued.
+///
+/// # Examples
+///
+/// ```no_run
+/// use tenferro_gpu::cuda::PublicationRejected;
+///
+/// fn describe(rejected: PublicationRejected) -> String {
+///     format!("{} after the value of shape {:?} came back", rejected.error, rejected.value.shape())
+/// }
+/// let _ = describe;
+/// ```
+#[derive(Debug)]
+pub struct PublicationRejected {
+    /// Why the publication was refused.
+    pub error: crate::Error,
+    /// The submitted value, unchanged.
+    pub value: Tensor,
+}
+
+impl std::fmt::Display for PublicationAdmissionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(rejected) => {
+                write!(formatter, "publication rejected: {}", rejected.error)
+            }
+            Self::Unproven { error } => {
+                write!(formatter, "publication completion unproven: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PublicationAdmissionError {}
+
+const PUBLICATION_OP: &str = "publish_source";
+
+/// A value whose production has been published: owned, retained, and carrying a producer frontier
+/// recorded on the stream that produced it.
+///
+/// The value is reachable only through [`Self::download_into`]. There is deliberately no public
+/// read accessor: an owned `&Tensor` would carry storage lifetime and Rust read authority, but not
+/// this publication's readiness, because ordinary CubeCL resource alignment follows the
+/// allocation's creating stream rather than this frontier - so a consumer handed that borrow on
+/// another stream could read before the producer's work completed. Serving a device consumer needs
+/// the dependency contract, which this revision does not specify.
+///
+/// Dropping a publication that was never consumed detaches its record into the runtime's bounded
+/// transfer-retirement queue without waiting, and a terminal publication is retained permanently.
+///
+/// # Examples
+///
+/// ```no_run
+/// use tenferro_gpu::cuda::SourcePublication;
+///
+/// fn byte_len(publication: &SourcePublication) -> usize {
+///     publication.bytes()
+/// }
+///
+///
+/// let _ = byte_len;
+/// ```
+pub struct SourcePublication {
+    runtime: CudaRuntime,
+    value: Option<Tensor>,
+    /// Device address of the published value's storage. The owned value keeps the allocation alive, so
+    /// resolution's retention guard is not needed after the address is recorded.
+    address: u64,
+    bytes: usize,
+    stream: StreamId,
+    frontier: Option<CUevent>,
+    /// Set once a readiness wait failed: the publication is terminal and keeps everything it owns.
+    failure: Option<crate::Error>,
+    /// Whether the terminal record was already handed to the queue.
+    terminal_recorded: bool,
+}
+
+impl std::fmt::Debug for SourcePublication {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SourcePublication")
+            .field("bytes", &self.bytes)
+            .field("terminal", &self.failure.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SourcePublication {
+    /// Byte length of the published value.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let publication: tenferro_gpu::cuda::SourcePublication = unimplemented!();
+    /// assert_eq!(publication.bytes(), 64);
+    /// ```
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// Whether the producer's frontier has completed. Never waits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] once the publication is terminal, so a failed
+    /// publication can never report readiness, and [`crate::Error::BackendSource`] when the event
+    /// query itself fails for a reason other than "not ready".
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let publication: tenferro_gpu::cuda::SourcePublication = unimplemented!();
+    /// let mut publication = publication;
+    /// let _ready: bool = publication.frontier_ready()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn frontier_ready(&mut self) -> crate::Result<bool> {
+        self.runtime.drain_transfer_retirements();
+        if let Some(failure) = &self.failure {
+            return Err(crate::Error::runtime_state(
+                PUBLICATION_OP,
+                format!("the publication is terminal and can never become ready: {failure}"),
+            ));
+        }
+        let Some(frontier) = self.frontier else {
+            return Ok(true);
+        };
+        self.runtime.set_current_cuda_context(PUBLICATION_OP)?;
+        // SAFETY: the event is live and owned by this publication.
+        match unsafe { cuda_result::event::query(frontier) } {
+            Ok(()) => Ok(true),
+            Err(err) if err.0 == CUresult::CUDA_ERROR_NOT_READY => Ok(false),
+            Err(err) => {
+                // A device failure observed here makes the publication terminal, exactly as a failed
+                // synchronization does, so it can never be consumed as if it were ready.
+                self.failure = Some(crate::Error::runtime_state(
+                    PUBLICATION_OP,
+                    "the frontier query reported a device failure",
+                ));
+                Err(crate::Error::backend_source(PUBLICATION_OP, err))
+            }
+        }
+    }
+
+    /// Explicit readiness boundary: wait for the producer's frontier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PublicationAdmissionError::Unproven`] when the event synchronization reports a
+    /// device failure, or when the publication is already terminal. Nothing is released: the
+    /// publication stays terminal and retains its value, allocation, frontier and provider pin until
+    /// it is dropped, at which point they are retained permanently.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let mut publication: tenferro_gpu::cuda::SourcePublication = unimplemented!();
+    /// publication.await_frontier().map_err(|err| err.to_string())?;
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn await_frontier(&mut self) -> Result<(), PublicationAdmissionError> {
+        if let Some(failure) = &self.failure {
+            return Err(PublicationAdmissionError::Unproven {
+                error: crate::Error::runtime_state(
+                    PUBLICATION_OP,
+                    format!("the publication is already terminal: {failure}"),
+                ),
+            });
+        }
+        let Some(frontier) = self.frontier else {
+            return Ok(());
+        };
+        let outcome = self
+            .runtime
+            .set_current_cuda_context(PUBLICATION_OP)
+            .and_then(|()| {
+                // SAFETY: the event is live and owned by this publication.
+                unsafe { cuda_result::event::synchronize(frontier) }
+                    .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))
+            });
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.failure = Some(error);
+                Err(PublicationAdmissionError::Unproven {
+                    error: crate::Error::runtime_state(
+                        PUBLICATION_OP,
+                        "the publication's completion could not be proven",
+                    ),
+                })
+            }
+        }
+    }
+
+    /// Consume the publication by copying it into `buffer`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PublicationError::Rejected`] when nothing was enqueued - the buffer's length does
+    /// not match, or the publication is already terminal - carrying the publication and the buffer
+    /// back; and [`PublicationError::Unproven`] when the copy may have been enqueued, in which case
+    /// the value, buffer, allocation and provider pin are retained and nothing is returned.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let publication: tenferro_gpu::cuda::SourcePublication = unimplemented!();
+    /// # let buffer: tenferro_gpu::cuda::PinnedHostBuffer = unimplemented!();
+    /// let pending = publication
+    ///     .download_into(buffer)
+    ///     .map_err(|err| err.to_string())?;
+    /// let (_value, filled) = pending.wait().map_err(|err| err.to_string())?;
+    /// assert_eq!(filled.len(), 64);
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn download_into(
+        mut self,
+        buffer: PinnedHostBuffer,
+    ) -> Result<PendingDownload, PublicationError> {
+        if self.failure.is_some() {
+            // Nothing was enqueued in this call, so the publication and the buffer both come back.
+            return Err(PublicationError::Rejected {
+                error: crate::Error::runtime_state(
+                    PUBLICATION_OP,
+                    "the publication is terminal; its value and frontier are retained, not consumed",
+                ),
+                publication: Box::new(self),
+                buffer,
+            });
+        }
+        if buffer.len() != self.bytes {
+            // Nothing is destroyed here: the frontier is what makes the returned publication usable,
+            // and dropping it would hand back a value whose readiness is no longer carried.
+            return Err(PublicationError::Rejected {
+                error: crate::Error::invalid_argument(
+                    PUBLICATION_OP,
+                    "buffer",
+                    format!(
+                        "the pinned buffer holds {} bytes but the published value holds {}",
+                        buffer.len(),
+                        self.bytes
+                    ),
+                ),
+                publication: Box::new(self),
+                buffer,
+            });
+        }
+
+        let stream = self.stream;
+        let event = match stream.executes(|| -> crate::Result<CUevent> {
+            self.runtime.set_current_cuda_context(PUBLICATION_OP)?;
+            let raw_stream = self.runtime.raw_cuda_stream()? as usize as CUstream;
+            let event = cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING)
+                .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
+            let source = self.address;
+            // SAFETY: `source` is the device address of the allocation this publication retained,
+            // `buffer` owns `self.bytes` bytes of pinned host memory, and `raw_stream` is the captured
+            // stream, applied for the duration of this closure.
+            let enqueued = unsafe {
+                cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
+                    buffer.as_mut_ptr().cast(),
+                    source,
+                    self.bytes,
+                    raw_stream,
+                )
+            }
+            .result()
+            .and_then(|()| unsafe { cuda_result::event::record(event, raw_stream) });
+            match enqueued {
+                Ok(()) => Ok(event),
+                Err(err) => {
+                    // An event that was never recorded queries as complete, so it must never be
+                    // destroyed or handed to a later release: it is left leaked on purpose.
+                    Err(crate::Error::backend_source(PUBLICATION_OP, err))
+                }
+            }
+        }) {
+            Ok(event) => event,
+            Err(error) => {
+                self.failure = Some(error);
+                // The copy may have been enqueued, so the buffer is retained with the value: releasing
+                // host memory the device may still be writing is what the contract forbids.
+                self.retain_terminal(Some(buffer));
+                return Err(PublicationError::Unproven {
+                    error: crate::Error::runtime_state(
+                        PUBLICATION_OP,
+                        "the consuming copy could not be enqueued",
+                    ),
+                });
+            }
+        };
+
+        // The frontier is ordered before the copy on the same stream, so it is no longer needed.
+        self.release_frontier();
+        Ok(PendingDownload {
+            runtime: self.runtime.clone(),
+            source: self.value.take(),
+            buffer: Some(buffer),
+            event,
+            resource: None,
+            live: true,
+        })
+    }
+
+    /// Destroy the frontier event, which no one needs once the copy is enqueued.
+    fn release_frontier(&mut self) {
+        if let Some(frontier) = self.frontier.take() {
+            let _ = self.runtime.set_current_cuda_context(PUBLICATION_OP);
+            // SAFETY: the event is live, owned by this publication, and no longer needed.
+            let _ = unsafe { cuda_result::event::destroy(frontier) };
+        }
+    }
+
+    /// Hand the record to the permanent-retention side of the queue, exactly once.
+    fn retain_terminal(&mut self, buffer: Option<PinnedHostBuffer>) {
+        if self.terminal_recorded {
+            return;
+        }
+        self.terminal_recorded = true;
+        let record = TransferRetirement {
+            event: self.frontier.take().unwrap_or(std::ptr::null_mut()),
+            value: self.value.take(),
+            buffer,
+            resource: None,
+        };
+        self.runtime.retain_transfer_for_soundness(record);
+    }
+
+    /// Hand the record to the runtime's drainable retirement queue.
+    fn detach(&mut self) {
+        let Some(frontier) = self.frontier.take() else {
+            return;
+        };
+        self.runtime.detach_transfer(TransferRetirement {
+            event: frontier,
+            value: self.value.take(),
+            buffer: None,
+            resource: None,
+        });
+    }
+}
+
+impl Drop for SourcePublication {
+    fn drop(&mut self) {
+        if self.failure.is_some() {
+            self.retain_terminal(None);
+        } else {
+            self.detach();
+        }
+    }
+}
+
+/// Publish `value`, recording its frontier on `stream`.
+///
+/// The caller must have entered `stream` already, so that the dispatch, the resource resolution and the
+/// event record all happen on the stream that produced the value.
+pub(crate) fn publish_in_stream(
+    runtime: &CudaRuntime,
+    stream: StreamId,
+    value: Tensor,
+) -> Result<SourcePublication, PublicationAdmissionError> {
+    runtime.drain_transfer_retirements();
+    let (handle, bytes) = match device_allocation(&value) {
+        Ok(allocation) => allocation,
+        Err(error) => return Err(publication_rejected(error, value)),
+    };
+    // The dispatch and the resource resolution happen on the stream the caller entered, so the
+    // frontier recorded below is ordered after everything that produced the value on that stream.
+    if let Err(error) = runtime.check_errors(PUBLICATION_OP) {
+        return Err(publication_rejected(error, value));
+    }
+    let resource = match runtime.client().get_resource(handle) {
+        Ok(resource) => resource,
+        Err(err) => {
+            return Err(publication_rejected(
+                crate::Error::backend_source(PUBLICATION_OP, err),
+                value,
+            ));
+        }
+    };
+    let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
+    if available < bytes {
+        return Err(publication_rejected(
+            crate::Error::Internal(format!(
+                "{PUBLICATION_OP}: published value of {bytes} bytes exceeds the {available}-byte allocation"
+            )),
+            value,
+        ));
+    }
+    let address = resource.resource().ptr;
+    // The value keeps the allocation alive, so resolution's guard is released here and only the
+    // address is retained.
+    drop(resource);
+
+    // Past this point an enqueue may happen: a failure retains the package for soundness.
+    let prepared = (|| -> crate::Result<CUevent> {
+        runtime.set_current_cuda_context(PUBLICATION_OP)?;
+        let raw_stream = runtime.raw_cuda_stream()? as usize as CUstream;
+        let event = cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING)
+            .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
+        // SAFETY: `event` is live and owned by this call, and `raw_stream` is the stream just resolved.
+        match unsafe { cuda_result::event::record(event, raw_stream) } {
+            Ok(()) => Ok(event),
+            Err(err) => {
+                // An event that was never recorded queries as complete, so it must never be released:
+                // `CUevent` is a raw pointer with no destructor, so leaving it untouched leaks it.
+                Err(crate::Error::backend_source(PUBLICATION_OP, err))
+            }
+        }
+    })();
+    let event = match prepared {
+        Ok(event) => event,
+        Err(error) => {
+            runtime.retain_transfer_for_soundness(TransferRetirement {
+                event: std::ptr::null_mut(),
+                value: Some(value),
+                buffer: None,
+                resource: None,
+            });
+            return Err(PublicationAdmissionError::Unproven { error });
+        }
+    };
+
+    Ok(SourcePublication {
+        runtime: runtime.clone(),
+        value: Some(value),
+        address,
+        bytes,
+        stream,
+        frontier: Some(event),
+        failure: None,
+        terminal_recorded: false,
     })
 }

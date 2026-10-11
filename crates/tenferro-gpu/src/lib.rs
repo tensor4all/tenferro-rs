@@ -54,8 +54,9 @@ pub mod cuda {
         CudaComputeCapability, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid,
         CudaExecSession, CudaExtensionCache, CudaExtensionCacheGuard, CudaHeldSession, CudaRuntime,
         CudaRuntimeIdentity, CudaSessionStats, CutensorWorkspaceStats, GpuExtensionCapability,
-        PendingDownload, PendingUpload, PinnedHostBuffer, TransferRejected, TransferSubmitError,
-        WorkspaceRetirementStats,
+        PendingDownload, PendingUpload, PinnedHostBuffer, PublicationAdmissionError,
+        PublicationError, PublicationRejected, SourcePublication, TransferRejected,
+        TransferSubmitError, WorkspaceRetirementStats,
     };
 
     /// Public tenferro-wide CubeCL session (issue #1597).

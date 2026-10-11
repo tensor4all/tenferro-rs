@@ -1,25 +1,35 @@
-# Source publication: an owned value with a producer frontier and a domain-scoped dependency (#1945 U4, source publication)
+# Source publication: an owned value with a producer frontier (revision 4) (#1945 U4 item 1)
 
-This record specifies the source-publication half of #1945's transfer contract. Its first revision
-proposed publishing from a runtime handle and was rejected in review; §1 records why, and what has
-changed since. §2 onwards is the revised design.
+This record specifies source publication - "a source session publishes an immutable storage/read lease
+plus the producer's ready token or submitted completion frontier ... the source root session/eager owner
+need not stay held ... no lazy source work or session entry is hidden inside the destination copy"
+(#1945 transfer contract, item 1) - and records what earlier revisions got wrong.
 
-## 1. What the first revision got wrong, and what has changed
+## 1. History, and what changed
+
+Two revisions were rejected, and both rejections were about the substrate rather than the API shape:
 
 | Rejection | State now |
 | --- | --- |
-| An asynchronous *borrow* contradicts the storage-ownership contract (owning submission, no escaped caller borrow, soundness independent of `Drop`/`mem::forget`) | **closed**: both pending transfers own their admitted package, detach on drop and leak on `mem::forget` ([owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)) |
-| A borrow is not an immutable lease while a *safe* writable-binding escape exists | **closed**: `ComputeServer::write` is `unsafe` with an explicit authority contract (tensor4all/cubecl#29), so an immutability guarantee is enforceable rather than implied |
-| `publish_source(&CudaRuntime, &Tensor)` receives no producer identity (CubeCL records the *creating* stream; `check_errors`/`get_resource` use the current one, so a frontier recorded on the wrong stream can precede the value's production) | **this design**: publication is entered from the held session, which captured its logical stream when it opened and runs every operation on it |
-| Cross-stream producer failures, waiting publication, and a destination that hides session entry or lazy source work | addressed by §3 below: the boundary is the same non-blocking one the pending transfers use, and consumption takes no session |
+| An asynchronous *borrow* contradicts the storage-ownership contract | closed: the pending transfers own their admitted package (#2073, #2076) |
+| A borrow is not an immutable lease while a *safe* writable-binding escape exists | closed for tenferro's surface: `ComputeServer::write` is `unsafe` (tensor4all/cubecl#29) and the extension accessors that derive a binding from a borrow are `unsafe` with the write-authority contract (#2093). The residue is cubecl's own checked launch, which is the upstream-facing part of finishing the fork |
+| A safe API taking an arbitrary value cannot establish producer provenance | addressed by §2: publication is `unsafe`, and the contract is the caller's assertion |
+| A dependency token orders work but hands the consumer no read operand | addressed by narrowing: this revision exposes **no read accessor at all**, so the unsupported device-consumer route is not advertised |
+| A caller-supplied event-domain id is not provenance, and a public driver escape is wrong | **deferred to U4-2** (§5): with no consumer-side route in this revision, no token is minted at all |
 
 ## 2. Specified API
 
 ```rust
 // crates/tenferro-gpu/src/cubecl/exec_session.rs, re-exported from tenferro_gpu::cuda
 impl CudaHeldSession<'_> {
-    /// Publish a value whose production ran on this session's stream.
-    pub fn publish(&mut self, value: Tensor) -> Result<SourcePublication, TransferSubmitError>;
+    /// Publish a value whose production is ordered before this session's captured stream.
+    ///
+    /// # Safety
+    /// The caller asserts that the value's last write is ordered before this session's stream: a value
+    /// produced by another stream (for example one written into through a `_into` route on a different
+    /// session) does not satisfy the contract, because neither the allocation handle nor the session can
+    /// prove who wrote last.
+    pub unsafe fn publish(&mut self, value: Tensor) -> Result<SourcePublication, PublicationError>;
 }
 
 // crates/tenferro-gpu/src/cubecl/transfer.rs
@@ -29,128 +39,267 @@ impl SourcePublication {
     /// Byte length of the published value.
     pub fn bytes(&self) -> usize;
     /// Whether the producer's frontier has completed. Never waits.
+    ///
+    /// # Errors
+    ///
+    /// Returns the recorded failure once the publication is terminal, so a failed publication can never
+    /// report readiness.
     pub fn frontier_ready(&mut self) -> crate::Result<bool>;
-    /// Explicit readiness boundary: wait for the producer's frontier.
-    pub fn await_frontier(&mut self) -> crate::Result<()>;
+    /// Explicit readiness boundary. A failure is terminal (§3.4).
+    pub fn await_frontier(&mut self) -> Result<(), PublicationAdmissionError>;
     /// Consume the publication by copying it into `buffer`.
-    pub fn download_into(self, buffer: PinnedHostBuffer) -> Result<PendingDownload, TransferSubmitError>;
-    /// The frontier as a dependency token for exactly `domain`.
-    pub fn dependency(&self, domain: EventDomainId) -> crate::Result<Arc<dyn EventToken>>;
+    ///
+    /// Reuses the transfer's own error carrier, because consumption can refuse before any enqueue and must
+    /// then hand both submitted owners back.
+    pub fn download_into(
+        self,
+        buffer: PinnedHostBuffer,
+    ) -> Result<PendingDownload, TransferSubmitError>;
 }
 
-// The consumer side needs the driver that owns the domain identity.
-impl CudaRuntime {
-    /// The CUDA event-domain driver, for a caller that owns the domain identity itself.
-    pub fn event_domain_driver(&self) -> Arc<dyn tenferro_runtime::EventDomainDriver>;
+/// A publication that could not be admitted, or whose completion could not be proven.
+#[derive(Debug)]
+pub enum PublicationAdmissionError {
+    /// Nothing was enqueued, so the caller keeps the value.
+    Rejected(Box<PublicationRejected>),
+    /// The enqueue may have happened, or the publication already failed terminally: no owner is returned.
+    Unproven { error: crate::Error },
 }
 ```
 
-## 3. What a publication owns, and what it guarantees
+## 3. Semantics
 
-```text
-SourcePublication
-  ├── value: Tensor            // owned; the caller has no other path to it
-  ├── allocation: ManagedResource   // pins; resolved while publishing
-  ├── frontier: CUevent        // recorded on the session's captured stream
-  ├── stream: StreamId         // the producer binding, captured by the session
-```
-
-1. **Producer identity.** `publish` runs inside the held session's captured stream: it dispatches
-   pending work through the non-blocking error check and then records the frontier there, so the
-   frontier is ordered after every operation the session ran — including the one that produced the
-   value. A frontier recorded on an arbitrary current stream cannot promise that, which is why the
-   entry point is the session rather than a runtime handle.
-2. **Ownership.** The value is moved in; only `download_into` (which consumes the publication) or a
-   drop ends it. Dropping detaches the record — value, retention, event, provider pin — into the
-   runtime's bounded transfer-retirement queue without waiting for the device; an unproven completion
-   or a full queue retains it permanently. `mem::forget` leaks it in place.
-3. **Immutability is enforceable.** The safe value model cannot reach the moved value, and reaching
-   its storage for a *write* requires an explicit `unsafe` assertion of authority (tensor4all/cubecl#29),
-   so the publication can state immutability for storage it owns.
-4. **No session entry and no lazy source work in the destination.** `download_into` enqueues the copy
-   on the publication's stream using the retained allocation; it takes no session, resolves nothing
-   lazily, and never calls the default/global route.
-5. **Readiness is explicit and never implicit.** `frontier_ready` is a non-blocking event query;
-   `await_frontier` is the documented boundary. Consuming without awaiting is allowed and correct
-   because the copy is stream-ordered after the frontier's work; what a caller must not do is read the
-   *host* buffer before the copy's own completion, which `PendingDownload` already prevents.
-6. **A dependent consumer can wait on the device.** `dependency(domain)` mints the frontier as a token
-   that admission accepts for exactly `domain` (origin and token type are both checked), so a consumer
-   that begins an event-domain run for that domain and enqueues with the token orders its own work
-   after the producer without a host wait.
-7. **Cross-domain stays explicit.** A consumer in a *different* execution domain still needs the
-   runtime's scheduler to carry a transfer dependency across domains, which today host-waits; that is
-   out of scope here and remains recorded in
-   [asynchronous-transfer-1945-u4.md](./asynchronous-transfer-1945-u4.md) §5 item 2.
+1. **Producer identity.** `publish` runs inside the session's captured stream and records the frontier
+   there after the same non-blocking dispatch the pending transfers use, so the frontier is ordered
+   after everything the session ran. It does *not* make the frontier correct for a value produced
+   elsewhere - that is what the `unsafe` contract is for, and why the entry point is the session rather
+   than a runtime handle.
+2. **Ownership and consumption, with no public read accessor.** The value moves into the publication and
+   is reachable only through `download_into`, which copies it into a caller-owned pinned buffer. There is
+   deliberately **no public `value()`**: an owned `&Tensor` carries storage lifetime and Rust read authority,
+   but not the publication's readiness, because ordinary CubeCL resource alignment follows the allocation's
+   *creating* stream rather than this publication's event - so a consumer handed that borrow on a third
+   stream could read before the producer's work completed. A device-consumer route needs the dependency
+   half (U4-2); until then the honest route back is the retained copy.
+   `download_into` copies from the retained allocation on the captured stream: it does not call
+   `get_resource`, does not run the producer's dispatch or error check again, enters no session, and never
+   falls back to the default route. The retained fields are the runtime pin, the allocation retention with
+   its resolved device address, the byte extent, the captured logical `StreamId` and the frontier event;
+   consumption re-applies the captured stream through `StreamId::executes` and enqueues the copy there.
+3. **Immutable by construction in tenferro's safe API.** Safe code cannot reach the value for a write:
+   the value model cannot alias it, and the extension accessors that could produce a writable
+   descriptor require an `unsafe` assertion of ownership (#2093). The remaining hole is cubecl's own
+   checked launch, recorded in §5.
+4. **Terminal failure.** A failed `await_frontier` marks the publication terminal: the failure is recorded,
+   `frontier_ready` reports it instead of readiness, and further `await_frontier` or `download_into` return
+   `PublicationAdmissionError::Unproven`/`TransferSubmitError::Unproven` without releasing anything. The
+   record is retained until the publication is dropped, at which point it goes to the permanent-retention
+   side of the retirement queue rather than the drainable side. A *successful* `await_frontier` does **not**
+   release the retention - unlike a pending transfer's `resolve` - because the publication still needs its
+   allocation for a later `download_into`. Dropping a publication detaches its record into
+   the runtime's bounded transfer-retirement queue without waiting; `mem::forget` leaks it in place; and
+   dropping the *last* runtime owner still runs the runtime's documented teardown, which synchronizes
+   its streams (the same qualification the owning transfer record states).
+5. **Rejection returns the value.** Validation that happens before any enqueue - an unserved dtype, a
+   host tensor, an unresolvable allocation, a producer failure reported at the dispatch boundary -
+   returns the value unchanged as `PublicationError::Rejected`.
 
 ## 4. Evidence plan
 
 | Claim | Evidence |
 | --- | --- |
-| Producer identity | publish a value produced by a held session, then close the session before consuming: the copy returns exactly the produced bytes |
-| Frontier ordering | publish immediately after a deliberately large producer: `frontier_ready` reports `false`, `await_frontier` then succeeds, and the copy is correct |
-| Dependent consumer | a consumer thread begins an event-domain run for the publication's domain on a different stream, enqueues with `dependency(domain)`, and its operation observes the produced values; the admission is device-ordered, not host-ordered |
-| Domain scoping | a token minted for one domain is refused typed (`DependencyDomainMismatch`) by a run for another |
-| Ownership and drop | the value is unreachable after publishing (compile-fail fixture); dropping detaches into the retirement queue and `synchronize` releases it; `mem::forget` leaks in place |
+| Publication survives its session | produce a value in a held session, publish it, `close()` the session, then `download_into(...).wait()`: the exact produced bytes come back |
+| Producer frontier | publish immediately after a deliberately large producer: `frontier_ready()` reports `false`; `await_frontier()` then succeeds and the copy is correct |
+| Retention without the source handles | drop the `CudaBackend` handle (and close the session) while only the publication holds the runtime pin and the allocation, then consume: the exact bytes come back |
+| Immutability in safe API | compile-fail fixture: the value cannot be used, moved or mutated after `publish`; and the extension accessors that could write are `unsafe` (#2093) |
+| Lifecycle | dropping a publication detaches into the retirement queue and `synchronize` releases it; `mem::forget` leaks in place; a rejected publication returns the value |
 | No session in consumption | `download_into` runs after the source session closed, with no other session open, and takes no session argument |
-| No regression | the pending transfer tests, the CUDA test partition, the example, the guide and the benchmark are updated in the same change |
+| No regression | the pending transfer tests keep passing and the audited CUDA test partition is updated; the example, guide and benchmark still describe and measure only the pending routes, which this slice does not change |
 
-## 5. Out of scope
+A fault-injected failed `await_frontier` (the terminal path) is **not** delivered in this revision: the
+path records the failure, reports it through `frontier_ready` and retains the record, but no test drives it.
+A simulated provider failure (rather than a malformed native handle) is the way to exercise it, and #1945
+asks for fault-injected production-path evidence, so it is listed as a gap rather than dressed up.
 
-- Cross-domain scheduling in the runtime (the scheduler host-waits source-domain transfer
-  dependencies), pageable staging for publications, P2P routes and differentiated transfers.
-- Publishing from the *scoped* callback entry: only the held session is specified here, because it is
-  the entry that owns an explicit binding; the scoped case can follow if a caller needs it.
+Publication is also **not** claimed to be host-wait-free: the dispatch and resource resolution it performs
+can still meet CubeCL's bounded GC backpressure and staging retirement, exactly as the pending transfers
+document.
+**Cross-stream and overlap claims are not established.** Every test uses the ambient stream a session
+captures when it opens: producer/consumer overlap, readiness across different streams, and any
+host-wait-free publication stay unmeasured, which is also why the rejected-length path returns the
+publication with its frontier instead of relying on them.
+
+
+## 5. What this revision defers, and why
+
+- **Dependent-consumer dependency tokens and cross-domain admission (U4-2).** With no consumer-side
+  route here, this revision mints no token: event-domain ids are minted by a runtime freeze and only
+  retrievable from the runtime snapshot, the CUDA driver must stay owned by the runtime registration
+  rather than exposed, and the runtime's scheduler currently host-waits source-domain dependencies. A
+  token minted for a caller-supplied id would prove equality and token type, not provenance.
+- **cubecl's own surface.** Its checked launch still accepts a lifetime-free binding as a writable
+  argument; marking launches with writable arguments `unsafe` is the fork-finishing change owed to
+  cubecl's users (the fork's own test harness and samples included).
+- **The consuming-copy rejection path** hands the publication back, including its frontier, rather than
+  destroying the frontier and returning a bare value: a value whose handle identifies its creating
+  stream carries no readiness, which is the same reason there is no public read accessor. Returning the
+  publication keeps the caller able to fix the buffer and consume, and nothing is destroyed.
+- Pageable staging for publications, P2P routes, differentiated transfers, and publishing from the
+  *scoped* callback entry (the held session is the entry that owns an explicit binding).
 
 ## 6. Open questions for maintainers
 
-1. Should `CudaRuntime::event_domain_driver` be public, or should the driver stay internal and the
-   token be minted only for a domain the caller obtained from the runtime registry?
-2. Should a publication expose `dependency` at all in this slice, or is `download_into` plus explicit
-   readiness the only consumption route worth specifying until cross-domain scheduling exists?
+1. Is `unsafe fn publish` the right provenance contract, or should the value carry its producer (a
+   session-tagged value type threaded through the operation routes, at the cost of touching every
+   route's return type)?
+# Source publication: an owned value with a producer frontier (revision 4) (#1945 U4 item 1)
 
-## 7. Revision 3 review: still blocked, and what the second review added
+This record specifies source publication - "a source session publishes an immutable storage/read lease
+plus the producer's ready token or submitted completion frontier ... the source root session/eager owner
+need not stay held ... no lazy source work or session entry is hidden inside the destination copy"
+(#1945 transfer contract, item 1) - and records what earlier revisions got wrong.
 
-Revision 2 was reviewed and rejected again. The findings are recorded here because they narrow the
-problem rather than merely repeating it:
+## 1. History, and what changed
 
-1. **Provenance cannot be established by a safe API taking an arbitrary value.** `publish(value: Tensor)`
-   says the value's production ran on the session's stream, but a value can be allocated on one stream
-   and written through another (native `_into` operations enqueue writes without changing the
-   allocation's *creating* stream identity, which is what CubeCL's binding alignment consults). Such a
-   value published through the first session lets the frontier precede its production. The entry point
-   therefore has to be an `unsafe` contract ("the caller asserts the value's last write is ordered
-   before this session's stream"), or the provenance has to be carried by the type.
-2. **A dependency token orders work but does not hand the consumer the value.** Admission validates the
-   token's domain and type and then enqueues a stream wait; nothing in that route gives the consumer's
-   launch closure a read operand. A publication needs an owning read handoff (a read accessor usable
-   inside the run's launch closure) for the dependent-consumer test to be writable at all.
-3. **A caller-supplied domain is not provenance.** `EventDomainId`s are minted by a runtime freeze and
-   retrieved from the runtime snapshot; the CUDA driver stores whatever domain it is given and does not
-   verify that the domain belongs to its runtime. Admission therefore proves equality and token type,
-   not "the exact frozen event domain that produced this token". The driver must stay owned by the
-   runtime registration rather than exposed for callers to mint into.
-4. **The immutability blocker, and where it now stands.** CubeCL's checked `launch` accepts a
-   lifetime-free `TensorBinding` as a writable argument, and bounds checking does not supply write
-   authority, so a binding for a borrowed tensor was a safe write route even after
-   `ComputeServer::write` became `unsafe` (tensor4all/cubecl#29). **Closed for tenferro's own surface**:
-   the extension accessors that derive such a binding from a borrow (`Session::tensor_binding`,
-   `Session::array_arg`) are now `unsafe` with the write-authority contract, so safe tenferro code can no
-   longer obtain a writable descriptor for storage it does not own. What remains is cubecl's own surface,
-   where the fix is `unsafe`-marking checked launches that have writable arguments — a broadly-scoped
-   change owed to cubecl's users rather than to this contract, and recorded as the upstream-facing part
-   of finishing the fork.
-5. **Lifecycle details** remain to specify: the error carrier for a bufferless publication, failed
-   readiness as a terminal outcome, sharing an event with an escaped dependency token, the last-owner
-   drop qualification, and re-applying the captured stream in the consumption path (calling the existing
-   `download_pending` would re-resolve the producer and reintroduce the submission boundary).
+Two revisions were rejected, and both rejections were about the substrate rather than the API shape:
 
-The review's own conclusion is the useful summary: for a device→host-only slice the separate publication
-object and a public driver route are unnecessary, and the full "source publication, not mandatory host
-export" contract needs a distinct ownership boundary that has not been completed. Two prerequisites are
-outside this repository's control as it stands: write authority on the kernel-launch route (a CubeCL-side
-mechanism) and a domain-ownership contract for tokens (the runtime registry).
+| Rejection | State now |
+| --- | --- |
+| An asynchronous *borrow* contradicts the storage-ownership contract | closed: the pending transfers own their admitted package (#2073, #2076) |
+| A borrow is not an immutable lease while a *safe* writable-binding escape exists | closed for tenferro's surface: `ComputeServer::write` is `unsafe` (tensor4all/cubecl#29) and the extension accessors that derive a binding from a borrow are `unsafe` with the write-authority contract (#2093). The residue is cubecl's own checked launch, which is the upstream-facing part of finishing the fork |
+| A safe API taking an arbitrary value cannot establish producer provenance | addressed by §2: publication is `unsafe`, and the contract is the caller's assertion |
+| A dependency token orders work but hands the consumer no read operand | addressed by narrowing: this revision exposes **no read accessor at all**, so the unsupported device-consumer route is not advertised |
+| A caller-supplied event-domain id is not provenance, and a public driver escape is wrong | **deferred to U4-2** (§5): with no consumer-side route in this revision, no token is minted at all |
 
-**Status: blocked.** Nothing here is implemented. The pending transfer routes keep their documented
-behaviour; a publication built on them must not be assumed to have established provenance, domain
-ownership, or immutable storage.
+## 2. Specified API
+
+```rust
+// crates/tenferro-gpu/src/cubecl/exec_session.rs, re-exported from tenferro_gpu::cuda
+impl CudaHeldSession<'_> {
+    /// Publish a value whose production is ordered before this session's captured stream.
+    ///
+    /// # Safety
+    /// The caller asserts that the value's last write is ordered before this session's stream: a value
+    /// produced by another stream (for example one written into through a `_into` route on a different
+    /// session) does not satisfy the contract, because neither the allocation handle nor the session can
+    /// prove who wrote last.
+    pub unsafe fn publish(&mut self, value: Tensor) -> Result<SourcePublication, PublicationError>;
+}
+
+// crates/tenferro-gpu/src/cubecl/transfer.rs
+pub struct SourcePublication { /* owns §3 */ }
+
+impl SourcePublication {
+    /// Byte length of the published value.
+    pub fn bytes(&self) -> usize;
+    /// Whether the producer's frontier has completed. Never waits.
+    ///
+    /// # Errors
+    ///
+    /// Returns the recorded failure once the publication is terminal, so a failed publication can never
+    /// report readiness.
+    pub fn frontier_ready(&mut self) -> crate::Result<bool>;
+    /// Explicit readiness boundary. A failure is terminal (§3.4).
+    pub fn await_frontier(&mut self) -> Result<(), PublicationAdmissionError>;
+    /// Consume the publication by copying it into `buffer`.
+    ///
+    /// Reuses the transfer's own error carrier, because consumption can refuse before any enqueue and must
+    /// then hand both submitted owners back.
+    pub fn download_into(
+        self,
+        buffer: PinnedHostBuffer,
+    ) -> Result<PendingDownload, TransferSubmitError>;
+}
+
+/// A publication that could not be admitted, or whose completion could not be proven.
+#[derive(Debug)]
+pub enum PublicationAdmissionError {
+    /// Nothing was enqueued, so the caller keeps the value.
+    Rejected(Box<PublicationRejected>),
+    /// The enqueue may have happened, or the publication already failed terminally: no owner is returned.
+    Unproven { error: crate::Error },
+}
+```
+
+## 3. Semantics
+
+1. **Producer identity.** `publish` runs inside the session's captured stream and records the frontier
+   there after the same non-blocking dispatch the pending transfers use, so the frontier is ordered
+   after everything the session ran. It does *not* make the frontier correct for a value produced
+   elsewhere - that is what the `unsafe` contract is for, and why the entry point is the session rather
+   than a runtime handle.
+2. **Ownership and consumption, with no public read accessor.** The value moves into the publication and
+   is reachable only through `download_into`, which copies it into a caller-owned pinned buffer. There is
+   deliberately **no public `value()`**: an owned `&Tensor` carries storage lifetime and Rust read authority,
+   but not the publication's readiness, because ordinary CubeCL resource alignment follows the allocation's
+   *creating* stream rather than this publication's event - so a consumer handed that borrow on a third
+   stream could read before the producer's work completed. A device-consumer route needs the dependency
+   half (U4-2); until then the honest route back is the retained copy.
+   `download_into` copies from the retained allocation on the captured stream: it does not call
+   `get_resource`, does not run the producer's dispatch or error check again, enters no session, and never
+   falls back to the default route. The retained fields are the runtime pin, the allocation retention with
+   its resolved device address, the byte extent, the captured logical `StreamId` and the frontier event;
+   consumption re-applies the captured stream through `StreamId::executes` and enqueues the copy there.
+3. **Immutable by construction in tenferro's safe API.** Safe code cannot reach the value for a write:
+   the value model cannot alias it, and the extension accessors that could produce a writable
+   descriptor require an `unsafe` assertion of ownership (#2093). The remaining hole is cubecl's own
+   checked launch, recorded in §5.
+4. **Terminal failure.** A failed `await_frontier` marks the publication terminal: the failure is recorded,
+   `frontier_ready` reports it instead of readiness, and further `await_frontier` or `download_into` return
+   `PublicationAdmissionError::Unproven`/`TransferSubmitError::Unproven` without releasing anything. The
+   record is retained until the publication is dropped, at which point it goes to the permanent-retention
+   side of the retirement queue rather than the drainable side. A *successful* `await_frontier` does **not**
+   release the retention - unlike a pending transfer's `resolve` - because the publication still needs its
+   allocation for a later `download_into`. Dropping a publication detaches its record into
+   the runtime's bounded transfer-retirement queue without waiting; `mem::forget` leaks it in place; and
+   dropping the *last* runtime owner still runs the runtime's documented teardown, which synchronizes
+   its streams (the same qualification the owning transfer record states).
+5. **Rejection returns the value.** Validation that happens before any enqueue - an unserved dtype, a
+   host tensor, an unresolvable allocation, a producer failure reported at the dispatch boundary -
+   returns the value unchanged as `PublicationError::Rejected`.
+
+## 4. Evidence plan
+
+| Claim | Evidence |
+| --- | --- |
+| Publication survives its session | produce a value in a held session, publish it, `close()` the session, then `download_into(...).wait()`: the exact produced bytes come back |
+| Producer frontier | publish immediately after a deliberately large producer: `frontier_ready()` reports `false`; `await_frontier()` then succeeds and the copy is correct |
+| Retention without the source handles | drop the `CudaBackend` handle (and close the session) while only the publication holds the runtime pin and the allocation, then consume: the exact bytes come back |
+| Immutability in safe API | compile-fail fixture: the value cannot be used, moved or mutated after `publish`; and the extension accessors that could write are `unsafe` (#2093) |
+| Lifecycle | dropping a publication detaches into the retirement queue and `synchronize` releases it; `mem::forget` leaks in place; a rejected publication returns the value |
+| No session in consumption | `download_into` runs after the source session closed, with no other session open, and takes no session argument |
+| No regression | the pending transfer tests keep passing and the audited CUDA test partition is updated; the example, guide and benchmark still describe and measure only the pending routes, which this slice does not change |
+
+A fault-injected failed `await_frontier` (the terminal path) is **not** delivered in this revision: the
+path records the failure, reports it through `frontier_ready` and retains the record, but no test drives it.
+A simulated provider failure (rather than a malformed native handle) is the way to exercise it, and #1945
+asks for fault-injected production-path evidence, so it is listed as a gap rather than dressed up.
+
+Publication is also **not** claimed to be host-wait-free: the dispatch and resource resolution it performs
+can still meet CubeCL's bounded GC backpressure and staging retirement, exactly as the pending transfers
+document.
+
+## 5. What this revision defers, and why
+
+- **Dependent-consumer dependency tokens and cross-domain admission (U4-2).** With no consumer-side
+  route here, this revision mints no token: event-domain ids are minted by a runtime freeze and only
+  retrievable from the runtime snapshot, the CUDA driver must stay owned by the runtime registration
+  rather than exposed, and the runtime's scheduler currently host-waits source-domain dependencies. A
+  token minted for a caller-supplied id would prove equality and token type, not provenance.
+- **cubecl's own surface.** Its checked launch still accepts a lifetime-free binding as a writable
+  argument; marking launches with writable arguments `unsafe` is the fork-finishing change owed to
+  cubecl's users (the fork's own test harness and samples included).
+- **The consuming-copy rejection path** hands the publication back, including its frontier, rather than
+  destroying the frontier and returning a bare value: a value whose handle identifies its creating
+  stream carries no readiness, which is the same reason there is no public read accessor. Returning the
+  publication keeps the caller able to fix the buffer and consume, and nothing is destroyed.
+- Pageable staging for publications, P2P routes, differentiated transfers, and publishing from the
+  *scoped* callback entry (the held session is the entry that owns an explicit binding).
+
+## 6. Open questions for maintainers
+
+1. Is `unsafe fn publish` the right provenance contract, or should the value carry its producer (a
+   session-tagged value type threaded through the operation routes, at the cost of touching every
+   route's return type)?
+2. Should `value()` be public at all in this revision, or should consumption be the only route until
+   U4-2 gives the read accessor a consumer to serve?
