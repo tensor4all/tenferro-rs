@@ -25,18 +25,6 @@ package = "cpueinsum-blas"
 reason = "Deliberately unpublished for now; the pinned revision has no crates.io release."
 issue = "https://github.com/tensor4all/cpueinsum-rs/issues/4"
 
-# The strided-rs #292 permutation and axis-reduction kernels are merged to
-# strided-rs main but not yet part of a crates.io release. Until the next
-# strided-rs release is published, pinning them under the released 0.4.6
-# version makes this check fail closed. Tracked by the batch umbrella; publish
-# the next strided-rs release and pin that exact revision, then remove these
-# entries.
-[[exception]]
-package = "strided-basic"
-reason = "The pinned revision carries the #292 axis-reduction kernels; no crates.io release contains them yet."
-issue = "https://github.com/tensor4all/tenferro-rs/issues/2010"
-
-[[exception]]
-package = "strided-perm"
-reason = "The pinned revision carries the #292 permutation kernels; no crates.io release contains them yet."
-issue = "https://github.com/tensor4all/tenferro-rs/issues/2010"
+# The strided exceptions for the #292 permutation and axis-reduction kernels are
+# gone: the workspace now pins the published strided-rs v0.4.7 revision, which
+# this check verifies against the crates.io archive.
