@@ -347,6 +347,200 @@ fn bench_chunk_boundary(c: &mut Criterion) {
     group.finish();
 }
 
+/// Overlap measured with a controlled schedule, not with a value plus a not-ready poll.
+///
+/// Three arms over the same 8 MiB payload and the same host workload:
+///
+/// | arm | schedule |
+/// | --- | --- |
+/// | `copy_only` | enqueue a pending device-to-host copy and wait for it |
+/// | `host_only` | the host workload alone |
+/// | `overlapped` | enqueue, run the host workload, then wait |
+///
+/// The overlap claim is the comparison against the **measured** serial arm (copy, wait, then host work), not
+/// against a sum of two central estimates. The host workload is compute-bound with a small working set,
+/// chosen to minimize host-memory bandwidth demand; its iteration count is opaque inside each call. The copy
+/// arms smoke-check three positions per iteration (poisoned first, so a skipped copy fails) and are compared
+/// against the full payload once per schedule outside the timed region. This measures host/device overlap for
+/// one pending copy; it does not exercise kernel/transfer overlap across two device streams.
+fn bench_overlap(c: &mut Criterion) {
+    /// Compute-bound host work with a 64-element working set and a fixed iteration count.
+    fn host_work(iterations: usize) -> f64 {
+        // `black_box` on the iteration count keeps the computation from being folded or hoisted out of a
+        // separately optimized closure; the result barrier alone would not.
+        let iterations = black_box(iterations);
+        let mut state: [f64; 64] = std::array::from_fn(|index| index as f64 * 0.5 + 1.0);
+        let mut accumulator = 0.0_f64;
+        for iteration in 0..iterations {
+            for slot in state.iter_mut() {
+                let value = *slot * 1.0000001 + (iteration % 7) as f64;
+                *slot = value;
+                accumulator += value * 0.5;
+            }
+        }
+        black_box(accumulator)
+    }
+
+    /// Tuned so the host workload costs about as much as the 8 MiB copy, making overlap visible instead of
+    /// hidden behind one side. `host_only` reports what it actually costs, so the tuning is checkable from
+    /// the three arms rather than assumed.
+    const HOST_ITERATIONS: usize = 6_000;
+
+    let backend = backend();
+    let runtime = backend.runtime().clone();
+    let elements = 1024 * 1024;
+    let bytes = elements * size_of::<f64>();
+    let host = host_vector(elements);
+    let device = upload_tensor(&runtime, &host).expect("device payload");
+    // A sentinel check rather than a full comparison: a whole-payload `assert_eq!` inside the timed closure
+    // would charge the two copy arms several hundred microseconds that `host_only` does not pay.
+    let reference = download_tensor(&runtime, &device).expect("reference download");
+    let reference_values = reference
+        .as_typed::<f64>()
+        .expect("f64 tensor")
+        .host_data()
+        .expect("host data");
+    let sentinels = (
+        reference_values[0],
+        reference_values[reference_values.len() / 2],
+        *reference_values.last().expect("non-empty"),
+    );
+    // The full payload is compared outside the timed region, once per copy schedule, from destinations that
+    // do not already hold it: the timed arms only smoke-check three positions.
+    let expected_payload: Vec<f64> = reference_values.to_vec();
+    {
+        for (label, with_host_work) in [("copy_only", false), ("overlapped", true)] {
+            let mut destination =
+                PinnedHostBuffer::new(&runtime, bytes).expect("verification buffer");
+            destination.as_mut_slice().fill(0xAB);
+            let value = upload_tensor(&runtime, &host).expect("verification payload");
+            let pending = download_pending(&runtime, value, destination).expect("pending download");
+            if with_host_work {
+                black_box(host_work(HOST_ITERATIONS));
+            }
+            let (_, filled) = pending.wait().expect("wait");
+            assert_full_payload(filled.as_slice(), &expected_payload, label);
+        }
+    }
+
+    let value = RefCell::new(Some(device));
+    let buffer = RefCell::new(Some(
+        PinnedHostBuffer::new(&runtime, bytes).expect("pinned buffer"),
+    ));
+
+    let mut group = c.benchmark_group("transfer_overlap");
+    group.throughput(Throughput::Bytes(bytes as u64));
+
+    group.bench_function(BenchmarkId::new("copy_only", "8MiB"), |bencher| {
+        bencher.iter(|| {
+            let device_value = value.borrow_mut().take().expect("reused value");
+            let mut host_buffer = buffer.borrow_mut().take().expect("reused buffer");
+            poison_sentinels(&mut host_buffer, elements);
+            let (returned_value, filled) = download_pending(&runtime, device_value, host_buffer)
+                .expect("pending download")
+                .wait()
+                .expect("wait");
+            check_sentinels(filled.as_slice(), elements, sentinels);
+            black_box(filled.len());
+            *value.borrow_mut() = Some(returned_value);
+            *buffer.borrow_mut() = Some(filled);
+        });
+    });
+
+    group.bench_function(BenchmarkId::new("host_only", "8MiB"), |bencher| {
+        bencher.iter(|| black_box(host_work(HOST_ITERATIONS)));
+    });
+
+    // The measured serial baseline for the same schedule: copy, wait, then the host work. Comparing the
+    // overlapped arm against this one avoids resting the overlap claim on a sum of two central estimates.
+    group.bench_function(BenchmarkId::new("serial", "8MiB"), |bencher| {
+        bencher.iter(|| {
+            let device_value = value.borrow_mut().take().expect("reused value");
+            let mut host_buffer = buffer.borrow_mut().take().expect("reused buffer");
+            poison_sentinels(&mut host_buffer, elements);
+            let (returned_value, filled) = download_pending(&runtime, device_value, host_buffer)
+                .expect("pending download")
+                .wait()
+                .expect("wait");
+            check_sentinels(filled.as_slice(), elements, sentinels);
+            black_box(host_work(HOST_ITERATIONS));
+            *value.borrow_mut() = Some(returned_value);
+            *buffer.borrow_mut() = Some(filled);
+        });
+    });
+
+    group.bench_function(BenchmarkId::new("overlapped", "8MiB"), |bencher| {
+        bencher.iter(|| {
+            let device_value = value.borrow_mut().take().expect("reused value");
+            let mut host_buffer = buffer.borrow_mut().take().expect("reused buffer");
+            poison_sentinels(&mut host_buffer, elements);
+            let pending =
+                download_pending(&runtime, device_value, host_buffer).expect("pending download");
+            // The controlled schedule: this host work runs while the copy is in flight.
+            black_box(host_work(HOST_ITERATIONS));
+            let (returned_value, filled) = pending.wait().expect("wait");
+            check_sentinels(filled.as_slice(), elements, sentinels);
+            black_box(filled.len());
+            *value.borrow_mut() = Some(returned_value);
+            *buffer.borrow_mut() = Some(filled);
+        });
+    });
+
+    group.finish();
+}
+
+/// Check three positions of a copied payload: enough to catch a wrong or partial copy, and O(1) so the timed
+/// closure does not pay for a whole-payload decode.
+/// Write a non-matching value into each sampled position.
+///
+/// Without this, a reused buffer would satisfy the smoke check even if an iteration copied nothing.
+fn poison_sentinels(buffer: &mut PinnedHostBuffer, elements: usize) {
+    let poison = f64::NAN.to_ne_bytes();
+    let byte_len = size_of::<f64>();
+    for index in [0, elements / 2, elements - 1] {
+        let start = index * byte_len;
+        buffer.as_mut_slice()[start..start + byte_len].copy_from_slice(&poison);
+    }
+}
+
+/// Compare a copied payload against the known host values, element by element.
+///
+/// Untimed, so a schedule can be validated without charging every iteration a whole-payload decode.
+fn assert_full_payload(bytes: &[u8], expected: &[f64], label: &str) {
+    assert_eq!(
+        bytes.len(),
+        std::mem::size_of_val(expected),
+        "{label}: length"
+    );
+    for (index, (chunk, value)) in bytes.as_chunks::<8>().0.iter().zip(expected).enumerate() {
+        assert_eq!(
+            f64::from_ne_bytes(*chunk),
+            *value,
+            "{label}: element {index}"
+        );
+    }
+}
+
+/// Smoke-check three positions of a copied payload.
+///
+/// It is deliberately O(1) so the timed closure does not pay a whole-payload decode, and it can only show
+/// that those positions were written with the expected values - not that the whole payload is correct. The
+/// untimed `verify_schedules` run below compares every element once per schedule.
+fn check_sentinels(bytes: &[u8], elements: usize, expected: (f64, f64, f64)) {
+    assert_eq!(bytes.len(), elements * size_of::<f64>(), "payload length");
+    let at = |index: usize| {
+        let start = index * size_of::<f64>();
+        f64::from_ne_bytes(
+            bytes[start..start + size_of::<f64>()]
+                .try_into()
+                .expect("one element"),
+        )
+    };
+    assert_eq!(at(0), expected.0, "first element");
+    assert_eq!(at(elements / 2), expected.1, "middle element");
+    assert_eq!(at(elements - 1), expected.2, "last element");
+}
+
 fn criterion_config() -> Criterion {
     Criterion::default()
         .warm_up_time(std::time::Duration::from_secs(2))
@@ -357,6 +551,6 @@ fn criterion_config() -> Criterion {
 criterion_group! {
     name = benches;
     config = criterion_config();
-    targets = bench_download, bench_upload, bench_host_copies, bench_large, bench_chunk_boundary
+    targets = bench_download, bench_upload, bench_host_copies, bench_large, bench_chunk_boundary, bench_overlap
 }
 criterion_main!(benches);
