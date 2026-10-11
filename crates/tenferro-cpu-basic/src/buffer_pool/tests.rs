@@ -242,7 +242,7 @@ fn retention_limit_documents_zero_byte_eviction_progress() {
 }
 
 #[test]
-fn pooled_uninit_guard_discards_partial_reused_storage_without_replacement() {
+fn pooled_uninit_guard_returns_partial_reused_storage() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
     let before = pool.stats();
@@ -252,16 +252,14 @@ fn pooled_uninit_guard_discards_partial_reused_storage_without_replacement() {
     output.as_uninit_slice_mut()[0].write(1.0);
     drop(output);
 
-    assert_eq!(pool.stats().buffers, before.buffers - 1);
-    assert_eq!(
-        pool.stats().capacity_bytes,
-        before.capacity_bytes - 8 * size_of::<f64>()
-    );
+    // An abandoned destination never became a tensor, so the pool gets its storage back whole
+    // instead of watching it go to the allocator.
+    assert_eq!(pool.stats(), before);
     assert!(pool.in_flight_is_empty());
 }
 
 #[test]
-fn pooled_uninit_guard_fresh_handoff_and_panic_discard_are_exact() {
+fn pooled_uninit_guard_fresh_handoff_and_panic_return_are_exact() {
     let pool = BufferPool::new();
     {
         let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
@@ -269,16 +267,22 @@ fn pooled_uninit_guard_fresh_handoff_and_panic_discard_are_exact() {
         output.as_uninit_slice_mut().iter_mut().for_each(|v| {
             v.write(3.0);
         });
-        let tensor = unsafe { output.assume_init() }.unwrap();
+        let tensor = unsafe { output.assume_init_recycled() }.unwrap();
         assert_eq!(tensor.as_slice().unwrap(), &[3.0, 3.0]);
+        // A finished output's storage is still the pool's while the tensor that owns it lives.
+        assert_eq!(pool.stats(), Default::default());
     }
+    assert_eq!(pool.stats().buffers, 1);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut output = PooledUninitOutput::<f64>::new(&pool, vec![4]).unwrap();
         output.as_uninit_slice_mut()[0].write(1.0);
         panic!("partial kernel panic");
     }));
     assert!(result.is_err());
-    assert_eq!(pool.stats(), Default::default());
+    // The aborted checkout hands its own storage back as well.
+    assert_eq!(pool.stats().buffers, 2);
+    assert_eq!(pool.stats().capacity_bytes, (2 + 4) * size_of::<f64>());
+    assert!(pool.in_flight_is_empty());
 }
 
 #[test]
@@ -305,7 +309,7 @@ fn pooled_uninit_guard_keeps_unrelated_dtype_markers_untouched() {
 }
 
 #[test]
-fn pooled_uninit_guard_bool_invalid_byte_error_drops_without_typed_read() {
+fn pooled_uninit_guard_bool_invalid_byte_error_returns_without_typed_read() {
     let mut pool = BufferPool::new();
     <bool as PoolScalar>::pool_release(&mut pool, vec![false; 8]);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -315,15 +319,20 @@ fn pooled_uninit_guard_bool_invalid_byte_error_drops_without_typed_read() {
     }));
     assert!(result.is_err());
     assert!(pool.in_flight_is_empty());
-    assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert!(super::lock_pool(&pool.state)
-        .bool_pool
-        .get(&8)
-        .is_none_or(Vec::is_empty));
+    // The storage is only ever handed back out as uninitialized bytes or zero-filled, so an
+    // invalid `bool` that was never read does not poison it.
+    assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<bool>());
+    assert_eq!(
+        super::lock_pool(&pool.state)
+            .bool_pool
+            .get(&8)
+            .map(Vec::len),
+        Some(1)
+    );
 }
 
 #[test]
-fn pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity() {
+fn pooled_uninit_guard_reused_success_handoff_returns_on_drop() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
     let mut output = PooledUninitOutput::<f64>::new(&pool, vec![3]).unwrap();
@@ -335,15 +344,12 @@ fn pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity() {
         .for_each(|(i, value)| {
             value.write(i as f64 + 1.0);
         });
-    let tensor = unsafe { output.assume_init() }.unwrap();
+    let tensor = unsafe { output.assume_init_recycled() }.unwrap();
     assert_eq!(tensor.as_slice().unwrap(), &[1.0, 2.0, 3.0]);
+    // While the tensor owns the buffer the pool holds neither its bytes nor a checkout claim.
     assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert_eq!(
-        super::lock_pool(&pool.state).f64_in_flight.get(&8),
-        Some(&1)
-    );
-    pool.replenish_in_flight_retained();
     assert!(pool.in_flight_is_empty());
+    drop(tensor);
     assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
     assert_eq!(
         super::lock_pool(&pool.state).f64_pool.get(&8).map(Vec::len),
@@ -352,18 +358,20 @@ fn pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity() {
 }
 
 #[test]
-fn pooled_uninit_guard_reused_error_discards_exact_capacity() {
+fn pooled_uninit_guard_reused_error_returns_exact_capacity() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
     let output = PooledUninitOutput::<f64>::new(&pool, vec![3]).unwrap();
-    let error = unsafe { output.assume_init_as::<tenferro_tensor::Rank<2>>() }.unwrap_err();
+    let error =
+        unsafe { output.assume_init_as_recycled::<tenferro_tensor::Rank<2>>() }.unwrap_err();
     assert!(error.to_string().contains("pooled_uninit_output"));
     assert!(pool.in_flight_is_empty());
-    assert_eq!(pool.retained_capacity_bytes(), 0);
+    // The handoff failed before a tensor could own the buffer, so it is the pool's again.
+    assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
 }
 
 #[test]
-fn pooled_uninit_guard_reused_partial_panic_discards_exact_capacity() {
+fn pooled_uninit_guard_reused_partial_panic_returns_exact_capacity() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -374,11 +382,11 @@ fn pooled_uninit_guard_reused_partial_panic_discards_exact_capacity() {
     }));
     assert!(result.is_err());
     assert!(pool.in_flight_is_empty());
-    assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert!(super::lock_pool(&pool.state)
-        .f64_pool
-        .get(&8)
-        .is_none_or(Vec::is_empty));
+    assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
+    assert_eq!(
+        super::lock_pool(&pool.state).f64_pool.get(&8).map(Vec::len),
+        Some(1)
+    );
 }
 
 #[test]
@@ -461,7 +469,7 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
         "// SAFETY: a successful erased strided entry initializes every element of its dense column-major destination"
     ));
     assert_eq!(
-        elementwise.matches("assume_init()").count(),
+        elementwise.matches("assume_init_recycled()").count(),
         2,
         "only run_into and the lazy outer product may finalize pooled output"
     );
@@ -512,7 +520,7 @@ fn pooled_uninit_guard_zero_length_view_bytes_and_drop_are_consistent() {
     assert!(pool.is_empty());
 
     let output = PooledUninitOutput::<i32>::new(&pool, vec![0]).unwrap();
-    let tensor = unsafe { output.assume_init() }.unwrap();
+    let tensor = unsafe { output.assume_init_recycled() }.unwrap();
     assert_eq!(tensor.shape(), &[0]);
     assert!(pool.is_empty());
 }
@@ -529,7 +537,7 @@ fn pooled_uninit_guard_static_rank_handoff_preserves_shape_and_values() {
             item.write(index as i32 + 1);
         });
 
-    let tensor = unsafe { output.assume_init_as::<tenferro_tensor::Rank<2>>() }.unwrap();
+    let tensor = unsafe { output.assume_init_as_recycled::<tenferro_tensor::Rank<2>>() }.unwrap();
     assert_eq!(tensor.shape(), &[2, 2]);
     assert_eq!(tensor.as_slice().unwrap(), &[1, 2, 3, 4]);
     assert!(pool.is_empty());

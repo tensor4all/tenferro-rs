@@ -250,7 +250,7 @@ where
         write(&mut dest).map_err(|err| strided_error(op, dtype, err))?;
     }
     // SAFETY: a successful erased strided entry initializes every element of its dense column-major destination, and the destination descriptor is dropped above.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 /// The output shape of a binary operation that broadcasts only rank-0 operands.
@@ -1367,7 +1367,7 @@ where
         .map_err(|err| crate::Error::backend_source(op, err))?;
     }
     // SAFETY: the planned output strides map the logical output one-to-one onto the dense base, so the successful broadcast multiply initialized every base element; the destination descriptor is dropped above.
-    let base = unsafe { base.assume_init()? };
+    let base = unsafe { base.assume_init_recycled()? };
     Ok(Some(LazyOuterProduct {
         base,
         strides: layout.output_strides,

@@ -138,7 +138,7 @@ pub(crate) fn execute_cached(
                             output.as_uninit_slice_mut().fill(std::mem::MaybeUninit::new(Default::default()));
                             // SAFETY: every physical element of the compact output
                             // has just been initialized, before lower N-ary execution.
-                            unsafe { output.assume_init() }
+                            unsafe { output.assume_init_recycled() }
                         }, &views, tree.output_shape())
                     },)*
                     _ => unreachable!("supported scalar dispatch checked above"),

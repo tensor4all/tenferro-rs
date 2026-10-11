@@ -198,13 +198,6 @@ pub(crate) mod private {
         ) -> std::sync::Weak<dyn tenferro_tensor::HostBufferRecycler<Self>>
         where
             Self: Sized;
-
-        fn pool_discard_uninit(
-            pool: &mut super::BufferPool,
-            data: Vec<MaybeUninit<Self>>,
-            checkout: super::UninitCheckoutToken,
-        ) where
-            Self: Sized;
     }
 }
 
@@ -358,19 +351,6 @@ macro_rules! impl_pool_scalar {
                 }
                 let owner: Arc<dyn HostBufferRecycler<Self>> = pool.state.clone();
                 Arc::downgrade(&owner)
-            }
-
-            fn pool_discard_uninit(
-                pool: &mut BufferPool,
-                data: Vec<MaybeUninit<Self>>,
-                checkout: UninitCheckoutToken,
-            ) {
-                drop(data);
-                let mut state = lock_pool(&pool.state);
-                let pool = &mut *state;
-                if let UninitCheckoutToken::Reused { actual_capacity } = checkout {
-                    decrement_in_flight(&mut pool.$in_flight, actual_capacity);
-                }
             }
         }
 

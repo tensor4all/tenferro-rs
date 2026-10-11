@@ -728,7 +728,7 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_without_poisoning_engine() 
 }
 
 #[test]
-fn uninit_output_partial_write_then_panic_discards_without_replenishment() {
+fn uninit_output_partial_write_then_panic_returns_without_replenishment() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     with_cpu_session(&mut backend, |cpu| {
         cpu.with_linalg_pool(|_, pool| {
@@ -749,8 +749,12 @@ fn uninit_output_partial_write_then_panic_discards_without_replenishment() {
     }));
 
     assert!(result.is_err());
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
-    assert_eq!(backend.buffer_pool_stats().unwrap().capacity_bytes, 0);
+    // The aborted destination hands its storage back, so no replacement has to be manufactured.
+    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    assert_eq!(
+        backend.buffer_pool_stats().unwrap().capacity_bytes,
+        1024 * std::mem::size_of::<bool>()
+    );
 }
 
 #[test]

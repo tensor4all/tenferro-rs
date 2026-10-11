@@ -411,14 +411,14 @@ fn pooled_scalar_f32(buffers: &mut BufferPool, value: f32) -> crate::Result<Tens
     let mut output = PooledUninitOutput::<f32>::new(buffers, vec![])?;
     output.as_uninit_slice_mut()[0].write(value);
     // SAFETY: the rank-0 output has exactly one element, initialized above.
-    unsafe { output.assume_init().map(Tensor::from_typed::<f32>) }
+    unsafe { output.assume_init_recycled().map(Tensor::from_typed::<f32>) }
 }
 
 fn pooled_scalar_f64(buffers: &mut BufferPool, value: f64) -> crate::Result<Tensor> {
     let mut output = PooledUninitOutput::<f64>::new(buffers, vec![])?;
     output.as_uninit_slice_mut()[0].write(value);
     // SAFETY: the rank-0 output has exactly one element, initialized above.
-    unsafe { output.assume_init().map(Tensor::from_typed::<f64>) }
+    unsafe { output.assume_init_recycled().map(Tensor::from_typed::<f64>) }
 }
 
 pub(crate) fn reduce_sum_squares_read(
@@ -951,7 +951,7 @@ where
         .map_err(|err| crate::Error::backend_source(label, err))?;
 
     // SAFETY: the reduction plan writes every logical destination element.
-    unsafe { output.assume_init() }
+    unsafe { output.assume_init_recycled() }
 }
 
 /// # Errors
