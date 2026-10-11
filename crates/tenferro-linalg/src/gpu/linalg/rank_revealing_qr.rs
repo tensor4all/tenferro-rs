@@ -104,7 +104,7 @@ fn rrqr_binding<T>(cubecl: &CubeclSession<'_>, tensor: &TypedTensor<T>) -> Resul
 where
     T: cubecl::prelude::CubeElement + TensorScalar + Clone,
 {
-    cubecl.tensor_binding(tensor, OP)
+    unsafe { cubecl.tensor_binding(tensor, OP) }
 }
 
 macro_rules! impl_cuda_rrqr_real {

@@ -65,7 +65,7 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
     let binding = backend
         .with_backend_session(|session| {
             with_cuda_exec_session(session, |sess| {
-                sess.with_cubecl("storage_provider_cuda", |cubecl| {
+                sess.with_cubecl("storage_provider_cuda", |cubecl| unsafe {
                     cubecl.tensor_binding(tensor, "storage_provider_cuda")
                 })
             })

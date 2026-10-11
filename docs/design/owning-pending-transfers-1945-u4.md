@@ -135,10 +135,11 @@ a claim that every drop is wait-free.
 
 ## 4. What this does not fix
 
-- **The safe writable-binding escape** (`Session::tensor_binding` + `Client::with_server` +
-  `ComputeServer::write`) still allows safe code to write into storage it does not own. That is a
-  pre-existing boundary defect recorded in [source-publication-1945-u4.md](./source-publication-1945-u4.md);
-  owning the transfer removes the borrow-based hole, not that one.
+- **The safe writable-binding escape** was a pre-existing boundary defect (a lifetime-free
+  `TensorBinding` for a borrowed tensor) and is now closed for tenferro's surface: `ComputeServer::write`
+  is `unsafe` (tensor4all/cubecl#29) and the extension accessors that derive such a binding from a borrow
+  are `unsafe` with the write-authority contract. See
+  [source-publication-1945-u4.md](./source-publication-1945-u4.md) for the cubecl-level residue.
 - **Source publication, dependent-consumer admission, cross-domain/P2P, view readiness, chunked
   staging, event batching and measured overlap** remain undelivered and are listed in
   [asynchronous-transfer-1945-u4.md](./asynchronous-transfer-1945-u4.md) §5.
