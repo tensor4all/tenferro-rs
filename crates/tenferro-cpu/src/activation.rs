@@ -11,6 +11,8 @@
 
 use tenferro_tensor::{ActivationOp, Tensor, TensorRead, TensorView, TypedTensorView};
 
+use crate::simd_math::VectorKernel;
+
 use crate::analytic::typed_unary_view_tensor_with_pool;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 
@@ -86,7 +88,15 @@ where
     T: FusedActivationElem,
     R: tenferro_tensor::TensorRank,
 {
-    typed_unary_view_tensor_with_pool(op.label(), buffers, view, |x| T::apply(op, x))
+    // Activations stay on the strided path: a fused `sigmoid`/`gelu` kernel is a different
+    // composition from the elementwise kernels `simd_math` exposes, so there is nothing to select.
+    typed_unary_view_tensor_with_pool(
+        op.label(),
+        buffers,
+        view,
+        |x| T::apply(op, x),
+        VectorKernel::None,
+    )
 }
 
 /// Fused activation fast path for the CPU backend.

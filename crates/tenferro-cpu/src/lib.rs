@@ -194,6 +194,7 @@ pub mod provider;
 mod reduction;
 mod resource_domain;
 mod runtime_adapter;
+mod simd_math;
 mod structural;
 mod topology;
 
