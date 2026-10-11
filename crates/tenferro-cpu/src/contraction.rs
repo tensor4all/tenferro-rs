@@ -463,7 +463,7 @@ fn fresh<T: Scalar>(
             result?;
             // SAFETY: BinaryPlan succeeded on MaybeUninit storage and proves complete
             // physical coverage. No initialized output reference existed before it.
-            unsafe { output.assume_init() }.map(Tensor::from_typed::<T>)
+            unsafe { output.assume_init_recycled() }.map(Tensor::from_typed::<T>)
         })
 }
 
