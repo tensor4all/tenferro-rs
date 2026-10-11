@@ -59,9 +59,11 @@ impl<'s> Session<'s> {
     ///
     /// The binding is an owned, lifetime-free descriptor: it stays valid after the borrow of the
     /// tensor ends, which is what lets an extension kernel keep the launch argument alive. That also
-    /// means it carries no write authority — writing through it goes through CubeCL's
-    /// `ComputeServer::write`, which is `unsafe` for exactly this reason, and a caller that writes
-    /// through a binding for a tensor it does not own must assert that authority itself.
+    /// means it carries no write authority: CubeCL's `ComputeServer::write` is `unsafe` for exactly this
+    /// reason, and a checked kernel launch that writes through such a binding is a supported route whose
+    /// bounds checks do not supply ownership either. A caller that writes through a binding for a tensor
+    /// it does not own must therefore assert that authority itself, and no owner can claim immutable
+    /// storage while that route exists.
     ///
     /// # Errors
     ///
