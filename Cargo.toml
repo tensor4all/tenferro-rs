@@ -52,7 +52,7 @@ num-complex = "0.4"
 num-traits = "0.2"
 # Scalar `erf`/`erff` for the CPU analytic kernels (`f64::erf` is unstable in std).
 libm = "0.2.16"
-elem-simd-math = { git = "https://github.com/tensor4all/elem-simd-math-rs.git", rev = "63d3f8df42425f3e6398da765261a5a5d1999c30" }
+elem-simd-math = { git = "https://github.com/tensor4all/elem-simd-math-rs.git", version = "=0.1.0", rev = "63d3f8df42425f3e6398da765261a5a5d1999c30" }
 thiserror = "2"
 smallvec = { version = "1", features = ["union"] }
 rayon = "1"
