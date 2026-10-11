@@ -13,6 +13,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [supported-ops.md](./supported-ops.md) | Crate-by-crate inventory of supported primal and AD operations |
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
 | [tensor-session-redesign-1938.md](./tensor-session-redesign-1938.md) | Accepted #1938 target for compact tensor/storage/views and explicit session execution, with per-decision implemented mappings |
+| [large-transfer-staging-1945-u4.md](./large-transfer-staging-1945-u4.md) | Implemented design for bounded chunked staging on the blocking upload route (#1945 U4 item 4): measured 6.9x at 256 MiB, and why the download direction is deliberately not chunked |
 | [exec-session.md](./exec-session.md) | Backend execution sessions: fallible entry, native-session visitors, runtime use |
 | [session-oriented-concrete-apis.md](./session-oriented-concrete-apis.md) | Session-borrowing concrete operation surface and its migration record |
 | [storage-ownership-contracts.md](./storage-ownership-contracts.md) | Normative Phase 1 contracts for the storage ownership redesign (#1555): span access and retirement, allocation groups, submission, method distribution, raw handles and reclamation, documentation ownership, and AD value retention |

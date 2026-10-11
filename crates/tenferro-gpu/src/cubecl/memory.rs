@@ -134,10 +134,27 @@ fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
         }
     };
 
-    // The host buffer is borrowed, so CubeCL stages exactly one copy of it: the
-    // device write runs after this call returns (#2009).
-    let handle = client.create_from_slice(T::as_bytes(host_data));
     let byte_len = T::as_bytes(host_data).len();
+    // A payload larger than the staging chunk goes through the runtime's pinned staging lease: the
+    // device then reads pinned memory instead of the pageable transport, which is where the measured
+    // 17x lives for these sizes (#1945 U4 item 4). Chunked uploads also wait for their own chunks,
+    // because a reused staging buffer and a borrowed host source cannot stay safe behind an early
+    // return.
+    let handle = if super::transfer::uses_chunked_staging(byte_len) {
+        let handle = client.empty(byte_len);
+        super::transfer::upload_tensor_chunked(
+            rt,
+            &handle,
+            byte_len,
+            T::as_bytes(host_data),
+            "upload",
+        )?;
+        handle
+    } else {
+        // The host buffer is borrowed, so CubeCL stages exactly one copy of it: the device write runs
+        // after this call returns (#2009).
+        client.create_from_slice(T::as_bytes(host_data))
+    };
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
         StorageBuffer::Backend(Box::new(CubeclBuffer::new(
@@ -217,6 +234,10 @@ fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
     }
 
     let data = if handle.size_in_used() == byte_len as u64 {
+        // Not chunked: staging a download through pinned memory measured no better than this route,
+        // because reading this machine's pinned allocations from the host runs at about 2 GB/s
+        // (`docs/design/large-transfer-staging-1945-u4.md` §3). The upload direction is where the
+        // chunked route pays, since host writes into pinned memory are an order of magnitude faster.
         download_owned_vec::<T>(rt, handle, typed.n_elements(), byte_len, "download")?
     } else {
         // A handle that does not span exactly the tensor's elements keeps the

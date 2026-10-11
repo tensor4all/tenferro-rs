@@ -320,6 +320,36 @@ fn bench_large(c: &mut Criterion) {
     group.finish();
 }
 
+<<<<<<< HEAD
+=======
+/// The routing boundary: the same payload either side of the staging chunk.
+///
+/// `STAGING_CHUNK_BYTES` is 8 MiB, so a payload at the chunk takes the previous route and one element
+/// more takes the chunked route. Two sizes eight bytes apart make the comparison fair without needing
+/// a runtime switch, and they are what decides whether the cutoff should move.
+fn bench_chunk_boundary(c: &mut Criterion) {
+    let backend = backend();
+    let runtime = backend.runtime().clone();
+    let mut group = c.benchmark_group("transfer_chunk_boundary");
+    let chunk_elements = 8 * 1024 * 1024 / size_of::<f64>();
+
+    for (elements, label) in [(chunk_elements, "8MiB"), (chunk_elements + 1, "8MiB+8B")] {
+        let bytes = elements * size_of::<f64>();
+        group.throughput(Throughput::Bytes(bytes as u64));
+        let host = host_vector(elements);
+        group.bench_with_input(
+            BenchmarkId::new("upload_staging", label),
+            &host,
+            |bencher, host| {
+                bencher.iter(|| black_box(upload_tensor(&runtime, host).expect("upload")));
+            },
+        );
+    }
+
+    group.finish();
+}
+
+>>>>>>> 30f317335 (perf(cuda): stage large blocking uploads through a bounded pinned lease (#1945 U4 item 4))
 fn criterion_config() -> Criterion {
     Criterion::default()
         .warm_up_time(std::time::Duration::from_secs(2))
@@ -330,6 +360,10 @@ fn criterion_config() -> Criterion {
 criterion_group! {
     name = benches;
     config = criterion_config();
+<<<<<<< HEAD
     targets = bench_download, bench_upload, bench_host_copies, bench_large
+=======
+    targets = bench_download, bench_upload, bench_host_copies, bench_large, bench_chunk_boundary
+>>>>>>> 30f317335 (perf(cuda): stage large blocking uploads through a bounded pinned lease (#1945 U4 item 4))
 }
 criterion_main!(benches);

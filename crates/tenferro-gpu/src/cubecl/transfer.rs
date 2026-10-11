@@ -90,7 +90,7 @@ impl PinnedHostBuffer {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::InvalidArgument`] for a zero length, and
+    /// Returns [`crate::Error::Validation`] for a zero length, and
     /// [`crate::Error::BackendSource`] when the CUDA context cannot be selected or the host
     /// allocation fails.
     ///
@@ -177,6 +177,15 @@ impl PinnedHostBuffer {
     fn as_mut_ptr(&self) -> *mut u8 {
         self.ptr
     }
+
+    /// Address of this buffer's allocation.
+    ///
+    /// A witness for the runtime's staging-slot tests, which have to tell reuse from a fresh
+    /// allocation instead of assuming it.
+    #[cfg(test)]
+    pub(crate) fn address(&self) -> usize {
+        self.ptr as usize
+    }
 }
 
 impl Drop for PinnedHostBuffer {
@@ -222,6 +231,105 @@ impl TransferRetirement {
         self.value.take();
         self.buffer.take();
         self.resource.take();
+    }
+}
+
+/// Bytes a chunked blocking transfer stages at a time.
+///
+/// Deliberately the same fixed capacity the runtime's staging slot allocates, so the lease's buffer is
+/// never grown and the chunk loop performs no allocation of its own.
+const CHUNKED_STAGING_BYTES: usize = super::runtime::STAGING_CHUNK_BYTES;
+
+/// Whether a blocking upload of `byte_len` should stage in chunks.
+///
+/// The routing cutoff is the chunk size. Above it the pageable blocking route loses its bandwidth
+/// (measured at 17x on 256 MiB, `docs/design/asynchronous-transfer-1945-u4.md` §3.2) and the chunked
+/// route pays: 256 MiB uploads drop from 166.7 ms to 23.2 ms. Below it host dispatch dominates. The
+/// same route does not pay for downloads, which is why only uploads are routed through it.
+pub(crate) fn uses_chunked_staging(byte_len: usize) -> bool {
+    byte_len > CHUNKED_STAGING_BYTES
+}
+
+/// Upload a payload larger than the staging chunk into an already allocated device buffer.
+///
+/// Every chunk is copied into the leased pinned buffer, DMA'd from there, and waited for before that
+/// buffer is reused, so a borrowed host source stays safe and the device reads pinned memory rather
+/// than the pageable route. Completion is proven per chunk; an unproven chunk retires the lease, the
+/// event and the device resource instead of releasing them.
+pub(crate) fn upload_tensor_chunked(
+    runtime: &CudaRuntime,
+    handle: &cubecl_runtime::server::Handle,
+    byte_len: usize,
+    bytes: &[u8],
+    op: &'static str,
+) -> crate::Result<()> {
+    runtime.check_errors(op)?;
+    let resource = runtime
+        .client()
+        .get_resource(handle.clone())
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+    let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
+    if available < byte_len {
+        return Err(crate::Error::Internal(format!(
+            "{op}: upload of {byte_len} bytes exceeds the {available}-byte allocation"
+        )));
+    }
+    let stream = runtime
+        .set_current_cuda_context(op)
+        .and_then(|()| runtime.raw_cuda_stream())? as usize as CUstream;
+    let event = cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING)
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+    let mut lease = runtime.acquire_pinned_staging()?;
+    let dst = resource.resource().ptr;
+
+    let mut offset = 0usize;
+    while offset < byte_len {
+        let len = (byte_len - offset).min(lease.len());
+        lease.begin_chunk();
+        lease.buffer_mut().as_mut_slice()[..len].copy_from_slice(&bytes[offset..offset + len]);
+        // SAFETY: `dst + offset` is inside the live allocation whose size was checked above, the
+        // leased buffer holds `len` initialized bytes, and `stream` is the captured CubeCL stream.
+        let enqueued = unsafe {
+            cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
+                dst + offset as u64,
+                lease.buffer().as_mut_ptr().cast(),
+                len,
+                stream,
+            )
+        }
+        .result()
+        .and_then(|()| unsafe { cuda_result::event::record(event, stream) });
+        if let Err(err) = enqueued {
+            lease.retire(event, Some(Box::new(resource)));
+            return Err(crate::Error::backend_source(op, err));
+        }
+        if let Err(err) = unsafe { cuda_result::event::synchronize(event) } {
+            lease.retire(event, Some(Box::new(resource)));
+            return Err(crate::Error::backend_source(op, err));
+        }
+        lease.end_chunk();
+        offset += len;
+    }
+    lease.release();
+    Ok(())
+}
+
+/// Build the retirement record for a staging package whose completion was never proven.
+///
+/// The event was never recorded, or its record failed, so no later query may authorize releasing the
+/// buffer or the device resource: the runtime retains the record permanently instead of releasing it.
+/// This is the only route a chunked transfer's staging lease may take on failure - the query-drainable
+/// detach path would release a buffer the device may still be reading or writing.
+pub(crate) fn staging_retirement(
+    event: CUevent,
+    buffer: PinnedHostBuffer,
+    resource: Option<Box<dyn std::any::Any + Send>>,
+) -> TransferRetirement {
+    TransferRetirement {
+        event,
+        value: None,
+        buffer: Some(buffer),
+        resource,
     }
 }
 

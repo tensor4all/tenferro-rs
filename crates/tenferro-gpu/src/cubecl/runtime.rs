@@ -12,7 +12,7 @@ use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
 use cubecl_runtime::config::{CubeClRuntimeConfig, RuntimeConfig};
 use cudarc::cublas::sys as cublas_sys;
 use cudarc::driver::result::DriverError;
-use cudarc::driver::sys::{CUcontext, CUdevice, CUresult};
+use cudarc::driver::sys::{CUcontext, CUdevice, CUevent, CUresult};
 use cudarc::runtime::{result as cuda_result, sys as cuda_sys, sys::cudaStream_t};
 use tenferro_tensor::AllocationDomainId;
 
@@ -228,6 +228,10 @@ pub(crate) struct CudaRuntimeState {
     // Transfers whose caller detached observation; released once their event completes, and
     // retained permanently when completion cannot be proven.
     transfer_retirements: Mutex<super::transfer::TransferRetirementQueue>,
+    // Pinned-host staging for chunked blocking transfers (#1945 U4 item 4), leased to one transfer at
+    // a time and fixed at `STAGING_CHUNK_BYTES`. A lease that returns here is proven complete; one
+    // whose completion was never proven is retired through `transfer_retirements` and never returns.
+    pinned_staging: Mutex<PinnedStagingSlot>,
 }
 
 /// One cached cuBLAS handle bound to a fixed CUDA stream.
@@ -242,16 +246,154 @@ struct PinnedScalarSlot {
 /// supported scalar (`Complex64`, 16 bytes).
 pub(crate) const PINNED_SCALAR_BYTES: usize = 16;
 
+/// Bytes of pinned staging a chunked blocking transfer moves at a time.
+///
+/// Fixed: the slot is allocated once, before the first enqueue, and never grows, so a transfer
+/// performs no allocation inside its chunk loop.
+pub(crate) const STAGING_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Pinned-host staging slot for chunked blocking transfers; empty until the first such transfer.
+struct PinnedStagingSlot {
+    buffer: Option<super::transfer::PinnedHostBuffer>,
+}
+
+/// One chunked transfer's lease on the runtime's pinned staging buffer.
+///
+/// The slot hands the buffer out instead of sharing it, so two concurrent chunked transfers never
+/// stage through the same memory. A lease is disposed of explicitly: [`PinnedStagingLease::release`]
+/// once the last chunk's completion is proven, [`PinnedStagingLease::retire`] when it is not. Dropping
+/// a lease without either is the unwinding path, and it leaks the buffer rather than freeing memory the
+/// device may still be reading or writing.
+///
+/// `!Send + !Sync` by construction: it owns pinned host memory bound to the CUDA context that created
+/// it, exactly like the buffer it holds.
+pub(crate) struct PinnedStagingLease {
+    buffer: Option<super::transfer::PinnedHostBuffer>,
+    /// Set before every possible enqueue and cleared only by a wait that proved completion.
+    unproven: bool,
+    runtime: std::sync::Weak<CudaRuntimeState>,
+}
+
+impl PinnedStagingLease {
+    /// Bytes this lease stages at a time.
+    pub(crate) fn len(&self) -> usize {
+        self.buffer
+            .as_ref()
+            .map_or(0, super::transfer::PinnedHostBuffer::len)
+    }
+
+    /// The leased pinned buffer.
+    pub(crate) fn buffer(&self) -> &super::transfer::PinnedHostBuffer {
+        self.buffer
+            .as_ref()
+            .expect("a live lease holds its buffer until it is released or retired")
+    }
+
+    /// The leased pinned buffer, mutably: the chunk loop fills it before an upload.
+    pub(crate) fn buffer_mut(&mut self) -> &mut super::transfer::PinnedHostBuffer {
+        self.buffer
+            .as_mut()
+            .expect("a live lease holds its buffer until it is released or retired")
+    }
+
+    /// Mark the lease unproven before an enqueue that may follow.
+    ///
+    /// A reused event proves only the work it captured, so a previous chunk's success must never be
+    /// read as this chunk's completion: the loop marks the lease unproven first and clears it only
+    /// after the wait that follows this enqueue succeeds.
+    pub(crate) fn begin_chunk(&mut self) {
+        self.unproven = true;
+    }
+
+    /// Record that the chunk enqueued after [`Self::begin_chunk`] completed.
+    pub(crate) fn end_chunk(&mut self) {
+        self.unproven = false;
+    }
+
+    /// Return the buffer to the runtime's slot after a proven completion.
+    ///
+    /// A lease that is still unproven is leaked instead of freed, because its chunks may be in flight;
+    /// the slot then stays empty and the next transfer allocates a replacement.
+    pub(crate) fn release(mut self) {
+        debug_assert!(
+            !self.unproven,
+            "a proven lease is released, an unproven one is retired"
+        );
+        self.restore();
+    }
+
+    /// Retire a lease whose completion was never proven.
+    ///
+    /// The event was never recorded or its record failed, so the buffer, the event and the device
+    /// resource are retained permanently by the runtime's retirement queue.
+    pub(crate) fn retire(
+        mut self,
+        event: CUevent,
+        resource: Option<Box<dyn std::any::Any + Send>>,
+    ) {
+        let Some(buffer) = self.buffer.take() else {
+            // An event whose record may not have happened must never be destroyed: `CUevent` is a raw
+            // pointer, so dropping it here *is* leaving it to the device, and no destructor runs.
+            let _ = event;
+            return;
+        };
+        let Some(state) = self.runtime.upgrade() else {
+            // The runtime is gone, so its context cannot be selected: leak rather than free memory that
+            // belongs to a device this lease can no longer name. The event is a raw pointer, so it is
+            // simply not destroyed.
+            std::mem::forget(buffer);
+            let _ = event;
+            return;
+        };
+        state.retain_staging_for_soundness(event, buffer, resource);
+    }
+
+    fn restore(&mut self) {
+        let Some(buffer) = self.buffer.take() else {
+            return;
+        };
+        let Some(state) = self.runtime.upgrade() else {
+            // The runtime is gone, so the buffer leaks rather than being freed through a context this
+            // lease can no longer select - the same fallback the buffer's own `Drop` takes.
+            std::mem::forget(buffer);
+            return;
+        };
+        let mut slot = state
+            .pinned_staging
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.unproven = false;
+        if slot.buffer.is_none() {
+            slot.buffer = Some(buffer);
+        }
+    }
+}
+
+impl Drop for PinnedStagingLease {
+    fn drop(&mut self) {
+        if self.unproven {
+            // Unwinding between an enqueue and its proven wait: the buffer may still be the source or
+            // destination of a DMA, so it is leaked rather than freed, and it never returns to the slot.
+            if let Some(buffer) = self.buffer.take() {
+                std::mem::forget(buffer);
+            }
+            return;
+        }
+        self.restore();
+    }
+}
+
 // SAFETY: `CudaRuntimeState` owns a retained CUDA primary context and a CubeCL
 // client for one device ordinal. Methods set the context current before raw CUDA
 // calls, and backend/executor layers serialize mutating tensor execution. The
-// raw cuBLAS handles and the pinned staging pointer are plain CUDA resource
+// raw cuBLAS handles and the pinned staging pointers are plain CUDA resource
 // addresses owned by this state and released in `Drop`.
 unsafe impl Send for CudaRuntimeState {}
 // SAFETY: Shared state access exposes immutable runtime handles; synchronization
 // and stream queries use explicit CUDA/CubeCL handles and do not mutate Rust
 // aliasing-visible fields. cuBLAS handles are locked per bounded physical
-// stream slot, and the pinned staging slot is used only while its mutex is held.
+// stream slot, and a pinned staging buffer is touched either while its slot mutex is held or by the
+// one lease that took it out of the slot, which serializes access to that buffer.
 unsafe impl Sync for CudaRuntimeState {}
 
 impl fmt::Debug for CudaRuntime {
@@ -373,12 +515,39 @@ impl CudaRuntime {
                 }),
                 workspace_retirements: Mutex::new(Default::default()),
                 transfer_retirements: Mutex::new(Default::default()),
+                pinned_staging: Mutex::new(PinnedStagingSlot { buffer: None }),
             }),
         })
     }
 
     pub(crate) fn client(&self) -> &ComputeClient<CubeclCudaRuntime> {
         &self.inner.client
+    }
+
+    /// Lease the runtime's pinned staging buffer for a chunked blocking transfer.
+    ///
+    /// The buffer is allocated on first use and never grown, and the lease takes it out of the slot, so
+    /// a concurrent chunked transfer allocates its own rather than sharing this one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the CUDA context cannot be selected or the pinned
+    /// allocation fails.
+    pub(crate) fn acquire_pinned_staging(&self) -> crate::Result<PinnedStagingLease> {
+        let mut slot = self
+            .inner
+            .pinned_staging
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let buffer = match slot.buffer.take() {
+            Some(buffer) => buffer,
+            None => super::transfer::PinnedHostBuffer::new(self, STAGING_CHUNK_BYTES)?,
+        };
+        Ok(PinnedStagingLease {
+            buffer: Some(buffer),
+            unproven: false,
+            runtime: self.weak_state(),
+        })
     }
 
     /// Return the caller-selected CUDA device identity that this runtime targets.
@@ -725,6 +894,21 @@ impl CudaRuntime {
 }
 
 impl CudaRuntimeState {
+    /// Retain a chunked transfer's staging package permanently: its completion was never proven, or
+    /// its event was never recorded, so no later query may be trusted to release it.
+    fn retain_staging_for_soundness(
+        &self,
+        event: CUevent,
+        buffer: super::transfer::PinnedHostBuffer,
+        resource: Option<Box<dyn std::any::Any + Send>>,
+    ) {
+        let mut queue = self
+            .transfer_retirements
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        queue.retain_for_soundness(super::transfer::staging_retirement(event, buffer, resource));
+    }
+
     fn stream_slot(&self) -> usize {
         self.stream_slot_for(StreamId::current())
     }
@@ -1068,6 +1252,11 @@ impl CudaRuntimeState {
                 slot.ptr = std::ptr::null_mut();
             }
         }
+        // A buffer in the staging slot is only ever populated by a proven completion, so it is as safe
+        // to free here as the scalar slot; a retired lease never returns to the slot.
+        if let Ok(mut slot) = self.pinned_staging.lock() {
+            drop(slot.buffer.take());
+        }
     }
 }
 
@@ -1168,6 +1357,13 @@ impl Drop for CudaRuntimeState {
         // A transfer whose completion was never proven is retained permanently either way: on
         // retirement failure the streams are not known to be done, so nothing it owns may be freed.
         if !self.retire_initialized_streams() {
+            // Streams are not known to be done, so a cached staging buffer may still be in use: leak it
+            // rather than let field destruction free it.
+            if let Ok(mut slot) = self.pinned_staging.lock() {
+                if let Some(buffer) = slot.buffer.take() {
+                    std::mem::forget(buffer);
+                }
+            }
             // Records kept for soundness must not be freed by field destruction either, so they are
             // forgotten rather than merely moved between queues.
             self.transfer_retirements
