@@ -57,6 +57,12 @@ impl<'s> Session<'s> {
 
     /// Build a CubeCL tensor binding for a GPU-backed tensor.
     ///
+    /// The binding is an owned, lifetime-free descriptor: it stays valid after the borrow of the
+    /// tensor ends, which is what lets an extension kernel keep the launch argument alive. That also
+    /// means it carries no write authority — writing through it goes through CubeCL's
+    /// `ComputeServer::write`, which is `unsafe` for exactly this reason, and a caller that writes
+    /// through a binding for a tensor it does not own must assert that authority itself.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
