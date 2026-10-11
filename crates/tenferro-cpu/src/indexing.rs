@@ -634,7 +634,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     // INVARIANT: the compact output has no unreachable storage, so successful
     // static-slice replay initializes every element.
     // SAFETY: every element contains a valid T after successful replay.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 fn typed_concatenate_from_dyn_inputs<T>(
@@ -793,7 +793,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     // INVARIANT: the compact output has no unreachable storage, so successful
     // concatenate replay initializes every element.
     // SAFETY: every element contains a valid T after successful replay.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
@@ -852,7 +852,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     // INVARIANT: the compact output has no unreachable storage, so successful
     // reverse replay initializes every element.
     // SAFETY: every element contains a valid T after successful replay.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 /// Index values for one gather, scatter, or dynamic-slice call.
@@ -1283,7 +1283,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         .map_err(|err| crate::Error::backend_source("gather", err))?;
 
     // SAFETY: the gather plan writes every logical output element.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 fn typed_scatter<T>(
@@ -1577,7 +1577,7 @@ where
 
     // SAFETY: the scatter plan first copies the initialized operand and then
     // applies additive updates before returning success.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
@@ -1703,7 +1703,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
 
     // SAFETY: the dynamic-slice plan writes every logical output element.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
@@ -1859,7 +1859,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
 
     // SAFETY: the dynamic-update plan first copies the initialized operand and
     // then overwrites the update window before returning success.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
@@ -2007,7 +2007,7 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     // INVARIANT: the compact output has no unreachable storage, so successful
     // pad replay initializes every element.
     // SAFETY: every element contains a valid T after successful replay.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 #[cfg(test)]

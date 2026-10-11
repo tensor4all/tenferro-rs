@@ -45,7 +45,9 @@ fn recycled_drop_during_another_checkout_does_not_reenter_the_execution_lock() {
     let output = PooledUninitOutput::<f64>::new(&pool, vec![4]).unwrap();
     drop(tensor);
     drop(output);
-    assert_eq!(pool.len(), 1);
+    // The recycled tensor and the abandoned checkout both return their storage, and neither
+    // return needs the pool's execution lock while the other is held.
+    assert_eq!(pool.len(), 2);
 }
 
 #[test]
@@ -81,8 +83,9 @@ fn ranked_recycled_handoff_returns_once_and_rank_error_cancels_checkout() {
     wrong.as_uninit_slice_mut()[1].write(2.0);
     // SAFETY: both elements have been initialized, although the selected rank is wrong.
     assert!(unsafe { wrong.assume_init_as_recycled::<Rank<2>>() }.is_err());
+    // A handoff that fails on its rank leaves the storage the pool's, so it comes straight back.
+    assert_eq!(pool.len(), 1);
     assert!(pool.in_flight_is_empty());
-    assert!(pool.is_empty());
 
     let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
     output.as_uninit_slice_mut()[0].write(3.0);
@@ -113,7 +116,7 @@ fn recycled_output_extraction_disarms_return_and_pool_may_drop_first() {
 }
 
 #[test]
-fn partial_output_is_discarded_on_error_and_unwind() {
+fn partial_output_returns_to_the_pool_on_error_and_unwind() {
     let mut pool = BufferPool::new();
     for unwind in [false, true] {
         drop(recycled(&mut pool));
@@ -131,15 +134,18 @@ fn partial_output_is_discarded_on_error_and_unwind() {
         } else {
             assert!(outcome.unwrap().is_err());
         }
-        assert!(
-            pool.is_empty(),
-            "partial initialization cannot become a retained tensor"
+        // An aborted destination never became a tensor, so its storage is still the pool's and
+        // goes back for the next call rather than to the allocator.
+        assert_eq!(
+            pool.len(),
+            1,
+            "an aborted checkout returns its buffer to the pool"
         );
-        pool.replenish_in_flight_retained();
-        assert!(
-            pool.is_empty(),
-            "aborted checkout must cancel replacement accounting"
+        assert_eq!(
+            pool.retained_capacity_bytes(),
+            4 * std::mem::size_of::<f64>()
         );
+        assert!(pool.in_flight_is_empty());
         let tensor = recycled(&mut pool);
         assert_eq!(tensor.as_slice().unwrap(), &[0., 1., 2., 3.]);
         drop(tensor);
@@ -181,7 +187,7 @@ fn pooled_uninit_output_public_contract_covers_zero_length_handoff() {
     assert!(output.as_uninit_bytes_mut().is_empty());
     assert_eq!(output.as_uninit_view_mut().unwrap().dims(), &[0]);
 
-    let tensor = unsafe { output.assume_init() }.unwrap();
+    let tensor = unsafe { output.assume_init_recycled() }.unwrap();
     assert_eq!(tensor.shape(), &[0]);
     assert!(pool.is_empty());
 }

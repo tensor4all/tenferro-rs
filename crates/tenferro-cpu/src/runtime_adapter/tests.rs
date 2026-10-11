@@ -284,7 +284,10 @@ fn cpu_backend_cache_owner_hooks_report_and_clear_current_engine_caches() {
         .unwrap()
         .expect("reuse gather plan");
     let populated = RuntimeCacheOwner::cache_stats(&backend).expect("populated cache stats");
-    assert_eq!(populated.entries, 1);
+    // The reported entries are the compiled gather plan plus whatever the buffer pool holds: a
+    // finished output carries a recycler, so the gather's result comes back to the pool.
+    let pooled = backend.buffer_pool_stats().expect("pool stats").buffers;
+    assert_eq!(populated.entries, 1 + pooled);
     assert!(populated.retained_bytes > 0);
     assert_eq!(populated.hits, 1);
     assert_eq!(populated.misses, 1);

@@ -841,7 +841,7 @@ where
     copy_into_uninit(&mut out.as_uninit_view_mut()?, &permuted)
         .map_err(|err| crate::Error::backend_source("transpose", err))?;
     // SAFETY: the successful transpose copy writes every logical destination element.
-    let mut out = unsafe { out.assume_init()? };
+    let mut out = unsafe { out.assume_init_recycled()? };
     out.set_placement(view.placement().clone());
     Ok(out)
 }
@@ -913,7 +913,7 @@ where
     copy_into_uninit(&mut copy_target, &src)
         .map_err(|err| crate::Error::backend_source("reshape", err))?;
     // SAFETY: the successful reshape copy writes every logical destination element.
-    let mut out = unsafe { out.assume_init()? };
+    let mut out = unsafe { out.assume_init_recycled()? };
     out.set_placement(view.placement().clone());
     Ok(out)
 }
@@ -996,7 +996,7 @@ where
     map_into(&mut out.as_uninit_view_mut()?, &broadcast, MaybeUninit::new)
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     // SAFETY: the successful broadcast copy writes every logical destination element.
-    let mut out = unsafe { out.assume_init()? };
+    let mut out = unsafe { out.assume_init_recycled()? };
     out.set_placement(view.placement().clone());
     Ok(out)
 }
@@ -1075,7 +1075,7 @@ where
     )
     .map_err(|err| crate::Error::backend_source("convert", err))?;
     // SAFETY: the successful conversion map writes every logical destination element.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 #[cfg(test)]
@@ -1120,7 +1120,7 @@ where
     copy_into_uninit(&mut out.as_uninit_view_mut()?, &diag)
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     // SAFETY: the successful diagonal copy writes every logical destination element.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 #[cfg(test)]
@@ -1179,7 +1179,7 @@ where
     )
     .map_err(|err| crate::Error::backend_source("embed_diagonal", err))?;
     // SAFETY: strided initialized the whole output, including off-diagonal zeros.
-    unsafe { out.assume_init() }
+    unsafe { out.assume_init_recycled() }
 }
 
 #[cfg(test)]
@@ -1296,7 +1296,7 @@ where
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
     // SAFETY: strided wrote every kept and masked output element.
-    let mut out = unsafe { out.assume_init()? };
+    let mut out = unsafe { out.assume_init_recycled()? };
     out.set_placement(tensor.placement().clone());
     Ok(out)
 }

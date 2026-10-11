@@ -144,7 +144,9 @@ fn drop_releases_the_session_like_close() {
         let mut session = backend.open_session().expect("held session");
         assert_eq!(add_in_session(&mut session), vec![3.0]);
     }
-    assert_eq!(backend.buffer_pool_len().expect("resources returned"), 0);
+    // Dropping the session returns the operation's storage to the pool, exactly as closing does,
+    // and releases the session state either way.
+    assert_eq!(backend.buffer_pool_len().expect("resources returned"), 1);
     let _second = backend.open_session().expect("held session reopens");
 }
 

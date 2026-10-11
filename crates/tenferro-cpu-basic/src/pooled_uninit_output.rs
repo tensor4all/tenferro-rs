@@ -2,7 +2,7 @@ use std::alloc::Layout;
 use std::mem::{ManuallyDrop, MaybeUninit};
 
 use strided_basic::StridedViewMut;
-use tenferro_tensor::{validate::checked_shape_product, TensorRank, TensorScalar, TypedTensor};
+use tenferro_tensor::{validate::checked_shape_product, TensorRank, TypedTensor};
 
 use crate::buffer_pool::{BufferPool, PoolScalar, UninitCheckoutToken};
 use crate::{Error, Result};
@@ -42,7 +42,7 @@ fn checked_compact_strides(shape: &[usize]) -> Result<tenferro_tensor::StrideVec
 ///     slot.write(3);
 /// }
 /// // SAFETY: the loop initializes every logical destination element.
-/// let tensor = unsafe { output.assume_init() }?;
+/// let tensor = unsafe { output.assume_init_recycled() }?;
 /// assert_eq!(tensor.as_slice()?, &[3, 3]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -182,64 +182,6 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// not retain any destination view after returning.
     /// Successful completion transfers the checkout's return target to the
     /// initialized tensor; the pool lock is held only for brief bookkeeping.
-    /// Completes the handoff as a dynamic-rank typed tensor.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
-    /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
-    /// output.as_uninit_slice_mut()[0].write(7);
-    /// // SAFETY: the preceding write initializes every logical destination element.
-    /// // SAFETY: the example writes every logical destination element before completion.
-    /// let tensor = unsafe { output.assume_init() }.unwrap();
-    /// assert_eq!(tensor.as_slice().unwrap(), &[7]);
-    /// ```
-    ///
-    /// # Errors
-    /// Returns `Error::Validation` if tensor construction rejects the shape or
-    /// data length. Dynamic-rank conversion itself is infallible, so this
-    /// method does not produce a rank-conversion `Error::BackendSource`.
-    pub unsafe fn assume_init(self) -> Result<TypedTensor<T>>
-    where
-        T: TensorScalar,
-    {
-        // SAFETY: this method has the same full-initialization precondition.
-        unsafe { self.assume_init_as::<tenferro_tensor::DynRank>() }
-    }
-
-    /// Completes the handoff with an explicitly selected tensor rank.
-    ///
-    /// # Safety
-    /// Every logical element must have been initialized by the completed kernel.
-    /// The destination must be fully initialized before this method is called;
-    /// otherwise reading or dropping the resulting tensor is undefined behavior.
-    ///
-    /// # Errors
-    /// Returns `Error::BackendSource` if rank conversion rejects the shape, or
-    /// `Error::Validation` if tensor construction rejects the shape or length.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
-    /// use tenferro_tensor::Rank;
-    /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
-    /// output.as_uninit_slice_mut()[0].write(7);
-    /// // SAFETY: the preceding write initializes every logical destination element.
-    /// let tensor = unsafe { output.assume_init_as::<Rank<1>>() }.unwrap();
-    /// assert_eq!(tensor.as_slice().unwrap(), &[7]);
-    /// ```
-    pub unsafe fn assume_init_as<R: TensorRank>(self) -> Result<TypedTensor<T, R>>
-    where
-        T: TensorScalar,
-    {
-        // SAFETY: the caller guarantees complete initialization.
-        unsafe { self.finish(false) }
-    }
-
     /// Finish a fully initialized ranked output while retaining its pool recycler.
     ///
     /// # Safety
@@ -249,9 +191,21 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// # Errors
     /// Returns `Error::Validation` with `ValidationError::RankMismatch` if the
     /// checked output metadata cannot be represented by the rank `R`.
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
+    /// use tenferro_tensor::Rank;
+    /// let mut pool = BufferPool::new();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
+    /// output.as_uninit_slice_mut()[0].write(7);
+    /// // SAFETY: the preceding write initializes every logical destination element.
+    /// let tensor = unsafe { output.assume_init_as_recycled::<Rank<1>>() }.unwrap();
+    /// assert_eq!(tensor.as_slice().unwrap(), &[7]);
+    /// ```
     pub unsafe fn assume_init_as_recycled<R: TensorRank>(self) -> Result<TypedTensor<T, R>> {
         // SAFETY: the caller guarantees complete initialization.
-        unsafe { self.finish(true) }
+        unsafe { self.finish() }
     }
 
     /// Transfer a fully initialized output with automatic original-pool return.
@@ -260,7 +214,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     ///
     /// # Safety
     /// Every logical element must be initialized and no kernel may retain a
-    /// destination view. This is the same full-overwrite contract as assume_init.
+    /// destination view.
     ///
     /// # Errors
     /// Returns [`Error::Validation`] if the output shape and initialized buffer
@@ -283,10 +237,10 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// ```
     pub unsafe fn assume_init_recycled(self) -> Result<TypedTensor<T>> {
         // SAFETY: the caller guarantees complete initialization.
-        unsafe { self.finish(true) }
+        unsafe { self.finish() }
     }
 
-    unsafe fn finish<R: TensorRank>(mut self, recycle: bool) -> Result<TypedTensor<T, R>> {
+    unsafe fn finish<R: TensorRank>(mut self) -> Result<TypedTensor<T, R>> {
         let shape = R::shape_from_vec(std::mem::take(&mut self.shape).into())
             .map_err(|err| Error::backend_source("pooled_uninit_output", err))?;
         let data = std::mem::take(&mut self.data);
@@ -295,41 +249,41 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
         let data = unsafe {
             Vec::from_raw_parts(data.as_mut_ptr().cast::<T>(), data.len(), data.capacity())
         };
-        if recycle {
-            // INVARIANT: only successful completion takes the checkout, and this
-            // method consumes self, so a live output always owns its token here.
-            let Some(checkout) = self.checkout.take() else {
-                unreachable!("a live pooled output owns its checkout");
-            };
-            let recycler = <T as crate::buffer_pool::private::Sealed>::pool_finish_recycled(
-                &mut self.pool,
-                checkout,
-            );
-            TypedTensor::from_vec_col_major_with_recycler(shape, data, recycler)
-        } else {
-            let tensor = TypedTensor::from_vec_col_major(shape, data)?;
-            // INVARIANT: a reused buffer handed out as a plain output stays
-            // counted in flight until the session settles the pool: normal exit
-            // clears the count, and an unwind replenishes one replacement so the
-            // retained budget stays warm (pinned by
-            // `pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity`).
-            self.checkout = None;
-            Ok(tensor)
-        }
+        // INVARIANT: only successful completion takes the checkout, and this
+        // method consumes self, so a live output always owns its token here.
+        let Some(checkout) = self.checkout.take() else {
+            unreachable!("a live pooled output owns its checkout");
+        };
+        let recycler = <T as crate::buffer_pool::private::Sealed>::pool_finish_recycled(
+            &mut self.pool,
+            checkout,
+        );
+        TypedTensor::from_vec_col_major_with_recycler(shape, data, recycler)
     }
 }
 
 impl<T: PoolScalar> Drop for PooledUninitOutput<T> {
+    /// Returns an abandoned destination's buffer to the pool instead of freeing it.
+    ///
+    /// An output that is dropped without being finished — an operation that failed or that
+    /// deliberately abandons a destination — leaves storage that is still the pool's, so it goes
+    /// back for the next call rather than to the C allocator. `pool_release` also settles the
+    /// buffer's in-flight count.
     fn drop(&mut self) {
-        let Some(checkout) = self.checkout.take() else {
+        if self.checkout.is_none() {
             return;
-        };
+        }
         let data = std::mem::take(&mut self.data);
-        <T as crate::buffer_pool::private::Sealed>::pool_discard_uninit(
-            &mut self.pool,
-            data,
-            checkout,
-        );
+        let mut data = ManuallyDrop::new(data);
+        // SAFETY: `MaybeUninit<T>` and `T` have the same layout, so this is the same allocation
+        // with the same capacity. The elements are still uninitialized, and the pool only ever
+        // hands its storage back out as `MaybeUninit` or zero fills it before use, so no
+        // uninitialized `T` is read. Every pooled scalar is `Copy`, so the buffer has no drop
+        // glue to run over them.
+        let buf = unsafe {
+            Vec::from_raw_parts(data.as_mut_ptr().cast::<T>(), data.len(), data.capacity())
+        };
+        <T as PoolScalar>::pool_release(&mut self.pool, buf);
     }
 }
 

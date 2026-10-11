@@ -545,7 +545,7 @@ where
         .execute_uninit(exec_context, &mut dest, input_ptrs)
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     // SAFETY: the fused replay writes every logical destination element and retains no destination view.
-    Ok(wrap(unsafe { out.assume_init()? }))
+    Ok(wrap(unsafe { out.assume_init_recycled()? }))
 }
 
 #[cfg(test)]
