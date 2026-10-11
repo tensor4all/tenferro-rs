@@ -58,19 +58,24 @@ impl<'s> Session<'s> {
     /// Build a CubeCL tensor binding for a GPU-backed tensor.
     ///
     /// The binding is an owned, lifetime-free descriptor: it stays valid after the borrow of the
-    /// tensor ends, which is what lets an extension kernel keep the launch argument alive. That also
-    /// means it carries no write authority: CubeCL's `ComputeServer::write` is `unsafe` for exactly this
-    /// reason, and a checked kernel launch that writes through such a binding is a supported route whose
-    /// bounds checks do not supply ownership either. A caller that writes through a binding for a tensor
-    /// it does not own must therefore assert that authority itself, and no owner can claim immutable
-    /// storage while that route exists.
+    /// tensor ends, which is what lets an extension kernel keep the launch argument alive. That is also
+    /// why this is `unsafe`: the descriptor carries no ownership proof, so a caller that passes it to a
+    /// kernel or to `ComputeServer::write` writes into storage it may not own, and no owner can claim
+    /// immutable storage while such a binding circulates.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold write authority over the tensor's storage: it must own the tensor (or
+    /// exclusively borrow it) and must keep the allocation alive and unreachable by other writers for as
+    /// long as any launched work may touch it. A caller that only reads through the binding may create it
+    /// for its own tensor under the same lifetime rule.
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
     /// on this session's runtime/device, or [`crate::Error::Validation`] when
     /// its layout cannot be bound.
-    pub fn tensor_binding<T>(
+    pub unsafe fn tensor_binding<T>(
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,
         op: &'static str,
@@ -84,12 +89,17 @@ impl<'s> Session<'s> {
 
     /// Build a CubeCL array argument for a GPU-backed tensor.
     ///
+    /// # Safety
+    ///
+    /// Same requirement as [`Self::tensor_binding`]: the caller must hold write authority over the
+    /// tensor's storage, because a launch argument can be a kernel output.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
     /// on this session's runtime/device, or [`crate::Error::Validation`] when
     /// its layout cannot be bound.
-    pub fn array_arg<T>(
+    pub unsafe fn array_arg<T>(
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,
         op: &'static str,

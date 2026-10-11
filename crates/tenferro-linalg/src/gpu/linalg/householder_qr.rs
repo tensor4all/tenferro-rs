@@ -18,7 +18,9 @@ where
         if output.n_elements() == 0 {
             return Ok(output);
         }
-        let output_arg = cubecl.tensor_binding(&output, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let output_arg = unsafe { cubecl.tensor_binding(&output, op) }?;
         let launch_count = cubecl.cube_count_1d(output.n_elements())?;
         // SAFETY: output is a live device tensor and each launched thread
         // writes one selected identity-column element.
@@ -49,8 +51,10 @@ where
         if output.n_elements() == 0 {
             return Ok(output);
         }
-        let output_arg = cubecl.tensor_binding(&output, op)?;
-        let packed_arg = cubecl.tensor_binding(packed, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let output_arg = unsafe { cubecl.tensor_binding(&output, op) }?;
+        let packed_arg = unsafe { cubecl.tensor_binding(packed, op) }?;
         let launch_count = cubecl.cube_count_1d(output.n_elements())?;
         // SAFETY: bindings are live device tensors and each thread writes one
         // explicit reflector-vector entry. The output is function-local scratch.
@@ -510,11 +514,14 @@ where
         if launch_len == 0 {
             return Ok((packed, coeff));
         }
-        let packed_arg = cubecl.tensor_binding(&packed, op)?;
-        let coeff_arg = cubecl.tensor_binding(&coeff, op)?;
-        let packed_q_arg = cubecl.tensor_binding(packed_q, op)?;
-        let coeff_q_arg = cubecl.tensor_binding(coeff_q, op)?;
-        let folded_arg = cubecl.tensor_binding(folded_r, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let packed_arg = unsafe { cubecl.tensor_binding(&packed, op) }?;
+        let coeff_arg = unsafe { cubecl.tensor_binding(&coeff, op) }?;
+        // SAFETY: the bindings in this block are created for tensors this call owns.
+        let packed_q_arg = unsafe { cubecl.tensor_binding(packed_q, op) }?;
+        let coeff_q_arg = unsafe { cubecl.tensor_binding(coeff_q, op) }?;
+        let folded_arg = unsafe { cubecl.tensor_binding(folded_r, op) }?;
         let launch_count = cubecl.cube_count_1d(launch_len)?;
         // SAFETY: bindings describe live device tensors and the launch covers
         // both packed and coefficient outputs.

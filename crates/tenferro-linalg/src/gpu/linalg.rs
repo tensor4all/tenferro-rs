@@ -659,8 +659,10 @@ where
         if output.n_elements() == 0 {
             return Ok(output);
         }
-        let output_arg = cubecl.tensor_binding(&output, op)?;
-        let input_arg = cubecl.tensor_binding(input, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let output_arg = unsafe { cubecl.tensor_binding(&output, op) }?;
+        let input_arg = unsafe { cubecl.tensor_binding(input, op) }?;
         let launch_count = cubecl.cube_count_1d(output.n_elements())?;
         // SAFETY: bindings are live device tensors and each thread writes one
         // independent validation flag.
@@ -1871,8 +1873,10 @@ where
         if launch_len == 0 {
             return Ok(());
         }
-        let phase_output_arg = cubecl.tensor_binding(&phase, op)?;
-        let r_input_arg = cubecl.tensor_binding(r, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let phase_output_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
+        let r_input_arg = unsafe { cubecl.tensor_binding(r, op) }?;
         let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
         // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
         unsafe {
@@ -1885,9 +1889,12 @@ where
                 r.shape().len(),
             );
         }
-        let phase_arg = cubecl.tensor_binding(&phase, op)?;
-        let q_arg = cubecl.tensor_binding(q, op)?;
-        let r_arg = cubecl.tensor_binding(r, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let phase_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
+        let q_arg = unsafe { cubecl.tensor_binding(q, op) }?;
+        // SAFETY: the bindings in this block are created for tensors this call owns.
+        let r_arg = unsafe { cubecl.tensor_binding(r, op) }?;
         let launch_count = cubecl.cube_count_1d(launch_len)?;
         // SAFETY: phase computation is stream-ordered before scaling, Q/R are
         // live mutable outputs, and the launch covers both domains.
@@ -1922,8 +1929,10 @@ fn apply_positive_qr_gauge_c32(
         if launch_len == 0 {
             return Ok(());
         }
-        let phase_output_arg = cubecl.tensor_binding(&phase, op)?;
-        let r_input_arg = cubecl.tensor_binding(r, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let phase_output_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
+        let r_input_arg = unsafe { cubecl.tensor_binding(r, op) }?;
         let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
         // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
         unsafe {
@@ -1936,9 +1945,12 @@ fn apply_positive_qr_gauge_c32(
                 r.shape().len(),
             );
         }
-        let phase_arg = cubecl.tensor_binding(&phase, op)?;
-        let q_arg = cubecl.tensor_binding(q, op)?;
-        let r_arg = cubecl.tensor_binding(r, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let phase_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
+        let q_arg = unsafe { cubecl.tensor_binding(q, op) }?;
+        // SAFETY: the bindings in this block are created for tensors this call owns.
+        let r_arg = unsafe { cubecl.tensor_binding(r, op) }?;
         let launch_count = cubecl.cube_count_1d(launch_len)?;
         // SAFETY: phase computation is stream-ordered before scaling and the
         // second launch covers Q/R exactly.
@@ -1973,8 +1985,10 @@ fn apply_positive_qr_gauge_c64(
         if launch_len == 0 {
             return Ok(());
         }
-        let phase_output_arg = cubecl.tensor_binding(&phase, op)?;
-        let r_input_arg = cubecl.tensor_binding(r, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let phase_output_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
+        let r_input_arg = unsafe { cubecl.tensor_binding(r, op) }?;
         let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
         // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
         unsafe {
@@ -1987,9 +2001,12 @@ fn apply_positive_qr_gauge_c64(
                 r.shape().len(),
             );
         }
-        let phase_arg = cubecl.tensor_binding(&phase, op)?;
-        let q_arg = cubecl.tensor_binding(q, op)?;
-        let r_arg = cubecl.tensor_binding(r, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let phase_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
+        let q_arg = unsafe { cubecl.tensor_binding(q, op) }?;
+        // SAFETY: the bindings in this block are created for tensors this call owns.
+        let r_arg = unsafe { cubecl.tensor_binding(r, op) }?;
         let launch_count = cubecl.cube_count_1d(launch_len)?;
         // SAFETY: phase computation is stream-ordered before scaling and the
         // second launch covers Q/R exactly.
@@ -2021,8 +2038,10 @@ where
     if vt.n_elements() == 0 {
         return Ok(());
     }
-    let vt_arg = cubecl.tensor_binding(vt, op)?;
-    let v_arg = cubecl.tensor_binding(v, op)?;
+    // SAFETY: every binding here is created for a tensor this call owns, and the
+    // kernel writes only into those buffers.
+    let vt_arg = unsafe { cubecl.tensor_binding(vt, op) }?;
+    let v_arg = unsafe { cubecl.tensor_binding(v, op) }?;
     let launch_count = cubecl.cube_count_1d(vt.n_elements())?;
     // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
     // covers exactly the output domain for the matrix-adjoint copy kernel.
@@ -2051,8 +2070,10 @@ where
     if vt.n_elements() == 0 {
         return Ok(());
     }
-    let vt_arg = cubecl.tensor_binding(vt, op)?;
-    let v_arg = cubecl.tensor_binding(v, op)?;
+    // SAFETY: every binding here is created for a tensor this call owns, and the
+    // kernel writes only into those buffers.
+    let vt_arg = unsafe { cubecl.tensor_binding(vt, op) }?;
+    let v_arg = unsafe { cubecl.tensor_binding(v, op) }?;
     let launch_count = cubecl.cube_count_1d(vt.n_elements())?;
     // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
     // covers exactly the output domain for the conjugating matrix-adjoint kernel.
@@ -3776,12 +3797,16 @@ where
             .max(l.n_elements())
             .max(u.n_elements())
             .max(parity.n_elements());
-        let p_arg = cubecl.tensor_binding(&p, "lu")?;
-        let l_arg = cubecl.tensor_binding(&l, "lu")?;
-        let u_arg = cubecl.tensor_binding(&u, "lu")?;
-        let parity_arg = cubecl.tensor_binding(&parity, "lu")?;
-        let work_arg = cubecl.tensor_binding(lu, "lu")?;
-        let pivots_arg = cubecl.array_arg(pivots, "lu")?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let p_arg = unsafe { cubecl.tensor_binding(&p, "lu") }?;
+        let l_arg = unsafe { cubecl.tensor_binding(&l, "lu") }?;
+        // SAFETY: the bindings in this block are created for tensors this call owns.
+        let u_arg = unsafe { cubecl.tensor_binding(&u, "lu") }?;
+        let parity_arg = unsafe { cubecl.tensor_binding(&parity, "lu") }?;
+        let work_arg = unsafe { cubecl.tensor_binding(lu, "lu") }?;
+        // SAFETY: the bindings in this block are created for tensors this call owns.
+        let pivots_arg = unsafe { cubecl.array_arg(pivots, "lu") }?;
         let launch_count = cubecl.cube_count_1d(launch_len)?;
         // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
         // covers the maximum P/L/U/parity output domain consumed by the kernel.
@@ -3815,8 +3840,10 @@ where
 {
     backend.with_cubecl("lu_factor", |cubecl| {
         let parity = cubecl.alloc_output::<T>(batch_shape)?;
-        let parity_arg = cubecl.tensor_binding(&parity, "lu_factor")?;
-        let pivots_arg = cubecl.array_arg(pivots, "lu_factor")?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let parity_arg = unsafe { cubecl.tensor_binding(&parity, "lu_factor") }?;
+        let pivots_arg = unsafe { cubecl.array_arg(pivots, "lu_factor") }?;
         let launch_count = cubecl.cube_count_1d(parity.n_elements())?;
         // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
         // covers exactly the parity output domain.
@@ -3844,7 +3871,9 @@ where
 {
     backend.with_cubecl(op, |cubecl| {
         let out = cubecl.alloc_output::<T>(shape)?;
-        let out_arg = cubecl.tensor_binding(&out, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let out_arg = unsafe { cubecl.tensor_binding(&out, op) }?;
         let launch_count = cubecl.cube_count_1d(out.n_elements())?;
         // SAFETY: `out_arg` describes a live CUDA output tensor, and
         // `launch_count` covers every output element exactly once.
@@ -3875,9 +3904,12 @@ where
             return Ok(out);
         }
         let k = pivots.shape()[0];
-        let out_arg = cubecl.tensor_binding(&out, "lu_solve_prepared")?;
-        let input_arg = cubecl.tensor_binding(input, "lu_solve_prepared")?;
-        let pivots_arg = cubecl.array_arg(pivots, "lu_solve_prepared")?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let out_arg = unsafe { cubecl.tensor_binding(&out, "lu_solve_prepared") }?;
+        let input_arg = unsafe { cubecl.tensor_binding(input, "lu_solve_prepared") }?;
+        // SAFETY: the bindings in this block are created for tensors this call owns.
+        let pivots_arg = unsafe { cubecl.array_arg(pivots, "lu_solve_prepared") }?;
         let launch_count = cubecl.cube_count_1d(out.n_elements())?;
         // SAFETY: tensor bindings describe live CUDA tensors, pivot metadata
         // matches the validated LU shape, and `launch_count` covers the output domain.
@@ -4198,8 +4230,10 @@ fn complex32_magnitude(
 ) -> Result<TypedTensor<f32>> {
     backend.with_cubecl("validate_nonsingular_gpu", |cubecl| {
         let output = cubecl.alloc_output::<f32>(input.shape())?;
-        let input_arg = cubecl.array_arg(input, "validate_nonsingular_gpu")?;
-        let output_arg = cubecl.array_arg(&output, "validate_nonsingular_gpu")?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let input_arg = unsafe { cubecl.array_arg(input, "validate_nonsingular_gpu") }?;
+        let output_arg = unsafe { cubecl.array_arg(&output, "validate_nonsingular_gpu") }?;
         if output.n_elements() == 0 {
             return Ok(output);
         }
@@ -4225,8 +4259,10 @@ fn complex64_magnitude(
 ) -> Result<TypedTensor<f64>> {
     backend.with_cubecl("validate_nonsingular_gpu", |cubecl| {
         let output = cubecl.alloc_output::<f64>(input.shape())?;
-        let input_arg = cubecl.array_arg(input, "validate_nonsingular_gpu")?;
-        let output_arg = cubecl.array_arg(&output, "validate_nonsingular_gpu")?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let input_arg = unsafe { cubecl.array_arg(input, "validate_nonsingular_gpu") }?;
+        let output_arg = unsafe { cubecl.array_arg(&output, "validate_nonsingular_gpu") }?;
         if output.n_elements() == 0 {
             return Ok(output);
         }

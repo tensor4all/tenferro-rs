@@ -45,7 +45,9 @@ fn cubecl_session_allocates_and_binds_output() {
             .with_cubecl("test.cubecl_alloc", |cubecl| {
                 let output = cubecl.alloc_output::<f32>(&[8])?;
                 // Binding a freshly allocated tensor must be valid.
-                let _binding = cubecl.tensor_binding(&output, "test.cubecl_alloc")?;
+                // SAFETY: every binding here is created for a tensor this call owns, and the
+                // kernel writes only into those buffers.
+                let _binding = unsafe { cubecl.tensor_binding(&output, "test.cubecl_alloc") }?;
                 Ok(())
             })
             .unwrap();

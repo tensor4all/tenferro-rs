@@ -130,11 +130,16 @@ problem rather than merely repeating it:
    verify that the domain belongs to its runtime. Admission therefore proves equality and token type,
    not "the exact frozen event domain that produced this token". The driver must stay owned by the
    runtime registration rather than exposed for callers to mint into.
-4. **The immutability blocker is only half closed.** `ComputeServer::write` is `unsafe` now, but a
-   *checked kernel launch* is a second, still-safe write route: a binding obtained for a borrowed tensor
-   can be passed as the output of a `#[cube(launch)]` kernel, whose generated launcher and
-   `ComputeClient::launch` are safe, and bounds checking does not supply write authority. Until that
-   route carries write authority too, a publication cannot unconditionally claim immutable storage.
+4. **The immutability blocker, and where it now stands.** CubeCL's checked `launch` accepts a
+   lifetime-free `TensorBinding` as a writable argument, and bounds checking does not supply write
+   authority, so a binding for a borrowed tensor was a safe write route even after
+   `ComputeServer::write` became `unsafe` (tensor4all/cubecl#29). **Closed for tenferro's own surface**:
+   the extension accessors that derive such a binding from a borrow (`Session::tensor_binding`,
+   `Session::array_arg`) are now `unsafe` with the write-authority contract, so safe tenferro code can no
+   longer obtain a writable descriptor for storage it does not own. What remains is cubecl's own surface,
+   where the fix is `unsafe`-marking checked launches that have writable arguments — a broadly-scoped
+   change owed to cubecl's users rather than to this contract, and recorded as the upstream-facing part
+   of finishing the fork.
 5. **Lifecycle details** remain to specify: the error carrier for a bufferless publication, failed
    readiness as a terminal outcome, sharing an event with an escaped dependency token, the last-owner
    drop qualification, and re-applying the captured stream in the consumption path (calling the existing

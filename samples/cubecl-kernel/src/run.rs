@@ -84,8 +84,10 @@ fn run_in_cuda_session(
         let input_typed = input.as_typed::<f32>().expect("f32 upload");
         let output_typed = output.as_typed::<f32>().expect("f32 upload");
 
-        let input_binding: ArrayArg<CubeclCudaRuntime> = cubecl.array_arg(input_typed, op)?;
-        let output_binding: ArrayArg<CubeclCudaRuntime> = cubecl.array_arg(output_typed, op)?;
+        // SAFETY: every binding here is created for a tensor this call owns, and the
+        // kernel writes only into those buffers.
+        let input_binding: ArrayArg<CubeclCudaRuntime> = unsafe { cubecl.array_arg(input_typed, op) }?;
+        let output_binding: ArrayArg<CubeclCudaRuntime> = unsafe { cubecl.array_arg(output_typed, op) }?;
 
         let cube_count = cubecl.cube_count_1d(n)?;
         let CubeCount::Static(x, y, z) = cube_count else {
