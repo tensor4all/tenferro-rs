@@ -297,7 +297,7 @@ where
         vector,
     )?;
     // SAFETY: the successful map replay writes every logical destination element.
-    unsafe { out.assume_init() }
+    Ok(unsafe { out.assume_init_recycled()? })
 }
 
 pub(crate) fn typed_unary_view_tensor_with_pool<T, R>(
@@ -451,7 +451,7 @@ where
         )?;
     }
     // SAFETY: the selected map kernel writes every logical destination element.
-    unsafe { out.assume_init() }
+    Ok(unsafe { out.assume_init_recycled()? })
 }
 
 macro_rules! define_unary_analytic_dispatch {
@@ -702,7 +702,7 @@ where
         )?;
     }
     // SAFETY: the selected map kernel writes every logical destination element.
-    unsafe { out.assume_init() }
+    Ok(unsafe { out.assume_init_recycled()? })
 }
 
 #[cfg(test)]

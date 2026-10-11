@@ -70,6 +70,16 @@ fn allocations(f: impl FnOnce() -> Tensor) -> (Tensor, usize) {
     (result, LARGE_ALLOCATIONS.load(Ordering::Relaxed))
 }
 
+/// Counts payload-sized allocations for one call, dropping the result before returning.
+///
+/// Dropping inside the measurement is the point: a live output keeps its buffer out of the pool,
+/// so measuring one arm while the other's result is still held compares two different pool states.
+fn count_large_allocations(call: impl FnOnce() -> Tensor) -> usize {
+    let (result, large) = allocations(call);
+    drop(result);
+    large
+}
+
 #[test]
 fn same_shape_wrappers_do_not_allocate_operand_copies() {
     let a = Tensor::from_vec_col_major([LEN], vec![2.0_f64; LEN]).unwrap();
@@ -89,16 +99,22 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
                         "{}: raw then public (effective backend threads=1)",
                         stringify!($name)
                     );
-                    let (raw, baseline) = allocations(|| {
-                        session
-                            .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                            .unwrap()
-                    });
-                    let (public, actual) = allocations(|| a.$name(&b, session).unwrap());
+                    let raw = session
+                        .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                        .unwrap();
+                    let public = a.$name(&b, session).unwrap();
                     assert_eq!(
                         public.as_slice::<f64>().unwrap(),
                         raw.as_slice::<f64>().unwrap()
                     );
+                    drop(raw);
+                    drop(public);
+                    let baseline = count_large_allocations(|| {
+                        session
+                            .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                            .unwrap()
+                    });
+                    let actual = count_large_allocations(|| a.$name(&b, session).unwrap());
                     assert!(
                         actual <= baseline,
                         "{}: public={actual}, backend={baseline}",
@@ -115,7 +131,21 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
             check!(maximum, maximum_read);
             check!(minimum, minimum_read);
             eprintln!("compare: raw then public");
-            let (raw, baseline) = allocations(|| {
+            let raw = session
+                .compare_read(
+                    TensorRead::from_tensor(&a),
+                    TensorRead::from_tensor(&b),
+                    &CompareDir::Lt,
+                )
+                .unwrap();
+            let public = a.compare(&b, CompareDir::Lt, session).unwrap();
+            assert_eq!(
+                public.as_slice::<bool>().unwrap(),
+                raw.as_slice::<bool>().unwrap()
+            );
+            drop(raw);
+            drop(public);
+            let baseline = count_large_allocations(|| {
                 session
                     .compare_read(
                         TensorRead::from_tensor(&a),
@@ -124,17 +154,28 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
                     )
                     .unwrap()
             });
-            let (public, actual) = allocations(|| a.compare(&b, CompareDir::Lt, session).unwrap());
-            assert_eq!(
-                public.as_slice::<bool>().unwrap(),
-                raw.as_slice::<bool>().unwrap()
-            );
+            let actual =
+                count_large_allocations(|| a.compare(&b, CompareDir::Lt, session).unwrap());
             assert!(
                 actual <= baseline,
                 "compare: public={actual}, backend={baseline}"
             );
             eprintln!("clamp: raw then public");
-            let (raw, baseline) = allocations(|| {
+            let raw = session
+                .clamp_read(
+                    TensorRead::from_tensor(&a),
+                    TensorRead::from_tensor(&a),
+                    TensorRead::from_tensor(&b),
+                )
+                .unwrap();
+            let public = a.clamp(&a, &b, session).unwrap();
+            assert_eq!(
+                public.as_slice::<f64>().unwrap(),
+                raw.as_slice::<f64>().unwrap()
+            );
+            drop(raw);
+            drop(public);
+            let baseline = count_large_allocations(|| {
                 session
                     .clamp_read(
                         TensorRead::from_tensor(&a),
@@ -143,18 +184,28 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
                     )
                     .unwrap()
             });
-            let (public, actual) = allocations(|| a.clamp(&a, &b, session).unwrap());
-            assert_eq!(
-                public.as_slice::<f64>().unwrap(),
-                raw.as_slice::<f64>().unwrap()
-            );
+            let actual = count_large_allocations(|| a.clamp(&a, &b, session).unwrap());
             assert!(
                 actual <= baseline,
                 "clamp: public={actual}, backend={baseline}"
             );
             let condition = Tensor::from_vec_col_major([LEN], vec![true; LEN]).unwrap();
             eprintln!("select: raw then public");
-            let (raw, baseline) = allocations(|| {
+            let raw = session
+                .select_read(
+                    tenferro_tensor::TensorRead::from_tensor(&condition),
+                    tenferro_tensor::TensorRead::from_tensor(&a),
+                    tenferro_tensor::TensorRead::from_tensor(&b),
+                )
+                .unwrap();
+            let public = condition.where_select(&a, &b, session).unwrap();
+            assert_eq!(
+                public.as_slice::<f64>().unwrap(),
+                raw.as_slice::<f64>().unwrap()
+            );
+            drop(raw);
+            drop(public);
+            let baseline = count_large_allocations(|| {
                 session
                     .select_read(
                         tenferro_tensor::TensorRead::from_tensor(&condition),
@@ -163,11 +214,8 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
                     )
                     .unwrap()
             });
-            let (public, actual) = allocations(|| condition.where_select(&a, &b, session).unwrap());
-            assert_eq!(
-                public.as_slice::<f64>().unwrap(),
-                raw.as_slice::<f64>().unwrap()
-            );
+            let actual =
+                count_large_allocations(|| condition.where_select(&a, &b, session).unwrap());
             assert!(
                 actual <= baseline,
                 "select: public={actual}, backend={baseline}"
