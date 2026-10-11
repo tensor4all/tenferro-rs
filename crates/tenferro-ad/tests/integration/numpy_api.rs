@@ -14,6 +14,24 @@ use tenferro_tensor::{BackendSessionHost, ValidationError};
 
 use crate::support::{cpu_runtime, run_compiled_one};
 
+/// Compares against a reference within the error bound the CPU analytic kernels promise.
+///
+/// The platform's `libm` and the vectorized kernel are both allowed to be a rounding away from the
+/// correctly rounded result, so the analytic rows below are checked to a few ULP rather than to
+/// the exact bits.
+#[track_caller]
+fn assert_close(actual: &Tensor, expected: &[f64]) {
+    let actual = actual.as_slice::<f64>().unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        let tolerance = 4.0 * f64::EPSILON * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "index {index}: expected {expected}, got {actual}"
+        );
+    }
+}
+
 #[derive(Clone, Debug)]
 struct TestExtensionOp;
 
@@ -139,13 +157,16 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
     let tanh = run(&analytic.tanh().unwrap());
     let expm1 = run(&analytic.expm1().unwrap());
     let log1p = run(&analytic.log1p().unwrap());
-    assert_eq!(exp.as_slice::<f64>().unwrap(), &[1.0, std::f64::consts::E]);
-    assert_eq!(log.as_slice::<f64>().unwrap(), &[0.0, 4.0_f64.ln()]);
-    assert_eq!(sin.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.sin()]);
-    assert_eq!(cos.as_slice::<f64>().unwrap(), &[1.0, 1.0_f64.cos()]);
-    assert_eq!(tanh.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.tanh()]);
-    assert_eq!(expm1.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.exp_m1()]);
-    assert_eq!(log1p.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.ln_1p()]);
+    // The analytic ops are only pinned to the error bound of the kernel that evaluates them, not to
+    // the exact bits the platform's `libm` happens to produce: the CPU backend hands compact
+    // buffers to a vectorized kernel, which is within 1 ULP of the correctly rounded result.
+    assert_close(&exp, &[1.0, std::f64::consts::E]);
+    assert_close(&log, &[0.0, 4.0_f64.ln()]);
+    assert_close(&sin, &[0.0, 1.0_f64.sin()]);
+    assert_close(&cos, &[1.0, 1.0_f64.cos()]);
+    assert_close(&tanh, &[0.0, 1.0_f64.tanh()]);
+    assert_close(&expm1, &[0.0, 1.0_f64.exp_m1()]);
+    assert_close(&log1p, &[0.0, 1.0_f64.ln_1p()]);
 
     let z = TracedTensor::from_vec_col_major(
         vec![2],
