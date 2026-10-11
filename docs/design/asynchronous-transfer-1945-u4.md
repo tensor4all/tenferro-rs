@@ -122,6 +122,40 @@ What the numbers support, and what they do not:
   enqueue-then-wait benchmark cannot separate a previous-fence wait from the boundary's own overhead,
   and a completion wait cannot overlap in this loop by construction. The observation stands; the
   attribution does not.
+### 3.1 Route cost attribution and host-copy counts (8 MiB)
+
+A second measurement pass separates the staged upload's pieces, so the route's cost is attributed rather
+than guessed. Same protocol, same machine, measured in one session with the `transfer_host_copies` group
+of the same bench; 8 MiB payloads:
+
+| piece | 8 MiB |
+| --- | ---: |
+| `pageable_clone` (one ownership copy of the payload) | 213 us (36 GiB/s) |
+| `pageable_to_pinned` (one pageable -> pinned copy) | 258 us (30 GiB/s) |
+| `pinned_dma` (`upload_pending` + `wait`) | 343 us (22.8 GiB/s) |
+| `staged_total` (`upload_tensor`) | 1.006 ms (7.8 GiB/s) |
+| upload `staging` / upload `pinned` (`transfer_upload`) | 1.087 ms / 343 us |
+| download `pageable` / `pinned` / `pinned_wait` | 509 us / 345 us / 324 us |
+| fresh pinned allocation, 8 MiB (`alloc_8MiB`) | 7.01 ms |
+
+- **The staged route already performs exactly the copies it needs.** The three pieces above sum to
+  814 us against 1.006 ms measured, so the remainder is reservation and dispatch, not another copy of
+  the payload. Source confirms the count: `staged_bytes` copies a borrowed slice once into max-aligned
+  owned storage (with its own unit test), `Client::staging` converts that pageable `Bytes` to pinned
+  memory once, and `do_create` hands the already-owned `Bytes` to the device server without re-copying
+  it (tensor4all/cubecl, "stop re-copying uploads in `ComputeClient::create*`").
+- **Host passes over an 8 MiB payload**: staged upload 3 (own copy, staging copy, DMA), pinned upload 1
+  (the device reads the caller's pinned buffer), staged download 2 (DMA into pageable, then the result
+  `Vec`), pinned download 1 (DMA straight into the caller's buffer).
+- **Buffer reuse is not an optimization, it is the contract.** A fresh 8 MiB pinned allocation costs
+  7.01 ms, twenty times the 343 us DMA it enables. That is why `wait` hands the buffer back and why the
+  pending routes exist: allocating a fresh pinned buffer per iteration costs far more than the transfer.
+- **The staged-upload row above is not reproduced by this pass.** The earlier table records 3.77 -> 4.15
+  ms for the 8 MiB staged upload; the same case now measures 1.087 ms, and the 32 KiB case 7.0 us
+  against 18.4 us there. Nothing here attributes that gap, the two passes are not the same bench
+  revision, and the earlier "varies by up to 10% run to run" statement is therefore withdrawn rather
+  than stretched to cover it. The current numbers are the ones to reuse; the pinned columns agree
+  across both passes (345 us vs 349 us at 8 MiB, 324 us vs 323 us for the wait-only row).
 - **The copy is not below the reference**: 8 MiB in 323 us is ~26 GB/s, above #2009's 5-13 GB/s cudarc
   reference. An earlier revision of this record claimed the opposite because the payload labels were
   wrong by a factor of eight (element counts read as bytes); that claim is withdrawn, and the staged

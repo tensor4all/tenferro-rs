@@ -18,6 +18,11 @@
 //! `*_alloc` cases measure allocating a fresh pinned buffer, and `download_pinned_wait` isolates the
 //! completion wait (`wait` only, with the enqueue in criterion's untimed setup).
 //!
+//! `transfer_host_copies` attributes the staged upload's cost instead of guessing at it: a pageable
+//! ownership copy, a pageable -> pinned copy, the DMA of an already-pinned source, and the staged route
+//! end to end. The pieces then show whether a route pays for a copy it does not need. Measured values
+//! for the 8 MiB payload are recorded in `docs/design/asynchronous-transfer-1945-u4.md` §3.1.
+//!
 //! These are device/PCIe measurements, not an app-level speedup claim: they do not include the
 //! caller's own bookkeeping, and a pending transfer's point is that the caller may wait later.
 
@@ -180,6 +185,62 @@ fn bench_upload(c: &mut Criterion) {
     group.finish();
 }
 
+/// Attribute the staged upload's cost: which host-side work the pageable route pays for.
+///
+/// `upload_tensor` on a pageable payload goes through `ComputeClient::create_from_slice`, which owns
+/// its input with `slice.to_vec()` and then stages that owned copy into pinned memory before the
+/// DMA. This group measures the pieces separately so the route's cost is attributed rather than
+/// guessed: a pageable clone, a pageable -> pinned copy, and the DMA of an already-pinned source.
+fn bench_host_copies(c: &mut Criterion) {
+    let backend = backend();
+    let runtime = backend.runtime().clone();
+    let mut group = c.benchmark_group("transfer_host_copies");
+
+    let elements = 1024 * 1024;
+    let bytes = elements * size_of::<f64>();
+    group.throughput(Throughput::Bytes(bytes as u64));
+    let host = host_vector(elements);
+    let flat: Vec<u8> = (0..elements)
+        .flat_map(|index| (index as f64 * 0.5).to_ne_bytes())
+        .collect();
+
+    group.bench_function("pageable_clone", |bencher| {
+        bencher.iter(|| black_box(flat.to_vec()));
+    });
+
+    let mut buffer = PinnedHostBuffer::new(&runtime, bytes).expect("pinned buffer");
+    group.bench_function("pageable_to_pinned", |bencher| {
+        bencher.iter(|| {
+            buffer.as_mut_slice().copy_from_slice(black_box(&flat));
+            black_box(buffer.as_slice().len());
+        });
+    });
+
+    let destination = RefCell::new(Some(
+        upload_tensor(&runtime, &host).expect("device destination"),
+    ));
+    let source = RefCell::new(Some(pinned_source(&backend, elements)));
+    group.bench_function("pinned_dma", |bencher| {
+        bencher.iter(|| {
+            let value = destination.borrow_mut().take().expect("reused destination");
+            let buffer = source.borrow_mut().take().expect("reused buffer");
+            let (value, buffer) = upload_pending(&runtime, buffer, value)
+                .expect("pending upload")
+                .wait()
+                .expect("wait");
+            black_box(buffer.len());
+            *destination.borrow_mut() = Some(value);
+            *source.borrow_mut() = Some(buffer);
+        });
+    });
+
+    group.bench_function("staged_total", |bencher| {
+        bencher.iter(|| black_box(upload_tensor(&runtime, black_box(&host)).expect("upload")));
+    });
+
+    group.finish();
+}
+
 fn criterion_config() -> Criterion {
     Criterion::default()
         .warm_up_time(std::time::Duration::from_secs(2))
@@ -190,6 +251,6 @@ fn criterion_config() -> Criterion {
 criterion_group! {
     name = benches;
     config = criterion_config();
-    targets = bench_download, bench_upload
+    targets = bench_download, bench_upload, bench_host_copies
 }
 criterion_main!(benches);

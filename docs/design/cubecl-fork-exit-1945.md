@@ -66,6 +66,14 @@ The fork is retired when either holds:
 Until then the pin stays, and every bump re-runs the CUDA test partition and the held-session /
 pending-transfer / publication tests against the new revision.
 
+**A rebase has to keep the upload de-duplication.** Newer upstream `create_from_slice` /
+`do_create_from_slices` own their input with `slice.to_vec()` and then copy that owned vector again
+inside `do_create_from_slices`, so a pageable upload pays two extra payload-sized copies before the
+staging copy. The pinned revision does not contain that code: `do_create` hands the already-owned `Bytes`
+straight to the server. When the fork next rebases onto a newer upstream, the de-duplication has to be
+kept (or the upstream regression reported), and the staged-upload row of the transfer measurement is
+where the loss would show.
+
 **A bump also has to keep the declared version honest.** `scripts/check-git-pin-content.py` fails closed
 when a git-pinned dependency's `version` does not identify the content the pinned revision actually has:
 the crates.io release of that version must match the pinned revision file by file. The workspace pins
