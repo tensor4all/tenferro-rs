@@ -145,7 +145,7 @@ class BuildArtifactContracts(unittest.TestCase):
         # (tensor4all/cubecl#27), which reports producer errors without retiring
         # staged bytes so a raw-copy publication boundary need not wait for the
         # device.
-        revision = "bf20b930256823f1d9ef62a54f43bbf06dc70f46"
+        revision = "1811309791f675125379b326bf748f2ec1e29f2a"
         for name in (
             "cubecl",
             "cubecl-cuda",

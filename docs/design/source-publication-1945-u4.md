@@ -23,14 +23,18 @@ evidence:
    the original tensor. The existing pending transfers have the same limitation, which the package
    record already leaves open as its item 3 ("owning asynchronous submission"); a publication layer
    cannot promote that limitation into a complete immutable-lease contract.
-2. **BLOCKER - a borrow is not an immutable lease while a safe writable-binding escape exists.**
-   Safe code can take `Session::tensor_binding(&TypedTensor)` (an owned, cloneable `TensorBinding`),
+2. **BLOCKER (now closed) - a borrow is not an immutable lease while a safe writable-binding escape exists.**
+   Safe code could take `Session::tensor_binding(&TypedTensor)` (an owned, cloneable `TensorBinding`),
    keep the client (`Session::client`), and call the *safe* `Client::with_server(...)` to reach the
    *safe* `ComputeServer::write(...)` with that binding — overwriting the storage a publication holds
    borrowed, without any `&mut`, `unsafe` block or second tensor owner. A compile-fail fixture for
    `&mut source` does not close this. This is a pre-existing boundary defect of the extension surface,
    not something the publication introduces, and it must be resolved or excluded by an enforceable
    contract rather than documented away.
+   **Closed by tensor4all/cubecl#29**: `ComputeServer::write` is now `unsafe` and documents the write
+   authority it requires, so reaching that storage for a write requires an explicit assertion of
+   ownership — the contract is enforceable rather than implied. Tenferro's extension surface says so
+   in `Session::tensor_binding`'s documentation.
 3. **BLOCKER - the producer frontier is not identified by `publish_source(&CudaRuntime, &Tensor)`.**
    `check_errors` and `get_resource` select the client's *current* stream and `raw_cuda_stream` selects
    `StreamId::current()`; a held session instead executes on its saved stream. CubeCL's handle records
@@ -64,10 +68,9 @@ provider-seam speculation.
 2. **A producer identity**: publication has to be created by whatever produced the value, or be given
    the producing stream/binding and frontier explicitly, because neither the allocation handle nor the
    current stream identifies the last writer.
-3. **An enforceable immutability contract for published storage**, which means closing or explicitly
-   excluding the safe writable-binding path (`Session::tensor_binding` plus `Client::with_server` plus
-   `ComputeServer::write`). That path is CubeCL-side as much as tenferro-side, so this is a maintainer
-   decision with a possible fork change.
+3. **An enforceable immutability contract for published storage.** Done: `ComputeServer::write` is
+   `unsafe` (tensor4all/cubecl#29), so a publication can state immutability for storage it owns, with the
+   remaining hole being a caller's own `unsafe` assertion.
 4. **Cross-domain admission** (#1945 U4 item 2) before a published frontier can serve a device consumer
    in another execution domain.
 
