@@ -135,19 +135,22 @@ controlled schedule (#2106, the `transfer_overlap` group in `crates/tenferro-gpu
 but readiness
 across *different* streams and a publication that never host-waits remain unestablished - which is also why
 the rejected-length path returns the publication with its frontier instead of relying on them. The consumer
-half that closes the gap is specified in `docs/design/consumer-read-handoff-1945-u4-2.md`.
+half is specified in `docs/design/consumer-read-handoff-1945-u4-2.md`; it claims a device-side consumer copy,
+**not** a host-wait-free scheduled transfer (that path's provider contract stays blocking).
 
 
 ## 5. What this revision defers, and why
 
 - **Dependent-consumer dependency tokens and cross-domain admission (U4-2).** Specified in
-  `docs/design/consumer-read-handoff-1945-u4-2.md`: the consumer's frozen domain id comes from
-  `EngineSnapshotView::event_domain_id`, and the runtime's cross-domain transfer classification admits the
-  source completion into the destination run instead of host-waiting it. With no consumer-side
-  route here, this revision mints no token: event-domain ids are minted by a runtime freeze and only
-  retrievable from the runtime snapshot, the CUDA driver must stay owned by the runtime registration
-  rather than exposed, and the runtime's scheduler currently host-waits source-domain dependencies. A
-  token minted for a caller-supplied id would prove equality and token type, not provenance.
+  `docs/design/consumer-read-handoff-1945-u4-2.md`: an admitted pair obtained from the selected frozen
+  executable slot authorizes one publication/consumer route, the recorded frontier is adopted into the
+  existing event-token owner, and the destination run admits it in place of the runtime's host bridge for
+  that edge. With no consumer-side route here, this revision mints no token: event-domain ids are minted by
+  a runtime freeze, the CUDA driver stays owned by the runtime registration rather than exposed, and the
+  scheduler currently host-waits source-domain dependencies. Possessing an id or a token with a matching
+  `origin` is not authorization - `EngineSnapshotView::event_domain_id` and the transfer accessors expose
+  ids of existing things, and the immediate driver can mint a token bearing an id it was given - which is
+  why the admitted pair, not the id, is the provenance.
 - **cubecl's own surface.** Its checked launch still accepts a lifetime-free binding as a writable
   argument; marking launches with writable arguments `unsafe` is the fork-finishing change owed to
   cubecl's users (the fork's own test harness and samples included).

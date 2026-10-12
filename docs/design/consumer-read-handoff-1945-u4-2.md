@@ -1,125 +1,111 @@
-# Consumer read handoff: a registry-bound consumer copy of a published value (U4-2) (#1945 U4)
+# Consumer read handoff: an admitted consumer copy of a published value (U4-2) (#1945 U4)
 
-Revision 2. Revision 1 (a borrowed `PublishedRead` view admitted through a new driver-level hook) was
-rejected by its pre-implementation review, and the rejections were verified against the source:
+Revision 3. Revisions 1 and 2 were both rejected by independent pre-implementation reviews (recorded below);
+revision 3 takes the reviewers' smallest-correct-alternative direction: **scope registry authorization to the
+publication/consumer pair** instead of every held session, **reuse** the existing token, retirement and error
+machinery instead of parallel types, and **change no scheduled-transfer contract**.
 
-| Revision 1 claim | Source | Disposition |
+## Review status
+
+| Revision | Verdict | Blockers that forced the next revision |
 | --- | --- | --- |
-| "the publication's frontier already implements `EventToken`" | the publication stores `frontier: Option<CUevent>` (`crates/tenferro-gpu/src/cubecl/transfer.rs:1332-1345`); the admissible token is the private `CudaEventToken` (`crates/tenferro-gpu/src/cubecl/event_domain.rs:198-215`) | **wrong**: revision 2 mints a registry-provenanced completion from the recorded event |
-| a driver-level `admit_foreign_dependency(&self, domain, token, source)` orders "the next run" | every run already exists before execution (`crates/tenferro-runtime/src/runtime/execution.rs:2198-2231`) and the destination run is located before classification (`:2259-2290`) | **wrong shape**: admission moves onto the destination run's enqueue |
-| the held session obtains a domain id from the snapshot | `CudaHeldSession` holds only the backend borrow, reservation, stream identity and stats (`crates/tenferro-gpu/src/cubecl/exec_session.rs`); the frozen registry is established by `cuda_runtime_engine_registration` (`crates/tenferro-gpu/src/cubecl/runtime_adapter.rs`) | **gap**: revision 2 specifies one owner-scoped registry binding |
-| `PublishedRead<'p>` borrowing `&'p SourcePublication` protects the asynchronous read | the source half queues the source tensor behind the *producer* frontier only (`transfer.rs:1599-1617`), and its drainable retirement queue holds owned records (`:251-256, 396-410`) | **unsound**: a borrow cannot exclude `download_into`, `mem::forget` or later writes; revision 2 replaces the view with an owned consuming copy |
-| "readiness across streams is a view property" | consumption re-applies the captured stream through `StreamId::executes` (`transfer.rs:1519-1541`); CubeCL aligns resources by `handle.stream` (`cubecl@1811309/crates/cubecl-runtime/src/stream/event.rs:257-312`) | **incomplete**: revision 2 binds admission, allocation, copy and completion to the *consumer* stream |
+| 1 | do not implement | the frontier is a native `CUevent`, not an `EventToken`; a driver-level hook cannot identify the destination run; nothing connects the held session to the frozen registry; a borrow cannot protect the asynchronous read; the view can outlive its session |
+| 2 | do not implement | `open_session` has no frozen registration to acquire from; `Admitted` must carry the destination completion token; the retirement queue cannot support pre-enqueue ownership; consumer retirement ownership (both allocations, teardown authority, the runtime-owning-completion cycle) is unsettled |
+| 3 | pending | this record |
 
-## Review status (read this first)
-
-Revision 2 is **not approved and not implemented**. Its own pre-implementation review
-(`openai/gpt-6.1-sol`, fresh read-only process) returned "do not implement revision 2 as written" and confirmed
-that revision 2 fixes the *direction* of revision 1 (consuming ownership, destination-run admission,
-consumer-stream ordering) while four blockers remain, all verified against the source:
-
-1. **No acquisition boundary for the capability.** `CudaBackend::open_session` takes no registration, and a
-   domain is minted only when a snapshot freezes, so "`open_session` acquires the capability from the
-   registration" is asserted rather than designed. The capability must be owned by the *selected frozen
-   executable slot*, and a non-`Clone` capability cannot move into every session - a credential shape is
-   needed.
-2. **`ForeignAdmission::Admitted` must carry the destination completion token.** The scheduler validates and
-   records that token for downstream dependencies; an `Admitted` without it cannot be inserted, and calling
-   the ordinary `enqueue` afterwards would launch twice or record a second completion.
-3. **The retirement queue cannot support pre-enqueue ownership.** Its records are owned and consumed with no
-   reservation/recovery operation, and a drainable record needs a *recorded* completion (an unrecorded event
-   may query as complete). The smallest correct shape is the existing pending-transfer model: an owning
-   local submission guard, moved into `PendingRead` on success, detached on drop, permanently retained after
-   an unproven submission - no pre-enqueue insertion.
-4. **Consumer retirement ownership is unsettled.** A copy can outlive the session borrow, so its package must
-   retain source *and* destination allocations plus provider lifetimes through success, error, drop and
-   forgetting; the source runtime's teardown must not be assumed to retire a consumer stream; and putting a
-   strong runtime-owning completion into that runtime's own queue creates a retention cycle (the pinned
-   buffer uses a weak reference for exactly this reason). Adding a normal `CudaEventDomainRun` to the session
-   would also add implicit synchronization on session destruction.
-
-Also recorded by the same review: exact-event completion is feasible with one shared event owner
-(`Arc<CudaEventHandle>`) but requires updating `release_frontier` and the detach paths and matching the
-admission's `CudaEventToken` downcast; scheduler admission does **not** make the *scheduled transfer* path
-asynchronous (its provider contract is blocking), so the "host-wait-free" claim must be narrowed to the
-held-session consumer route; and same-device eligibility must be explicit.
-
-Revision 3 addresses these before implementation. Nothing in this record may be implemented as it stands.
+Every rejection was verified against the source before it was recorded (citations appear inline). Revision 3
+is not implemented and must be re-reviewed before implementation starts.
 
 ## 1. Scope
 
-#1945 item 1's consumer half: a consumer session reads a value published by another session, ordered by a
-**registry-established dependency** rather than the runtime's cross-domain host bridge, with no
-caller-constructed domain id and no public driver escape. The producer half is revision 6 of
-`docs/design/source-publication-1945-u4.md`.
+#1945 item 1's consumer half: a consumer session copies a value published by another session on the **same
+device**, ordered by a dependency admitted into the consumer's own execution stream instead of the runtime's
+cross-domain host bridge, with **no caller-constructed domain id**, **no public driver escape**, and an
+explicit registry authorization. The producer half is revision 6 of `docs/design/source-publication-1945-u4.md`.
+
+Explicitly out of scope, because the reviewers showed they are separate contract changes: making the
+**scheduled blocking transfer** provider asynchronous
+(`crates/tenferro-runtime/src/runtime/transfer.rs`: a blocking provider must return an immediately readable
+tensor), making ordinary held sessions registry-backed, pageable/P2P/differentiated transfers,
+scoped-callback publishing, and U2-AD (D12).
 
 ## 2. Settled decisions
 
-### 2.1 The registry binding is the provenance, not an id
+### 2.1 Registry authorization: one admitted pair, not every session
 
-A frozen engine witness (`RuntimeId`, `RuntimeEpoch`, `RegistrationIdentity` → `EventDomainId`, minted in
-`crates/tenferro-runtime/src/runtime/snapshot.rs`) is bound to the exact CUDA runtime and the consumer's
-logical stream by one owner-scoped admission capability:
+Authorization is a value the caller obtains from the **selected frozen executable slot** and passes to the two
+entries that need it. Ordinary `CudaBackend::open_session` keeps its current signature and stays
+registry-independent.
 
 ```rust
-// crates/tenferro-gpu/src/cubecl/runtime_adapter.rs (CUDA engine registration)
-/// Admission capability for one frozen engine witness.
+// crates/tenferro-gpu/src/cubecl/runtime_adapter.rs (public in tenferro_gpu::cuda)
+/// Authorization for one frozen CUDA engine witness on one device.
 ///
-/// Minted by the registration that owns the frozen witness; not `Clone`, not constructible by callers,
-/// and never exposed as a driver handle. It binds the witness to the CUDA runtime the registration
-/// drives, so a completion minted or admitted through it carries that witness's provenance.
-pub struct CudaDomainAdmission { /* private: witness (domain), runtime pin, CUDA provider handle */ }
+/// Not `Clone`, not constructible by callers, and never a driver handle: `bind` validates that `view`
+/// froze the CUDA engine this backend drives, and keeps only the witness, the runtime pin and the device
+/// id. The type is public because callers hold it; its fields and its constructor are not.
+pub struct CudaAdmittedPair<'a> { /* private: witness (EventDomainId), runtime pin, device id */ }
 
-impl CudaDomainAdmission {
-    /// The frozen domain this capability speaks for.
-    pub fn domain(&self) -> EventDomainId;
+impl<'a> CudaAdmittedPair<'a> {
+    /// Bind a frozen snapshot view to the backend it froze.
+    ///
+    /// # Errors
+    ///
+    /// [`AdmissionError`] when the view did not freeze this backend's engine (a different runtime, epoch,
+    /// or device), so a caller cannot authorize itself against a witness it does not own.
+    pub fn bind(
+        backend: &CudaBackend,
+        view: &'a EngineSnapshotView<'a>,
+    ) -> Result<Self, AdmissionError>;
+
+    /// The device this authorization is valid for.
+    pub fn device(&self) -> DeviceId;
 }
 ```
 
-- `CudaHeldSession::open_session` acquires the capability from the registration it was opened through and
-  carries it privately, so every held session is registry-backed from the start (no new constructor and no
-  caller-supplied id).
-- `EventDomainId` is *not* accepted as an argument anywhere in this design. `EventDomainId::new` stays
-  `pub(crate)`; the public snapshot accessor (`EngineSnapshotView::event_domain_id`) and the public transfer
-  accessors (`TransferRequest::source_event_domain_id`/`destination_event_domain_id`) only expose ids of
-  existing things - possessing one proves nothing, which is exactly why the capability, not the id, is the
-  provenance (this corrects revision 1's stronger "only public source" claim).
+- No entry point accepts an `EventDomainId`. `EventDomainId::new` stays `pub(crate)`
+  (`crates/tenferro-runtime/src/runtime/schedule.rs`), and the public accessors
+  (`EngineSnapshotView::event_domain_id`, `TransferRequest::source_event_domain_id`/
+  `destination_event_domain_id`, `EventToken::origin`) only expose ids of *existing* things. Possessing an id
+  or a token with a matching `origin` is therefore **not** authorization - the admitted pair is.
+- Authorization is scoped to the pair: the producer publishes *through* it and the consumer copies *through*
+  it, so the two ends provably belong to the same frozen witness and device.
 
-### 2.2 The dependency is a registry-provenanced completion of the recorded frontier
+### 2.2 The completion reuses the existing event-token machinery
 
-`publish` mints, through the session's capability, an owned completion that keeps the **exact recorded
-`CUevent`** and carries the producer's frozen domain. It is the private CUDA token machinery
-(`CudaEventToken`) with a publication-specific record, not a new public token type:
+`publish` records the frontier event exactly as it does today and then **adopts** it into the existing owner
+instead of storing a bare handle; there is no parallel completion type:
 
-```rust
-// crates/tenferro-gpu/src/cubecl/transfer.rs (private)
-struct PublicationCompletion {
-    domain: EventDomainId,          // from the session's CudaDomainAdmission
-    event: CUevent,                 // the exact event publish recorded, never a replacement
-    provider: /* runtime pin */,
-}
-impl EventToken for PublicationCompletion { /* as_any, origin, repeatable wait */ }
-```
+- the recorded `CUevent` is wrapped in the private `Arc<CudaEventHandle>` that `CudaEventToken` already owns
+  (`crates/tenferro-gpu/src/cubecl/event_domain.rs`: the handle owns the event, has justified `Send`/`Sync`
+  impls, waits without consuming the event, and destroys it in its owner);
+- `SourcePublication` stores that shared owner, and `frontier_ready`/`await_frontier` query through it, so
+  there is one owner and no double destruction;
+- `release_frontier` and the terminal/detach paths pass the **same shared owner** into the retirement record
+  rather than moving a raw event, so the existing drop path keeps working;
+- the publication exposes the frontier as a `CudaEventToken` (the type CUDA admission already downcasts to,
+  `crates/tenferro-gpu/src/event_domain_admission.rs`), so an admitted pair can hand it to a consumer run.
 
-`SourcePublication` stores this completion instead of the bare event, and `frontier_ready`/`await_frontier`
-keep their current query/synchronize semantics through it. No replacement event is recorded on an unrelated
-stream, and no new public token type is added.
+`publish` through an admitted pair records the pair's witness on the completion; the unadmitted `publish`
+keeps its current behaviour and mints nothing that can be admitted.
 
-### 2.3 Admission happens on the destination run, before its enqueue
-
-The destination run exists before classification, so the runtime gains no driver-global state. The
-classification (`crates/tenferro-runtime/src/runtime/execution.rs`, `ScheduledEventDomains`) resolves a
-foreign-domain transfer dependency into the run's enqueue:
+### 2.3 Admission happens on the destination run and returns the completion
 
 ```rust
 // crates/tenferro-runtime/src/runtime/event_domain.rs
 pub trait EventDomainRun {
     // ... existing methods ...
 
-    /// Enqueue `launch` with the given same-domain dependencies plus `foreign`.
+    /// Enqueue `launch` with same-domain `dependencies` plus `foreign`, which came from other frozen domains.
     ///
-    /// Returning [`ForeignAdmission::Unsupported`] keeps the runtime's documented host bridge for that
-    /// edge: the caller never sees a silently reordered dependency, only a slower but correct one.
+    /// Contract:
+    /// - `Unsupported`: nothing was enqueued, `launch` was not invoked, no dependency was partially
+    ///   admitted. The caller keeps its documented host bridge.
+    /// - `Admitted(token)`: every dependency (same-domain and foreign) was accepted, `launch` was invoked
+    ///   exactly once, and `token` is the destination completion the scheduler records for downstream
+    ///   dependencies.
+    /// - `Err`: the same partial-enqueue semantics as the existing enqueue; the caller reports it as the
+    ///   node's failure.
     fn enqueue_with_foreign(
         &mut self,
         dependencies: &[Arc<dyn EventToken>],
@@ -131,114 +117,130 @@ pub trait EventDomainRun {
     }
 }
 
-pub enum ForeignAdmission { Admitted, Unsupported }
+pub enum ForeignAdmission {
+    /// Dependencies accepted; the destination completion for downstream scheduling.
+    Admitted(Arc<dyn EventToken>),
+    /// Nothing was enqueued; the runtime host-waits this edge as before.
+    Unsupported,
+}
 ```
 
-- The CUDA run applies an admitted foreign completion **inside its captured-stream execution**, exactly as
-  it already applies same-domain waits (`crates/tenferro-gpu/src/cubecl/event_domain.rs`), so the wait lands
-  on the destination stream and no ambient stream is involved.
-- Only `Unsupported` falls back to `dependency_completion.wait()`; the outcome is counted with
-  test-driver instrumentation rather than a new public snapshot surface (§4).
-- The consumer *read* route (§2.4) enqueues the same way through its own session's run, so the held-session
-  path and the scheduled path share one admission mechanism.
+- The CUDA run applies an admitted foreign completion **inside its captured-stream execution**, exactly as it
+  already applies same-domain waits (`crates/tenferro-gpu/src/cubecl/event_domain.rs`), so the wait lands on
+  the destination stream and no ambient stream is involved.
+- The default implementation changes nothing; the contract above is what an override must satisfy, so an
+  implementation cannot enqueue waits and then answer `Unsupported`.
+- **Only the consumer copy (§2.4) uses this in this revision.** The scheduled transfer path keeps its blocking
+  provider contract: the scheduler's explicit source-token `wait()` may be removable for an admitted edge, but
+  the provider still must return a readable tensor, so this revision claims **no** host-wait-free scheduled
+  transfer and does not relax that contract.
 
-### 2.4 The consumer read is an owned consuming copy
-
-Revision 1's borrowed view is replaced by a consuming operation whose ownership is explicit before any
-enqueue:
+### 2.4 The consumer copy reuses the pending-transfer ownership model
 
 ```rust
 // crates/tenferro-gpu/src/cubecl/transfer.rs
 impl SourcePublication {
-    /// Consume the publication by copying it into `consumer`'s domain, ordered after its frontier.
+    /// Consume the publication by copying it into `consumer`'s device, ordered after its frontier.
     ///
-    /// The publication is consumed: the source value, allocation and completion move into the returned
-    /// pending read, so no later `download_into`, write or reuse can race the consumer's copy.
+    /// # Errors
+    ///
+    /// [`PublicationError`] - the existing carrier - when the admitted pair does not authorize this
+    /// publication (a different frozen witness or device), when the publication is terminal, or when the
+    /// submission is unproven. A refusal before any enqueue returns the publication unchanged.
     pub fn copy_into(
         self,
+        admitted: &CudaAdmittedPair<'_>,
         consumer: &mut CudaHeldSession<'_>,
-    ) -> Result<PendingRead, ReadAdmissionError>;
+    ) -> Result<PendingRead, PublicationError>;
 }
 
-/// An admitted consumer copy in flight.
-pub struct PendingRead { /* owns the source-side retention record + the consumer completion */ }
+/// An admitted consumer copy in flight. `wait` is the only accessor, as in `PendingDownload`.
+pub struct PendingRead { /* private */ }
 
 impl PendingRead {
     /// Byte length of the copy.
     pub fn bytes(&self) -> usize;
-    /// Wait for the copy's completion and take the consumer-side tensor.
-    pub fn wait(self) -> Result<Tensor, ReadAdmissionError>;
-}
-
-pub enum ReadAdmissionError {
-    /// Nothing was enqueued: the publication is returned unchanged, with its retention intact.
-    Refused { publication: Box<SourcePublication>, error: crate::Error },
-    /// The enqueue may have happened: the source retention stays queued, no value is returned.
-    Unproven { error: crate::Error },
+    /// Wait for the consumer completion and take the destination tensor.
+    pub fn wait(self) -> Result<Tensor, PublicationError>;
 }
 ```
 
-Semantics, all settled:
+Settled semantics, in the order they matter:
 
-1. **Ownership before enqueue.** `copy_into` moves the publication into a source-side retention record
-   *before* it enqueues anything; a refusal hands the publication back, an `Unproven` outcome keeps the
-   record queued. Dropping or forgetting the returned `PendingRead` cannot release the source: the record is
-   already on the bounded retirement queue (drainable) or its permanent-retention side, and `Drop` never
-   waits - the same contract the pending transfers state.
-2. **Exclusion.** Because the publication is consumed, the revision-1 counterexamples (enqueue then
-   `download_into`; `mem::forget` of the view; `Unproven` followed by reuse) cannot occur: there is no
-   publication left to consume, write or reuse.
-3. **Consumer-stream ordering.** The copy is enqueued on the **consumer's captured stream** (reapplied
-   through `StreamId::executes`), with the admitted foreign wait enqueued before it on that same stream; the
-   consumer completion is recorded on that stream. A copy on an ambient third stream is not permitted, and
-   the held session's own run is the execution authority - the operation does not outlive it (it borrows the
-   session for the call and the session's stream for the copy).
-4. **Readiness.** `PendingRead::wait` is the explicit boundary; `frontier_ready` on the publication is
-   unchanged for the caller who has not consumed it (and takes `&mut self`, so it is called before
-   `copy_into`, not during).
-5. **Terminal publications.** A publication that recorded a failure is refused before any enqueue with
-   `ReadAdmissionError::Refused`; the source half's terminal record is untouched.
+1. **Eligibility before any enqueue.** The pair must authorize this publication (same frozen witness and same
+   device as the publication's own admission) and the consumer session must be on that device; otherwise the
+   call refuses with the existing `PublicationError::Rejected`, returning the publication unchanged. Nothing
+   is enqueued, so no ownership has moved.
+2. **Owning submission guard, not a pre-enqueued record.** The call builds a local guard that owns the
+   publication (value, allocation, completion) and the destination allocation. On success the guard moves
+   into `PendingRead`; on refusal it returns the publication; if the submission outcome is unproven the guard
+   is detached into permanent retention. `mem::forget(PendingRead)` leaks the owned package in place, exactly
+   as forgetting a pending transfer does. There is **no** queue insertion before the enqueue, so the existing
+   queue needs no reservation or recovery operation.
+3. **Consumer-stream ordering, one stream.** The copy is enqueued on the **consumer's captured stream**
+   (reapplied through `StreamId::executes`), with the admitted foreign wait enqueued before it on that same
+   stream, and the consumer completion recorded on that stream. A same-device address copy on that stream is
+   sufficient: the producer frontier already represents the producer's writes, so the producer's stream is not
+   reapplied. No `CudaEventDomainRun` is created inside the session, so session destruction keeps its current
+   semantics (`close` submits; it does not add a retirement barrier).
+4. **Retention authority and no cycle.** The in-flight package is owned by the **consumer runtime's** transfer
+   retirement queue - the runtime whose stream carries the completion - and it holds:
+   - a **strong** pin on the *source* runtime (a different runtime, so this is not a self-cycle) plus the
+     source value/allocation, which is what keeps the published storage alive until the consumer completes;
+   - a **weak** reference to the *consumer* runtime, following the pinned-buffer precedent
+     (`crates/tenferro-gpu/src/cubecl/transfer.rs`), so the queue record cannot pin its own runtime and the
+     last-owner teardown qualification is preserved;
+   - the destination allocation and the consumer completion.
+   The source runtime's teardown is **not** assumed to retire a consumer stream: the record's strong source pin
+   means the source runtime cannot tear down first, and the consumer runtime's own teardown retires its stream
+   and then drains its queue, as it already does for pending transfers.
+5. **Terminal publications** are refused before any enqueue (rule 1), so a failed publication can never be
+   copied as if it were ready.
 
 ### 2.5 No public driver escape
 
-The capability is a private field of the held session, the run admission is a trait method on the runtime's
-run, and nothing in this design returns a driver, a raw device handle or an `EventDomainId` chosen by a
-caller. The new public surface is exactly `SourcePublication::copy_into`, `PendingRead` (two methods) and
-`ReadAdmissionError`; the private surface is the completion type, the capability and the run admission.
+The admitted pair is a value with a crate-private constructor; the run admission is a trait method on the
+runtime's own run; nothing in this design returns a driver, a raw device handle, an `EventDomainId` chosen by
+a caller, or the frozen executable witness. New public surface: `CudaAdmittedPair` (`bind`, `device`),
+`SourcePublication::copy_into`, `PendingRead` (`bytes`, `wait`), `ForeignAdmission`, and the run's
+`enqueue_with_foreign` (a provider contract on the already-public `EventDomainRun`).
 
-## 3. Non-goals
+## 3. Evidence plan
 
-Unchanged from the source half's deferrals: pageable staging, P2P routes, differentiated transfers,
-publishing from the *scoped* callback entry, and U2-AD (D12). Pageable/overlapped copies of publications
-are explicitly out of scope: this slice copies one published value once, on the consumer's stream.
-
-## 4. Evidence plan
-
-Two evidence layers, deliberately separated (revision 1 conflated them):
-
-**(a) Scheduler-level, no GPU:** a test driver whose run returns `Unsupported` keeps the host bridge and
-increments the host-wait counter (`crates/tenferro-runtime/src/runtime/tests/event_domain.rs` already
-injects a host-wait failure); a run that admits increments the admitted counter and the launch proceeds.
-Claim proven: *no scheduler dependency host wait* for an admitted edge. This does **not** claim that
-publication or copying never host-waits - the source half's resolution/dispatch waits stay as documented.
-
-**(b) CUDA consumer path (local A100, GPU model/driver/toolkit recorded):**
+**(a) Scheduler-level, no GPU** (`crates/tenferro-runtime/src/runtime/tests/event_domain.rs`, whose test
+tokens already count waits and inject failures):
 
 | Claim | Evidence |
 | --- | --- |
-| Genuine cross-stream read | producer session A and consumer session B hold *different* streams (asserted, not assumed); publish on A, `copy_into(B)`, `wait()` returns the exact bytes; A's frontier was not ready at admission |
-| Consumer-stream ordering | after `copy_into`, a probe operation enqueued on B observes the copied bytes; a probe on A before the admitted wait does not (the wait is on B) |
-| Ownership before enqueue | a refusal returns the publication with its retention intact; an `Unproven` outcome leaves the source record queued; dropping/forgetting a `PendingRead` never releases the source early (asserted through the retirement counters and a `synchronize` after) |
-| Exclusion | the publication cannot be reused after `copy_into` (compile-fail fixture: `download_into`/`copy_into` on a moved value), and no safe write path exists (#2093) |
-| Fault-injected terminal paths | a simulated provider failure at the completion query/submission seam drives: consumer admission refusal (publication returned), copy success followed by a completion-record failure (no value, record retained), and a terminal publication's refusal; each asserts the retirement/ownership state, not just the error |
-| No regression | the pending-transfer, publication and overlap suites keep passing; the audited CUDA test partition is updated; the `transfer_overlap` bench (`crates/tenferro-gpu/benches/transfer_paths.rs`) gains a two-session consumer arm |
+| Admission returns a usable completion | the returned token is recorded and consumed by a downstream node; the node runs exactly once |
+| `Unsupported` changes nothing | launch count is zero, no dependency is enqueued, the host bridge is used and counted |
+| Override contract | a test run that enqueues and then answers `Unsupported` fails the contract assertion (the trait's documented rule) |
+
+**(b) CUDA consumer path (local A100; GPU model, driver and toolkit recorded):**
+
+| Claim | Evidence |
+| --- | --- |
+| Genuine cross-stream copy | producer and consumer sessions hold **distinct physical stream handles/slots** (asserted on the handles, not the logical ids, which map modulo the bounded pool); sessions run sequentially on one thread (two live held sessions are rejected) or on separate threads; the copied bytes equal the produced bytes |
+| Consumer-stream ordering | after the copy, work enqueued on the consumer stream sees the copied bytes; the consumer stream is synchronized **explicitly** (ambient synchronization is not evidence). No negative "the producer stream cannot see it" assertion is made: missing ordering permits an early read but does not guarantee one |
+| Authorization | a pair bound to a different snapshot view, runtime or device refuses before enqueue with the publication returned; `CudaAdmittedPair` has no public constructor (compile-fail fixture) |
+| Ownership before enqueue | refusal returns the publication with its retention intact; an unproven submission leaves the guard permanently retained; forgetting a `PendingRead` leaks the owned package in place; retention is observed through controlled pending work and resource-release observations, not aggregate counters |
+| Exclusion | the publication cannot be reused after `copy_into` (compile-fail fixture: `download_into`/`copy_into` on a moved value); no safe write path exists (#2093) |
+| Fault-injected terminal paths | a private seam at the completion query/submission boundary (part of this slice, `#[cfg(test)]`-reachable) drives: a terminal source query/wait failure, consumer admission refusal, and a copy whose completion record fails; each asserts the resulting ownership/retirement state |
+| No regression | pending-transfer, publication and overlap suites keep passing; the audited CUDA test partition is updated; the `transfer_overlap` group (`crates/tenferro-gpu/benches/transfer_paths.rs`) gains a two-session consumer arm |
+
+## 4. What this revision does not claim
+
+- No host-wait-free **scheduled transfer**: the blocking provider contract is unchanged.
+- No registry authorization for ordinary held sessions.
+- No fault-injected evidence for the source half's own terminal path beyond the seam listed above; the source
+  record's gap stays open until that seam is implemented.
+- No pageable, P2P, differentiated or scoped-callback publication routes, and no U2-AD.
 
 ## 5. Open questions for maintainers
 
-1. Should the run admission be a new trait method (`enqueue_with_foreign`, as specified) or a parameter on
-   the existing enqueue? The classification resolves dependencies immediately before the run's enqueue,
-   which is why this record adds the variant rather than a second call.
-2. Should `CudaDomainAdmission` be acquired by `open_session` (this record's choice: every held session is
-   registry-backed) or handed to `publish`/`copy_into` explicitly (fewer hidden fields, more call sites)?
-3. Does the registration want the capability to be per-*engine* or per-*stream*? This record mints it per
-   engine and binds the stream at the call site, because one registration can drive several sessions.
+1. Should the admitted pair bind one device (this record's choice: the copy is same-device) or one engine
+   across devices (which would make the eligibility check a per-call device comparison)?
+2. Should the in-flight record live in the consumer runtime's queue (this record's choice, matching the
+   completion's stream) or in a dedicated consumer-side queue with its own teardown rule?
+3. Is `EngineSnapshotView` the right public anchor for `bind`, or should the registration handle expose the
+   binding (the view is the only public object that identifies a frozen witness today)?
