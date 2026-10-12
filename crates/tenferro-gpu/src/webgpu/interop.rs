@@ -1,5 +1,5 @@
 use cubecl::client::Client;
-use cubecl::frontend::CubePrimitive;
+use cubecl::frontend::{CubePrimitive, Scalar};
 use cubecl::std::tensor::TensorHandle;
 use cubecl_runtime::server::Handle;
 use cubecl_wgpu::WgpuRuntime;
@@ -96,9 +96,9 @@ pub fn execute_c32_fft(
     } = output;
     let (handle, shape, strides) = input_parts(session, input, op)?;
     let input =
-        ComplexTensorHandle::<WgpuRuntime>::new_strided(shape, strides, handle, f32_storage())
+        ComplexTensorHandle::new_strided(shape, strides, handle, f32_storage())
             .map_err(|error| Error::backend_source(op, error))?;
-    let output = ComplexTensorHandle::<WgpuRuntime>::new_strided(
+    let output = ComplexTensorHandle::new_strided(
         output_shape.clone(),
         output_strides,
         allocate_raw(session, output_bytes::<Complex32>(op, &output_shape)?),
@@ -146,7 +146,7 @@ pub fn execute_f32_rfft(
         strides: output_strides,
     } = output;
     let input = f32_input(session, input, op)?;
-    let output = ComplexTensorHandle::<WgpuRuntime>::new_strided(
+    let output = ComplexTensorHandle::new_strided(
         output_shape.clone(),
         output_strides,
         allocate_raw(session, output_bytes::<Complex32>(op, &output_shape)?),
@@ -192,9 +192,9 @@ pub fn execute_c32_irfft(
     } = output;
     let (handle, shape, strides) = input_parts(session, input, op)?;
     let input =
-        ComplexTensorHandle::<WgpuRuntime>::new_strided(shape, strides, handle, f32_storage())
+        ComplexTensorHandle::new_strided(shape, strides, handle, f32_storage())
             .map_err(|error| Error::backend_source(op, error))?;
-    let output = TensorHandle::<WgpuRuntime>::new(
+    let output = TensorHandle::new(
         allocate_raw(session, output_bytes::<f32>(op, &output_shape)?),
         output_shape.clone(),
         output_strides,
@@ -212,7 +212,7 @@ pub fn execute_c32_irfft(
     finish_f32(session, output_shape, output.handle, op)
 }
 
-fn client<'a>(session: &'a WebGpuExecSession<'a>) -> &'a Client<WgpuRuntime> {
+fn client<'a>(session: &'a WebGpuExecSession<'a>) -> &'a Client {
     session.runtime().client()
 }
 
@@ -224,13 +224,13 @@ fn f32_input(
     session: &WebGpuExecSession<'_>,
     tensor: &TypedTensor<f32>,
     op: &'static str,
-) -> tenferro_tensor::Result<TensorHandle<WgpuRuntime>> {
+) -> tenferro_tensor::Result<TensorHandle> {
     let (handle, shape, strides) = input_parts(session, tensor, op)?;
     Ok(TensorHandle::new(
         handle,
         shape,
         strides,
-        f32::as_type_native_unchecked().storage_type(),
+        f32::elem_type_native(),
     ))
 }
 
@@ -426,6 +426,6 @@ impl From<WebGpuFftNormalization> for FftNormalization {
     }
 }
 
-fn f32_storage() -> cubecl::prelude::StorageType {
-    f32::as_type_native_unchecked().storage_type()
+fn f32_storage() -> cubecl::prelude::ElemType {
+    f32::elem_type_native()
 }

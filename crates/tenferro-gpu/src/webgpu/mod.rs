@@ -428,7 +428,7 @@ fn typed_tensor_binding_with_layout<T: CubeElement + TensorScalar + Clone>(
     shape: &[usize],
     strides: &[usize],
     op: &'static str,
-) -> crate::Result<TensorBinding<WgpuRuntime>> {
+) -> crate::Result<TensorBinding> {
     if shape.len() != strides.len() {
         return Err(Error::rank_mismatch(op, shape.len(), strides.len()));
     }

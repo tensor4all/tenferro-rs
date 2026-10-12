@@ -1,3 +1,4 @@
+use cubecl::frontend::Scalar;
 use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
 use cubecl_wgpu::WgpuRuntime;
 use tenferro_tensor::validate::validate_permutation_axes;
@@ -76,12 +77,12 @@ fn strides_i64(strides: &[isize], op: &'static str) -> crate::Result<Vec<i64>> {
 fn launch_materialization<T>(
     backend: &WebGpuBackend,
     output: &TypedTensor<T>,
-    input: BufferArg<WgpuRuntime>,
+    input: BufferArg,
     plan: &NativePermutationPlan,
     op: &'static str,
 ) -> crate::Result<()>
 where
-    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Scalar + Clone + Send + Sync + 'static,
 {
     if plan.len == 0 {
         return Ok(());
@@ -133,7 +134,7 @@ where
                     // SAFETY: The tiled classification proves a compact 2D
                     // transpose. Bounds guards cover edge tiles and every unit
                     // reaches the shared-memory barrier.
-                    crate::kernels::structural::tiled_transpose_comptime_layout_kernel::launch_unchecked::<T, WgpuRuntime>(
+                    crate::kernels::structural::tiled_transpose_comptime_layout_kernel::launch_unchecked::<T>(
                         backend.runtime().client(),
                         CubeCount::Static(cubes_x, cubes_y, cubes_z),
                         cube_dim,
@@ -167,7 +168,7 @@ where
     unsafe {
         // SAFETY: `NativePermutationPlan` validated source/destination bounds,
         // destination non-overlap, shape products, and disjoint allocations.
-        crate::kernels::structural::materialize_strided_comptime_layout_kernel::launch_unchecked::<T, WgpuRuntime>(
+        crate::kernels::structural::materialize_strided_comptime_layout_kernel::launch_unchecked::<T>(
             backend.runtime().client(),
             cube_count_for_len(plan.len)?,
             cube_dim_1d(),
@@ -187,7 +188,7 @@ fn view_array_arg<T, R>(
     backend: &WebGpuBackend,
     view: &TypedTensorView<'_, T, R>,
     op: &'static str,
-) -> crate::Result<BufferArg<WgpuRuntime>>
+) -> crate::Result<BufferArg>
 where
     T: CubeElement + crate::TensorScalar + Clone + Send + Sync + 'static,
     R: TensorRank,
@@ -234,7 +235,7 @@ fn transpose_typed<T>(
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Scalar + Clone + Send + Sync + 'static,
 {
     validate_permutation_axes(TRANSPOSE_OP, input.shape().len(), perm)?;
     let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
@@ -260,7 +261,7 @@ fn materialize_typed<T, R>(
     view: &TypedTensorView<'_, T, R>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Scalar + Clone + Send + Sync + 'static,
     R: TensorRank,
 {
     let len = view
