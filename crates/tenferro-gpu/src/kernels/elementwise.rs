@@ -64,7 +64,7 @@ fn broadcast_source_index<E: CubePrimitive + Scalar>(
     #[comptime] output_rank: usize,
 ) -> usize {
     let input_rank = dims.len();
-    let out_idx = flat_to_tensor_index(out_flat, &*out, output_rank);
+    let out_idx = flat_to_tensor_index(out_flat, out, output_rank);
     let mut input_idx = Array::<usize>::new(input_rank);
     #[unroll]
     for src_axis in 0..input_rank {

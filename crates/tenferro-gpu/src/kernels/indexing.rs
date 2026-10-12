@@ -83,7 +83,7 @@ pub(crate) fn clamp_window_start<I: Numeric + CubePrimitive>(
 #[cube]
 pub(crate) fn index_component<I: Numeric + CubePrimitive>(
     indices: &Tensor<I>,
-    batch_idx: &[usize],
+    batch_idx: &Array<usize>,
     #[comptime] index_vector_dim: usize,
     #[comptime] component: usize,
     #[comptime] rank: usize,
