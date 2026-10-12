@@ -1,8 +1,9 @@
 # webgpu feature: migration state and the remaining decisions
 
-Status: 54 errors -> 9 with `--features webgpu` (10 with
-`--features cuda,webgpu`). Everything mechanical is done; the nine left each need a
-decision, which is why this is a separate record from the A100 note.
+Status: 54 errors -> 7 with `--features webgpu` (7 with
+`--features cuda,webgpu`). Everything on the tenferro side is done; the seven left
+each need an API only the host-visible port provides, which is why this is a
+separate record from the A100 note.
 
 Verification: `cargo check -j 4 -p tenferro-gpu --features webgpu`.
 
@@ -23,37 +24,37 @@ Verification: `cargo check -j 4 -p tenferro-gpu --features webgpu`.
 - the kernel scalar bounds the macro now needs (`+ Scalar`) on
   `pack_lhs/rhs_dot_general`, `launch_materialization`;
 - `MatmulSetupError` no longer implements `std::error::Error`, so the two
-  `dot_general` sites wrap its message in `std::io::Error::other`.
+  `dot_general` sites wrap its message in `std::io::Error::other`;
+- the webgpu module's server-typed interop names the WGPU server, not the CUDA
+  one: `with_server::<WgpuServer<AutoCompiler>, _>` (`event_domain.rs`) and
+  `get_resource::<WgpuServer<AutoCompiler>>` (`mod.rs:116`). Both are the
+  WebGPU runtime's own server, and the resolved `ManagedResource<WgpuResource>`
+  is the type the buffer field already declared (#2114);
+- `cubek_matmul::strategy::Strategy` replaces the now-private
+  `launch::Strategy`; the dot-general path asks for `MultiLevel(Naive)` (see
+  below).
 
-## The nine, by decision
+## The seven, by decision
 
-**Apple/Metal host-visible memory (6 sites, fork-only APIs).**
+**Apple/Metal host-visible memory (7 sites, fork-only APIs).**
 `init_device_for_graphics_api` + `PrimaryMemoryMode` (imports),
-`RuntimeOptions.primary_memory` (`apple.rs:174`), `WgpuMappedReadGuard` /
+`RuntimeOptions.primary_memory` (`apple.rs:173`), `WgpuMappedReadGuard` /
 `WgpuMappedWriteGuard` and `WgpuResource::map_read` / `map_write`
-(`mod.rs:150,169,305,331`). Upstream 0.11 has none of them; they are the
-host-visible buffer mapping the goal's Apple/Metal note keeps blocked without a
-real Metal device and an agreed upstream ownership contract. Options: port them
-upstream (needs that contract and the user's approval), or scope the Apple path
-out of the feature's build.
+(`mod.rs:149,168,304,330`), plus `WgpuResource::allocation_id` (`mod.rs:118`),
+which the WGPU server typing un-masked. Upstream 0.11 has none of them; they are
+the host-visible buffer mapping the goal's Apple/Metal note keeps blocked without
+a real Metal device and an agreed upstream ownership contract, and the
+`t4a/hostvisible` port carries all seven. Options: take that port upstream (needs
+the ownership contract and the user's approval), or scope the Apple path out of
+the feature's build.
 
-**CUDA interop inside the webgpu module (3 sites, fork-only methods plus a
-scoping question).**
-`mod.rs:116-123` and `event_domain.rs:239` reach into the CUDA server
-(`get_resource::<cubecl_cuda::ffi_interop::CudaServer>`, `with_server::<…>`) to
-take an allocation id and to submit a stream completion. Two methods they need
-do not exist on the ported interop surface:
-`CudaServer::submit_stream_completion(stream_id)` and
-`GpuResource::allocation_id()`. `mod.rs:123` then mismatches types
-(`ManagedResource<WgpuResource>` expected, `ManagedResource<GpuResource>` found),
-which is the same path's scoping problem: the wgpu buffer is being resolved
-through the CUDA server. With `--features webgpu` alone `cubecl_cuda` is not
-linked at all, so these paths also need `#[cfg(feature = "cuda")]` gating with a
-defined fallback. Options: port the two methods upstream and gate the paths, or
-move the CUDA-dependent part behind its own feature.
-
-**cubek matmul strategy (1 site).**
-`gemm.rs:6,463,528` import `cubek_matmul::launch::Strategy` and ask for
-`Strategy::Naive`. In 0.11 the public enum is `cubek_matmul::strategy::Strategy`
-with `Tiled`/`MultiLevel`/`Auto` — no `Naive`. Which arm replaces it is a choice
-about which kernel architecture the Metal/wgpu path requests, not a rename.
+**cubek matmul strategy (decided).**
+`gemm.rs` asks for `Strategy::MultiLevel(multi_level::Strategy::Naive)`. 0.11
+moved the fork's `Naive` kernel under the `multi-level` family, so this is the
+same simple, always-available routine — one output element per unit, no
+accelerator requirement — and keeps the webgpu path's kernel choice and
+numerics. The workspace pin enables `multi-level` only, so `Tiled` is not
+compiled in at all; `Auto` would try `SimpleCyclicCmma` first and fall back to
+`SimpleUnit`, silently requesting a different kernel. `cubek_matmul::launch`
+keeps `Strategy` private, so the import must come from
+`cubek_matmul::strategy`.

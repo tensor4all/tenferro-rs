@@ -2,7 +2,9 @@ use cubecl::frontend::Scalar;
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use cubek_matmul::{
     definition::MatmulElems,
-    launch::{launch_c32_ref, launch_ref, ComplexMatmulOptions, Strategy},
+    launch::{launch_c32_ref, launch_ref, ComplexMatmulOptions},
+    multi_level,
+    strategy::Strategy,
 };
 use cubek_std::InputBinding;
 use num_complex::Complex32;
@@ -408,6 +410,16 @@ where
     })
 }
 
+/// The strategy the webgpu dot-general path requests.
+///
+/// 0.11 moved the fork's `Naive` kernel — the simple, always-available routine
+/// that computes one output element per unit — under the `multi-level` family.
+/// `MultiLevel(Naive)` is that same routine; `Auto` would try an accelerated
+/// kernel first and change the webgpu path's kernel choice.
+fn matmul_strategy() -> Strategy {
+    Strategy::MultiLevel(multi_level::Strategy::Naive)
+}
+
 fn dot_general_f32(
     backend: &WebGpuBackend,
     lhs: &TypedTensor<f32>,
@@ -459,7 +471,7 @@ fn dot_general_f32(
     let mut dtypes = MatmulElems::from_single_dtype(f32::elem_type_native());
 
     launch_ref(
-        &Strategy::Naive,
+        &matmul_strategy(),
         backend.runtime().client(),
         lhs_binding,
         rhs_binding,
@@ -524,7 +536,7 @@ fn dot_general_c32(
     let mut dtypes = MatmulElems::from_single_dtype(Complex32::elem_type_native());
 
     launch_c32_ref(
-        &Strategy::Naive,
+        &matmul_strategy(),
         backend.runtime().client(),
         lhs_binding,
         rhs_binding,

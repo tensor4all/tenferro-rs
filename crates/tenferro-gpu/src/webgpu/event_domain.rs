@@ -233,9 +233,11 @@ fn submit_completion(
     runtime: &WebGpuRuntime,
     stream_id: StreamId,
 ) -> tenferro_runtime::Result<WgpuSubmission> {
+    // The WebGPU runtime's own server owns the stream, and its
+    // `submit_stream_completion` seals that stream's queue.
     runtime
         .client()
-        .with_server::<cubecl_cuda::ffi_interop::CudaServer, _>(move |server| {
+        .with_server::<cubecl_wgpu::WgpuServer<cubecl_wgpu::AutoCompiler>, _>(move |server| {
             server.submit_stream_completion(stream_id)
         })
         .ok_or_else(|| {
