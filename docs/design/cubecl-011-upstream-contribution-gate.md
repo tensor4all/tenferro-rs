@@ -56,3 +56,14 @@ own tests, not just its own:
 
 A port that cannot be shown to carry the tests is not contributed; it is
 reported as a known gap instead.
+
+## Process for every PR candidate
+
+1. An independent review by `openai/gpt-6.1-sol` (read-only, `independent-review`
+   skill), with its findings verified against the source before anything is acted
+   on.
+2. The user's explicit approval.
+Nothing is pushed to `tracel-ai/*` or filed before both. The arithmetic fix
+series is already in that shape and pushed as
+`tensor4all/cubecl` `feat/tenferro-upstream-arith-fixes` (`daf31e033`, four
+single-file commits on `6bba5fdf`).
