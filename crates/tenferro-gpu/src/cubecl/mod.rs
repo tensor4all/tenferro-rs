@@ -75,7 +75,7 @@ use cubecl::prelude::{
     BufferArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
-use cubecl::prelude::{CubeCount, Int as CubeInt, PlaneReduce, Scalar, TensorBinding, Type};
+use cubecl::prelude::{CubeCount, Int as CubeInt, LaunchArg, PlaneReduce, Scalar, TensorBinding, Type};
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 
@@ -3700,6 +3700,7 @@ trait CudaCastFloat:
     + TensorScalar
     + CubeFloat
     + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
+    + LaunchArg
     + Clone
     + Send
     + Sync
@@ -3883,6 +3884,7 @@ trait CudaFloatIndex:
     + TensorScalar
     + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
     + CubeFloat
+    + LaunchArg
     + Clone
     + Send
     + Sync
