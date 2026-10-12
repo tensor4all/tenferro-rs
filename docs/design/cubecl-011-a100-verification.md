@@ -171,3 +171,27 @@ the ten webgpu errors recorded in
 feature unification builds that module. For `--features cuda` alone the same
 clippy invocation is clean. Both commands ran with `CARGO_BUILD_JOBS=4` and the
 A100 environment above.
+
+## FFT and the known upstream baseline failure
+
+`tenferro-gpu` has no FFT tests: its CUDA suite covers the stream/ownership,
+buffer offset/alignment/address-invalidation, elementwise and strided paths
+above. The FFT kernels are the CubeK port, whose own suite was run on the same
+A100 (worktree `../cubek-upstream-fft`, branch `feat/tenferro-upstream-interleaved-fft`
+at `a25de257`, which pins `tracel-ai/cubecl` rev `363145515` rather than the port
+tree, so this is the port against its own baseline):
+
+```
+CUBECL_DEBUG_LOG=0 CUDA_PATH=/usr/local/cuda LD_LIBRARY_PATH=... \
+  cargo test -j 4 -p cubek-fft -- --test-threads=4
+```
+
+`41 passed; 1 failed`, and the failure is the known baseline one:
+
+- `fft::rfft::rfft_light_f64` — "Got incorrect results: 6/10 elements mismatched
+  (max |Δ|=1.4378, mean |Δ|=0.9326), shape=[2,5]"; the returned column repeats one
+  value per column, so the f64 light route's element mapping is wrong.
+
+Recorded as a known failure, not a pass, and not attributed to the tenferro
+migration (it is the CubeK port against its own pinned CubeCL).
+
