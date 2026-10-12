@@ -13,7 +13,7 @@ pub fn extract_diagonal_kernel<E: CubePrimitive + Scalar>(
     #[comptime] output_rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, output_rank);
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, &*out, output_rank);
         let mut input_idx = Array::<usize>::new(input_rank);
         let diag = out_idx[diag_output_axis];
         let mut out_axis = 0usize;
@@ -53,7 +53,7 @@ pub fn embed_diagonal_copy_kernel<E: CubePrimitive + Scalar>(
                 src_axis += 1;
             }
         }
-        let dst = multi_to_tensor_index(&output_idx, out, output_rank);
+        let dst = multi_to_tensor_index(&output_idx, &*out, output_rank);
         out[dst] = input[ABSOLUTE_POS];
     }
 }

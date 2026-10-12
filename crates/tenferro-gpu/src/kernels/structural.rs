@@ -323,7 +323,7 @@ pub fn broadcast_in_dim_kernel<E: CubePrimitive + Scalar>(
 ) {
     if ABSOLUTE_POS < out.len() {
         let rank = dims.len();
-        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, output_rank);
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, &*out, output_rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for src_axis in 0..rank {
@@ -546,7 +546,7 @@ pub fn reverse_kernel<E: CubePrimitive + Scalar>(
     #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, &*out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
@@ -577,7 +577,7 @@ pub fn concatenate_copy_kernel<E: CubePrimitive + Scalar>(
             output_idx[dim] = input_idx[dim];
         }
         output_idx[axis] += axis_offset;
-        let dst = multi_to_tensor_index(&output_idx, out, rank);
+        let dst = multi_to_tensor_index(&output_idx, &*out, rank);
         out[dst] = input[ABSOLUTE_POS];
     }
 }

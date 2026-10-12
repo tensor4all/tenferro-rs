@@ -64,7 +64,7 @@ fn broadcast_source_index<E: CubePrimitive + Scalar>(
     #[comptime] output_rank: usize,
 ) -> usize {
     let input_rank = dims.len();
-    let out_idx = flat_to_tensor_index(out_flat, out, output_rank);
+    let out_idx = flat_to_tensor_index(out_flat, &*out, output_rank);
     let mut input_idx = Array::<usize>::new(input_rank);
     #[unroll]
     for src_axis in 0..input_rank {
@@ -90,8 +90,8 @@ macro_rules! broadcast_multiply_kernel {
             #[comptime] output_rank: usize,
         ) {
             if ABSOLUTE_POS < out.len() {
-                let lhs_idx = broadcast_source_index(ABSOLUTE_POS, out, lhs, lhs_dims, output_rank);
-                let rhs_idx = broadcast_source_index(ABSOLUTE_POS, out, rhs, rhs_dims, output_rank);
+                let lhs_idx = broadcast_source_index(ABSOLUTE_POS, &*out, lhs, lhs_dims, output_rank);
+                let rhs_idx = broadcast_source_index(ABSOLUTE_POS, &*out, rhs, rhs_dims, output_rank);
                 out[ABSOLUTE_POS] = lhs[lhs_idx] * rhs[rhs_idx];
             }
         }
@@ -111,8 +111,8 @@ pub fn broadcast_multiply_int<I: Int>(
     #[comptime] output_rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = broadcast_source_index(ABSOLUTE_POS, out, lhs, lhs_dims, output_rank);
-        let rhs_idx = broadcast_source_index(ABSOLUTE_POS, out, rhs, rhs_dims, output_rank);
+        let lhs_idx = broadcast_source_index(ABSOLUTE_POS, &*out, lhs, lhs_dims, output_rank);
+        let rhs_idx = broadcast_source_index(ABSOLUTE_POS, &*out, rhs, rhs_dims, output_rank);
         out[ABSOLUTE_POS] = wrapping_mul::<I>(lhs[lhs_idx], rhs[rhs_idx]);
     }
 }

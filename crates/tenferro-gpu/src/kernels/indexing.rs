@@ -181,7 +181,7 @@ pub fn slice_kernel<E: CubePrimitive + Scalar>(
 ) {
     if ABSOLUTE_POS < out.len() {
         let rank = comptime! { strides.len() };
-        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, &*out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
@@ -200,7 +200,7 @@ pub fn dynamic_slice_kernel<E: CubePrimitive + Scalar, I: Numeric + CubePrimitiv
     #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, &*out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
@@ -222,7 +222,7 @@ pub fn pad_kernel<E: CubePrimitive + Scalar>(
     #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, &*out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         let mut in_bounds = true;
         #[unroll]
@@ -276,7 +276,7 @@ pub fn gather_kernel<E: CubePrimitive + Scalar, I: Numeric + CubePrimitive>(
     #[comptime] start_indices_rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, out_rank);
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, &*out, out_rank);
         let batch_rank = comptime! {
             if index_vector_dim < start_indices_rank {
                 start_indices_rank - 1
