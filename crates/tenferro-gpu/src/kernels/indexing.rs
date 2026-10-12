@@ -10,10 +10,7 @@ use crate::kernels::helpers::{
 };
 
 #[cube(launch_unchecked)]
-pub fn init_float_index_validation_flag<F: Float>(
-    flag: &mut [Atomic<u32>],
-    flag_values: &mut [F],
-) {
+pub fn init_float_index_validation_flag<F: Float>(flag: &mut [Atomic<u32>], flag_values: &mut [F]) {
     // INVARIANT: exactly one worker initializes two scalar validation outputs; this is O(1)
     // setup and does not perform tensor-sized serial work.
     if ABSOLUTE_POS == 0 {
@@ -24,7 +21,9 @@ pub fn init_float_index_validation_flag<F: Float>(
 
 #[cube(launch_unchecked)]
 pub fn validate_float_indices_kernel<
-    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>
+    F: Float
+        + CubeElement
+        + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>
         + LaunchArg
         + cubecl::ScalarArgType,
 >(

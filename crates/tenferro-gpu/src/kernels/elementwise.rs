@@ -90,8 +90,10 @@ macro_rules! broadcast_multiply_kernel {
             #[comptime] output_rank: usize,
         ) {
             if ABSOLUTE_POS < out.len() {
-                let lhs_idx = broadcast_source_index(ABSOLUTE_POS, &*out, lhs, lhs_dims, output_rank);
-                let rhs_idx = broadcast_source_index(ABSOLUTE_POS, &*out, rhs, rhs_dims, output_rank);
+                let lhs_idx =
+                    broadcast_source_index(ABSOLUTE_POS, &*out, lhs, lhs_dims, output_rank);
+                let rhs_idx =
+                    broadcast_source_index(ABSOLUTE_POS, &*out, rhs, rhs_dims, output_rank);
                 out[ABSOLUTE_POS] = lhs[lhs_idx] * rhs[rhs_idx];
             }
         }
@@ -226,15 +228,18 @@ pub fn mul_int<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I]) {
 macro_rules! scalar_binary_float_kernel {
     ($name:ident, |$lhs:ident, $rhs:ident| $body:expr) => {
         #[cube(launch_unchecked)]
-        pub fn $name<F: Float>(
-            out: &mut [F],
-            lhs: &[F],
-            rhs: &[F],
-            #[comptime] lhs_scalar: bool,
-        ) {
+        pub fn $name<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F], #[comptime] lhs_scalar: bool) {
             if ABSOLUTE_POS < out.len() {
-                let lhs_idx = if lhs_scalar { 0usize.runtime() } else { ABSOLUTE_POS };
-                let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0usize.runtime() };
+                let lhs_idx = if lhs_scalar {
+                    0usize.runtime()
+                } else {
+                    ABSOLUTE_POS
+                };
+                let rhs_idx = if lhs_scalar {
+                    ABSOLUTE_POS
+                } else {
+                    0usize.runtime()
+                };
                 let $lhs = lhs[lhs_idx];
                 let $rhs = rhs[rhs_idx];
                 out[ABSOLUTE_POS] = $body;
@@ -330,8 +335,16 @@ pub fn scalar_div_int_checked<I: Int>(
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0usize.runtime() } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0usize.runtime() };
+        let lhs_idx = if lhs_scalar {
+            0usize.runtime()
+        } else {
+            ABSOLUTE_POS
+        };
+        let rhs_idx = if lhs_scalar {
+            ABSOLUTE_POS
+        } else {
+            0usize.runtime()
+        };
         let x = lhs[lhs_idx];
         let y = rhs[rhs_idx];
         let zero = I::new(0);
@@ -356,8 +369,16 @@ pub fn scalar_rem_int_checked<I: Int>(
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0usize.runtime() } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0usize.runtime() };
+        let lhs_idx = if lhs_scalar {
+            0usize.runtime()
+        } else {
+            ABSOLUTE_POS
+        };
+        let rhs_idx = if lhs_scalar {
+            ABSOLUTE_POS
+        } else {
+            0usize.runtime()
+        };
         let x = lhs[lhs_idx];
         let y = rhs[rhs_idx];
         let zero = I::new(0);
@@ -375,12 +396,7 @@ pub fn scalar_rem_int_checked<I: Int>(
 }
 
 #[cube(launch_unchecked)]
-pub fn div_int_checked<I: Int>(
-    out: &mut [I],
-    lhs: &[I],
-    rhs: &[I],
-    err: &mut [i32],
-) {
+pub fn div_int_checked<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I], err: &mut [i32]) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
@@ -407,12 +423,7 @@ pub fn rem_float<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
 }
 
 #[cube(launch_unchecked)]
-pub fn rem_int_checked<I: Int>(
-    out: &mut [I],
-    lhs: &[I],
-    rhs: &[I],
-    err: &mut [i32],
-) {
+pub fn rem_int_checked<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I], err: &mut [i32]) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
@@ -592,12 +603,7 @@ pub fn pow_float<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
 }
 
 #[cube(launch_unchecked)]
-pub fn pow_int_checked<I: Int>(
-    out: &mut [I],
-    lhs: &[I],
-    rhs: &[I],
-    err: &mut [i32],
-) {
+pub fn pow_int_checked<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I], err: &mut [i32]) {
     if ABSOLUTE_POS < out.len() {
         let zero = I::new(0);
         let one = I::new(1);
@@ -634,8 +640,16 @@ pub fn scalar_pow_int_checked<I: Int>(
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0usize.runtime() } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0usize.runtime() };
+        let lhs_idx = if lhs_scalar {
+            0usize.runtime()
+        } else {
+            ABSOLUTE_POS
+        };
+        let rhs_idx = if lhs_scalar {
+            ABSOLUTE_POS
+        } else {
+            0usize.runtime()
+        };
         let zero = I::new(0);
         let one = I::new(1);
         let two = I::new(2);
@@ -685,12 +699,7 @@ pub fn compare_float_bool<F: Float>(
 }
 
 #[cube(launch_unchecked)]
-pub fn compare_int_bool<I: Int>(
-    out: &mut [bool],
-    lhs: &[I],
-    rhs: &[I],
-    #[comptime] mode: usize,
-) {
+pub fn compare_int_bool<I: Int>(out: &mut [bool], lhs: &[I], rhs: &[I], #[comptime] mode: usize) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
@@ -707,12 +716,7 @@ pub fn compare_int_bool<I: Int>(
 }
 
 #[cube(launch_unchecked)]
-pub fn select_bool_float<F: Float>(
-    out: &mut [F],
-    pred: &[bool],
-    on_true: &[F],
-    on_false: &[F],
-) {
+pub fn select_bool_float<F: Float>(out: &mut [F], pred: &[bool], on_true: &[F], on_false: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = if pred[ABSOLUTE_POS] {
             on_true[ABSOLUTE_POS]
@@ -723,12 +727,7 @@ pub fn select_bool_float<F: Float>(
 }
 
 #[cube(launch_unchecked)]
-pub fn select_bool_int<I: Int>(
-    out: &mut [I],
-    pred: &[bool],
-    on_true: &[I],
-    on_false: &[I],
-) {
+pub fn select_bool_int<I: Int>(out: &mut [I], pred: &[bool], on_true: &[I], on_false: &[I]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = if pred[ABSOLUTE_POS] {
             on_true[ABSOLUTE_POS]
@@ -739,12 +738,7 @@ pub fn select_bool_int<I: Int>(
 }
 
 #[cube(launch_unchecked)]
-pub fn clamp_float<F: Float>(
-    out: &mut [F],
-    input: &[F],
-    lower: &[F],
-    upper: &[F],
-) {
+pub fn clamp_float<F: Float>(out: &mut [F], input: &[F], lower: &[F], upper: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].clamp(lower[ABSOLUTE_POS], upper[ABSOLUTE_POS]);
     }

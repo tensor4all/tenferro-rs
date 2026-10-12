@@ -1,5 +1,4 @@
 use cubecl::ir::{
-    Builtin, OpInserter, Scope,
     dialect::{
         branch::IfOp,
         cmp::{FClampNanOp, FMaxOp, FMinOp, ULessThanOp},
@@ -12,6 +11,7 @@ use cubecl::ir::{
     },
     pliron::value::Value,
     settings::ExecutionMode,
+    Builtin, OpInserter, Scope,
 };
 use cubecl::prelude::{
     AddressType, CubeDim, CubePrimitive, KernelBuilder, KernelDefinition, KernelSettings,
@@ -126,10 +126,19 @@ fn emit_op(scope: &Scope, op: &ElementwiseFusionOp, inputs: &[Value]) -> Value {
         ($ctor:path) => {{
             let extrema = scope.register_with_result(&$ctor(scope.ctx_mut(), inputs[0], inputs[1]));
             let rhs_is_nan = scope.register_with_result(&IsNanOp::new(scope.ctx_mut(), inputs[1]));
-            let rhs_or_extrema =
-                scope.register_with_result(&SelectOp::new(scope.ctx_mut(), rhs_is_nan, inputs[1], extrema));
+            let rhs_or_extrema = scope.register_with_result(&SelectOp::new(
+                scope.ctx_mut(),
+                rhs_is_nan,
+                inputs[1],
+                extrema,
+            ));
             let lhs_is_nan = scope.register_with_result(&IsNanOp::new(scope.ctx_mut(), inputs[0]));
-            scope.register_with_result(&SelectOp::new(scope.ctx_mut(), lhs_is_nan, inputs[0], rhs_or_extrema))
+            scope.register_with_result(&SelectOp::new(
+                scope.ctx_mut(),
+                lhs_is_nan,
+                inputs[0],
+                rhs_or_extrema,
+            ))
         }};
     }
 

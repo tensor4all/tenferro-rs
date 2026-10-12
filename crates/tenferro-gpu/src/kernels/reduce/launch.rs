@@ -152,10 +152,7 @@ fn validate_plane_strategy(
     Ok(())
 }
 
-fn auto_reduce_strategy(
-    client: &Client,
-    problem: ReduceProblem,
-) -> Result<ResolvedReduceStrategy> {
+fn auto_reduce_strategy(client: &Client, problem: ReduceProblem) -> Result<ResolvedReduceStrategy> {
     let unit_axis_limit = client.properties().hardware.plane_size_max.max(1) as usize;
     auto_reduce_strategy_for_capabilities(
         problem.reduce_len,
@@ -312,17 +309,15 @@ pub(crate) fn launch_sum_int<I: Int + CubeElement>(
                 launch.axis,
                 launch.output_len,
             ),
-            ResolvedReduceStrategy::Plane => {
-                kernels::reduce_sum_int_plane::launch_unchecked::<I>(
-                    client,
-                    launch.cube_count,
-                    launch.cube_dim,
-                    input.into_tensor_arg(),
-                    output.into_tensor_arg(),
-                    launch.axis,
-                    launch.output_len,
-                )
-            }
+            ResolvedReduceStrategy::Plane => kernels::reduce_sum_int_plane::launch_unchecked::<I>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
         }
     }
 
@@ -444,17 +439,15 @@ pub(crate) fn launch_prod_int<I: Int + CubeElement>(
                 launch.axis,
                 launch.output_len,
             ),
-            ResolvedReduceStrategy::Plane => {
-                kernels::reduce_prod_int_plane::launch_unchecked::<I>(
-                    client,
-                    launch.cube_count,
-                    launch.cube_dim,
-                    input.into_tensor_arg(),
-                    output.into_tensor_arg(),
-                    launch.axis,
-                    launch.output_len,
-                )
-            }
+            ResolvedReduceStrategy::Plane => kernels::reduce_prod_int_plane::launch_unchecked::<I>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
         }
     }
 
@@ -576,17 +569,15 @@ pub(crate) fn launch_max_int<I: Int + CubeElement>(
                 launch.axis,
                 launch.output_len,
             ),
-            ResolvedReduceStrategy::Plane => {
-                kernels::reduce_max_int_plane::launch_unchecked::<I>(
-                    client,
-                    launch.cube_count,
-                    launch.cube_dim,
-                    input.into_tensor_arg(),
-                    output.into_tensor_arg(),
-                    launch.axis,
-                    launch.output_len,
-                )
-            }
+            ResolvedReduceStrategy::Plane => kernels::reduce_max_int_plane::launch_unchecked::<I>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
         }
     }
 
@@ -664,17 +655,15 @@ pub(crate) fn launch_min_int<I: Int + CubeElement>(
                 launch.axis,
                 launch.output_len,
             ),
-            ResolvedReduceStrategy::Plane => {
-                kernels::reduce_min_int_plane::launch_unchecked::<I>(
-                    client,
-                    launch.cube_count,
-                    launch.cube_dim,
-                    input.into_tensor_arg(),
-                    output.into_tensor_arg(),
-                    launch.axis,
-                    launch.output_len,
-                )
-            }
+            ResolvedReduceStrategy::Plane => kernels::reduce_min_int_plane::launch_unchecked::<I>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
         }
     }
 

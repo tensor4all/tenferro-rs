@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use cubecl::client::Client;
 use cubecl::server::ServerStorage;
-use cubecl_environment::stream::StreamId;
 use cubecl::Device;
 use cubecl_cuda::CudaDevice;
+use cubecl_environment::stream::StreamId;
 use cubecl_runtime::config::{CubeClRuntimeConfig, RuntimeConfig};
 use cudarc::cublas::sys as cublas_sys;
 use cudarc::driver::result::DriverError;

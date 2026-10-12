@@ -1,6 +1,5 @@
 use cubecl::frontend::Scalar;
 use cubecl::prelude::{CubeElement, CubePrimitive};
-use cubecl_wgpu::WgpuRuntime;
 use cubek_matmul::{
     definition::MatmulElems,
     launch::{launch_c32_ref, launch_ref, ComplexMatmulOptions, Strategy},

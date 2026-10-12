@@ -540,14 +540,7 @@ pub(crate) fn scale_typed_tensor<T, F>(
 ) -> crate::Result<()>
 where
     T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
-    F: FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        usize,
-    ),
+    F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
     scale_typed_tensor_for_op(rt, output, factor, SCALE_OP, launch)
 }
@@ -561,14 +554,7 @@ pub(crate) fn scale_typed_tensor_for_op<T, F>(
 ) -> crate::Result<()>
 where
     T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
-    F: FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        usize,
-    ),
+    F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
     dispatch::ensure_resident_on_runtime(rt, output, op)?;
     let len = output.n_elements();
@@ -591,14 +577,7 @@ fn scale_typed_view<T, F>(
 ) -> crate::Result<()>
 where
     T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
-    F: FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        usize,
-    ),
+    F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
     dispatch::ensure_view_mut_resident_on_runtime(rt, output, SCALE_OP)?;
     if output.offset() != 0 || !output.is_col_major_contiguous()? {
@@ -647,14 +626,7 @@ fn launch_scaled<T, F>(
 ) -> crate::Result<()>
 where
     T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
-    F: FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        usize,
-    ),
+    F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
     let factor = upload_typed_tensor(rt, vec![1], vec![factor])?;
     let factor = dispatch::typed_tensor_array_arg(&factor, op)?;
@@ -676,7 +648,9 @@ fn launch_scale_f32(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f32>(client, count, dim, output, factor, len);
+        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f32>(
+            client, count, dim, output, factor, len,
+        );
     }
 }
 
@@ -694,7 +668,9 @@ fn launch_scale_f64(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f64>(client, count, dim, output, factor, len);
+        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
+            client, count, dim, output, factor, len,
+        );
     }
 }
 
@@ -712,7 +688,9 @@ fn launch_scale_c32(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex32>(client, count, dim, output, factor, len);
+        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex32>(
+            client, count, dim, output, factor, len,
+        );
     }
 }
 
@@ -730,7 +708,9 @@ fn launch_scale_c64(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex64>(client, count, dim, output, factor, len);
+        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex64>(
+            client, count, dim, output, factor, len,
+        );
     }
 }
 

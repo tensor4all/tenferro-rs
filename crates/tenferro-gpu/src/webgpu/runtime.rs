@@ -1,4 +1,3 @@
-use cubecl::Device;
 use cubecl_runtime::device::WgpuDeviceKind;
 use std::fmt;
 
@@ -92,7 +91,10 @@ impl WebGpuRuntime {
     /// Returns [`crate::Error::RuntimeState`] when the requested adapter is
     /// unavailable or CubeCL initialization panics while selecting it.
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
-        Self::from_device(WgpuDevice::new(WgpuDeviceKind::DiscreteGpu(device_ordinal)), device_ordinal)
+        Self::from_device(
+            WgpuDevice::new(WgpuDeviceKind::DiscreteGpu(device_ordinal)),
+            device_ordinal,
+        )
     }
 
     /// Initialize the CubeCL WebGPU runtime using CubeCL's default adapter selection.

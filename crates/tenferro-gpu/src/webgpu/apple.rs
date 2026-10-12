@@ -1,4 +1,3 @@
-use cubecl::Device;
 use cubecl_runtime::device::WgpuDeviceKind;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,7 +6,7 @@ use std::sync::Arc;
 use cubecl::client::Client;
 use cubecl_wgpu::{
     init_device_for_graphics_api, MemoryConfiguration, Metal, PrimaryMemoryMode, RuntimeOptions,
-    WgpuDevice, WgpuRuntime as CubeWgpuRuntime,
+    WgpuDevice,
 };
 
 use super::{
@@ -174,7 +173,10 @@ impl AppleContext {
             primary_memory: PrimaryMemoryMode::HostVisible,
         };
         let device = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            init_device_for_graphics_api::<Metal>(&WgpuDevice::new(WgpuDeviceKind::DefaultDevice), options)
+            init_device_for_graphics_api::<Metal>(
+                &WgpuDevice::new(WgpuDeviceKind::DefaultDevice),
+                options,
+            )
         }))
         .map_err(|payload| {
             crate::Error::runtime_state(

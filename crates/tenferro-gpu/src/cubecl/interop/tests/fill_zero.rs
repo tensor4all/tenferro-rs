@@ -9,8 +9,8 @@ use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{ErrorKind, Tensor, TensorViewMut, TensorWrite};
 
 use crate::cubecl::interop::fill_zero_write;
-use cubecl::MemoryScope;
 use crate::cubecl::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaRuntime};
+use cubecl::MemoryScope;
 
 macro_rules! cuda_test {
     ($name:ident, $body:block) => {
@@ -224,11 +224,17 @@ cuda_test!(fill_zero_does_not_allocate, {
     // Warm the path once, then pin the active-allocation count across repeats:
     // a materialized zero source or a staging buffer would show up here.
     fill_zero_write(&runtime, TensorWrite::from_tensor(&mut output)).unwrap();
-    let before = runtime.client().memory_report(MemoryScope::CurrentStream).usage();
+    let before = runtime
+        .client()
+        .memory_report(MemoryScope::CurrentStream)
+        .usage();
     for _ in 0..4 {
         fill_zero_write(&runtime, TensorWrite::from_tensor(&mut output)).unwrap();
     }
-    let after = runtime.client().memory_report(MemoryScope::CurrentStream).usage();
+    let after = runtime
+        .client()
+        .memory_report(MemoryScope::CurrentStream)
+        .usage();
     assert_eq!(after.number_allocs, before.number_allocs);
     assert_eq!(after.bytes_in_use, before.bytes_in_use);
 

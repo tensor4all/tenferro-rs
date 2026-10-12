@@ -24,11 +24,11 @@ use super::{CudaBackend, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, CubeclBuffer, Error, Tensor, TypedTensor};
+use cubecl::frontend::Scalar;
 use tenferro_tensor::{
     CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorScalar,
     TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
-use cubecl::frontend::Scalar;
 
 const OP: &str = "dot_general";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
@@ -716,7 +716,9 @@ impl<T: 'static> ReadOperand<'_, '_, T> {
     }
 }
 
-fn read_operand_alignment_requirement<T: CutensorScalar + Scalar>(operand: &ReadOperand<'_, '_, T>) -> u32 {
+fn read_operand_alignment_requirement<T: CutensorScalar + Scalar>(
+    operand: &ReadOperand<'_, '_, T>,
+) -> u32 {
     match operand {
         ReadOperand::Owned(_) => CUDA_ALLOCATION_ALIGNMENT,
         ReadOperand::View(_) => view_descriptor_alignment_requirement::<T>(),
@@ -1122,9 +1124,7 @@ where
             cube_count_for_len(out.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<T>(
-                    client, count, dim, out,
-                );
+                structural::fill_zero_kernel::launch_unchecked::<T>(client, count, dim, out);
             },
         );
     }
@@ -1159,9 +1159,7 @@ where
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<T>(
-                    client, count, dim, out,
-                );
+                structural::fill_zero_kernel::launch_unchecked::<T>(client, count, dim, out);
             },
         )?;
         return Ok(output);

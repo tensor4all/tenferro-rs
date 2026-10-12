@@ -850,7 +850,9 @@ where
 {
     let resource = rt
         .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared_view_mut_access(view, op)?.into_handle())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(
+            prepared_view_mut_access(view, op)?.into_handle(),
+        )
         .map_err(|err| Error::backend_source(op, err))?;
     Ok(resource.resource().ptr)
 }

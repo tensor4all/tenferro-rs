@@ -1,6 +1,5 @@
 use cubecl::frontend::Scalar;
 use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
-use cubecl_wgpu::WgpuRuntime;
 use tenferro_tensor::validate::validate_permutation_axes;
 use tenferro_tensor::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
 

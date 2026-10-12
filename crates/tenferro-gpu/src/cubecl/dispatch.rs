@@ -361,13 +361,7 @@ pub(crate) fn launch_unary_bool_tensor(
     input: &TypedTensor<bool>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        TensorBinding,
-        TensorBinding,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, TensorBinding, TensorBinding),
 ) -> crate::Result<TypedTensor<bool>> {
     ensure_resident_on_runtime(rt, input, op)?;
     let input_arg = typed_tensor_binding(input, op)?;
@@ -398,14 +392,7 @@ pub(crate) fn launch_binary_bool_tensor<I: CubeElement + TensorScalar + Clone>(
     indices: &TypedTensor<I>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        TensorBinding,
-        TensorBinding,
-        TensorBinding,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, TensorBinding, TensorBinding, TensorBinding),
 ) -> crate::Result<TypedTensor<bool>> {
     ensure_resident_on_runtime(rt, input, op)?;
     ensure_resident_on_runtime(rt, indices, op)?;
@@ -440,13 +427,7 @@ pub(crate) fn launch_bool_tensor_into(
     op: &'static str,
     count: CubeCount,
     dim: CubeDim,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        TensorBinding,
-        TensorBinding,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, TensorBinding, TensorBinding),
 ) -> crate::Result<()> {
     ensure_resident_on_runtime(rt, output, op)?;
     ensure_resident_on_runtime(rt, input, op)?;
@@ -469,12 +450,7 @@ pub(crate) fn launch_nullary_bool_into(
     op: &'static str,
     count: CubeCount,
     dim: CubeDim,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg),
 ) -> crate::Result<()> {
     ensure_resident_on_runtime(rt, output, op)?;
     // A queued kernel is about to write this buffer, so any memoized device
@@ -752,13 +728,7 @@ pub(crate) fn launch_unary<TIn, TOut>(
     input: &TypedTensor<TIn>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TIn: CubeElement + TensorScalar + Clone,
@@ -795,13 +765,7 @@ pub(crate) fn launch_unary_tensor<TIn, TOut>(
     input: &TypedTensor<TIn>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        TensorBinding,
-        TensorBinding,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, TensorBinding, TensorBinding),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TIn: CubeElement + TensorScalar + Clone,
@@ -837,12 +801,7 @@ pub(crate) fn launch_nullary_into<TOut>(
     op: &'static str,
     count: CubeCount,
     dim: CubeDim,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg),
 ) -> crate::Result<()>
 where
     TOut: CubeElement + TensorScalar + Clone,
@@ -871,13 +830,7 @@ pub(crate) fn launch_unary_tensor_into<TIn, TOut>(
     op: &'static str,
     count: CubeCount,
     dim: CubeDim,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        TensorBinding,
-        TensorBinding,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, TensorBinding, TensorBinding),
 ) -> crate::Result<()>
 where
     TIn: CubeElement + TensorScalar + Clone,
@@ -909,14 +862,7 @@ pub(crate) fn launch_binary<TLhs, TRhs, TOut>(
     rhs: &TypedTensor<TRhs>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TLhs: CubeElement + TensorScalar + Clone,
@@ -958,14 +904,7 @@ pub(crate) fn launch_binary_parts<TLhs, TRhs, TOut, F>(
     rhs: &TypedTensor<TRhs>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TLhs: CubeElement + TensorScalar + Clone,
@@ -1004,14 +943,7 @@ pub(crate) fn launch_binary_views_parts<TLhs, TRhs, TOut, F>(
     rhs: &TypedTensorView<'_, TRhs>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TLhs: CubeElement + TensorScalar + Clone,
@@ -1064,13 +996,7 @@ pub(crate) fn launch_unary_view<TIn, TOut>(
     input: &TypedTensorView<'_, TIn>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TIn: CubeElement + TensorScalar + Clone,
@@ -1109,14 +1035,7 @@ pub(crate) fn launch_binary_views<TLhs, TRhs, TOut>(
     rhs: &TypedTensorView<'_, TRhs>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TLhs: CubeElement + TensorScalar + Clone,
@@ -1168,14 +1087,7 @@ pub(crate) fn launch_compare_bool<T>(
     rhs: &TypedTensor<T>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<bool>>
 where
     T: CubeElement + TensorScalar + Clone,
@@ -1212,14 +1124,7 @@ pub(crate) fn launch_binary_tensor<TLhs, TRhs, TOut>(
     rhs: &TypedTensor<TRhs>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        TensorBinding,
-        TensorBinding,
-        TensorBinding,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, TensorBinding, TensorBinding, TensorBinding),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TLhs: CubeElement + TensorScalar + Clone,
@@ -1265,14 +1170,7 @@ pub(crate) fn launch_binary_bindings<TOut>(
     rhs_arg: TensorBinding,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        TensorBinding,
-        TensorBinding,
-        TensorBinding,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, TensorBinding, TensorBinding, TensorBinding),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TOut: CubeElement + TensorScalar + Clone,
@@ -1302,15 +1200,7 @@ pub(crate) fn launch_select_bool<T>(
     on_false: &TypedTensor<T>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<T>>
 where
     T: CubeElement + TensorScalar + Clone,
@@ -1351,15 +1241,7 @@ pub(crate) fn launch_ternary<TA, TB, TC, TOut>(
     c: &TypedTensor<TC>,
     out_shape: &[usize],
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<TOut>>
 where
     TA: CubeElement + TensorScalar + Clone,

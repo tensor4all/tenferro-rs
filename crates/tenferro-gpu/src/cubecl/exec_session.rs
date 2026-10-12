@@ -40,10 +40,7 @@ struct CubeclExitFlush<'a> {
 }
 
 impl<'a> CubeclExitFlush<'a> {
-    fn new(
-        op: &'static str,
-        client: &'a cubecl::client::Client,
-    ) -> Self {
+    fn new(op: &'static str, client: &'a cubecl::client::Client) -> Self {
         Self {
             op,
             client,

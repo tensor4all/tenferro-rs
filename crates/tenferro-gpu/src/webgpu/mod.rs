@@ -8,7 +8,6 @@
 //! devices-and-gpu guide compares this subset with CUDA.
 
 use cubecl::prelude::{CubeCount, CubeDim, CubeElement, CubeType, Sequence, TensorBinding};
-use cubecl_wgpu::WgpuRuntime;
 use std::fmt;
 use std::sync::Arc;
 

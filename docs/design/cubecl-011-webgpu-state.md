@@ -1,6 +1,7 @@
 # webgpu feature: migration state and the remaining decisions
 
-Status: 54 errors -> 9. Everything mechanical is done; the nine left each need a
+Status: 54 errors -> 9 with `--features webgpu` (10 with
+`--features cuda,webgpu`). Everything mechanical is done; the nine left each need a
 decision, which is why this is a separate record from the A100 note.
 
 Verification: `cargo check -j 4 -p tenferro-gpu --features webgpu`.
@@ -36,13 +37,20 @@ real Metal device and an agreed upstream ownership contract. Options: port them
 upstream (needs that contract and the user's approval), or scope the Apple path
 out of the feature's build.
 
-**CUDA interop inside the webgpu module (2 sites).**
-`mod.rs:117` and `event_domain.rs:238` call
-`get_resource::<cubecl_cuda::ffi_interop::CudaServer>` / `with_server::<…>`, i.e.
-the wgpu module reaches into the CUDA server (the allocation-domain and
-stream-completion paths). With `--features webgpu` alone `cubecl_cuda` is not
-linked. Options: `#[cfg(feature = "cuda")]` on those paths with a fallback, or
-moving the CUDA-dependent part behind its own feature.
+**CUDA interop inside the webgpu module (3 sites, fork-only methods plus a
+scoping question).**
+`mod.rs:116-123` and `event_domain.rs:239` reach into the CUDA server
+(`get_resource::<cubecl_cuda::ffi_interop::CudaServer>`, `with_server::<…>`) to
+take an allocation id and to submit a stream completion. Two methods they need
+do not exist on the ported interop surface:
+`CudaServer::submit_stream_completion(stream_id)` and
+`GpuResource::allocation_id()`. `mod.rs:123` then mismatches types
+(`ManagedResource<WgpuResource>` expected, `ManagedResource<GpuResource>` found),
+which is the same path's scoping problem: the wgpu buffer is being resolved
+through the CUDA server. With `--features webgpu` alone `cubecl_cuda` is not
+linked at all, so these paths also need `#[cfg(feature = "cuda")]` gating with a
+defined fallback. Options: port the two methods upstream and gate the paths, or
+move the CUDA-dependent part behind its own feature.
 
 **cubek matmul strategy (1 site).**
 `gemm.rs:6,463,528` import `cubek_matmul::launch::Strategy` and ask for

@@ -46,9 +46,7 @@ fn queued_cubecl_write_drops_the_memoized_device_address() {
         cube_count_for_len(typed.n_elements()).unwrap(),
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<f64>(
-                client, count, dim, out,
-            );
+            structural::fill_zero_kernel::launch_unchecked::<f64>(client, count, dim, out);
         },
     )
     .unwrap();
@@ -97,15 +95,20 @@ fn queued_scale_write_drops_the_memoized_device_address() {
     );
 
     let typed = x.as_typed_mut::<f64>().unwrap();
-    scale_typed_tensor(&rt, typed, 2.0_f64, |client, count, dim, out, factor, len| {
-        // SAFETY: the scaling bridge validates residency, buffer length, and
-        // the one-dimensional launch domain before this unchecked launch.
-        unsafe {
-            structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
-                client, count, dim, out, factor, len,
-            );
-        }
-    })
+    scale_typed_tensor(
+        &rt,
+        typed,
+        2.0_f64,
+        |client, count, dim, out, factor, len| {
+            // SAFETY: the scaling bridge validates residency, buffer length, and
+            // the one-dimensional launch domain before this unchecked launch.
+            unsafe {
+                structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
+                    client, count, dim, out, factor, len,
+                );
+            }
+        },
+    )
     .unwrap();
     assert!(
         cubecl_buffer::<f64>(x.as_typed::<f64>().unwrap(), "test")

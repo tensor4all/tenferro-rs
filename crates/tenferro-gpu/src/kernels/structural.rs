@@ -376,10 +376,7 @@ pub fn convert_bool_to_numeric<Out: Numeric>(out: &mut [Out], input: &[u8]) {
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_numeric_to_complex_raw<Out: Float, In: Numeric>(
-    out: &mut [Out],
-    input: &[In],
-) {
+pub fn convert_numeric_to_complex_raw<Out: Float, In: Numeric>(out: &mut [Out], input: &[In]) {
     if ABSOLUTE_POS < input.len() {
         out[ABSOLUTE_POS * 2] = Out::cast_from(input[ABSOLUTE_POS]);
         out[ABSOLUTE_POS * 2 + 1] = Out::new(0.0f32);
@@ -395,10 +392,7 @@ pub fn convert_bool_to_complex_raw<Out: Float>(out: &mut [Out], input: &[u8]) {
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_complex_to_numeric<Out: Numeric, In: ComplexCore>(
-    out: &mut [Out],
-    input: &[In],
-) {
+pub fn convert_complex_to_numeric<Out: Numeric, In: ComplexCore>(out: &mut [Out], input: &[In]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS].real_val());
     }
@@ -419,7 +413,9 @@ pub fn convert_complex_raw_to_bool<F: Float>(out: &mut [u8], input: &[F]) {
 
 #[cube(launch_unchecked)]
 pub fn validate_real_cast<
-    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>
+    F: Float
+        + CubeElement
+        + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>
         + LaunchArg
         + cubecl::ScalarArgType,
 >(

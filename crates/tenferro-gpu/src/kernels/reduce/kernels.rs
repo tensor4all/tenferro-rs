@@ -172,7 +172,6 @@ pub(crate) fn reduce_prod_int<I: Int>(
     }
 }
 
-
 #[cube(launch_unchecked)]
 pub(crate) fn reduce_sum_float_plane<T: Float + PlaneReduce>(
     input: &Tensor<T>,
@@ -341,7 +340,6 @@ pub(crate) fn reduce_prod_complex_plane<T: ComplexCore + PlaneReduce>(
     }
 }
 
-
 #[cube(launch_unchecked)]
 pub(crate) fn reduce_sum_squares_float_plane<F: Float>(
     input: &Tensor<F>,
@@ -470,7 +468,6 @@ pub(crate) fn reduce_prod_int_plane<T: Int>(
         }
     }
 }
-
 
 #[cube(launch_unchecked)]
 pub(crate) fn reduce_max_float<F: Float>(

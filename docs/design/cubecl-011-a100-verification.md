@@ -157,3 +157,14 @@ bool-buffer question (upstream `SizedType` for `BoolType`, or a tenferro
 representation change to `u8`/`u32` buffers) and the `log1p` lowering (upstream
 C++ native `log1pf`, as the fork had). Both need the user's approval as
 `tracel-ai/*` work.
+
+## Repository-local gate
+
+`python3 scripts/ci/run_profile.py fmt` — clean.
+`bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -j 4 -p
+tenferro-gpu --features cuda --lib -- --ignored --test-threads=4'` — the cheap
+checks pass (`git diff --check`, doc-snippets, session-entry audit, fmt) and its
+`clippy` profile then fails, because `cargo clippy --workspace --all-targets`
+unifies features and therefore builds the webgpu module, which still has the
+decision-gated errors below. Both commands were run with `CARGO_BUILD_JOBS=4`
+and the A100 environment above.

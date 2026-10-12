@@ -75,7 +75,9 @@ use cubecl::prelude::{
     BufferArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
-use cubecl::prelude::{CubeCount, Int as CubeInt, LaunchArg, PlaneReduce, Scalar, TensorBinding, Type};
+use cubecl::prelude::{
+    CubeCount, Int as CubeInt, LaunchArg, PlaneReduce, Scalar, TensorBinding, Type,
+};
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 
@@ -1915,13 +1917,7 @@ impl CudaBackend {
     fn launch_cast_unary<In, Out>(
         &self,
         input: &TypedTensor<In>,
-        launch: impl FnOnce(
-            &Client,
-            CubeCount,
-            CubeDim,
-            BufferArg,
-            BufferArg,
-        ),
+        launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg),
     ) -> crate::Result<TypedTensor<Out>>
     where
         In: CubeElement + TensorScalar + Clone,
@@ -2027,7 +2023,13 @@ impl CudaBackend {
             input,
             |client, out, input, count| {
                 unsafe {
-                    structural::convert_numeric_to_complex_raw::launch_unchecked::<OutFloat, In>(client, count, cube_dim_1d(), out, input);
+                    structural::convert_numeric_to_complex_raw::launch_unchecked::<OutFloat, In>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
                 }
                 Ok(())
             },
@@ -2454,9 +2456,7 @@ impl CudaBackend {
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<T>(
-                    client, count, dim, out,
-                );
+                structural::fill_zero_kernel::launch_unchecked::<T>(client, count, dim, out);
             },
         )?;
         launch_unary_tensor_into(
@@ -2503,9 +2503,7 @@ impl CudaBackend {
             output_count,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<u8>(
-                    client, count, dim, out,
-                );
+                structural::fill_zero_kernel::launch_unchecked::<u8>(client, count, dim, out);
             },
         )?;
         launch_bool_tensor_into(
@@ -2639,11 +2637,7 @@ impl CudaBackend {
         input: &TypedTensor<T>,
         axis: usize,
         op: &'static str,
-        launch: impl FnOnce(
-            &Client,
-            TensorBinding,
-            TensorBinding,
-        ) -> crate::kernels::Result<()>,
+        launch: impl FnOnce(&Client, TensorBinding, TensorBinding) -> crate::kernels::Result<()>,
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
@@ -4049,15 +4043,7 @@ fn launch_checked_integer_binary<I>(
     op: &'static str,
     dtype: crate::DType,
     domain: CheckedIntegerDomain,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<I>>
 where
     I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
@@ -4079,9 +4065,7 @@ where
         cube_count_for_len(flag.n_elements())?,
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<i32>(
-                client, count, dim, out,
-            );
+            structural::fill_zero_kernel::launch_unchecked::<i32>(client, count, dim, out);
         },
     )?;
 
@@ -4110,15 +4094,7 @@ fn launch_scalar_binary<I>(
     lhs: &TypedTensor<I>,
     rhs: &TypedTensor<I>,
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-        bool,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg, bool),
 ) -> crate::Result<TypedTensor<I>>
 where
     I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
@@ -4279,16 +4255,7 @@ fn launch_checked_integer_scalar_binary<I>(
     op: &'static str,
     dtype: crate::DType,
     domain: CheckedIntegerDomain,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-        bool,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg, BufferArg, bool),
 ) -> crate::Result<TypedTensor<I>>
 where
     I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
@@ -4321,9 +4288,7 @@ where
         cube_count_for_len(flag.n_elements())?,
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<i32>(
-                client, count, dim, out,
-            );
+            structural::fill_zero_kernel::launch_unchecked::<i32>(client, count, dim, out);
         },
     )?;
 
@@ -4385,14 +4350,7 @@ fn launch_elementwise_binary_into<T>(
     rhs: &Tensor,
     out: &mut Tensor,
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<()>
 where
     T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
@@ -4432,13 +4390,7 @@ fn launch_elementwise_unary_into<T>(
     input: &Tensor,
     out: &mut Tensor,
     op: &'static str,
-    launch: impl FnOnce(
-        &Client,
-        CubeCount,
-        CubeDim,
-        BufferArg,
-        BufferArg,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg),
 ) -> crate::Result<()>
 where
     T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
@@ -4791,7 +4743,9 @@ impl CudaBackend {
 }
 
 /// The typed tensor behind a contiguous-read adapter's tensor, or its refusal.
-fn contiguous_read_typed<T: TensorScalar + Scalar>(tensor: &Tensor) -> crate::Result<&TypedTensor<T>> {
+fn contiguous_read_typed<T: TensorScalar + Scalar>(
+    tensor: &Tensor,
+) -> crate::Result<&TypedTensor<T>> {
     tensor.as_typed::<T>().ok_or_else(|| {
         crate::Error::unsupported(
             "CudaBackend::to_contiguous_read",

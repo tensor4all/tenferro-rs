@@ -235,7 +235,9 @@ fn submit_completion(
 ) -> tenferro_runtime::Result<WgpuSubmission> {
     runtime
         .client()
-        .with_server::<cubecl_cuda::ffi_interop::CudaServer, _>(move |server| server.submit_stream_completion(stream_id))
+        .with_server::<cubecl_cuda::ffi_interop::CudaServer, _>(move |server| {
+            server.submit_stream_completion(stream_id)
+        })
         .ok_or_else(|| {
             RuntimeError::from(crate::Error::backend_source(
                 EVENT_OP,

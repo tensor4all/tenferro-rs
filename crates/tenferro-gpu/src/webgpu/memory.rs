@@ -1,6 +1,5 @@
 use cubecl::client::Client;
 use cubecl::prelude::CubeElement;
-use cubecl_wgpu::WgpuRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::DType;
 

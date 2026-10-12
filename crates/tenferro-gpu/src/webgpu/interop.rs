@@ -1,8 +1,7 @@
 use cubecl::client::Client;
-use cubecl::frontend::{CubePrimitive, Scalar};
+use cubecl::frontend::Scalar;
 use cubecl::std::tensor::TensorHandle;
 use cubecl_runtime::server::Handle;
-use cubecl_wgpu::WgpuRuntime;
 use cubek_fft::{
     cfft_interleaved_launch, irfft_interleaved_launch_padded, rfft_interleaved_launch_padded,
     ComplexTensorHandle, FftMode, FftNormalization,
@@ -95,9 +94,8 @@ pub fn execute_c32_fft(
         strides: output_strides,
     } = output;
     let (handle, shape, strides) = input_parts(session, input, op)?;
-    let input =
-        ComplexTensorHandle::new_strided(shape, strides, handle, f32_storage())
-            .map_err(|error| Error::backend_source(op, error))?;
+    let input = ComplexTensorHandle::new_strided(shape, strides, handle, f32_storage())
+        .map_err(|error| Error::backend_source(op, error))?;
     let output = ComplexTensorHandle::new_strided(
         output_shape.clone(),
         output_strides,
@@ -191,9 +189,8 @@ pub fn execute_c32_irfft(
         strides: output_strides,
     } = output;
     let (handle, shape, strides) = input_parts(session, input, op)?;
-    let input =
-        ComplexTensorHandle::new_strided(shape, strides, handle, f32_storage())
-            .map_err(|error| Error::backend_source(op, error))?;
+    let input = ComplexTensorHandle::new_strided(shape, strides, handle, f32_storage())
+        .map_err(|error| Error::backend_source(op, error))?;
     let output = TensorHandle::new(
         allocate_raw(session, output_bytes::<f32>(op, &output_shape)?),
         output_shape.clone(),

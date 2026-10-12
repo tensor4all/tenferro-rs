@@ -784,7 +784,10 @@ pub fn download_pending(
             buffer,
         ));
     }
-    let resource = match runtime.client().get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle) {
+    let resource = match runtime
+        .client()
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+    {
         Ok(resource) => resource,
         Err(err) => {
             return Err(rejected(
@@ -1107,7 +1110,10 @@ pub fn upload_pending(
             source,
         ));
     }
-    let resource = match runtime.client().get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle) {
+    let resource = match runtime
+        .client()
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+    {
         Ok(resource) => resource,
         Err(err) => {
             return Err(rejected(
@@ -1627,7 +1633,10 @@ pub(crate) fn publish_in_stream(
     };
     // The dispatch and the resource resolution happen on the stream the caller entered, so the
     // frontier recorded below is ordered after everything that produced the value on that stream.
-    let resource = match runtime.client().get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle) {
+    let resource = match runtime
+        .client()
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+    {
         Ok(resource) => resource,
         Err(err) => {
             return Err(publication_rejected(
