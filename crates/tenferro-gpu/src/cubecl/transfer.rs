@@ -276,7 +276,6 @@ pub(crate) fn upload_tensor_chunked(
     bytes: &[u8],
     op: &'static str,
 ) -> crate::Result<()> {
-    runtime.check_errors(op)?;
     let resource = runtime
         .client()
         .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle.clone())
@@ -726,8 +725,9 @@ fn rejected(error: crate::Error, value: Tensor, buffer: PinnedHostBuffer) -> Tra
 
 /// Start a device→host copy, taking ownership of `source` and `buffer`.
 ///
-/// The copy is published through CubeCL's `check_errors` (producer errors reported, host queue
-/// dispatched, no drop-queue rotation) and the source allocation is retained for the whole flight.
+/// The copy is published through the published buffer's own claim: CubeCL reports a producer
+/// failure on the buffers the failed launch never wrote, and resolving the resource below is
+/// what asks for that buffer (host queue dispatched, no drop-queue rotation) and the source allocation is retained for the whole flight.
 /// `wait` is the only way to get the value and the buffer back.
 ///
 /// # Errors
@@ -783,10 +783,6 @@ pub fn download_pending(
             source,
             buffer,
         ));
-    }
-
-    if let Err(error) = runtime.check_errors(OP) {
-        return Err(rejected(error, source, buffer));
     }
     let resource = match runtime.client().get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle) {
         Ok(resource) => resource,
@@ -1110,10 +1106,6 @@ pub fn upload_pending(
             destination,
             source,
         ));
-    }
-
-    if let Err(error) = runtime.check_errors(OP) {
-        return Err(rejected(error, destination, source));
     }
     let resource = match runtime.client().get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle) {
         Ok(resource) => resource,
@@ -1635,9 +1627,6 @@ pub(crate) fn publish_in_stream(
     };
     // The dispatch and the resource resolution happen on the stream the caller entered, so the
     // frontier recorded below is ordered after everything that produced the value on that stream.
-    if let Err(error) = runtime.check_errors(PUBLICATION_OP) {
-        return Err(publication_rejected(error, value));
-    }
     let resource = match runtime.client().get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle) {
         Ok(resource) => resource,
         Err(err) => {

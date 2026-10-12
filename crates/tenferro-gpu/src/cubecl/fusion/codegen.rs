@@ -29,11 +29,10 @@ pub(crate) fn build_kernel_definition<T>(
 where
     T: CubePrimitive + Clone,
 {
-    let mut builder = KernelBuilder::new(KernelSettings::new(
-        cube_dim.into(),
-        ExecutionMode::Unchecked,
-        address_type,
-    ));
+    let mut builder = KernelBuilder::new(
+        KernelSettings::new(cube_dim.into(), ExecutionMode::Unchecked, address_type)
+            .kernel_name(KERNEL_NAME),
+    );
 
     let item = T::__expand_as_type(&builder.scope);
     let mut input_arrays = Vec::with_capacity(plan.input_count());
