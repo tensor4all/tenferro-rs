@@ -488,3 +488,56 @@ gpu_test!(test_pointer_and_stream_bridge, {
     let back = download_tensor(backend.runtime(), &gpu).unwrap();
     assert_eq!(back.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 });
+
+// A dropped tensor returns its block to CubeCL's pool for the device, not to the
+// driver, and the pool's reservations never shrink on their own. The explicit
+// trim is what returns it (tenferro-rs #2081).
+gpu_test!(test_trim_memory_returns_dropped_blocks_to_the_driver, {
+    use cudarc::driver::result as cuda_result;
+
+    let free_bytes = || -> u64 {
+        cuda_result::init().expect("driver init");
+        let (free, _total) = cuda_result::mem_get_info().expect("free memory");
+        free as u64
+    };
+
+    let rt = CudaRuntime::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let gib = 1usize << 30;
+    let elements = gib / 8;
+    let tensor = Tensor::from_vec_col_major(vec![elements], vec![0.0f64; elements]).unwrap();
+
+    let free_before = free_bytes();
+    let gpu = upload_tensor(&rt, &tensor).unwrap();
+    rt.synchronize().unwrap();
+    let free_while_alive = free_bytes();
+    assert!(
+        free_before.saturating_sub(free_while_alive) >= (gib - (64 << 20)) as u64,
+        "the 1 GiB upload should be visible to the driver"
+    );
+
+    drop(gpu);
+    let free_after_drop = free_bytes();
+    // Dropping alone must not be enough: the block stays reserved in the pool.
+    assert!(
+        free_after_drop.saturating_add(64 << 20) < free_before,
+        "the dropped tensor was expected to stay reserved in the pool before the trim \
+         (free_before {free_before}, free_after_drop {free_after_drop})"
+    );
+    rt.trim_memory();
+    // `memory_cleanup` submits the release to the allocator's server thread and
+    // returns; the stream synchronize lets that work finish before the read.
+    rt.synchronize().unwrap();
+    let free_after_trim = free_bytes();
+
+    let recovered = free_after_trim.saturating_sub(free_after_drop);
+    assert!(
+        recovered >= (gib - (64 << 20)) as u64,
+        "trim_memory returned {recovered} of the dropped 1 GiB (free {free_after_drop} -> \
+         {free_after_trim}); the pool reservation did not reach the driver"
+    );
+    assert!(
+        free_after_trim.saturating_add(64 << 20) >= free_before,
+        "trim_memory should restore the driver free memory seen before the upload \
+         ({free_before} before, {free_after_trim} after)"
+    );
+});
