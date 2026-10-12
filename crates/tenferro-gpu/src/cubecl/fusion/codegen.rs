@@ -65,7 +65,7 @@ where
     let then_block = branch.then_block(builder.scope.ctx());
     let then_scope = builder
         .scope
-        .child(OpInserter::new_at_block_end(then_block));
+        .branch_child(OpInserter::new_at_block_end(then_block));
     build_body(
         plan,
         &then_scope,
@@ -77,7 +77,7 @@ where
     let else_block = branch.else_block(builder.scope.ctx());
     let else_scope = builder
         .scope
-        .child(OpInserter::new_at_block_end(else_block));
+        .branch_child(OpInserter::new_at_block_end(else_block));
     else_scope.terminate_yield();
     builder.scope.register(&branch);
 

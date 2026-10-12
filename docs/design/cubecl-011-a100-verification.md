@@ -195,3 +195,24 @@ CUBECL_DEBUG_LOG=0 CUDA_PATH=/usr/local/cuda LD_LIBRARY_PATH=... \
 Recorded as a known failure, not a pass, and not attributed to the tenferro
 migration (it is the CubeK port against its own pinned CubeCL).
 
+## Rebased run (main-based port set) — the gate is met
+
+Tree: `../cubecl-ports-combined` on `local/ports-011-combined` @ `2747c68a1` =
+upstream `main` `6bba5fdf` + the three wgpu host-visible commits + the CUDA-interop
+port + the two arithmetic fixes + `SizedType for BoolType` + the native `log1p`
+lowering. The consumer's webgpu-side fixes (WgpuServer naming, `Strategy::
+MultiLevel(Naive)`) and the repin rename (`Scope::child` -> `branch_child`) are on
+`migration/cubecl-0.11-upstream` @ `a05661622`.
+
+Measured on the A100 (CUDA 12.6, driver 580.126.09, `-j 4 --test-threads=4`):
+
+- `cargo check -j 4 -p tenferro-gpu --features cuda` — 0 errors
+- `cargo check -j 4 -p tenferro-gpu --features cuda,webgpu` — 0 errors
+- CUDA lib tests: **209 passed / 0 failed**
+- integration targets: **45 passed / 0 failed** (pending_upload 6, pending_download
+  7, source_publication 7, chunked_staging 4, blas1_cuda 11, held_cuda_session 7,
+  storage_provider_cuda 3)
+
+The Metal-side behavioural evidence is the Mac's (`apple_context` 4, `apple_cpu` 2,
+`webgpu_metal_fft` 1, storage-provider WebGPU 3 + 2, recorded in #2114).
+
