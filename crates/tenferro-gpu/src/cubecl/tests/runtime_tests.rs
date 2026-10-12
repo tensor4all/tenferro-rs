@@ -8,7 +8,6 @@ use crate::cubecl::{
 use crate::{Error, Tensor};
 use tenferro_tensor::backend::BackendSessionHost;
 use tenferro_tensor::TensorRead;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 #[cube(launch_unchecked)]
 fn kernel_add_f64(output: &mut [f64], a: &[f64], b: &[f64]) {

@@ -7,7 +7,6 @@ use super::super::{cube_count_for_len, cube_dim_1d};
 use crate::cuda::{download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use crate::kernels::structural;
 use tenferro_tensor::Tensor;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 /// Issue #1868: a queued CubeCL write must drop the memoized device address.
 ///
