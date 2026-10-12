@@ -562,11 +562,9 @@ where
     if len == 0 {
         return Ok(());
     }
-    let count = dispatch::cube_count_for_len(len)?;
-    let dim = dispatch::cube_dim_1d();
     let mut output_view = output.as_view_mut();
     let output_arg = dispatch::typed_view_mut_array_arg(&mut output_view, op)?;
-    launch_scaled(rt, output_arg, factor, len, count, dim, op, launch)
+    launch_scaled(rt, output_arg, factor, len, op, launch)
 }
 
 fn scale_typed_view<T, F>(
@@ -596,10 +594,8 @@ where
     if len == 0 {
         return Ok(());
     }
-    let count = dispatch::cube_count_for_len(len)?;
-    let dim = dispatch::cube_dim_1d();
     let output_arg = dispatch::typed_view_mut_array_arg(output, SCALE_OP)?;
-    launch_scaled(rt, output_arg, factor, len, count, dim, SCALE_OP, launch)
+    launch_scaled(rt, output_arg, factor, len, SCALE_OP, launch)
 }
 
 fn validate_scale_buffer(op: &'static str, len: usize, buffer_len: usize) -> crate::Result<()> {
@@ -619,8 +615,6 @@ fn launch_scaled<T, F>(
     output: BufferArg,
     factor: T,
     len: usize,
-    count: CubeCount,
-    dim: CubeDim,
     op: &'static str,
     launch: F,
 ) -> crate::Result<()>
@@ -628,6 +622,8 @@ where
     T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
     F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
+    let count = dispatch::cube_count_for_len(len)?;
+    let dim = dispatch::cube_dim_1d();
     let factor = upload_typed_tensor(rt, vec![1], vec![factor])?;
     let factor = dispatch::typed_tensor_array_arg(&factor, op)?;
     launch(rt.client(), count, dim, output, factor, len);

@@ -78,11 +78,16 @@ pub fn scale_in_place_float_kernel<F: Float>(out: &mut [F], factor: &[F], len: u
     // (the strided kernels already do). See
     // docs/design/cubecl-011-a100-verification.md.
     if ABSOLUTE_POS < len {
-        out[ABSOLUTE_POS] = out[ABSOLUTE_POS] * factor[0];
+        out[ABSOLUTE_POS] *= factor[0];
     }
 }
 
 /// Complex twin of [`scale_in_place_float_kernel`].
+///
+/// The expanded assignment is not a `clippy::assign_op_pattern` slip: the cube
+/// DSL has no `*= ` for complex values (`MulAssign` is absent), so the compound
+/// form does not expand.
+#[allow(clippy::assign_op_pattern)]
 #[cube(launch_unchecked)]
 pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut [C], factor: &[C], len: usize) {
     if ABSOLUTE_POS < len {

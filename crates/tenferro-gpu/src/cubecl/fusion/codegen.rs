@@ -37,11 +37,11 @@ where
     let item = T::__expand_as_type(&builder.scope);
     let mut input_arrays = Vec::with_capacity(plan.input_count());
     for _ in 0..plan.input_count() {
-        input_arrays.push(builder.buffer(item.clone()));
+        input_arrays.push(builder.buffer(item));
     }
     let mut output_arrays = Vec::with_capacity(plan.outputs().len());
     for _ in plan.outputs() {
-        output_arrays.push(builder.buffer(item.clone()));
+        output_arrays.push(builder.buffer(item));
     }
 
     let absolute_pos = builder.scope.register_with_result(&ReadBuiltinOp::new(
