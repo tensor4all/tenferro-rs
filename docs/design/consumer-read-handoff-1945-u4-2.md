@@ -11,10 +11,41 @@ machinery instead of parallel types, and **change no scheduled-transfer contract
 | --- | --- | --- |
 | 1 | do not implement | the frontier is a native `CUevent`, not an `EventToken`; a driver-level hook cannot identify the destination run; nothing connects the held session to the frozen registry; a borrow cannot protect the asynchronous read; the view can outlive its session |
 | 2 | do not implement | `open_session` has no frozen registration to acquire from; `Admitted` must carry the destination completion token; the retirement queue cannot support pre-enqueue ownership; consumer retirement ownership (both allocations, teardown authority, the runtime-owning-completion cycle) is unsettled |
-| 3 | pending | this record |
+| 3 | do not implement | `bind(backend, view)` has no exact-instance validation seam (the view exposes nominal identities and ingress predicates, not backend-instance or registration-candidate equality); one frozen witness does not authorize two distinct runtimes (the producer's and the consumer's); the consumer path has no destination run for the admission to land on; and adopting `CudaEventHandle` reintroduces a runtime-owning-completion cycle |
 
 Every rejection was verified against the source before it was recorded (citations appear inline). Revision 3
 is not implemented and must be re-reviewed before implementation starts.
+
+## Revision 4 direction (recorded after the third review)
+
+The third review confirms the *copy* is the bounded, implementable piece and that the registry/token/admission
+half needs substrate contracts this repository does not have yet:
+
+1. an exact-instance binding seam - either a provider-neutral predicate such as
+   `EngineSnapshotView::matches_executable_registration(&EngineRegistration)`, or a new executable-instance
+   identity contract; today the view exposes nominal identities and ingress predicates, and `CudaBackend` does
+   not retain its registration candidate token (`crates/tenferro-runtime/src/runtime/snapshot.rs`,
+   `crates/tenferro-runtime/src/runtime/engine_registration.rs`, `crates/tenferro-gpu/src/cubecl/runtime_adapter.rs`);
+2. a two-runtime authorization model - one witness cannot authorize a producer runtime and a consumer runtime
+   at once;
+3. a destination-run (or equivalent admission) surface on the consumer path - the held-session copy never
+   enters a run, so `enqueue_with_foreign` has nothing to admit into;
+4. a cycle-free completion owner - the adopted `CudaEventHandle` holds a strong `CudaRuntime`, which a
+   runtime-owned retirement record cannot hold (`crates/tenferro-gpu/src/cubecl/event_domain.rs`).
+
+Those four are a substrate decision, not a bounded consumer slice. Revision 4 therefore splits this record:
+
+- **4a (implementable now, review-endorsed):** an **unadmitted same-runtime, same-device consumer copy** -
+  `SourcePublication::copy_into(&mut CudaHeldSession<'_>)` with an eligibility check that both ends belong to
+  the same CUDA runtime and device, the pending-transfer ownership model, the consumer-stream copy and
+  completion, and the private fault-injection seam. No registry, no token, no run admission, no new
+  substrate contract. Claims bounded to "device-side consumer copy on the same runtime and device".
+- **4b (deferred, needs the substrate decision above):** the registry-authorized, cross-runtime handoff with a
+  domain-scoped dependency token admitted into the consumer's run - i.e. the part #1945 item 1 calls
+  "authorized read access plus a domain-scoped dependency token obtained from the runtime registry".
+
+Nothing in the revision-3 design is implemented; 4a is specified below only as a scope decision and needs its
+own review before implementation.
 
 ## 1. Scope
 
