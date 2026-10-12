@@ -11,6 +11,41 @@ rejected by its pre-implementation review, and the rejections were verified agai
 | `PublishedRead<'p>` borrowing `&'p SourcePublication` protects the asynchronous read | the source half queues the source tensor behind the *producer* frontier only (`transfer.rs:1599-1617`), and its drainable retirement queue holds owned records (`:251-256, 396-410`) | **unsound**: a borrow cannot exclude `download_into`, `mem::forget` or later writes; revision 2 replaces the view with an owned consuming copy |
 | "readiness across streams is a view property" | consumption re-applies the captured stream through `StreamId::executes` (`transfer.rs:1519-1541`); CubeCL aligns resources by `handle.stream` (`cubecl@1811309/crates/cubecl-runtime/src/stream/event.rs:257-312`) | **incomplete**: revision 2 binds admission, allocation, copy and completion to the *consumer* stream |
 
+## Review status (read this first)
+
+Revision 2 is **not approved and not implemented**. Its own pre-implementation review
+(`openai/gpt-6.1-sol`, fresh read-only process) returned "do not implement revision 2 as written" and confirmed
+that revision 2 fixes the *direction* of revision 1 (consuming ownership, destination-run admission,
+consumer-stream ordering) while four blockers remain, all verified against the source:
+
+1. **No acquisition boundary for the capability.** `CudaBackend::open_session` takes no registration, and a
+   domain is minted only when a snapshot freezes, so "`open_session` acquires the capability from the
+   registration" is asserted rather than designed. The capability must be owned by the *selected frozen
+   executable slot*, and a non-`Clone` capability cannot move into every session - a credential shape is
+   needed.
+2. **`ForeignAdmission::Admitted` must carry the destination completion token.** The scheduler validates and
+   records that token for downstream dependencies; an `Admitted` without it cannot be inserted, and calling
+   the ordinary `enqueue` afterwards would launch twice or record a second completion.
+3. **The retirement queue cannot support pre-enqueue ownership.** Its records are owned and consumed with no
+   reservation/recovery operation, and a drainable record needs a *recorded* completion (an unrecorded event
+   may query as complete). The smallest correct shape is the existing pending-transfer model: an owning
+   local submission guard, moved into `PendingRead` on success, detached on drop, permanently retained after
+   an unproven submission - no pre-enqueue insertion.
+4. **Consumer retirement ownership is unsettled.** A copy can outlive the session borrow, so its package must
+   retain source *and* destination allocations plus provider lifetimes through success, error, drop and
+   forgetting; the source runtime's teardown must not be assumed to retire a consumer stream; and putting a
+   strong runtime-owning completion into that runtime's own queue creates a retention cycle (the pinned
+   buffer uses a weak reference for exactly this reason). Adding a normal `CudaEventDomainRun` to the session
+   would also add implicit synchronization on session destruction.
+
+Also recorded by the same review: exact-event completion is feasible with one shared event owner
+(`Arc<CudaEventHandle>`) but requires updating `release_frontier` and the detach paths and matching the
+admission's `CudaEventToken` downcast; scheduler admission does **not** make the *scheduled transfer* path
+asynchronous (its provider contract is blocking), so the "host-wait-free" claim must be narrowed to the
+held-session consumer route; and same-device eligibility must be explicit.
+
+Revision 3 addresses these before implementation. Nothing in this record may be implemented as it stands.
+
 ## 1. Scope
 
 #1945 item 1's consumer half: a consumer session reads a value published by another session, ordered by a
