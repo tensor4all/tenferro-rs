@@ -53,7 +53,11 @@ packaging:
 
 `WgpuServer` and `WgpuResource` are already public at the crate root
 (`pub use compute::*`), so exporting the wgpu interop surface needed only the
-runtime-side accessor.
+runtime-side accessor. The rebased CUDA-interop port (`CudaServer::raw_stream`,
+`ffi_interop`, which the CUDA feature's `get_resource`/`with_server` calls need)
+stacks on those three as `feat/tenferro-upstream-cuda-interop` `1883fd93`, and
+its `graph.rs` test uses the same runtime `with_server`. The Linux tidying that
+splits the interop port must therefore not add `with_server` a second time.
 
 The ownership contract the guards encode: a launch, a staged write and a read
 copy each take a `GpuAccessToken` on the buffers they touch, a recorded graph
