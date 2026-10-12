@@ -5,10 +5,10 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use cubecl::client::ComputeClient;
-use cubecl::stream_id::StreamId;
-use cubecl::Runtime;
-use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
+use cubecl::client::Client;
+use cubecl_environment::stream::StreamId;
+use cubecl::Device;
+use cubecl_cuda::CudaDevice;
 use cubecl_runtime::config::{CubeClRuntimeConfig, RuntimeConfig};
 use cudarc::cublas::sys as cublas_sys;
 use cudarc::driver::result::DriverError;
@@ -196,7 +196,7 @@ pub struct CudaRuntime {
 }
 
 pub(crate) struct CudaRuntimeState {
-    client: ComputeClient<CubeclCudaRuntime>,
+    client: Client,
     device_id: CudaDeviceId,
     device_ordinal: usize,
     device_info: CudaDeviceInfo,
@@ -526,7 +526,7 @@ impl CudaRuntime {
         cudarc::runtime::result::device::set(cuda_ordinal)
             .map_err(|source| cuda_initialization_error(device_id, "set_device", source))?;
         let device = CudaDevice::new(device_ordinal);
-        let client = CubeclCudaRuntime::client(&device);
+        let client = Device::Cuda(device).client();
         let discovered = cuda_devices()?;
         let device_info = discovered
             .iter()
@@ -558,7 +558,7 @@ impl CudaRuntime {
         })
     }
 
-    pub(crate) fn client(&self) -> &ComputeClient<CubeclCudaRuntime> {
+    pub(crate) fn client(&self) -> &Client {
         &self.inner.client
     }
 
@@ -874,7 +874,7 @@ impl CudaRuntime {
         handle: cubecl_runtime::server::Handle,
         op: &'static str,
     ) -> crate::Result<u64> {
-        use cubecl_runtime::server::ComputeServer;
+        use cubecl::server::Server;
 
         let stream_id = StreamId::current();
         let binding = handle.binding();
