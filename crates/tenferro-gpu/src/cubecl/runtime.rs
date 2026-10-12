@@ -209,7 +209,7 @@ pub(crate) struct CudaRuntimeState {
     // INVARIANT: in pinned CubeCL rev a2adda17, the CUDA server maps each
     // `StreamId` to a fixed `StreamPool` slot whose `CUstream` is created once
     // and never destroyed or replaced while the server is alive, and the
-    // server outlives the `ComputeClient` clone owned by this state. The table
+    // server outlives the `Client` clone owned by this state. The table
     // is owned by this runtime object (not thread-local/global), holds one
     // entry per CubeCL stream slot, and is dropped with the runtime.
     raw_streams: Box<[OnceLock<u64>]>,

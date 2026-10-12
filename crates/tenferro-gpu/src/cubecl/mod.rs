@@ -69,16 +69,16 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::features::AtomicUsage;
 use cubecl::prelude::{
-    ArrayArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
+    BufferArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
 use cubecl::prelude::{CubeCount, Int as CubeInt, StorageType, TensorBinding, Type};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use tenferro_tensor::CacheStats;
 use tenferro_tensor::{
@@ -188,7 +188,7 @@ fn op_name(
 }
 
 fn ensure_atomic_add_supported<T: CubePrimitive>(
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client>,
     op: &'static str,
 ) -> crate::Result<()> {
     let elem = T::as_type_native_unchecked().elem_type();
@@ -250,8 +250,8 @@ fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
 
 fn launch_native_materialization<E: CubePrimitive>(
     backend: &CudaBackend,
-    output: ArrayArg<CubeclCudaRuntime>,
-    input: ArrayArg<CubeclCudaRuntime>,
+    output: BufferArg>,
+    input: BufferArg>,
     plan: &NativePermutationPlan,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -1917,11 +1917,11 @@ impl CudaBackend {
         &self,
         input: &TypedTensor<In>,
         launch: impl FnOnce(
-            &ComputeClient<CubeclCudaRuntime>,
+            &Client>,
             CubeCount,
             CubeDim,
-            ArrayArg<CubeclCudaRuntime>,
-            ArrayArg<CubeclCudaRuntime>,
+            BufferArg>,
+            BufferArg>,
         ),
     ) -> crate::Result<TypedTensor<Out>>
     where
@@ -2234,9 +2234,9 @@ impl CudaBackend {
         &self,
         input: &TypedTensor<InFloat>,
         launch: impl FnOnce(
-            &cubecl::client::ComputeClient<CubeclCudaRuntime>,
-            ArrayArg<CubeclCudaRuntime>,
-            ArrayArg<CubeclCudaRuntime>,
+            &cubecl::client::Client>,
+            BufferArg>,
+            BufferArg>,
             CubeCount,
         ) -> crate::Result<()>,
     ) -> crate::Result<TypedTensor<OutComplex>>
@@ -2645,9 +2645,9 @@ impl CudaBackend {
         axis: usize,
         op: &'static str,
         launch: impl FnOnce(
-            &ComputeClient<CubeclCudaRuntime>,
-            TensorBinding<CubeclCudaRuntime>,
-            TensorBinding<CubeclCudaRuntime>,
+            &Client>,
+            TensorBinding>,
+            TensorBinding>,
         ) -> crate::kernels::Result<()>,
     ) -> crate::Result<TypedTensor<T>>
     where
@@ -4050,13 +4050,13 @@ fn launch_checked_integer_binary<I>(
     dtype: crate::DType,
     domain: CheckedIntegerDomain,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client>,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg>,
+        BufferArg>,
+        BufferArg>,
+        BufferArg>,
     ),
 ) -> crate::Result<TypedTensor<I>>
 where
@@ -4111,12 +4111,12 @@ fn launch_scalar_binary<I>(
     rhs: &TypedTensor<I>,
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client>,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg>,
+        BufferArg>,
+        BufferArg>,
         bool,
     ),
 ) -> crate::Result<TypedTensor<I>>
@@ -4280,13 +4280,13 @@ fn launch_checked_integer_scalar_binary<I>(
     dtype: crate::DType,
     domain: CheckedIntegerDomain,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client>,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg>,
+        BufferArg>,
+        BufferArg>,
+        BufferArg>,
         bool,
     ),
 ) -> crate::Result<TypedTensor<I>>
@@ -4386,12 +4386,12 @@ fn launch_elementwise_binary_into<T>(
     out: &mut Tensor,
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client>,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg>,
+        BufferArg>,
+        BufferArg>,
     ),
 ) -> crate::Result<()>
 where
@@ -4433,11 +4433,11 @@ fn launch_elementwise_unary_into<T>(
     out: &mut Tensor,
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client>,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg>,
+        BufferArg>,
     ),
 ) -> crate::Result<()>
 where
@@ -4860,7 +4860,7 @@ impl<T: TensorScalar + Clone + 'static> CompactOperand<'_, T> {
         }
     }
 
-    fn binding(&self, op: &'static str) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
+    fn binding(&self, op: &'static str) -> crate::Result<TensorBinding>> {
         match self {
             Self::Tensor(tensor) => dispatch::typed_tensor_binding(tensor, op),
             Self::View(view) => dispatch::typed_view_binding(view, op),

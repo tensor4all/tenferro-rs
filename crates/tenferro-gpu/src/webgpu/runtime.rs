@@ -1,6 +1,6 @@
 use std::fmt;
 
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::Runtime;
 use cubecl_common::future;
 use cubecl_wgpu::{WgpuDevice, WgpuRuntime};
@@ -60,7 +60,7 @@ impl Eq for WebGpuRuntimeIdentity {}
 /// ```
 #[derive(Clone)]
 pub struct WebGpuRuntime {
-    client: ComputeClient<WgpuRuntime>,
+    client: Client<WgpuRuntime>,
     device_ordinal: usize,
     pub(super) apple_domain: Option<std::sync::Arc<AppleDomainState>>,
     identity: WebGpuRuntimeIdentity,
@@ -132,7 +132,7 @@ impl WebGpuRuntime {
     }
 
     pub(super) fn from_apple_client(
-        client: ComputeClient<WgpuRuntime>,
+        client: Client<WgpuRuntime>,
         device_ordinal: usize,
         domain: std::sync::Arc<AppleDomainState>,
     ) -> Self {
@@ -166,7 +166,7 @@ impl WebGpuRuntime {
         }
     }
 
-    pub(crate) fn client(&self) -> &ComputeClient<WgpuRuntime> {
+    pub(crate) fn client(&self) -> &Client<WgpuRuntime> {
         &self.client
     }
 

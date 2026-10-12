@@ -2,7 +2,7 @@ use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use cubecl_wgpu::WgpuSubmission;
 use tenferro_runtime::runtime::{
     EventDomainDriver, EventDomainError, EventDomainId, EventDomainOperation, EventDomainRun,

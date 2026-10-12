@@ -89,7 +89,7 @@ fn validate_reduce_problem(
 }
 
 fn launch_with_unit_settings<R: Runtime>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     problem: ReduceProblem,
 ) -> Result<ResolvedReduceLaunch> {
     let settings = unit_launch_settings(client, problem)?;
@@ -104,7 +104,7 @@ fn launch_with_unit_settings<R: Runtime>(
 }
 
 fn launch_with_plane_settings<R: Runtime>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     problem: ReduceProblem,
 ) -> Result<ResolvedReduceLaunch> {
     let plane_width = client.properties().hardware.plane_size_max.max(1);
@@ -153,7 +153,7 @@ fn validate_plane_strategy(
 }
 
 fn auto_reduce_strategy<R: Runtime>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     problem: ReduceProblem,
 ) -> Result<ResolvedReduceStrategy> {
     let unit_axis_limit = client.properties().hardware.plane_size_max.max(1) as usize;
@@ -185,7 +185,7 @@ fn auto_reduce_strategy_for_capabilities(
 }
 
 fn resolve_launch_settings<R: Runtime>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     problem: ReduceProblem,
     strategy: ReduceStrategy,
 ) -> Result<ResolvedReduceLaunch> {
@@ -199,7 +199,7 @@ fn resolve_launch_settings<R: Runtime>(
 
 /// Launch a floating-point sum reduction.
 pub(crate) fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -243,7 +243,7 @@ pub(crate) fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
 
 /// Launch a floating-point sum-of-squares reduction.
 pub(crate) fn launch_sum_squares_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -287,7 +287,7 @@ pub(crate) fn launch_sum_squares_float<R: Runtime, F: Float + CubeElement>(
 
 /// Launch an integer sum reduction.
 pub(crate) fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -331,7 +331,7 @@ pub(crate) fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
 
 /// Launch a complex sum reduction.
 pub(crate) fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -375,7 +375,7 @@ pub(crate) fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
 
 /// Launch a floating-point product reduction.
 pub(crate) fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -419,7 +419,7 @@ pub(crate) fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
 
 /// Launch an integer product reduction.
 pub(crate) fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -463,7 +463,7 @@ pub(crate) fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
 
 /// Launch a complex product reduction.
 pub(crate) fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -507,7 +507,7 @@ pub(crate) fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
 
 /// Launch a floating-point maximum reduction.
 pub(crate) fn launch_max_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -551,7 +551,7 @@ pub(crate) fn launch_max_float<R: Runtime, F: Float + CubeElement>(
 
 /// Launch an integer maximum reduction.
 pub(crate) fn launch_max_int<R: Runtime, I: Int + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -595,7 +595,7 @@ pub(crate) fn launch_max_int<R: Runtime, I: Int + CubeElement>(
 
 /// Launch a floating-point minimum reduction.
 pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,
@@ -639,7 +639,7 @@ pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
 
 /// Launch an integer minimum reduction.
 pub(crate) fn launch_min_int<R: Runtime, I: Int + CubeElement>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
     axis: usize,

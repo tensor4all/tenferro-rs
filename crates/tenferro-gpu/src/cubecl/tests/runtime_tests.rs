@@ -1,6 +1,5 @@
 // Run with: cargo test -p tenferro-gpu --features cuda -- --ignored
 use cubecl::prelude::*;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use crate::cubecl::memory::{download_tensor, upload_tensor};
 use crate::cubecl::{
@@ -9,6 +8,7 @@ use crate::cubecl::{
 use crate::{Error, Tensor};
 use tenferro_tensor::backend::BackendSessionHost;
 use tenferro_tensor::TensorRead;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 #[cube(launch_unchecked)]
 fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {
@@ -226,9 +226,9 @@ gpu_test!(test_trivial_cube_kernel, {
             client,
             CubeCount::new_single(),
             CubeDim::new_1d(n as u32),
-            ArrayArg::from_raw_parts(handle_out.clone(), n),
-            ArrayArg::from_raw_parts(handle_a, n),
-            ArrayArg::from_raw_parts(handle_b, n),
+            BufferArg::from_raw_parts(handle_out.clone(), n),
+            BufferArg::from_raw_parts(handle_a, n),
+            BufferArg::from_raw_parts(handle_b, n),
         );
     }
 
@@ -300,9 +300,9 @@ gpu_test!(test_cached_scalar_read_observes_queued_writes, {
                 rt.client(),
                 CubeCount::new_single(),
                 CubeDim::new_1d(1),
-                ArrayArg::from_raw_parts(handle.clone(), 1),
-                ArrayArg::from_raw_parts(a.clone(), 1),
-                ArrayArg::from_raw_parts(rhs.clone(), 1),
+                BufferArg::from_raw_parts(handle.clone(), 1),
+                BufferArg::from_raw_parts(a.clone(), 1),
+                BufferArg::from_raw_parts(rhs.clone(), 1),
             );
         }
         let actual = download_tensor(&rt, &output).unwrap();

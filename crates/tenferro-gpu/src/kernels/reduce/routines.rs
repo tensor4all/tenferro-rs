@@ -56,7 +56,7 @@ pub struct ReduceLaunchSettings {
 
 /// Choose launch settings for the first unit-kernel implementation.
 pub(crate) fn unit_launch_settings<R: Runtime>(
-    client: &ComputeClient<R>,
+    client: &Client<R>,
     problem: ReduceProblem,
 ) -> Result<ReduceLaunchSettings> {
     unit_launch_settings_for_plane_size(client.properties().hardware.plane_size_max, problem)

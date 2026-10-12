@@ -32,9 +32,8 @@
 
 use std::ffi::c_void;
 
-use cubecl::client::ComputeClient;
-use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::client::Client;
+use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
 use cudarc::cublas::sys as cublas;
 use num_complex::{Complex32, Complex64};
 
@@ -56,6 +55,7 @@ use super::interop::{alloc_zero_output, offset_device_ptr, upload_typed_tensor};
 use super::runtime::check_cublas;
 use super::{CudaBackend, CudaRuntime};
 use crate::{
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
     Error, Tensor, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
@@ -310,7 +310,7 @@ impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
 
 impl<T: CubeElement + TensorScalar + Clone + 'static> WriteRef<'_, '_, T> {
     /// Bind the destination's whole root allocation for a native kernel launch.
-    fn array_arg(&mut self, op: &'static str) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+    fn array_arg(&mut self, op: &'static str) -> crate::Result<BufferArg>> {
         match self {
             Self::Owned(tensor) => typed_tensor_mut_array_arg(tensor, op),
             Self::View(view) => typed_view_mut_array_arg(view, op),
@@ -644,12 +644,12 @@ pub(super) trait CublasScalar:
     /// exactly `len` logical elements.
     #[allow(clippy::too_many_arguments)]
     unsafe fn launch_axpby_strided_source(
-        client: &ComputeClient<CubeclCudaRuntime>,
+        client: &Client>,
         count: CubeCount,
         dim: CubeDim,
-        y: ArrayArg<CubeclCudaRuntime>,
-        x: ArrayArg<CubeclCudaRuntime>,
-        coefficients: ArrayArg<CubeclCudaRuntime>,
+        y: BufferArg>,
+        x: BufferArg>,
+        coefficients: BufferArg>,
         dims: &[usize],
         x_strides: &[i64],
         x_offset: i64,
@@ -747,12 +747,12 @@ macro_rules! impl_cublas_scalar {
             }
 
             unsafe fn launch_axpby_strided_source(
-                client: &ComputeClient<CubeclCudaRuntime>,
+                client: &Client>,
                 count: CubeCount,
                 dim: CubeDim,
-                y: ArrayArg<CubeclCudaRuntime>,
-                x: ArrayArg<CubeclCudaRuntime>,
-                coefficients: ArrayArg<CubeclCudaRuntime>,
+                y: BufferArg>,
+                x: BufferArg>,
+                coefficients: BufferArg>,
                 dims: &[usize],
                 x_strides: &[i64],
                 x_offset: i64,

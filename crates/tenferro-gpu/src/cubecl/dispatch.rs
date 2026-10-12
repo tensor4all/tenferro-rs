@@ -1,6 +1,5 @@
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::prelude::*;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use crate::config::CompareDir;
 use crate::cubecl::CudaRuntime;
@@ -9,6 +8,7 @@ use crate::types::{
     Tensor, TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::{
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
     CapabilityAxis, CapabilityQuery, DType, DeviceAccessError, DeviceAccessRequest,
     PreparedDeviceAccess, TensorBackendCapability as TensorBackendCapabilityTrait, TensorScalar,
 };
@@ -47,7 +47,7 @@ pub(crate) struct CubeclPreparedAccess {
 }
 
 impl CubeclPreparedAccess {
-    pub(crate) fn into_binding(self) -> TensorBinding<CubeclCudaRuntime> {
+    pub(crate) fn into_binding(self) -> TensorBinding {
         // SAFETY: the storage root validated the logical layout before
         // preparation, and this exact prepared handle is consumed once by the
         // binding that performs the launch.
@@ -56,10 +56,10 @@ impl CubeclPreparedAccess {
         }
     }
 
-    pub(crate) fn into_array_arg(self, len: usize) -> ArrayArg<CubeclCudaRuntime> {
+    pub(crate) fn into_array_arg(self, len: usize) -> BufferArg {
         // SAFETY: the storage root prepared the provider handle for this
         // access; callers choose only a typed logical length within that root.
-        unsafe { ArrayArg::from_raw_parts(self.handle, len) }
+        unsafe { BufferArg::from_raw_parts(self.handle, len) }
     }
 
     pub(crate) fn into_handle(self) -> cubecl_runtime::server::Handle {
@@ -150,9 +150,9 @@ where
 /// key, so the module is specialized per rank and not per layout value, and the
 /// values travel with the launch's scalar arguments instead of a device upload.
 /// Use [`comptime_sequence`] only for operation attributes such as axis maps.
-pub(crate) fn runtime_sequence<T>(values: &[T]) -> SequenceArg<CubeclCudaRuntime, T>
+pub(crate) fn runtime_sequence<T>(values: &[T]) -> SequenceArg<T>
 where
-    T: LaunchArg<RuntimeArg<CubeclCudaRuntime> = T> + Copy,
+    T: LaunchArg<RuntimeArg = T> + Copy,
 {
     values.iter().copied().collect()
 }
@@ -309,7 +309,7 @@ fn downcast_prepared(
 pub(crate) fn typed_tensor_binding<T: TensorScalar + Clone + 'static>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
+) -> crate::Result<TensorBinding> {
     Ok(downcast_prepared(tensor.prepare_device_read(op)?, op)?.into_binding())
 }
 
@@ -346,7 +346,7 @@ pub(crate) fn prepared_view_mut_access<T: TensorScalar + 'static>(
 pub(crate) fn typed_view_binding<T: TensorScalar + Clone + 'static>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
+) -> crate::Result<TensorBinding> {
     if view.offset() != 0 || !view.is_col_major_contiguous()? {
         return Err(crate::Error::invalid_argument(
             op,
@@ -363,11 +363,11 @@ pub(crate) fn launch_unary_bool_tensor(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding,
+        TensorBinding,
     ),
 ) -> crate::Result<TypedTensor<bool>> {
     ensure_resident_on_runtime(rt, input, op)?;
@@ -400,12 +400,12 @@ pub(crate) fn launch_binary_bool_tensor<I: CubeElement + TensorScalar + Clone>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding,
+        TensorBinding,
+        TensorBinding,
     ),
 ) -> crate::Result<TypedTensor<bool>> {
     ensure_resident_on_runtime(rt, input, op)?;
@@ -442,11 +442,11 @@ pub(crate) fn launch_bool_tensor_into(
     count: CubeCount,
     dim: CubeDim,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding,
+        TensorBinding,
     ),
 ) -> crate::Result<()> {
     ensure_resident_on_runtime(rt, output, op)?;
@@ -471,10 +471,10 @@ pub(crate) fn launch_nullary_bool_into(
     count: CubeCount,
     dim: CubeDim,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
     ),
 ) -> crate::Result<()> {
     ensure_resident_on_runtime(rt, output, op)?;
@@ -634,7 +634,7 @@ pub(crate) fn alloc_bool_output(
 pub(crate) fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+) -> crate::Result<BufferArg> {
     let prepared = downcast_prepared(tensor.prepare_device_read(op)?, op)?;
     Ok(prepared.into_array_arg(tensor.n_elements()))
 }
@@ -642,7 +642,7 @@ pub(crate) fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
 pub(crate) fn typed_tensor_mut_array_arg<T: CubeElement + TensorScalar + Clone>(
     tensor: &mut TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+) -> crate::Result<BufferArg> {
     let len = tensor.n_elements();
     // INVARIANT (issue #1868, issue #1875): every mutable CubeCL binding of an
     // existing allocation drops the memoized device address, because the
@@ -658,7 +658,7 @@ pub(crate) fn typed_tensor_mut_array_arg<T: CubeElement + TensorScalar + Clone>(
 pub(crate) fn typed_view_array_arg<T: CubeElement + TensorScalar + Clone>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+) -> crate::Result<BufferArg> {
     let prepared = downcast_prepared(view.prepare_device_read(op)?, op)?;
     Ok(prepared.into_array_arg(view.n_elements()))
 }
@@ -666,7 +666,7 @@ pub(crate) fn typed_view_array_arg<T: CubeElement + TensorScalar + Clone>(
 pub(crate) fn typed_view_mut_array_arg<T: CubeElement + TensorScalar + Clone>(
     view: &mut TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+) -> crate::Result<BufferArg> {
     // INVARIANT (issue #1868, issue #1875): every mutable CubeCL binding of an
     // existing allocation drops the memoized device address, because the
     // kernel about to be queued writes this buffer. The next raw-FFI access
@@ -681,7 +681,7 @@ pub(crate) fn typed_view_mut_array_arg<T: CubeElement + TensorScalar + Clone>(
 pub(crate) fn bool_tensor_array_arg(
     tensor: &TypedTensor<bool, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+) -> crate::Result<BufferArg> {
     let prepared = downcast_prepared(tensor.prepare_device_read(op)?, op)?;
     Ok(prepared.into_array_arg(tensor.n_elements()))
 }
@@ -689,7 +689,7 @@ pub(crate) fn bool_tensor_array_arg(
 pub(crate) fn bool_view_array_arg(
     view: &TypedTensorView<'_, bool, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+) -> crate::Result<BufferArg> {
     let prepared = downcast_prepared(view.prepare_device_read(op)?, op)?;
     Ok(prepared.into_array_arg(view.n_elements()))
 }
@@ -698,7 +698,7 @@ pub(crate) fn typed_tensor_array_arg_as<T, U>(
     tensor: &TypedTensor<T, impl TensorRank>,
     len: usize,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>>
+) -> crate::Result<BufferArg>
 where
     T: CubeElement + TensorScalar + Clone,
     U: CubeElement + Clone,
@@ -725,7 +725,7 @@ pub(crate) fn typed_view_array_arg_as<T, U>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     len: usize,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>>
+) -> crate::Result<BufferArg>
 where
     T: CubeElement + TensorScalar + Clone,
     U: CubeElement + Clone,
@@ -754,11 +754,11 @@ pub(crate) fn launch_unary<TIn, TOut>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -797,11 +797,11 @@ pub(crate) fn launch_unary_tensor<TIn, TOut>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding,
+        TensorBinding,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -839,10 +839,10 @@ pub(crate) fn launch_nullary_into<TOut>(
     count: CubeCount,
     dim: CubeDim,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
     ),
 ) -> crate::Result<()>
 where
@@ -873,11 +873,11 @@ pub(crate) fn launch_unary_tensor_into<TIn, TOut>(
     count: CubeCount,
     dim: CubeDim,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding,
+        TensorBinding,
     ),
 ) -> crate::Result<()>
 where
@@ -911,12 +911,12 @@ pub(crate) fn launch_binary<TLhs, TRhs, TOut>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -960,12 +960,12 @@ pub(crate) fn launch_binary_parts<TLhs, TRhs, TOut, F>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -1006,12 +1006,12 @@ pub(crate) fn launch_binary_views_parts<TLhs, TRhs, TOut, F>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -1066,11 +1066,11 @@ pub(crate) fn launch_unary_view<TIn, TOut>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -1111,12 +1111,12 @@ pub(crate) fn launch_binary_views<TLhs, TRhs, TOut>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -1170,12 +1170,12 @@ pub(crate) fn launch_compare_bool<T>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<bool>>
 where
@@ -1214,12 +1214,12 @@ pub(crate) fn launch_binary_tensor<TLhs, TRhs, TOut>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding,
+        TensorBinding,
+        TensorBinding,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -1262,17 +1262,17 @@ where
 /// launch.
 pub(crate) fn launch_binary_bindings<TOut>(
     rt: &CudaRuntime,
-    lhs_arg: TensorBinding<CubeclCudaRuntime>,
-    rhs_arg: TensorBinding<CubeclCudaRuntime>,
+    lhs_arg: TensorBinding,
+    rhs_arg: TensorBinding,
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
-        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding,
+        TensorBinding,
+        TensorBinding,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -1304,13 +1304,13 @@ pub(crate) fn launch_select_bool<T>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<T>>
 where
@@ -1353,13 +1353,13 @@ pub(crate) fn launch_ternary<TA, TB, TC, TOut>(
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
+        &Client,
         CubeCount,
         CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where

@@ -68,7 +68,7 @@ pub mod cuda {
     pub mod cubecl {
         pub use super::super::cubecl::session_cubecl::Session;
         // Narrow prelude: only the types needed to describe a CubeCL launch.
-        pub use ::cubecl::prelude::{ArrayArg, CubeCount, CubeDim, TensorBinding};
+        pub use ::cubecl::prelude::{BufferArg, CubeCount, CubeDim, TensorBinding};
     }
 
     /// The `cudarc` crate tenferro-gpu is built against (issue #1940).

@@ -3,8 +3,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use cubecl::prelude::{CubeElement, CubePrimitive};
-use cubecl::stream_id::StreamId;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl_environment::stream::StreamId;
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
@@ -26,6 +25,7 @@ use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, CubeclBuffer, Error, Tensor, TypedTensor};
 use tenferro_tensor::{
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
     CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorScalar,
     TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
@@ -183,11 +183,11 @@ trait CutensorScalar: CubeElement + TensorScalar + CubePrimitive + Clone + One +
 
     /// Launch the in-place scale kernel for this scalar type.
     fn launch_scale_in_place(
-        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        client: &cubecl::prelude::Client>,
         count: cubecl::prelude::CubeCount,
         dim: cubecl::prelude::CubeDim,
-        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
-        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        out: cubecl::prelude::BufferArg>,
+        factor: cubecl::prelude::BufferArg>,
     );
 }
 
@@ -231,11 +231,11 @@ impl CutensorScalar for f32 {
     }
 
     fn launch_scale_in_place(
-        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        client: &cubecl::prelude::Client>,
         count: cubecl::prelude::CubeCount,
         dim: cubecl::prelude::CubeDim,
-        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
-        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        out: cubecl::prelude::BufferArg>,
+        factor: cubecl::prelude::BufferArg>,
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
@@ -261,11 +261,11 @@ impl CutensorScalar for f64 {
     }
 
     fn launch_scale_in_place(
-        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        client: &cubecl::prelude::Client>,
         count: cubecl::prelude::CubeCount,
         dim: cubecl::prelude::CubeDim,
-        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
-        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        out: cubecl::prelude::BufferArg>,
+        factor: cubecl::prelude::BufferArg>,
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
@@ -291,11 +291,11 @@ impl CutensorScalar for Complex32 {
     }
 
     fn launch_scale_in_place(
-        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        client: &cubecl::prelude::Client>,
         count: cubecl::prelude::CubeCount,
         dim: cubecl::prelude::CubeDim,
-        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
-        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        out: cubecl::prelude::BufferArg>,
+        factor: cubecl::prelude::BufferArg>,
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
@@ -322,11 +322,11 @@ impl CutensorScalar for Complex64 {
     }
 
     fn launch_scale_in_place(
-        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        client: &cubecl::prelude::Client>,
         count: cubecl::prelude::CubeCount,
         dim: cubecl::prelude::CubeDim,
-        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
-        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        out: cubecl::prelude::BufferArg>,
+        factor: cubecl::prelude::BufferArg>,
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {

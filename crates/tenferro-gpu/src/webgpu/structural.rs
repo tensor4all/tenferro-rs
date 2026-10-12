@@ -1,4 +1,4 @@
-use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
+use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
 use cubecl_wgpu::WgpuRuntime;
 use tenferro_tensor::validate::validate_permutation_axes;
 use tenferro_tensor::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
@@ -76,7 +76,7 @@ fn strides_i64(strides: &[isize], op: &'static str) -> crate::Result<Vec<i64>> {
 fn launch_materialization<T>(
     backend: &WebGpuBackend,
     output: &TypedTensor<T>,
-    input: ArrayArg<WgpuRuntime>,
+    input: BufferArg<WgpuRuntime>,
     plan: &NativePermutationPlan,
     op: &'static str,
 ) -> crate::Result<()>
@@ -193,7 +193,7 @@ fn view_array_arg<T, R>(
     backend: &WebGpuBackend,
     view: &TypedTensorView<'_, T, R>,
     op: &'static str,
-) -> crate::Result<ArrayArg<WgpuRuntime>>
+) -> crate::Result<BufferArg<WgpuRuntime>>
 where
     T: CubeElement + crate::TensorScalar + Clone + Send + Sync + 'static,
     R: TensorRank,
@@ -227,7 +227,7 @@ where
     // the binding is constructed. The kernel receives the same validated
     // layout metadata and indexes only logical output elements.
     Ok(unsafe {
-        ArrayArg::from_raw_parts(
+        BufferArg::from_raw_parts(
             prepared.handle,
             prepared.byte_len / core::mem::size_of::<T>(),
         )

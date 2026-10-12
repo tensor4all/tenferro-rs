@@ -1,4 +1,4 @@
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use std::num::NonZeroUsize;
 use std::panic;
 

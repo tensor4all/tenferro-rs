@@ -1,8 +1,7 @@
 //! Host-to-device and device-to-host transfers via CubeCL-managed allocations.
 
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::prelude::CubeElement;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::DType;
 
@@ -118,7 +117,7 @@ pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tenso
 
 fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client>,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let host_data = match typed.buffer() {
@@ -293,7 +292,7 @@ pub(super) fn download_owned_vec<T: CubeElement>(
 
 fn upload_bool(
     rt: &CudaRuntime,
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client>,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
     let host_data = match typed.buffer() {

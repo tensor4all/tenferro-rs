@@ -1,5 +1,5 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use num_complex::{Complex32, Complex64};
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -34,14 +34,14 @@ use super::{
 /// work.
 struct CubeclExitFlush<'a> {
     op: &'static str,
-    client: &'a cubecl::client::ComputeClient<cubecl_cuda::CudaRuntime>,
+    client: &'a cubecl::client::Client<cubecl_cuda::CudaRuntime>,
     flushed: bool,
 }
 
 impl<'a> CubeclExitFlush<'a> {
     fn new(
         op: &'static str,
-        client: &'a cubecl::client::ComputeClient<cubecl_cuda::CudaRuntime>,
+        client: &'a cubecl::client::Client<cubecl_cuda::CudaRuntime>,
     ) -> Self {
         Self {
             op,

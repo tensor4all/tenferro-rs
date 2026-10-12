@@ -9,6 +9,7 @@
 //! `&mut CudaBackend`.
 
 use super::*;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 pub(super) fn add_read(
     backend: &mut CudaBackend,

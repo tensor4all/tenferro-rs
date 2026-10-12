@@ -36,7 +36,7 @@
 //! ```
 
 use cubecl::prelude::CubeElement;
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use cudarc::driver::result as cuda_result;
 use cudarc::driver::sys::{CUevent, CUevent_flags, CUresult, CUstream};
 use cudarc::runtime::sys as cuda_sys;

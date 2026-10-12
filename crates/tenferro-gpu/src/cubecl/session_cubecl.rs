@@ -2,7 +2,7 @@
 //!
 //! [`Session`] is the promoted, public view over the existing owner-scoped
 //! CubeCL integration helpers in [`super::interop`]. While a session is alive,
-//! the wrapped `ComputeClient` is the exact tenferro CubeCL client bound to the
+//! the wrapped `Client` is the exact tenferro CubeCL client bound to the
 //! tenferro `CudaRuntime`; work enqueued through it is flushed at session exit.
 //!
 //! The prelude is intentionally narrow: only the types needed to write and
@@ -13,9 +13,8 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use cubecl::client::ComputeClient;
-use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive, TensorBinding};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::client::Client;
+use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement, CubePrimitive, TensorBinding};
 
 use tenferro_tensor::{TensorRank, TensorScalar, TensorWrite, TypedTensor};
 
@@ -51,7 +50,7 @@ impl<'s> Session<'s> {
     }
 
     /// Borrow the tenferro CubeCL client.
-    pub fn client(&self) -> &ComputeClient<CubeclCudaRuntime> {
+    pub fn client(&self) -> &Client> {
         self.runtime.client()
     }
 
@@ -79,7 +78,7 @@ impl<'s> Session<'s> {
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,
         op: &'static str,
-    ) -> crate::Result<TensorBinding<CubeclCudaRuntime>>
+    ) -> crate::Result<TensorBinding>>
     where
         T: CubeElement + TensorScalar + Clone,
     {
@@ -103,7 +102,7 @@ impl<'s> Session<'s> {
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,
         op: &'static str,
-    ) -> crate::Result<ArrayArg<CubeclCudaRuntime>>
+    ) -> crate::Result<BufferArg>>
     where
         T: CubeElement + TensorScalar + Clone,
     {

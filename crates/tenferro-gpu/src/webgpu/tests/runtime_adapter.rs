@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 
 #[cfg(not(target_family = "wasm"))]
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};

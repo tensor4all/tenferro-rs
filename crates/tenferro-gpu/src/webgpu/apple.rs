@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::Runtime;
 use cubecl_wgpu::{
     init_device_for_graphics_api, MemoryConfiguration, Metal, PrimaryMemoryMode, RuntimeOptions,
@@ -37,7 +37,7 @@ pub struct AppleTransferStats {
 
 pub(super) struct AppleDomainState {
     pub(super) id: AllocationDomainId,
-    client: ComputeClient<CubeWgpuRuntime>,
+    client: Client<CubeWgpuRuntime>,
     device_ordinal: usize,
     uploaded_bytes: AtomicUsize,
     downloaded_bytes: AtomicUsize,

@@ -1,4 +1,4 @@
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::frontend::CubePrimitive;
 use cubecl::std::tensor::TensorHandle;
 use cubecl_runtime::server::Handle;
@@ -212,7 +212,7 @@ pub fn execute_c32_irfft(
     finish_f32(session, output_shape, output.handle, op)
 }
 
-fn client<'a>(session: &'a WebGpuExecSession<'a>) -> &'a ComputeClient<WgpuRuntime> {
+fn client<'a>(session: &'a WebGpuExecSession<'a>) -> &'a Client<WgpuRuntime> {
     session.runtime().client()
 }
 

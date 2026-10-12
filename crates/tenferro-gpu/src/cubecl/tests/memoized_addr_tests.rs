@@ -1,5 +1,4 @@
-use cubecl::stream_id::StreamId;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl_environment::stream::StreamId;
 
 use super::super::dispatch::{cubecl_buffer, launch_nullary_into};
 use super::super::gemm::typed_device_ptr;
@@ -8,6 +7,7 @@ use super::super::{cube_count_for_len, cube_dim_1d};
 use crate::cuda::{download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use crate::kernels::structural;
 use tenferro_tensor::Tensor;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 /// Issue #1868: a queued CubeCL write must drop the memoized device address.
 ///
@@ -170,7 +170,7 @@ fn every_in_place_launch_helper_invalidates_the_memoized_address() {
 
 /// Issue #1875: the same rule must hold at the mutable CubeCL binding helpers.
 ///
-/// A helper that converts a mutable tensor or view into an `ArrayArg` is about
+/// A helper that converts a mutable tensor or view into an `BufferArg` is about
 /// to have a kernel write that buffer, whatever the caller's shape. The older
 /// check keyed on `launch_*` names with a `&TypedTensor` output and therefore
 /// never reached `typed_tensor_mut_array_arg` / `typed_view_mut_array_arg`,
@@ -195,7 +195,7 @@ fn every_write_binding_helper_invalidates_the_memoized_address() {
         // Only CubeCL array bindings can queue a scheduler-managed write.
         // `prepared_*_mut_access` returns a raw provider access instead and
         // keeps its own explicit enqueue ordering.
-        if !body.contains("ArrayArg<CubeclCudaRuntime>") || !body.contains("prepare_device_write") {
+        if !body.contains("BufferArg>") || !body.contains("prepare_device_write") {
             continue;
         }
         assert!(
