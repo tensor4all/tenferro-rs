@@ -697,6 +697,10 @@ gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_retain_tensor_rejects_ten
 gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_allocates_output_and_bytes
 gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_exposes_stream_and_runtime_identity
 gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_reports_capabilities
+
+gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_entry_is_not_a_host_barrier
+gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_reuses_the_runtime_cublas_handle
+gpu	tenferro-gpu	cubecl::tests::raw_session_tests::session_after_raw_still_runs
 gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_restores_context_on_error_path_observably
 gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_tensor_ref_carries_validated_span
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_bool_reductions_are_unsupported
