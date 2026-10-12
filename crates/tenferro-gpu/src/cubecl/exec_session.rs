@@ -266,19 +266,25 @@ impl CudaExecSession<'_> {
     ///
     /// The enter/exit protocol is fully contained in this call: a definite
     /// CubeCL stream is captured on the current thread, pending CubeCL work is
-    /// flushed, the calling thread's previous device/context is saved, the
-    /// tenferro primary context is activated, the callback runs, and the
-    /// previous device/context is best-effort restored on return, `Err`, or
-    /// unwind (restoration failures are logged to stderr). The success path
-    /// does not synchronize.
+    /// dispatched to that stream (host task queue drained, no device wait), the
+    /// calling thread's previous device/context is saved, the tenferro primary
+    /// context is activated, the callback runs, and the previous device/context
+    /// is best-effort restored on return, `Err`, or unwind (restoration
+    /// failures are logged to stderr). The success path does not synchronize,
+    /// and **entering a raw session is not a host barrier**: an empty scope
+    /// returns in microseconds even behind queued device work, so a caller can
+    /// interleave raw kernels and vendor calls with eager operations instead of
+    /// stalling the pipeline. [`Session::synchronize`](crate::cuda::CudaExecSession::synchronize)
+    /// and downloads stay the explicit host barriers.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose or
-    /// flush the stream, or when the CUDA context cannot be entered. Context
-    /// restoration on exit is best-effort: a failure to restore the caller's
-    /// previous device/context is logged to stderr rather than propagated, so
-    /// a callback result is never replaced by a restore error.
+    /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose the
+    /// stream or report the errors of work already submitted, or when the CUDA
+    /// context cannot be entered. Context restoration on exit is best-effort: a
+    /// failure to restore the caller's previous device/context is logged to
+    /// stderr rather than propagated, so a callback result is never replaced by
+    /// a restore error.
     ///
     /// # Examples
     ///
@@ -305,8 +311,11 @@ impl CudaExecSession<'_> {
         let cache = self.backend.cuda_extension_cache();
         // 1. Capture the definite CubeCL stream on this thread.
         let stream = runtime.raw_cuda_stream()?;
-        // 2. Flush pending CubeCL work so raw library calls observe it.
-        runtime.flush_cubecl(op)?;
+        // 2. Dispatch pending CubeCL work so raw library calls observe it,
+        //    without arming a fence the next submission would synchronize:
+        //    entering a raw scope must not become a host barrier (tenferro-rs
+        //    #2078). The host task queue is drained either way.
+        runtime.check_errors(op)?;
         // 3-4. Save previous context, activate the tenferro primary context.
         let device_ordinal = i32::try_from(runtime.device_ordinal())
             .map_err(|source| crate::Error::backend_source(op, source))?;

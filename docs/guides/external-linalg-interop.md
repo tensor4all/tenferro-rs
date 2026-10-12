@@ -499,54 +499,44 @@ fn cublas_dgemm(
                 let c_ref = session.tensor_mut(&mut c)?;
                 let (alpha, beta) = (1.0_f64, 0.0_f64);
 
-                // The handle is created inside the session, bound to the
-                // session's stream, and destroyed after the host barrier. A
-                // longer-lived handle must be re-bound with `set_stream` in
-                // every session: the stream belongs to the session, not the
-                // handle.
-                let handle =
-                    cublas::create_handle().map_err(|err| Error::backend_source(OP, err))?;
-                // SAFETY: `raw_handle` is the session's live CUDA stream and is
-                // used only inside this session. The three device pointers come
-                // from checked tensor references that stay borrowed until the
-                // `synchronize` below; A is m x k (lda = m), B is k x n
-                // (ldb = k) and C is m x n (ldc = m) in compact column-major
-                // storage, which is cuBLAS's native layout. C is the only
-                // buffer written and does not alias A or B.
-                let launched = unsafe {
-                    cublas::set_stream(
-                        handle,
-                        session.stream().raw_handle() as cublas_sys::cudaStream_t,
-                    )
-                    .and_then(|()| {
-                        cublas::dgemm(
-                            handle,
-                            cublas_sys::cublasOperation_t::CUBLAS_OP_N,
-                            cublas_sys::cublasOperation_t::CUBLAS_OP_N,
-                            m32,
-                            n32,
-                            k32,
-                            &alpha,
-                            a_ref.raw_ptr().cast(),
-                            m32,
-                            b_ref.raw_ptr().cast(),
-                            k32,
-                            &beta,
-                            c_ref.raw_ptr().cast(),
-                            m32,
-                        )
-                    })
-                };
+                // The handle is the runtime's own, already bound to this
+                // session's stream, so a raw scope pays neither `cublasCreate`
+                // nor `cublasDestroy` (tenferro-rs #2083) and never has to
+                // re-bind the stream. It is usable only inside this closure.
+                session.with_cublas_handle(
+                    OP,
+                    cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+                    |handle| {
+                        // SAFETY: the three device pointers come from checked
+                        // tensor references that stay borrowed until the
+                        // `synchronize` below; A is m x k (lda = m), B is k x n
+                        // (ldb = k) and C is m x n (ldc = m) in compact
+                        // column-major storage, which is cuBLAS's native layout.
+                        // C is the only buffer written and does not alias A or B.
+                        unsafe {
+                            cublas::dgemm(
+                                handle,
+                                cublas_sys::cublasOperation_t::CUBLAS_OP_N,
+                                cublas_sys::cublasOperation_t::CUBLAS_OP_N,
+                                m32,
+                                n32,
+                                k32,
+                                &alpha,
+                                a_ref.raw_ptr().cast(),
+                                m32,
+                                b_ref.raw_ptr().cast(),
+                                k32,
+                                &beta,
+                                c_ref.raw_ptr().cast(),
+                                m32,
+                            )
+                        }
+                        .map_err(|err| Error::backend_source(OP, err))
+                    },
+                )?;
                 // `synchronize` is the only host barrier: the GEMM was merely
                 // enqueued on the session's stream.
-                let synchronized = session.synchronize();
-                // SAFETY: the handle is not used after this point, and the
-                // barrier above (or the failed enqueue) means no work using it
-                // is still pending on the stream.
-                let destroyed = unsafe { cublas::destroy_handle(handle) };
-                launched.map_err(|err| Error::backend_source(OP, err))?;
-                synchronized?;
-                destroyed.map_err(|err| Error::backend_source(OP, err))?;
+                session.synchronize()?;
                 Ok(c)
             })
         })
