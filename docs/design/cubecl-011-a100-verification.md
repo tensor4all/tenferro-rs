@@ -1,7 +1,15 @@
 # A100 verification of the CubeCL 0.11 migration
 
-Status: first full run of the migrated branch's CUDA unit tests. 199 passed, 10
-failed. The failures are classified below; none is infrastructure.
+Status: **green**. 209 passed / 0 failed for the CUDA lib tests and 45 passed /
+0 failed across the integration targets, on the A100, with the five port-tree
+fixes below applied to the local port worktree.
+
+The record below keeps the diagnosis order: the first run was 199/10, every
+failure was traced to a cause, and the fixes are either in tenferro's own code or
+are *prepared upstream fixes* in `../cubecl-ports-combined` (three commits:
+sound IEEE folds + sized `BoolType`; FMA restricted to real scalars; accurate
+`log1p` polyfill). Those are ready to be filed upstream; filing needs the user's
+approval.
 
 ## Command
 
