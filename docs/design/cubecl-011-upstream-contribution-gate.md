@@ -6,6 +6,10 @@ filed upstream yet.
 
 ## Order
 
+Base: upstream `v0.11.0` (`52c5086d3`) and `v0.3.0` (`b6ac1f2ee`) are published.
+Verified at `v0.11.0`, the five fixes and the four ports are still absent, so the
+whole extension set is contributed as 0.12.0-line work.
+
 1. **Mac-side work first** (`#2114`): the Apple/Metal host-visible path is part
    of the port set, so the ports cannot be presented upstream until it exists.
    The Mac side produces:
@@ -26,10 +30,11 @@ filed upstream yet.
      `opt/passes/inst_combine.rs` (FMA stays real), `frontend/polyfills.rs`
      (accurate `log1p`) — dropping the intermediate `log1p` lowering toggle in
      `cubecl-cpp/src/shared/unary.rs` that the polyfill change reverses;
-   - rebase every port onto the then-current upstream `main` (the cubecl ports sit
-     39 commits behind, with upstream changes in the same files:
-     `cubecl-cuda/src/compute/server.rs` ×4, `cubecl-runtime/src/client.rs` ×6;
-     the cubek ports are clean apart from `Cargo.lock`).
+   - rebase every port onto the stable upstream tags — cubecl `v0.11.0`
+     (`52c5086d3`), whose 16 commits since the port base changed 68 files in the
+     port-target crates; cubek `v0.3.0` (`b6ac1f2ee`), 8 commits with the target
+     crates untouched. The contribution then targets the 0.12.0 line, since
+     0.11.0 is already released.
 3. **Only then** the release branches are regenerated from the rebased ports and
    published, and the pins move. Publishing before the rebase would force a
    0.11.1 release.
