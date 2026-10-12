@@ -730,6 +730,7 @@ gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_upload_download_f64
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_upload_download_i32
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_upload_download_i64
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_zero_stride_view_materializes_without_cutensor_descriptor
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_trim_memory_returns_dropped_blocks_to_the_driver
 host	tenferro-gpu	cubecl::tests::scatter_launch_meta_rejects_mismatched_update_batch_extents
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_bool_structural_ops_match_cpu
 gpu	tenferro-gpu	cubecl::tests::structural_tests::cuda_complex_permutation_views_match_the_explicit_index_map
