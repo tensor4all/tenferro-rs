@@ -175,9 +175,9 @@ pub use memory::{download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};
 pub use transfer::{
-    download_pending, upload_pending, CompletionUnproven, PendingDownload, PendingUpload,
-    PinnedHostBuffer, PublicationAdmissionError, PublicationError, PublicationRejected,
-    SourcePublication, TransferRejected, TransferSubmitError,
+    download_pending, upload_pending, CompletionUnproven, PendingDownload, PendingRead,
+    PendingUpload, PinnedHostBuffer, PublicationAdmissionError, PublicationError,
+    PublicationRejected, SourcePublication, TransferRejected, TransferSubmitError,
 };
 
 fn op_name(

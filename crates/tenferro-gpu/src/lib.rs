@@ -54,7 +54,7 @@ pub mod cuda {
         CudaComputeCapability, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid,
         CudaExecSession, CudaExtensionCache, CudaExtensionCacheGuard, CudaHeldSession, CudaRuntime,
         CudaRuntimeIdentity, CudaSessionStats, CutensorWorkspaceStats, GpuExtensionCapability,
-        PendingDownload, PendingUpload, PinnedHostBuffer, PublicationAdmissionError,
+        PendingDownload, PendingRead, PendingUpload, PinnedHostBuffer, PublicationAdmissionError,
         PublicationError, PublicationRejected, SourcePublication, TransferRejected,
         TransferSubmitError, WorkspaceRetirementStats,
     };
