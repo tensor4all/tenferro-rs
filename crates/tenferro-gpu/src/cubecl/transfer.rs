@@ -38,12 +38,13 @@
 use cubecl::prelude::CubeElement;
 use cubecl::stream_id::StreamId;
 use cudarc::driver::result as cuda_result;
-use cudarc::driver::sys::{CUevent, CUevent_flags, CUresult, CUstream};
+use cudarc::driver::sys::{CUevent, CUevent_flags, CUevent_wait_flags, CUresult, CUstream};
 use cudarc::runtime::sys as cuda_sys;
 
 use tenferro_tensor::{DType, Tensor, TensorScalar};
 
 use super::dispatch;
+use super::exec_session::{with_cuda_exec_session, CudaHeldSession};
 use super::runtime::{CudaRuntime, CudaRuntimeState};
 use num_complex::{Complex32, Complex64};
 
@@ -708,6 +709,103 @@ impl Drop for PendingDownload {
     }
 }
 
+/// An admitted device-side consumer copy of a published value in flight (`U4-2a`).
+///
+/// Owns the source value (which keeps the published allocation alive), the destination tensor and the
+/// copy's completion event until [`Self::wait`], a detached drop, or a terminal failure - the same
+/// ownership model [`PendingDownload`] follows. `Drop` never waits.
+pub struct PendingRead {
+    runtime: CudaRuntime,
+    /// The published value: keeps the source allocation alive until the copy completes, and doubles as
+    /// the consumed flag (like `PendingDownload::source`).
+    source: Option<Tensor>,
+    /// The destination tensor, returned by [`Self::wait`] or erased into the retirement record.
+    destination: Option<Tensor>,
+    event: CUevent,
+    bytes: usize,
+    /// Whether this handle still owns the live event (a resolved copy destroyed it, a detached one
+    /// handed it to the retirement queue).
+    live: bool,
+}
+
+impl PendingRead {
+    /// Byte length of the copy.
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// Wait for the copy's completion and take the destination tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the completion synchronization fails, or
+    /// [`crate::Error::RuntimeState`] when the destination was already taken.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let pending: tenferro_gpu::cuda::PendingRead = unimplemented!();
+    /// let value = pending.wait()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn wait(mut self) -> crate::Result<Tensor> {
+        self.resolve()?;
+        self.destination.take().ok_or_else(|| {
+            crate::Error::runtime_state(PUBLICATION_OP, "the consumer copy has no destination")
+        })
+    }
+
+    fn resolve(&mut self) -> crate::Result<()> {
+        if self.source.is_none() {
+            return Ok(());
+        }
+        self.runtime.set_current_cuda_context(PUBLICATION_OP)?;
+        // SAFETY: the event is live and owned by this handle.
+        unsafe { cuda_result::event::synchronize(self.event) }
+            .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
+        // Completion is proven from here on: the source retention and the event are released once.
+        self.source.take();
+        // SAFETY: the event is live, owned, and no longer needed.
+        let _ = unsafe { cuda_result::event::destroy(self.event) };
+        self.live = false;
+        Ok(())
+    }
+
+    fn detach(&mut self) {
+        if !self.live {
+            return;
+        }
+        self.live = false;
+        let record = TransferRetirement {
+            event: self.event,
+            value: self.source.take(),
+            buffer: None,
+            resource: self
+                .destination
+                .take()
+                .map(|destination| Box::new(destination) as Box<dyn std::any::Any + Send>),
+        };
+        self.runtime.detach_transfer(record);
+    }
+}
+
+impl std::fmt::Debug for PendingRead {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingRead")
+            .field("bytes", &self.bytes)
+            .field("live", &self.live)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for PendingRead {
+    fn drop(&mut self) {
+        // Detached drop: no device wait here, exactly as `PendingDownload` documents.
+        self.detach();
+    }
+}
+
 /// Report a pinned-host release failure without unwinding from `Drop`.
 fn report_pinned_release_error(error: &impl std::fmt::Debug) {
     eprintln!("tenferro-gpu: failed to release pinned host buffer during Drop: {error:?}");
@@ -859,6 +957,82 @@ pub fn download_pending(
         resource: Some(Box::new(resource)),
         live: true,
     })
+}
+
+/// Allocate a device tensor on `runtime` matching `source`'s shape and dtype.
+///
+/// This is the destination of the device-side consumer copy: an owned tensor (not a session-bound
+/// `DeviceBytes`), so it can live in the package, be erased into the retirement record, and be
+/// returned by [`PendingRead::wait`].
+fn allocate_like(runtime: &CudaRuntime, source: &Tensor) -> crate::Result<Tensor> {
+    let shape = source.shape().to_vec();
+    match source.dtype() {
+        DType::F64 => Ok(Tensor::from_typed(super::dispatch::alloc_output::<f64>(
+            runtime, &shape,
+        )?)),
+        DType::F32 => Ok(Tensor::from_typed(super::dispatch::alloc_output::<f32>(
+            runtime, &shape,
+        )?)),
+        DType::I64 => Ok(Tensor::from_typed(super::dispatch::alloc_output::<i64>(
+            runtime, &shape,
+        )?)),
+        DType::I32 => Ok(Tensor::from_typed(super::dispatch::alloc_output::<i32>(
+            runtime, &shape,
+        )?)),
+        DType::C64 => Ok(Tensor::from_typed(super::dispatch::alloc_output::<
+            Complex64,
+        >(runtime, &shape)?)),
+        DType::C32 => Ok(Tensor::from_typed(super::dispatch::alloc_output::<
+            Complex32,
+        >(runtime, &shape)?)),
+        other => Err(crate::Error::unsupported(
+            PUBLICATION_OP,
+            format!("the consumer copy route does not serve {other:?}"),
+        )),
+    }
+}
+
+/// Test-only fault injection at the consumer copy's submission boundary (`U4-2a` evidence).
+///
+/// The production path is unchanged: the hooks are compiled out unless the crate is under test, and they
+/// only ever produce a *recoverable preparation* error before the submission or a completion-record
+/// failure after it, which is what the evidence plan needs to drive those ownership paths.
+#[cfg(test)]
+pub(crate) mod copy_fault_injection {
+    use std::cell::Cell;
+
+    thread_local! {
+        static PREPARATION: Cell<Option<&'static str>> = const { Cell::new(None) };
+        static RECORD: Cell<Option<&'static str>> = const { Cell::new(None) };
+    }
+
+    /// Arm a recoverable preparation failure for the next copy.
+    pub(crate) fn arm_preparation(message: &'static str) {
+        PREPARATION.with(|slot| slot.set(Some(message)));
+    }
+
+    /// Take an armed preparation failure.
+    pub(crate) fn take_preparation() -> Option<&'static str> {
+        PREPARATION.with(Cell::take)
+    }
+
+    /// Arm a completion-record failure for the next copy.
+    pub(crate) fn arm_record(message: &'static str) {
+        RECORD.with(|slot| slot.set(Some(message)));
+    }
+
+    /// Take an armed completion-record failure.
+    pub(crate) fn take_record() -> Option<&'static str> {
+        RECORD.with(Cell::take)
+    }
+}
+
+/// Refuse a device-side consumer copy, returning the publication unchanged.
+fn copy_refused(publication: SourcePublication, error: crate::Error) -> PublicationError {
+    PublicationError::CopyRejected {
+        error,
+        publication: Box::new(publication),
+    }
 }
 
 /// The source's CubeCL allocation handle and its byte length.
@@ -1203,6 +1377,7 @@ fn publication_rejected(error: crate::Error, value: Tensor) -> PublicationAdmiss
 ///     match error {
 ///         PublicationError::Rejected { error, .. } => error.to_string(),
 ///         PublicationError::Unproven { error } => error.to_string(),
+///         PublicationError::CopyRejected { error, .. } => error.to_string(),
 ///     }
 /// }
 /// let _ = describe;
@@ -1225,12 +1400,24 @@ pub enum PublicationError {
         /// The failure that prevented completion from being proven.
         error: crate::Error,
     },
+    /// A device-side consumer copy was refused before this copy's submission: the publication comes
+    /// back unchanged and there is no pinned buffer, because the destination is a device tensor
+    /// allocated for the copy (issue #859's `U4-2a`; see `docs/design/consumer-copy-1945-u4-2a.md`).
+    CopyRejected {
+        /// Why the copy was refused.
+        error: crate::Error,
+        /// The publication, unchanged.
+        publication: Box<SourcePublication>,
+    },
 }
 
 impl std::fmt::Display for PublicationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Rejected { error, .. } => write!(formatter, "published copy rejected: {error}"),
+            Self::CopyRejected { error, .. } => {
+                write!(formatter, "published device copy rejected: {error}")
+            }
             Self::Unproven { error } => write!(formatter, "published copy unproven: {error}"),
         }
     }
@@ -1567,6 +1754,223 @@ impl SourcePublication {
             buffer: Some(buffer),
             event,
             resource: None,
+            live: true,
+        })
+    }
+
+    /// Consume the publication by copying it into `consumer`'s device, ordered after its frontier
+    /// (`U4-2a`; see `docs/design/consumer-copy-1945-u4-2a.md`).
+    ///
+    /// The publication is consumed: the source value, its allocation and the frontier move into the
+    /// returned [`PendingRead`], so no later `download_into`, write or reuse can race the copy. The
+    /// destination is an owned device tensor on the consumer's runtime, and the copy runs on the
+    /// consumer session's captured stream behind the publication's frontier.
+    ///
+    /// # Errors
+    ///
+    /// [`PublicationError::CopyRejected`] when the consumer session does not belong to this
+    /// publication's runtime instance, when the publication is terminal, or when the destination could
+    /// not be prepared; the publication comes back unchanged and nothing of this copy was submitted.
+    /// [`PublicationError::Unproven`] when the copy may have been enqueued and completion cannot be
+    /// proven; nothing is returned and the package is retained for soundness.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let publication: tenferro_gpu::cuda::SourcePublication = unimplemented!();
+    /// # let mut consumer: tenferro_gpu::cuda::CudaHeldSession<'_> = unimplemented!();
+    /// let pending = publication.copy_into(&mut consumer).map_err(|err| err.to_string())?;
+    /// let value = pending.wait()?;
+    /// # let _ = value;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn copy_into(
+        mut self,
+        consumer: &mut CudaHeldSession<'_>,
+    ) -> Result<PendingRead, PublicationError> {
+        // Eligibility and the terminal record are checked before the captured-stream entry, so a
+        // refusal submits nothing at all.
+        let consumer_runtime = consumer.runtime().clone();
+        if self.runtime.runtime_identity() != consumer_runtime.runtime_identity() {
+            return Err(copy_refused(
+                self,
+                crate::Error::invalid_argument(
+                    PUBLICATION_OP,
+                    "consumer",
+                    "the consumer session does not belong to the publication's runtime instance",
+                ),
+            ));
+        }
+        if let Some(failure) = self.failure.as_ref().map(ToString::to_string) {
+            return Err(copy_refused(
+                self,
+                crate::Error::runtime_state(
+                    PUBLICATION_OP,
+                    format!("the publication is terminal and can never be copied: {failure}"),
+                ),
+            ));
+        }
+        let published_bytes = self.bytes;
+        #[cfg(test)]
+        if let Some(message) = copy_fault_injection::take_preparation() {
+            return Err(copy_refused(
+                self,
+                crate::Error::runtime_state(PUBLICATION_OP, message),
+            ));
+        }
+
+        let runtime = self.runtime.clone();
+        let destination = match self.value.as_ref() {
+            Some(source_value) => match allocate_like(&runtime, source_value) {
+                Ok(destination) => destination,
+                Err(error) => {
+                    // Recoverable destination preparation: nothing of this copy was submitted, so the
+                    // publication comes back unchanged. A genuine CUDA reservation failure is not
+                    // recoverable here (the allocation substrate panics on it), which this route does
+                    // not claim to make recoverable.
+                    return Err(copy_refused(self, error));
+                }
+            },
+            None => {
+                return Err(copy_refused(
+                    self,
+                    crate::Error::runtime_state(
+                        PUBLICATION_OP,
+                        "the publication no longer owns its value",
+                    ),
+                ))
+            }
+        };
+        let (handle, byte_len) = match device_allocation(&destination) {
+            Ok(allocation) => allocation,
+            Err(error) => return Err(copy_refused(self, error)),
+        };
+        if byte_len != published_bytes {
+            return Err(copy_refused(
+                self,
+                crate::Error::invalid_argument(
+                    PUBLICATION_OP,
+                    "destination",
+                    format!(
+                        "the prepared destination holds {byte_len} bytes but the published value holds {published_bytes}"
+                    ),
+                ),
+            ));
+        }
+        let destination_pointer = match runtime.client().get_resource(handle) {
+            Ok(resource) => resource.resource().ptr,
+            Err(error) => {
+                return Err(copy_refused(
+                    self,
+                    crate::Error::backend_source(PUBLICATION_OP, error),
+                ))
+            }
+        };
+        let source_address = self.address;
+        let frontier = self.frontier;
+        let event = match cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING) {
+            Ok(event) => event,
+            Err(err) => {
+                return Err(copy_refused(
+                    self,
+                    crate::Error::backend_source(PUBLICATION_OP, err),
+                ))
+            }
+        };
+
+        // The copy is submitted inside the consumer session's captured-stream entry, which reapplies
+        // the logical stream and activates/restores the CUDA context.
+        let outcome = consumer
+            .with_session(|session| {
+                with_cuda_exec_session(session, |exec| {
+                    exec.with_raw(PUBLICATION_OP, |raw| {
+                        // SAFETY: the handle is valid for this closure, while the session's context is current.
+                        let stream = unsafe { raw.stream().raw_handle() } as usize as CUstream;
+                        if let Some(frontier) = frontier {
+                            // SAFETY: the frontier event is live and owned by this publication until it is
+                            // released below, and `stream` is the consumer's captured stream.
+                            unsafe {
+                                cuda_result::stream::wait_event(
+                                    stream,
+                                    frontier,
+                                    CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
+                                )
+                            }
+                            .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
+                        }
+                        // SAFETY: `destination_pointer` is a device span of `byte_len` bytes owned by the package,
+                        // `source_address` is the device address of the allocation this publication retained, and
+                        // the copy is enqueued on the consumer's captured stream.
+                        unsafe {
+                            raw.copy_bytes(
+                                destination_pointer as *mut std::ffi::c_void,
+                                source_address as *const std::ffi::c_void,
+                                byte_len,
+                                PUBLICATION_OP,
+                            )?;
+                        }
+                        #[cfg(test)]
+                        if let Some(message) = copy_fault_injection::take_record() {
+                            return Err(crate::Error::runtime_state(PUBLICATION_OP, message));
+                        }
+                        // SAFETY: the event was created for this copy and is recorded on the same stream.
+                        unsafe { cuda_result::event::record(event, stream) }
+                            .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
+                        Ok(())
+                    })
+                })
+            })
+            .map_err(|error| {
+                crate::Error::runtime_state(
+                    PUBLICATION_OP,
+                    format!("the consumer session entry failed: {error}"),
+                )
+            })
+            .and_then(|outcome| {
+                outcome.ok_or_else(|| {
+                    crate::Error::runtime_state(
+                        PUBLICATION_OP,
+                        "the consumer session is not a CUDA execution session",
+                    )
+                })
+            });
+        // Flatten the session entry's own result: an error from the copy closure must reach the unproven
+        // path below, not be swallowed by the entry's success.
+        let outcome: crate::Result<()> = match outcome {
+            Ok(inner) => inner,
+            Err(error) => Err(error),
+        };
+
+        if let Err(error) = outcome {
+            // The copy may have been enqueued, so nothing is returned: the source value and the
+            // prepared destination are retained permanently, because an event that was never recorded
+            // queries as complete and must never be released by a later drain.
+            self.release_frontier();
+            let record = TransferRetirement {
+                event,
+                value: self.value.take(),
+                buffer: None,
+                resource: Some(Box::new(destination) as Box<dyn std::any::Any + Send>),
+            };
+            runtime.retain_transfer_for_soundness(record);
+            return Err(PublicationError::Unproven {
+                error: crate::Error::runtime_state(
+                    PUBLICATION_OP,
+                    format!("the consumer copy could not be enqueued: {error}"),
+                ),
+            });
+        }
+
+        // The frontier is ordered before the copy on the consumer's stream, so it is no longer needed.
+        self.release_frontier();
+        Ok(PendingRead {
+            runtime,
+            source: self.value.take(),
+            destination: Some(destination),
+            event,
+            bytes: byte_len,
             live: true,
         })
     }
