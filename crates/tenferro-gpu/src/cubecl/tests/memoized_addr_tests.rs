@@ -47,7 +47,7 @@ fn queued_cubecl_write_drops_the_memoized_device_address() {
         cube_count_for_len(typed.n_elements()).unwrap(),
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
+            structural::fill_zero_kernel::launch_unchecked::<f64>(
                 client, count, dim, out,
             );
         },
@@ -102,7 +102,7 @@ fn queued_scale_write_drops_the_memoized_device_address() {
         // SAFETY: the scaling bridge validates residency, buffer length, and
         // the one-dimensional launch domain before this unchecked launch.
         unsafe {
-            structural::scale_in_place_float_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
+            structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
                 client, count, dim, out, factor,
             );
         }
@@ -331,7 +331,7 @@ fn view_reads_share_the_root_memo_and_observe_queued_writes() {
             // SAFETY: the scaling bridge validates residency, buffer length, and
             // the one-dimensional launch domain before this unchecked launch.
             unsafe {
-                structural::scale_in_place_float_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
+                structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
                     client, count, dim, out, factor,
                 );
             }

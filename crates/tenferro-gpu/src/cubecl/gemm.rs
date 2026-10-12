@@ -25,10 +25,10 @@ use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, CubeclBuffer, Error, Tensor, TypedTensor};
 use tenferro_tensor::{
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
     CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorScalar,
     TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 const OP: &str = "dot_general";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
@@ -239,7 +239,7 @@ impl CutensorScalar for f32 {
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
-            structural::scale_in_place_float_kernel::launch_unchecked::<f32, CubeclCudaRuntime>(
+            structural::scale_in_place_float_kernel::launch_unchecked::<f32>(
                 client, count, dim, out, factor,
             );
         }
@@ -269,7 +269,7 @@ impl CutensorScalar for f64 {
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
-            structural::scale_in_place_float_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
+            structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
                 client, count, dim, out, factor,
             );
         }
@@ -1119,7 +1119,7 @@ where
             cube_count_for_len(out.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::fill_zero_kernel::launch_unchecked::<T>(
                     client, count, dim, out,
                 );
             },
@@ -1156,7 +1156,7 @@ where
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::fill_zero_kernel::launch_unchecked::<T>(
                     client, count, dim, out,
                 );
             },

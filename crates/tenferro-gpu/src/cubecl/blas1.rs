@@ -55,10 +55,10 @@ use super::interop::{alloc_zero_output, offset_device_ptr, upload_typed_tensor};
 use super::runtime::check_cublas;
 use super::{CudaBackend, CudaRuntime};
 use crate::{
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
     Error, Tensor, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {

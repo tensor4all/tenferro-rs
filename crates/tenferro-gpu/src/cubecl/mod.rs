@@ -78,7 +78,6 @@ use cubecl::prelude::{
 use cubecl::prelude::{CubeCount, Int as CubeInt, StorageType, TensorBinding, Type};
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use tenferro_tensor::CacheStats;
 use tenferro_tensor::{
@@ -98,6 +97,7 @@ use crate::{
     DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer, Tensor, TensorRank,
     TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {
@@ -282,7 +282,7 @@ fn launch_native_materialization<E: CubePrimitive>(
                     // SAFETY: The tiled classification proves a compact 2D
                     // transpose. Bounds guards cover edge tiles and every unit
                     // reaches the shared-memory barrier.
-                    structural::tiled_transpose_kernel::launch_unchecked::<E, CubeclCudaRuntime>(
+                    structural::tiled_transpose_kernel::launch_unchecked::<E>(
                         backend.runtime().client(),
                         CubeCount::Static(cubes_x, cubes_y, cubes_z),
                         CubeDim::new_2d(config.tile / config.vector_width, config.block_rows),
@@ -307,7 +307,7 @@ fn launch_native_materialization<E: CubePrimitive>(
     unsafe {
         // SAFETY: `NativePermutationPlan` validated both allocation ranges,
         // destination non-overlap, and disjoint source/destination storage.
-        structural::materialize_strided_kernel::launch_unchecked::<E, CubeclCudaRuntime>(
+        structural::materialize_strided_kernel::launch_unchecked::<E>(
             backend.runtime().client(),
             cube_count_for_len(plan.len)?,
             cube_dim_1d(),
@@ -1299,7 +1299,7 @@ impl CudaBackend {
             shape,
             "broadcast_in_dim",
             |client, count, dim, out, input_arg| unsafe {
-                structural::broadcast_in_dim_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::broadcast_in_dim_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -1325,7 +1325,7 @@ impl CudaBackend {
             shape,
             "broadcast_in_dim",
             |client, count, dim, out, input_arg| unsafe {
-                structural::broadcast_in_dim_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                structural::broadcast_in_dim_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -1353,7 +1353,7 @@ impl CudaBackend {
             input.shape(),
             "reverse",
             |client, count, dim, out, input_arg| unsafe {
-                structural::reverse_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::reverse_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -1378,7 +1378,7 @@ impl CudaBackend {
             input.shape(),
             "reverse",
             |client, count, dim, out, input_arg| unsafe {
-                structural::reverse_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                structural::reverse_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -1599,7 +1599,7 @@ impl CudaBackend {
                 // has validated reachable offsets and no internal overlap, and
                 // the launch domain covers each source element and destination
                 // logical coordinate exactly once.
-                structural::contiguous_to_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::contiguous_to_view_kernel::launch_unchecked::<T>(
                     self.runtime().client(),
                     cube_count_for_len(len)?,
                     cube_dim_1d(),
@@ -1626,7 +1626,7 @@ impl CudaBackend {
             // destination is injective, and (with the allocation identity
             // check above) that the two allocations are distinct. The launch
             // domain visits each logical coordinate exactly once.
-            structural::strided_to_strided_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+            structural::strided_to_strided_kernel::launch_unchecked::<T>(
                 self.runtime().client(),
                 cube_count_for_len(plan.len)?,
                 cube_dim_1d(),
@@ -1720,7 +1720,7 @@ impl CudaBackend {
             // destination column-major over the same matrix, which is the
             // kernel's indexing contract; its bounds guards cover edge tiles
             // and every unit reaches the shared-memory barrier.
-            structural::tiled_transpose_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+            structural::tiled_transpose_kernel::launch_unchecked::<T>(
                 self.runtime().client(),
                 CubeCount::Static(cubes_x, cubes_y, cubes_z),
                 CubeDim::new_2d(config.tile / config.vector_width, config.block_rows),
@@ -1894,7 +1894,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_float_to_float::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+                structural::convert_float_to_float::launch_unchecked::<Out, In>(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -1907,7 +1907,7 @@ impl CudaBackend {
         Out: CubeElement + TensorScalar + CubeNumeric + Clone,
     {
         self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
-            structural::convert_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+            structural::convert_numeric::launch_unchecked::<Out, In>(
                 client, count, dim, out, input,
             );
         })
@@ -1972,7 +1972,7 @@ impl CudaBackend {
         };
         let output_arg = bool_tensor_array_arg(&output, "cast")?;
         unsafe {
-            structural::convert_numeric_to_bool::launch_unchecked::<In, CubeclCudaRuntime>(
+            structural::convert_numeric_to_bool::launch_unchecked::<In>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2004,7 +2004,7 @@ impl CudaBackend {
         };
         let output_arg = typed_tensor_array_arg(&output, "cast")?;
         unsafe {
-            structural::convert_bool_to_numeric::launch_unchecked::<Out, CubeclCudaRuntime>(
+            structural::convert_bool_to_numeric::launch_unchecked::<Out>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2064,7 +2064,7 @@ impl CudaBackend {
         };
         let out = typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, part_len, "cast")?;
         unsafe {
-            structural::convert_bool_to_complex_raw::launch_unchecked::<OutFloat, CubeclCudaRuntime>(
+            structural::convert_bool_to_complex_raw::launch_unchecked::<OutFloat>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2084,7 +2084,7 @@ impl CudaBackend {
         Out: CubeElement + TensorScalar + CubeNumeric + Clone,
     {
         self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
-            structural::convert_complex_to_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+            structural::convert_complex_to_numeric::launch_unchecked::<Out, In>(
                 client, count, dim, out, input,
             );
         })
@@ -2115,7 +2115,7 @@ impl CudaBackend {
         };
         let output_arg = bool_tensor_array_arg(&output, "cast")?;
         unsafe {
-            structural::convert_complex_raw_to_bool::launch_unchecked::<F, CubeclCudaRuntime>(
+            structural::convert_complex_raw_to_bool::launch_unchecked::<F>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2367,7 +2367,7 @@ impl CudaBackend {
         };
         let output_arg = typed_tensor_array_arg_as::<Out, OutFloat>(&output, parts, "cast")?;
         unsafe {
-            structural::convert_complex_raw::launch_unchecked::<OutFloat, InFloat, CubeclCudaRuntime>(
+            structural::convert_complex_raw::launch_unchecked::<OutFloat, InFloat>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2395,7 +2395,7 @@ impl CudaBackend {
             &output_shape,
             "extract_diagonal",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::extract_diagonal_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                diagonal::extract_diagonal_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -2425,7 +2425,7 @@ impl CudaBackend {
             &output_shape,
             "extract_diagonal",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::extract_diagonal_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                diagonal::extract_diagonal_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -2459,7 +2459,7 @@ impl CudaBackend {
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::fill_zero_kernel::launch_unchecked::<T>(
                     client, count, dim, out,
                 );
             },
@@ -2472,7 +2472,7 @@ impl CudaBackend {
             cube_count_for_len(input.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -2508,7 +2508,7 @@ impl CudaBackend {
             output_count,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                structural::fill_zero_kernel::launch_unchecked::<u8>(
                     client, count, dim, out,
                 );
             },
@@ -2521,7 +2521,7 @@ impl CudaBackend {
             input_count,
             cube_dim_1d(),
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -2554,7 +2554,7 @@ impl CudaBackend {
             input.shape(),
             "tril",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::tril_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                diagonal::tril_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -2576,7 +2576,7 @@ impl CudaBackend {
             input.shape(),
             "tril",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::tril_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                diagonal::tril_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -2605,7 +2605,7 @@ impl CudaBackend {
             input.shape(),
             "triu",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::triu_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                diagonal::triu_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -2627,7 +2627,7 @@ impl CudaBackend {
             input.shape(),
             "triu",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::triu_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                diagonal::triu_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -3081,7 +3081,7 @@ impl CudaBackend {
             &output_shape,
             "slice",
             |client, count, dim, out, input_arg| unsafe {
-                indexing::slice_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                indexing::slice_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -3106,7 +3106,7 @@ impl CudaBackend {
             &output_shape,
             "slice",
             |client, count, dim, out, input_arg| unsafe {
-                indexing::slice_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                indexing::slice_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -3163,7 +3163,7 @@ impl CudaBackend {
             slice_sizes,
             "dynamic_slice",
             |client, count, dim, out, input_arg, starts_arg| unsafe {
-                indexing::dynamic_slice_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                indexing::dynamic_slice_kernel::launch_unchecked::<T, I>(
                     client,
                     count,
                     dim,
@@ -3230,7 +3230,7 @@ impl CudaBackend {
             slice_sizes,
             "dynamic_slice",
             |client, count, dim, out, input_arg, starts_arg| unsafe {
-                indexing::dynamic_slice_kernel::launch_unchecked::<u8, I, CubeclCudaRuntime>(
+                indexing::dynamic_slice_kernel::launch_unchecked::<u8, I>(
                     client,
                     count,
                     dim,
@@ -3259,7 +3259,7 @@ impl CudaBackend {
             &output_shape,
             "pad",
             |client, count, dim, out, input_arg| unsafe {
-                indexing::pad_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                indexing::pad_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -3285,7 +3285,7 @@ impl CudaBackend {
             &output_shape,
             "pad",
             |client, count, dim, out, input_arg| unsafe {
-                indexing::pad_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                indexing::pad_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -3319,7 +3319,7 @@ impl CudaBackend {
                 cube_count_for_len(input.n_elements())?,
                 cube_dim_1d(),
                 |client, count, dim, out, input_arg| unsafe {
-                    structural::concatenate_copy_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    structural::concatenate_copy_kernel::launch_unchecked::<T>(
                         client,
                         count,
                         dim,
@@ -3364,7 +3364,7 @@ impl CudaBackend {
                 launch_count,
                 cube_dim_1d(),
                 |client, count, dim, out, input_arg| unsafe {
-                    structural::concatenate_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    structural::concatenate_copy_kernel::launch_unchecked::<u8>(
                         client,
                         count,
                         dim,
@@ -3408,7 +3408,7 @@ impl CudaBackend {
             &meta.output_shape,
             "gather",
             |client, count, dim, out, operand_arg, indices_arg| unsafe {
-                indexing::gather_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                indexing::gather_kernel::launch_unchecked::<T, I>(
                     client,
                     count,
                     dim,
@@ -3454,7 +3454,7 @@ impl CudaBackend {
             &meta.output_shape,
             "gather",
             |client, count, dim, out, operand_arg, indices_arg| unsafe {
-                indexing::gather_kernel::launch_unchecked::<u8, I, CubeclCudaRuntime>(
+                indexing::gather_kernel::launch_unchecked::<u8, I>(
                     client,
                     count,
                     dim,
@@ -3521,7 +3521,7 @@ impl CudaBackend {
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out_arg, operand_arg| unsafe {
-                indexing::scatter_copy_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                indexing::scatter_copy_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -3547,7 +3547,7 @@ impl CudaBackend {
             // within its backing allocation. The launch domain is
             // `scatter_update_len(meta)`, and the kernel maps each launched
             // update through the validated metadata before indexing.
-            indexing::scatter_float_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+            indexing::scatter_float_kernel::launch_unchecked::<T, I>(
                 client,
                 cube_count_for_len(update_len)?,
                 cube_dim_1d(),
@@ -3630,7 +3630,7 @@ impl CudaBackend {
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out_arg, operand_arg| unsafe {
-                indexing::scatter_copy_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                indexing::scatter_copy_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -3658,7 +3658,7 @@ impl CudaBackend {
             // backing allocations. The launch domain is
             // `scatter_update_len(meta)` and the kernel indexes via the
             // validated metadata.
-            indexing::scatter_complex_kernel::launch_unchecked::<T, F, I, CubeclCudaRuntime>(
+            indexing::scatter_complex_kernel::launch_unchecked::<T, F, I>(
                 client,
                 cube_count_for_len(update_len)?,
                 cube_dim_1d(),
@@ -3814,7 +3814,7 @@ where
     let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
     let flag_values = typed_tensor_array_arg(&flag, "cast")?;
     unsafe {
-        indexing::init_float_index_validation_flag::launch_unchecked::<F, CubeclCudaRuntime>(
+        indexing::init_float_index_validation_flag::launch_unchecked::<F>(
             backend.runtime().client(),
             CubeCount::Static(1, 1, 1),
             cube_dim_1d(),
@@ -3825,7 +3825,7 @@ where
     let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
     let (min, max, inclusive) = F::bounds(target);
     unsafe {
-        structural::validate_real_cast::launch_unchecked::<F, CubeclCudaRuntime>(
+        structural::validate_real_cast::launch_unchecked::<F>(
             backend.runtime().client(),
             count,
             cube_dim_1d(),
@@ -3841,7 +3841,7 @@ where
     let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
     let flag_values = typed_tensor_array_arg(&flag, "cast")?;
     unsafe {
-        structural::extract_invalid_real_cast::launch_unchecked::<F, CubeclCudaRuntime>(
+        structural::extract_invalid_real_cast::launch_unchecked::<F>(
             backend.runtime().client(),
             CubeCount::Static(1, 1, 1),
             cube_dim_1d(),
@@ -3994,7 +3994,7 @@ where
     unsafe {
         // SAFETY: the flag allocation has two `F` elements, and the checked
         // reinterpretation above proves the atomic-u32 view fits that buffer.
-        indexing::init_float_index_validation_flag::launch_unchecked::<F, CubeclCudaRuntime>(
+        indexing::init_float_index_validation_flag::launch_unchecked::<F>(
             backend.runtime().client(),
             CubeCount::Static(1, 1, 1),
             cube_dim_1d(),
@@ -4007,7 +4007,7 @@ where
         // SAFETY: the input binding was validated before allocation, the
         // launch domain is the checked input length, and the scalar flag view
         // was bounds-checked above.
-        indexing::validate_float_indices_kernel::launch_unchecked::<F, CubeclCudaRuntime>(
+        indexing::validate_float_indices_kernel::launch_unchecked::<F>(
             backend.runtime().client(),
             count,
             cube_dim_1d(),
@@ -4022,7 +4022,7 @@ where
     unsafe {
         // SAFETY: one worker reads the atomically selected in-range index and
         // copies that single value into the second element of the same flag.
-        indexing::extract_invalid_float_index_kernel::launch_unchecked::<F, CubeclCudaRuntime>(
+        indexing::extract_invalid_float_index_kernel::launch_unchecked::<F>(
             backend.runtime().client(),
             CubeCount::Static(1, 1, 1),
             cube_dim_1d(),
@@ -4079,7 +4079,7 @@ where
         cube_count_for_len(flag.n_elements())?,
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<i32, CubeclCudaRuntime>(
+            structural::fill_zero_kernel::launch_unchecked::<i32>(
                 client, count, dim, out,
             );
         },
@@ -4205,7 +4205,7 @@ where
         return Ok(output);
     }
     unsafe {
-        elementwise::scalar_real_complex_binary::launch_unchecked::<R, CubeclCudaRuntime>(
+        elementwise::scalar_real_complex_binary::launch_unchecked::<R>(
             backend.runtime().client(),
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
@@ -4321,7 +4321,7 @@ where
         cube_count_for_len(flag.n_elements())?,
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<i32, CubeclCudaRuntime>(
+            structural::fill_zero_kernel::launch_unchecked::<i32>(
                 client, count, dim, out,
             );
         },
@@ -4505,7 +4505,7 @@ impl CudaBackend {
                     // validate_read_into_destination checks overlap, and the launch helper
                     // validates runtime residency and prepares the exclusive output write.
                     |client, count, dim, out, lhs, rhs| unsafe {
-                        elementwise::$kernel::launch_unchecked::<$ty, CubeclCudaRuntime>(
+                        elementwise::$kernel::launch_unchecked::<$ty>(
                             client, count, dim, out, lhs, rhs,
                         );
                     },
@@ -4523,7 +4523,7 @@ impl CudaBackend {
                     // validate_read_into_destination checks overlap, and the launch helper
                     // validates runtime residency and prepares the exclusive output write.
                     |client, count, dim, out, input| unsafe {
-                        elementwise::$kernel::launch_unchecked::<$ty, CubeclCudaRuntime>(
+                        elementwise::$kernel::launch_unchecked::<$ty>(
                             client, count, dim, out, input,
                         );
                     },
@@ -4605,7 +4605,7 @@ impl CudaBackend {
                     // SAFETY: launch_binary_views validates equal shapes, zero-offset
                     // compact layouts and residency, and allocates an independent output.
                     |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::$kernel::launch_unchecked::<$ty, CubeclCudaRuntime>(
+                        elementwise::$kernel::launch_unchecked::<$ty>(
                             client, count, dim, out, lhs_arg, rhs_arg,
                         );
                     },
@@ -4635,7 +4635,7 @@ impl CudaBackend {
                     // zero-offset compact layouts and residency, and allocates an
                     // independent output; the parts kernel guards its index domain.
                     |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::div_complex_parts::launch_unchecked::<$float, CubeclCudaRuntime>(
+                        elementwise::div_complex_parts::launch_unchecked::<$float>(
                             client, count, dim, out, lhs_arg, rhs_arg,
                         );
                     },
@@ -4735,7 +4735,7 @@ impl CudaBackend {
                             // SAFETY: launch_unary_view validates the shape, zero-offset
                             // compact layout and residency, and allocates a fresh output.
                             |client, count, dim, out, input_arg| unsafe {
-                                elementwise::$kernel::launch_unchecked::<$ty, CubeclCudaRuntime>(
+                                elementwise::$kernel::launch_unchecked::<$ty>(
                                     client, count, dim, out, input_arg,
                                 );
                             },
@@ -4947,7 +4947,7 @@ where
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-            elementwise::broadcast_multiply_float::launch_unchecked::<T, CubeclCudaRuntime>(
+            elementwise::broadcast_multiply_float::launch_unchecked::<T>(
                 client,
                 count,
                 dim,
@@ -4986,7 +4986,7 @@ where
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-            elementwise::broadcast_multiply_int::launch_unchecked::<T, CubeclCudaRuntime>(
+            elementwise::broadcast_multiply_int::launch_unchecked::<T>(
                 client,
                 count,
                 dim,
@@ -5025,7 +5025,7 @@ where
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-            elementwise::broadcast_multiply_complex::launch_unchecked::<T, CubeclCudaRuntime>(
+            elementwise::broadcast_multiply_complex::launch_unchecked::<T>(
                 client,
                 count,
                 dim,

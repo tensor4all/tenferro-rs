@@ -149,7 +149,7 @@ pub(super) fn conj_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> cra
                 tensor.shape(),
                 op,
                 |client, count, dim, out, input_arg| unsafe {
-                    elementwise::conj_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
+                    elementwise::conj_complex::launch_unchecked::<Complex32>(
                         client, count, dim, out, input_arg,
                     );
                 },
@@ -164,7 +164,7 @@ pub(super) fn conj_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> cra
                 tensor.shape(),
                 op,
                 |client, count, dim, out, input_arg| unsafe {
-                    elementwise::conj_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
+                    elementwise::conj_complex::launch_unchecked::<Complex64>(
                         client, count, dim, out, input_arg,
                     );
                 },
@@ -209,7 +209,7 @@ pub(super) fn div_read(
             typed_or_unsupported::<f32>(rhs, op)?,
             op,
             |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                elementwise::scalar_div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                elementwise::scalar_div_float::launch_unchecked::<f32>(
                     client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
                 );
             },
@@ -222,7 +222,7 @@ pub(super) fn div_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                elementwise::div_float::launch_unchecked::<f32>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -234,7 +234,7 @@ pub(super) fn div_read(
             typed_or_unsupported::<f64>(rhs, op)?,
             op,
             |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                elementwise::scalar_div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                elementwise::scalar_div_float::launch_unchecked::<f64>(
                     client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
                 );
             },
@@ -247,7 +247,7 @@ pub(super) fn div_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                elementwise::div_float::launch_unchecked::<f64>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -262,7 +262,7 @@ pub(super) fn div_read(
                 crate::DType::I32,
                 CheckedIntegerDomain::DivisionByZero,
                 |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
-                    elementwise::scalar_div_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                    elementwise::scalar_div_int_checked::launch_unchecked::<i32>(
                         client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
                     );
                 },
@@ -277,7 +277,7 @@ pub(super) fn div_read(
             crate::DType::I32,
             CheckedIntegerDomain::DivisionByZero,
             |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
-                elementwise::div_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                elementwise::div_int_checked::launch_unchecked::<i32>(
                     client, count, dim, out, lhs_arg, rhs_arg, err_arg,
                 );
             },
@@ -292,7 +292,7 @@ pub(super) fn div_read(
                 crate::DType::I64,
                 CheckedIntegerDomain::DivisionByZero,
                 |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
-                    elementwise::scalar_div_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                    elementwise::scalar_div_int_checked::launch_unchecked::<i64>(
                         client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
                     );
                 },
@@ -307,7 +307,7 @@ pub(super) fn div_read(
             crate::DType::I64,
             CheckedIntegerDomain::DivisionByZero,
             |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
-                elementwise::div_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                elementwise::div_int_checked::launch_unchecked::<i64>(
                     client, count, dim, out, lhs_arg, rhs_arg, err_arg,
                 );
             },
@@ -320,7 +320,7 @@ pub(super) fn div_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::div_complex_parts::launch_unchecked::<f32, CubeclCudaRuntime>(
+                elementwise::div_complex_parts::launch_unchecked::<f32>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -333,7 +333,7 @@ pub(super) fn div_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::div_complex_parts::launch_unchecked::<f64, CubeclCudaRuntime>(
+                elementwise::div_complex_parts::launch_unchecked::<f64>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -492,7 +492,7 @@ pub(super) fn compare_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::compare_float_bool::launch_unchecked::<f32, CubeclCudaRuntime>(
+                elementwise::compare_float_bool::launch_unchecked::<f32>(
                     client,
                     count,
                     dim,
@@ -511,7 +511,7 @@ pub(super) fn compare_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::compare_float_bool::launch_unchecked::<f64, CubeclCudaRuntime>(
+                elementwise::compare_float_bool::launch_unchecked::<f64>(
                     client,
                     count,
                     dim,
@@ -530,7 +530,7 @@ pub(super) fn compare_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::compare_int_bool::launch_unchecked::<i32, CubeclCudaRuntime>(
+                elementwise::compare_int_bool::launch_unchecked::<i32>(
                     client,
                     count,
                     dim,
@@ -549,7 +549,7 @@ pub(super) fn compare_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::compare_int_bool::launch_unchecked::<i64, CubeclCudaRuntime>(
+                elementwise::compare_int_bool::launch_unchecked::<i64>(
                     client,
                     count,
                     dim,
@@ -597,7 +597,7 @@ pub(super) fn select_read(
                 pred.shape(),
                 op,
                 |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                    elementwise::select_bool_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                    elementwise::select_bool_float::launch_unchecked::<f32>(
                         client, count, dim, out, pred_arg, true_arg, false_arg,
                     );
                 },
@@ -616,7 +616,7 @@ pub(super) fn select_read(
                 pred.shape(),
                 op,
                 |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                    elementwise::select_bool_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                    elementwise::select_bool_float::launch_unchecked::<f64>(
                         client, count, dim, out, pred_arg, true_arg, false_arg,
                     );
                 },
@@ -635,7 +635,7 @@ pub(super) fn select_read(
                 pred.shape(),
                 op,
                 |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                    elementwise::select_bool_int::launch_unchecked::<i32, CubeclCudaRuntime>(
+                    elementwise::select_bool_int::launch_unchecked::<i32>(
                         client, count, dim, out, pred_arg, true_arg, false_arg,
                     );
                 },
@@ -654,7 +654,7 @@ pub(super) fn select_read(
                 pred.shape(),
                 op,
                 |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                    elementwise::select_bool_int::launch_unchecked::<i64, CubeclCudaRuntime>(
+                    elementwise::select_bool_int::launch_unchecked::<i64>(
                         client, count, dim, out, pred_arg, true_arg, false_arg,
                     );
                 },
@@ -698,7 +698,7 @@ pub(super) fn clamp_read(
                 input.shape(),
                 op,
                 |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
-                    elementwise::clamp_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                    elementwise::clamp_float::launch_unchecked::<f32>(
                         client, count, dim, out, input_arg, lower_arg, upper_arg,
                     );
                 },
@@ -717,7 +717,7 @@ pub(super) fn clamp_read(
                 input.shape(),
                 op,
                 |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
-                    elementwise::clamp_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                    elementwise::clamp_float::launch_unchecked::<f64>(
                         client, count, dim, out, input_arg, lower_arg, upper_arg,
                     );
                 },
@@ -743,7 +743,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
             typed_or_unsupported::<f32>(rhs, op)?,
             op,
             |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                elementwise::scalar_rem_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                elementwise::scalar_rem_float::launch_unchecked::<f32>(
                     client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
                 );
             },
@@ -756,7 +756,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::rem_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                elementwise::rem_float::launch_unchecked::<f32>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -768,7 +768,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
             typed_or_unsupported::<f64>(rhs, op)?,
             op,
             |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                elementwise::scalar_rem_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                elementwise::scalar_rem_float::launch_unchecked::<f64>(
                     client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
                 );
             },
@@ -781,7 +781,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::rem_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                elementwise::rem_float::launch_unchecked::<f64>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -796,7 +796,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
                 crate::DType::I32,
                 CheckedIntegerDomain::DivisionByZero,
                 |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
-                    elementwise::scalar_rem_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                    elementwise::scalar_rem_int_checked::launch_unchecked::<i32>(
                         client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
                     );
                 },
@@ -811,7 +811,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
             crate::DType::I32,
             CheckedIntegerDomain::DivisionByZero,
             |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
-                elementwise::rem_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                elementwise::rem_int_checked::launch_unchecked::<i32>(
                     client, count, dim, out, lhs_arg, rhs_arg, err_arg,
                 );
             },
@@ -826,7 +826,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
                 crate::DType::I64,
                 CheckedIntegerDomain::DivisionByZero,
                 |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
-                    elementwise::scalar_rem_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                    elementwise::scalar_rem_int_checked::launch_unchecked::<i64>(
                         client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
                     );
                 },
@@ -841,7 +841,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
             crate::DType::I64,
             CheckedIntegerDomain::DivisionByZero,
             |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
-                elementwise::rem_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                elementwise::rem_int_checked::launch_unchecked::<i64>(
                     client, count, dim, out, lhs_arg, rhs_arg, err_arg,
                 );
             },
@@ -971,7 +971,7 @@ pub(super) fn pow_read(
             typed_or_unsupported::<f32>(rhs, op)?,
             op,
             |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                elementwise::scalar_pow_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                elementwise::scalar_pow_float::launch_unchecked::<f32>(
                     client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
                 );
             },
@@ -984,7 +984,7 @@ pub(super) fn pow_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::pow_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                elementwise::pow_float::launch_unchecked::<f32>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -996,7 +996,7 @@ pub(super) fn pow_read(
             typed_or_unsupported::<f64>(rhs, op)?,
             op,
             |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
-                elementwise::scalar_pow_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                elementwise::scalar_pow_float::launch_unchecked::<f64>(
                     client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
                 );
             },
@@ -1009,7 +1009,7 @@ pub(super) fn pow_read(
             lhs.shape(),
             op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                elementwise::pow_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                elementwise::pow_float::launch_unchecked::<f64>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -1024,7 +1024,7 @@ pub(super) fn pow_read(
                 crate::DType::I32,
                 CheckedIntegerDomain::NegativeExponent,
                 |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
-                    elementwise::scalar_pow_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                    elementwise::scalar_pow_int_checked::launch_unchecked::<i32>(
                         client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
                     );
                 },
@@ -1039,7 +1039,7 @@ pub(super) fn pow_read(
             crate::DType::I32,
             CheckedIntegerDomain::NegativeExponent,
             |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
-                elementwise::pow_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                elementwise::pow_int_checked::launch_unchecked::<i32>(
                     client, count, dim, out, lhs_arg, rhs_arg, err_arg,
                 );
             },
@@ -1054,7 +1054,7 @@ pub(super) fn pow_read(
                 crate::DType::I64,
                 CheckedIntegerDomain::NegativeExponent,
                 |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
-                    elementwise::scalar_pow_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                    elementwise::scalar_pow_int_checked::launch_unchecked::<i64>(
                         client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
                     );
                 },
@@ -1069,7 +1069,7 @@ pub(super) fn pow_read(
             crate::DType::I64,
             CheckedIntegerDomain::NegativeExponent,
             |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
-                elementwise::pow_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                elementwise::pow_int_checked::launch_unchecked::<i64>(
                     client, count, dim, out, lhs_arg, rhs_arg, err_arg,
                 );
             },

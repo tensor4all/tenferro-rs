@@ -953,7 +953,7 @@ where
         // allocation, the view layout was validated as reachable and injective
         // when the view was created, and the launch domain visits each logical
         // coordinate of the region exactly once.
-        crate::kernels::structural::fill_zero_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+        crate::kernels::structural::fill_zero_view_kernel::launch_unchecked::<T>(
             rt.client(),
             count,
             dim,

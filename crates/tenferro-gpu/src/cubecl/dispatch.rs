@@ -8,10 +8,10 @@ use crate::types::{
     Tensor, TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::{
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
     CapabilityAxis, CapabilityQuery, DType, DeviceAccessError, DeviceAccessRequest,
     PreparedDeviceAccess, TensorBackendCapability as TensorBackendCapabilityTrait, TensorScalar,
 };
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 /// The Rust scalar type behind a preset variant name a macro received.
 #[allow(unused_macros)]
@@ -1499,7 +1499,7 @@ macro_rules! launch_binary_elementwise_kernel {
             $lhs.shape(),
             $op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CubeclCudaRuntime>(
+                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -1516,7 +1516,7 @@ macro_rules! launch_unary_elementwise_kernel {
             $input.shape(),
             $op,
             |client, count, dim, out, input_arg| unsafe {
-                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CubeclCudaRuntime>(
+                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar>(
                     client, count, dim, out, input_arg,
                 );
             },

@@ -25,7 +25,7 @@ fn strided_view_offset_from_tensor<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
+pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut [E]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = zero_value::<E>();
     }
@@ -39,7 +39,7 @@ pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
 /// of a given rank.
 #[cube(launch_unchecked)]
 pub fn fill_zero_view_kernel<E: CubePrimitive>(
-    out: &mut Array<E>,
+    out: &mut [E],
     dims: Sequence<usize>,
     strides: Sequence<i64>,
     base_offset: i64,
@@ -61,7 +61,7 @@ pub fn fill_zero_view_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn copy_bool_kernel(out: &mut Array<u8>, input: &Array<u8>) {
+pub fn copy_bool_kernel(out: &mut [u8], input: &[u8]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS];
     }
@@ -71,7 +71,7 @@ pub fn copy_bool_kernel(out: &mut Array<u8>, input: &Array<u8>) {
 /// `out[i] *= factor[0]`. Used by the dot-general accumulation path for the
 /// degenerate `out = beta * out` case (zero-sized contraction).
 #[cube(launch_unchecked)]
-pub fn scale_in_place_float_kernel<F: Float>(out: &mut Array<F>, factor: &Array<F>) {
+pub fn scale_in_place_float_kernel<F: Float>(out: &mut [F], factor: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = out[ABSOLUTE_POS] * factor[0];
     }
@@ -79,7 +79,7 @@ pub fn scale_in_place_float_kernel<F: Float>(out: &mut Array<F>, factor: &Array<
 
 /// Complex twin of [`scale_in_place_float_kernel`].
 #[cube(launch_unchecked)]
-pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut Array<C>, factor: &Array<C>) {
+pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut [C], factor: &[C]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = out[ABSOLUTE_POS] * factor[0];
     }
@@ -91,8 +91,8 @@ pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut Array<C>, factor:
 /// arguments, so one module serves every layout of a given rank.
 #[cube(launch_unchecked)]
 pub fn materialize_strided_kernel<E: CubePrimitive>(
-    dst: &mut Array<E>,
-    src: &Array<E>,
+    dst: &mut [E],
+    src: &[E],
     dims: Sequence<usize>,
     src_strides: Sequence<i64>,
     src_offset: i64,
@@ -122,8 +122,8 @@ pub fn materialize_strided_kernel<E: CubePrimitive>(
 /// CUDA launches [`materialize_strided_kernel`] instead.
 #[cube(launch_unchecked)]
 pub fn materialize_strided_comptime_layout_kernel<E: CubePrimitive>(
-    dst: &mut Array<E>,
-    src: &Array<E>,
+    dst: &mut [E],
+    src: &[E],
     #[comptime] dims: Sequence<usize>,
     #[comptime] src_strides: Sequence<i64>,
     src_offset: i64,
@@ -153,8 +153,8 @@ pub fn materialize_strided_comptime_layout_kernel<E: CubePrimitive>(
 /// compile-time algorithm configuration.
 #[cube(launch_unchecked)]
 pub fn tiled_transpose_kernel<E: CubePrimitive>(
-    dst: &mut Array<E>,
-    src: &Array<E>,
+    dst: &mut [E],
+    src: &[E],
     src_offset: usize,
     batch_stride: usize,
     dst_fast_extent: usize,
@@ -165,7 +165,7 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
     #[comptime] vector_width: usize,
 ) {
     let pitch = tile + padding;
-    let mut shared = SharedMemory::<E>::new(tile * pitch);
+    let mut shared = Shared::new_slice(tile * pitch);
     let unit_x = UNIT_POS_X as usize;
     let unit_y = UNIT_POS_Y as usize;
     // The destination tiles advance along `x`, so a block's neighbours along the
@@ -216,8 +216,8 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
 /// [`tiled_transpose_kernel`] instead.
 #[cube(launch_unchecked)]
 pub fn tiled_transpose_comptime_layout_kernel<E: CubePrimitive>(
-    dst: &mut Array<E>,
-    src: &Array<E>,
+    dst: &mut [E],
+    src: &[E],
     src_offset: usize,
     #[comptime] batch_stride: usize,
     #[comptime] dst_fast_extent: usize,
@@ -228,7 +228,7 @@ pub fn tiled_transpose_comptime_layout_kernel<E: CubePrimitive>(
     #[comptime] vector_width: usize,
 ) {
     let pitch = tile + padding;
-    let mut shared = SharedMemory::<E>::new(tile * pitch);
+    let mut shared = Shared::new_slice(tile * pitch);
     let unit_x = UNIT_POS_X as usize;
     let unit_y = UNIT_POS_Y as usize;
     // The destination tiles advance along `x`, so a block's neighbours along the
@@ -273,7 +273,7 @@ pub fn tiled_transpose_comptime_layout_kernel<E: CubePrimitive>(
 
 #[cube(launch_unchecked)]
 pub fn contiguous_to_view_kernel<E: CubePrimitive>(
-    dst: &mut Array<E>,
+    dst: &mut [E],
     src: &Tensor<E>,
     strides: Sequence<i64>,
     base_offset: i64,
@@ -288,8 +288,8 @@ pub fn contiguous_to_view_kernel<E: CubePrimitive>(
 
 #[cube(launch_unchecked)]
 pub fn strided_to_strided_kernel<E: CubePrimitive>(
-    dst: &mut Array<E>,
-    src: &Array<E>,
+    dst: &mut [E],
+    src: &[E],
     dims: Sequence<usize>,
     src_strides: Sequence<i64>,
     dst_strides: Sequence<i64>,
@@ -339,21 +339,21 @@ pub fn broadcast_in_dim_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_float_to_float<Out: Float, In: Float>(out: &mut Array<Out>, input: &Array<In>) {
+pub fn convert_float_to_float<Out: Float, In: Float>(out: &mut [Out], input: &[In]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_numeric<Out: Numeric, In: Numeric>(out: &mut Array<Out>, input: &Array<In>) {
+pub fn convert_numeric<Out: Numeric, In: Numeric>(out: &mut [Out], input: &[In]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_numeric_to_bool<In: Numeric>(out: &mut Array<u8>, input: &Array<In>) {
+pub fn convert_numeric_to_bool<In: Numeric>(out: &mut [u8], input: &[In]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = if input[ABSOLUTE_POS] != In::from_int(0) {
             1u8
@@ -364,7 +364,7 @@ pub fn convert_numeric_to_bool<In: Numeric>(out: &mut Array<u8>, input: &Array<I
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_bool_to_numeric<Out: Numeric>(out: &mut Array<Out>, input: &Array<u8>) {
+pub fn convert_bool_to_numeric<Out: Numeric>(out: &mut [Out], input: &[u8]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
     }
@@ -372,8 +372,8 @@ pub fn convert_bool_to_numeric<Out: Numeric>(out: &mut Array<Out>, input: &Array
 
 #[cube(launch_unchecked)]
 pub fn convert_numeric_to_complex_raw<Out: Float, In: Numeric>(
-    out: &mut Array<Out>,
-    input: &Array<In>,
+    out: &mut [Out],
+    input: &[In],
 ) {
     if ABSOLUTE_POS < input.len() {
         out[ABSOLUTE_POS * 2] = Out::cast_from(input[ABSOLUTE_POS]);
@@ -382,7 +382,7 @@ pub fn convert_numeric_to_complex_raw<Out: Float, In: Numeric>(
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_bool_to_complex_raw<Out: Float>(out: &mut Array<Out>, input: &Array<u8>) {
+pub fn convert_bool_to_complex_raw<Out: Float>(out: &mut [Out], input: &[u8]) {
     if ABSOLUTE_POS < input.len() {
         out[ABSOLUTE_POS * 2] = Out::cast_from(input[ABSOLUTE_POS]);
         out[ABSOLUTE_POS * 2 + 1] = Out::new(0.0f32);
@@ -391,8 +391,8 @@ pub fn convert_bool_to_complex_raw<Out: Float>(out: &mut Array<Out>, input: &Arr
 
 #[cube(launch_unchecked)]
 pub fn convert_complex_to_numeric<Out: Numeric, In: ComplexCore>(
-    out: &mut Array<Out>,
-    input: &Array<In>,
+    out: &mut [Out],
+    input: &[In],
 ) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS].real_val());
@@ -400,7 +400,7 @@ pub fn convert_complex_to_numeric<Out: Numeric, In: ComplexCore>(
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_complex_raw_to_bool<F: Float>(out: &mut Array<u8>, input: &Array<F>) {
+pub fn convert_complex_raw_to_bool<F: Float>(out: &mut [u8], input: &[F]) {
     if ABSOLUTE_POS < out.len() {
         let real = input[ABSOLUTE_POS * 2];
         let imag = input[ABSOLUTE_POS * 2 + 1];
@@ -416,8 +416,8 @@ pub fn convert_complex_raw_to_bool<F: Float>(out: &mut Array<u8>, input: &Array<
 pub fn validate_real_cast<
     F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>,
 >(
-    input: &Array<F>,
-    flag: &mut Array<Atomic<u32>>,
+    input: &[F],
+    flag: &mut [Atomic<u32>],
     min: F,
     max: F,
     #[comptime] stride: usize,
@@ -438,9 +438,9 @@ pub fn validate_real_cast<
 
 #[cube(launch_unchecked)]
 pub fn extract_invalid_real_cast<F: Float>(
-    input: &Array<F>,
-    flag: &Array<Atomic<u32>>,
-    values: &mut Array<F>,
+    input: &[F],
+    flag: &[Atomic<u32>],
+    values: &mut [F],
     #[comptime] stride: usize,
 ) {
     if ABSOLUTE_POS == 0 {
@@ -452,28 +452,28 @@ pub fn extract_invalid_real_cast<F: Float>(
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_c32_to_f32(out: &mut Array<f32>, input: &Array<Complex32>) {
+pub fn convert_c32_to_f32(out: &mut [f32], input: &[Complex32]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].real_val();
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_c32_to_f64(out: &mut Array<f64>, input: &Array<Complex32>) {
+pub fn convert_c32_to_f64(out: &mut [f64], input: &[Complex32]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = f64::cast_from(input[ABSOLUTE_POS].real_val());
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_c64_to_f32(out: &mut Array<f32>, input: &Array<Complex64>) {
+pub fn convert_c64_to_f32(out: &mut [f32], input: &[Complex64]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = f32::cast_from(input[ABSOLUTE_POS].real_val());
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_c64_to_f64(out: &mut Array<f64>, input: &Array<Complex64>) {
+pub fn convert_c64_to_f64(out: &mut [f64], input: &[Complex64]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].real_val();
     }
@@ -484,7 +484,7 @@ pub fn convert_c64_to_f64(out: &mut Array<f64>, input: &Array<Complex64>) {
 /// These write interleaved (re, im) pairs to the output buffer viewed as
 /// raw floats. Output array has 2x the length of input (re, 0, re, 0, ...).
 #[cube(launch_unchecked)]
-pub fn convert_f32_to_c32_raw(out: &mut Array<f32>, input: &Array<f32>) {
+pub fn convert_f32_to_c32_raw(out: &mut [f32], input: &[f32]) {
     if ABSOLUTE_POS < input.len() {
         let re = input[ABSOLUTE_POS];
         out[ABSOLUTE_POS * 2] = re;
@@ -493,7 +493,7 @@ pub fn convert_f32_to_c32_raw(out: &mut Array<f32>, input: &Array<f32>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_f32_to_c64_raw(out: &mut Array<f64>, input: &Array<f32>) {
+pub fn convert_f32_to_c64_raw(out: &mut [f64], input: &[f32]) {
     if ABSOLUTE_POS < input.len() {
         let re = f64::cast_from(input[ABSOLUTE_POS]);
         out[ABSOLUTE_POS * 2] = re;
@@ -502,7 +502,7 @@ pub fn convert_f32_to_c64_raw(out: &mut Array<f64>, input: &Array<f32>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_f64_to_c32_raw(out: &mut Array<f32>, input: &Array<f64>) {
+pub fn convert_f64_to_c32_raw(out: &mut [f32], input: &[f64]) {
     if ABSOLUTE_POS < input.len() {
         let re = f32::cast_from(input[ABSOLUTE_POS]);
         out[ABSOLUTE_POS * 2] = re;
@@ -511,7 +511,7 @@ pub fn convert_f64_to_c32_raw(out: &mut Array<f32>, input: &Array<f64>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_f64_to_c64_raw(out: &mut Array<f64>, input: &Array<f64>) {
+pub fn convert_f64_to_c64_raw(out: &mut [f64], input: &[f64]) {
     if ABSOLUTE_POS < input.len() {
         let re = input[ABSOLUTE_POS];
         out[ABSOLUTE_POS * 2] = re;
@@ -521,8 +521,8 @@ pub fn convert_f64_to_c64_raw(out: &mut Array<f64>, input: &Array<f64>) {
 
 #[cube(launch_unchecked)]
 pub fn convert_complex_to_complex<Out: ComplexCore, In: ComplexCore>(
-    out: &mut Array<Out>,
-    input: &Array<In>,
+    out: &mut [Out],
+    input: &[In],
 ) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
@@ -530,7 +530,7 @@ pub fn convert_complex_to_complex<Out: ComplexCore, In: ComplexCore>(
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_complex_raw<Out: Float, In: Float>(out: &mut Array<Out>, input: &Array<In>) {
+pub fn convert_complex_raw<Out: Float, In: Float>(out: &mut [Out], input: &[In]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
     }

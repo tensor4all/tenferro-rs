@@ -11,8 +11,8 @@ use crate::kernels::helpers::{
 
 #[cube(launch_unchecked)]
 pub fn init_float_index_validation_flag<F: Float>(
-    flag: &mut Array<Atomic<u32>>,
-    flag_values: &mut Array<F>,
+    flag: &mut [Atomic<u32>],
+    flag_values: &mut [F],
 ) {
     // INVARIANT: exactly one worker initializes two scalar validation outputs; this is O(1)
     // setup and does not perform tensor-sized serial work.
@@ -27,7 +27,7 @@ pub fn validate_float_indices_kernel<
     F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>,
 >(
     indices: &Tensor<F>,
-    flag: &mut Array<Atomic<u32>>,
+    flag: &mut [Atomic<u32>],
     max_exact_integer: F,
 ) {
     if ABSOLUTE_POS < indices.len() {
@@ -46,8 +46,8 @@ pub fn validate_float_indices_kernel<
 #[cube(launch_unchecked)]
 pub fn extract_invalid_float_index_kernel<F: Float>(
     indices: &Tensor<F>,
-    flag: &Array<Atomic<u32>>,
-    flag_values: &mut Array<F>,
+    flag: &[Atomic<u32>],
+    flag_values: &mut [F],
 ) {
     // INVARIANT: exactly one worker reads the scalar flag and, when invalid, extracts one
     // selected index value; this is O(1) work and does not scan the tensor serially.
@@ -81,7 +81,7 @@ pub(crate) fn clamp_window_start<I: Numeric + CubePrimitive>(
 #[cube]
 pub(crate) fn index_component<I: Numeric + CubePrimitive>(
     indices: &Tensor<I>,
-    batch_idx: &Array<usize>,
+    batch_idx: &[usize],
     #[comptime] index_vector_dim: usize,
     #[comptime] component: usize,
     #[comptime] rank: usize,
@@ -350,7 +350,7 @@ pub fn scatter_copy_kernel<E: CubePrimitive>(out: &mut Tensor<E>, operand: &Tens
 pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
     // Atomic<E> is a CubeCL storage view over the same dense output allocation;
     // the host launch path gates it with `ensure_atomic_add_supported`.
-    out_parts: &mut Array<Atomic<E>>,
+    out_parts: &mut [Atomic<E>],
     operand: &Tensor<E>,
     scatter_indices: &Tensor<I>,
     updates: &Tensor<E>,
@@ -453,11 +453,11 @@ pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
 
 #[cube(launch_unchecked)]
 pub fn scatter_complex_kernel<E: ComplexCore, F: Float, I: Numeric + CubePrimitive>(
-    out_parts: &mut Array<Atomic<F>>,
+    out_parts: &mut [Atomic<F>],
     operand: &Tensor<E>,
     scatter_indices: &Tensor<I>,
     updates: &Tensor<E>,
-    update_parts: &Array<F>,
+    update_parts: &[F],
     #[comptime] window_dims: Sequence<usize>,
     #[comptime] update_window_dims: Sequence<usize>,
     #[comptime] scatter_dims_to_operand_dims: Sequence<usize>,
