@@ -594,7 +594,7 @@ impl NativeStridedSourcePlan {
 
 /// Scalar-family dispatch for the cuBLAS BLAS1 bindings.
 pub(super) trait CublasScalar:
-    CubeElement + CubePrimitive + TensorScalar + Clone + Default + Send + Sync + 'static
+    CubeElement + CubePrimitive + Scalar + TensorScalar + Clone + Default + Send + Sync + 'static
 {
     /// Real accumulator scalar: `Self` for real dtypes, the underlying real
     /// float for complex dtypes.

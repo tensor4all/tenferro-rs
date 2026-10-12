@@ -165,7 +165,7 @@ pub(super) fn plan_workspace(
     }
 }
 
-trait CutensorScalar: CubeElement + TensorScalar + CubePrimitive + Clone + One + Zero {
+trait CutensorScalar: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone + One + Zero {
     const DATA_TYPE: CudaDataType;
     const DTYPE: DType;
     const IS_COMPLEX: bool;
