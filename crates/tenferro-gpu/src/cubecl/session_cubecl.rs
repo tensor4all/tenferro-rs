@@ -148,7 +148,7 @@ impl<'s> Session<'s> {
     /// ```
     pub fn alloc_zero_output<T>(&self, shape: &[usize]) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+        T: CubeElement + CubePrimitive + TensorScalar + Scalar + Clone + Send + Sync + 'static,
     {
         super::interop::alloc_zero_output(&self.runtime, shape)
     }

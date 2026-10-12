@@ -473,6 +473,7 @@ impl<'s> Session<'s> {
     where
         T: cubecl::prelude::CubeElement
             + tenferro_tensor::TensorScalar
+            + cubecl::frontend::Scalar
             + Clone
             + Send
             + Sync

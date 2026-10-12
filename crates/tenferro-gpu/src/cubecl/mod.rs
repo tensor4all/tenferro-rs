@@ -775,8 +775,8 @@ impl CudaBackend {
                     client,
                     count,
                     dim,
-                    out.into_array_arg(),
-                    input_arg.into_array_arg(),
+                    out.into_buffer_arg(),
+                    input_arg.into_buffer_arg(),
                 );
             },
         )
@@ -2673,6 +2673,7 @@ impl CudaBackend {
         T: CubeElement
             + CubePrimitive
             + tenferro_tensor::TensorScalar
+            + Scalar
             + Clone
             + Send
             + Sync
