@@ -162,9 +162,12 @@ C++ native `log1pf`, as the fork had). Both need the user's approval as
 
 `python3 scripts/ci/run_profile.py fmt` — clean.
 `bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -j 4 -p
-tenferro-gpu --features cuda --lib -- --ignored --test-threads=4'` — the cheap
-checks pass (`git diff --check`, doc-snippets, session-entry audit, fmt) and its
-`clippy` profile then fails, because `cargo clippy --workspace --all-targets`
-unifies features and therefore builds the webgpu module, which still has the
-decision-gated errors below. Both commands were run with `CARGO_BUILD_JOBS=4`
-and the A100 environment above.
+tenferro-gpu --features cuda --lib -- --ignored --test-threads=4'` — **not yet
+clean**, and it cannot be until the webgpu feature compiles. The cheap checks
+pass (`git diff --check`, doc-snippets, session-entry audit, fmt); the `clippy`
+profile then fails at `cargo clippy --workspace --all-targets -- -D warnings` on
+the ten webgpu errors recorded in
+[cubecl-011-webgpu-state.md](./cubecl-011-webgpu-state.md), because workspace
+feature unification builds that module. For `--features cuda` alone the same
+clippy invocation is clean. Both commands ran with `CARGO_BUILD_JOBS=4` and the
+A100 environment above.
