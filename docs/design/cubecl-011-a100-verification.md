@@ -15,8 +15,16 @@ LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$
   cargo test -j 4 -p tenferro-gpu --features cuda --lib -- --ignored --test-threads=4
 ```
 
-Result of the latest run: `201 passed; 8 failed; 0 ignored; 109 filtered out;
-finished in 52.71s` (the first run was 199/10).
+Latest run: `202 passed; 7 failed; 0 ignored; 109 filtered out; finished in
+52.96s` (the first run was 199/10). The integration targets were run too
+(`--ignored --test-threads=4`): pending_upload 6/6, pending_download 7/7,
+source_publication 7/7, chunked_staging 4/4, held_cuda_session 7/7, blas1_cuda
+10/11 — 34 passed, 1 failed, and that failure is the complex-FMA defect below.
+The transfer paths the `check_errors` retirement touched are all green.
+
+`KernelLauncher`-side region lengths: the flat scale kernels now take the region
+length as an explicit argument, which fixes the scale view test; the contract gap
+itself (item 4) is recorded below.
 `--features cuda` builds clean (0 errors, 0 warnings) and the whole fusion test
 set (12 tests) passes, including the multi-output and NaN-propagation cases.
 
