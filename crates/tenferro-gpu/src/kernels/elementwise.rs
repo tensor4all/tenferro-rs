@@ -233,8 +233,8 @@ macro_rules! scalar_binary_float_kernel {
             #[comptime] lhs_scalar: bool,
         ) {
             if ABSOLUTE_POS < out.len() {
-                let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
-                let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+                let lhs_idx = if lhs_scalar { 0usize.runtime() } else { ABSOLUTE_POS };
+                let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0usize.runtime() };
                 let $lhs = lhs[lhs_idx];
                 let $rhs = rhs[rhs_idx];
                 out[ABSOLUTE_POS] = $body;
@@ -331,8 +331,8 @@ pub fn scalar_div_int_checked<I: Int>(
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let lhs_idx = if lhs_scalar { 0usize.runtime() } else { ABSOLUTE_POS };
+        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0usize.runtime() };
         let x = lhs[lhs_idx];
         let y = rhs[rhs_idx];
         let zero = I::new(0);
@@ -357,8 +357,8 @@ pub fn scalar_rem_int_checked<I: Int>(
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let lhs_idx = if lhs_scalar { 0usize.runtime() } else { ABSOLUTE_POS };
+        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0usize.runtime() };
         let x = lhs[lhs_idx];
         let y = rhs[rhs_idx];
         let zero = I::new(0);
@@ -640,8 +640,8 @@ pub fn scalar_pow_int_checked<I: Int>(
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let lhs_idx = if lhs_scalar { 0usize.runtime() } else { ABSOLUTE_POS };
+        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0usize.runtime() };
         let zero = I::new(0);
         let one = I::new(1);
         let two = I::new(2);
