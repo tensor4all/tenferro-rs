@@ -67,3 +67,33 @@ Nothing is pushed to `tracel-ai/*` or filed before both. The arithmetic fix
 series is already in that shape and pushed as
 `tensor4all/cubecl` `feat/tenferro-upstream-arith-fixes` (`daf31e033`, four
 single-file commits on `6bba5fdf`).
+
+## Gate met: the rebased run
+
+Base decided as upstream `main` `6bba5fdf` (the Mac ports are built on it; the
+`v0.11.0` tag is 25 commits behind with 105 files changed in the port-target
+crates). Against `local/ports-011-combined` @ `2747c68a1` — `6bba5fdf` + three
+wgpu host-visible commits + the CUDA-interop port + two arithmetic fixes + sized
+`BoolType` + native `log1p` — on the A100:
+
+- `cargo check -j 4 -p tenferro-gpu --features cuda` — 0 errors
+- `cargo check -j 4 -p tenferro-gpu --features cuda,webgpu` — 0 errors
+- CUDA lib tests **209 passed / 0 failed**; integration **45 passed / 0 failed**
+
+Consumer-side fixes are on `migration/cubecl-0.11-upstream` @ `a8ae113d1`.
+Metal evidence: #2114.
+
+## Candidates and what each still needs
+
+| # | branch | content | open item |
+| --- | --- | --- | --- |
+| 1 | `feat/tenferro-upstream-arith-fixes` `5941a32b9` | sound folds; FMA stays real | a test per commit |
+| 2 | (from the Mac stack) | CUDA interop | split into server interop + complex plane reductions (`with_server` hunk already absent) |
+| 3 | `feat/tenferro-upstream-log1p-native` `c02cc079a` | native `log1p` in C++/LLVM, polyfill only for Metal | upstream accuracy test |
+| 4 | `feat/tenferro-upstream-bool-buffers` `5d0fa26b5` | sized `BoolType` | part 2: the refusal (narrow the wgpu tables, shared compile-time check, tests) |
+| 5 | `feat/tenferro-upstream-host-visible` `3098a1558` | completion, primary memory, device-server accessor | — |
+| 6 | cubek `feat/tenferro-upstream-kernels`, `...-interleaved-fft` | matmul C32, interleaved FFT | — |
+
+Each goes through the gpt-6.1-sol review and then the user's approval before
+filing.
+
