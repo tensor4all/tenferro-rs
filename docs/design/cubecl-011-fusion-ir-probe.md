@@ -41,6 +41,18 @@ and `scope.register(&if_op)` — the shape at
 `cubecl-core/src/frontend/branch.rs:106–117`. The 0.10 `Branch::If` /
 argumentless `scope.child()` pair no longer exists.
 
+Whole-definition reference: upstream 0.11 already ships a test that hand-builds a
+kernel scope with exactly this primitive set —
+`cubecl-opt/tests/visibility.rs:15–90`. It pins the entry point
+(`Scope::root(KernelSettings::new(cube_dim, execution_mode, address_type))`),
+buffer registration (`scope.global(id, None, ty)` and `KernelBuilder::buffer(ty)`),
+an index constant (`scope.const_usize`), the access chain
+(`IndexOp::new(ctx, base, index, None)` → `register_with_result`, then
+`LoadOp::new(ctx, ptr)` / `StoreOp::new(ctx, ptr, value)`), and how a scope is
+finished (`scope.into_context()` / `scope.state()`). Use it as the shape model
+rather than the 0.10 file's structure; the emitter then becomes the same
+sequence driven by the plan.
+
 Every operation the fusion plan can emit exists as a public dialect op:
 
 | tenferro `ElementwiseFusionOp` / kernel need | 0.11 op |
