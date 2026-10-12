@@ -3700,7 +3700,7 @@ trait CudaCastFloat:
     + TensorScalar
     + CubeFloat
     + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
-    + LaunchArg
+    + LaunchArg<RuntimeArg = Self>
     + Clone
     + Send
     + Sync
@@ -3884,7 +3884,7 @@ trait CudaFloatIndex:
     + TensorScalar
     + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
     + CubeFloat
-    + LaunchArg
+    + LaunchArg<RuntimeArg = Self>
     + Clone
     + Send
     + Sync
