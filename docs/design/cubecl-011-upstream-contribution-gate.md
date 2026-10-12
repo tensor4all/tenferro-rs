@@ -90,7 +90,7 @@ Metal evidence: #2114.
 | 1 | `feat/tenferro-upstream-arith-fixes` `23b6cd7a5` | sound folds; FMA stays real | **done**: each commit carries a device-verified test |
 | 2 | `feat/tenferro-upstream-cuda-interop` `9344bd4e0` | CUDA interop, split | **done**: two topic commits, content-identical to the Mac's single commit (`git diff 1883fd93b HEAD` empty) |
 | 3 | `feat/tenferro-upstream-log1p-native` `5fc8da47e` | native `log1p` in the C++ backend, polyfill only for Metal | upstream accuracy test: needs a dtype-correct shape first (the LLVM backend has no native `log1p` lowering, so a generic test would fail there) |
-| 4 | `feat/tenferro-upstream-bool-buffers` `5d0fa26b5` | sized `BoolType` | part 2: the refusal (narrow the wgpu tables, shared compile-time check, tests) |
+| 4 | `feat/tenferro-upstream-bool-buffers` `f4afe68f0` | sized `BoolType`; the wgpu tables stop claiming bool buffers | **the refusal call site** (see below) |
 | 5 | `feat/tenferro-upstream-host-visible` `3098a1558` | completion, primary memory, device-server accessor | — |
 | 6 | cubek `feat/tenferro-upstream-kernels`, `...-interleaved-fft` | matmul C32, interleaved FFT | — |
 
@@ -110,4 +110,38 @@ filing.
   (fails against the pre-fix revision, passes with the C++ native lowering), and
   it is cited in the commit. A portable upstream accuracy test is not yet written
   for the reason above.
+
+## bool part 2: what is done and what the refusal still needs
+
+Done and pushed (`feat/tenferro-upstream-bool-buffers` @ `f4afe68f0`,
+`local/ports-011-combined` @ `93db202c3`):
+
+- both wgpu registrations (`backend/wgsl.rs`, `backend/vulkan.rs`) no longer claim
+  `TypeUsage::Buffer` for `ElemType::Bool`, with the reason written down;
+- `Features::supports_buffer(elem)` (and `DeviceProperties::supports_buffer_type`)
+  answers exactly that question, with a unit test (`cargo test -p cubecl-ir --lib
+  -- supports_buffer`: a type usable as a value is not necessarily storable);
+- `cargo check -p cubecl-wgpu` and the consumer's `--features cuda,webgpu` check
+  both pass with the change.
+
+**The refusal itself is not implemented.** Where it has to go was located by
+reading the two call paths:
+
+- `WgslCompiler::compile_kernel(kernel, definition, options)` has the IR but no
+  `DeviceProperties`; `validate_ir(&self, repr, props)` has the properties but only
+  the compiled representation, so neither has both.
+- Kernels reach compilation through `KernelLoader<WgpuPipelines<C>>::compile_queued`
+  (`crates/cubecl-wgpu/src/compute/server.rs:89,603`), which is backend-agnostic and
+  has neither.
+- So the check belongs at the wgpu launch/compile boundary where the server holds
+  the device and the kernel: a pure `fn refuse_unsupported_buffers(ctx, entry_func,
+  props) -> Result<(), String>` that walks the kernel's buffer arguments exactly as
+  `cubecl-opt/src/passes/annotate_buffer_visibility.rs:32-44` does (find
+  `BufferBindingAttr` args, take each value's element type, ask
+  `supports_buffer_type`), called from the wgpu compile path. Being a pure function
+  over hand-built IR and a hand-built feature table, it is unit-testable without a
+  device, which is what makes it verifiable here rather than only in wgpu CI.
+- Still owed: that call site, its unit test, and a positive runtime test for a
+  `&[bool]` kernel on the backends that can store it (CUDA/CPU), guarded by the
+  same usage check the existing tests use.
 
