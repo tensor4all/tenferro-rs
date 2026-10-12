@@ -83,16 +83,22 @@ frontend's `length` field is only read by `BufferBinding::into_tensor()`
 (`cubecl-core/src/frontend/container/slice/launch.rs:118-133`). So
 `BufferArg::from_raw_parts(handle, 3)` over a 6-element allocation still shows
 `out.len() == 6` in the kernel, and the flat scale kernel correctly scales all
-six. tenferro's `CubeclPreparedAccess::into_array_arg(len)`
-(`cubecl/src/dispatch.rs:58`) must hand over a handle whose `size_in_used()` is
-the region — i.e. trim `offset_end` (and set `offset_start` in bytes for a
-non-zero view offset) instead of relying on the length. That needs the region's
-byte offset and element size threaded through the prepared access.
+six.
 
-This is a contract gap worth reporting with the other two: the safety comment on
-`from_raw_parts` ("Specifying the wrong length may lead to out-of-bounds reads
-and writes") implies the length governs the region, while the launcher ignores it
-in favour of the handle's size.
+Trimming the handle to the region in `CubeclPreparedAccess::into_array_arg` was
+tried and **ruled out by measurement**: it takes the 201/8 result to 129/80,
+because tenferro's strided bindings address the allocation relative to its
+start (kernel shape/stride arguments, `BufferArg::from_raw_parts` with the
+allocation handle) and need the handle to keep covering it. The viable fix is
+targeted: the flat kernels that bound themselves with `.len()` (scale,
+fill_zero) must receive the region length as an explicit kernel argument, or
+resolve the region through a binding that carries it, rather than changing what
+every binding means.
+
+This is a contract gap worth reporting with the other upstream items: the safety
+comment on `from_raw_parts` ("Specifying the wrong length may lead to
+out-of-bounds reads and writes") implies the length governs the region, while the
+launcher ignores it in favour of the handle's size.
 
 **5. `download_tensor` errors in the axpby strided path (2 tests).**
 
