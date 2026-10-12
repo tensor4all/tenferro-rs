@@ -1,5 +1,27 @@
 # U4-2a: an unadmitted same-runtime consumer copy of a published value (#1945 U4)
 
+Revision 3. The second review found **no substrate-level blocker** and left two IMPORTANT issues and one MINOR
+wording issue, all applied here (revision 2's review table is in §1).
+
+## 0. Revision 3 changes
+
+- **Allocation-failure claim narrowed.** `raw::alloc_output` -> `dispatch::alloc_output` -> CubeCL's
+  *infallible* `ComputeClient::empty`; a genuine CUDA reservation failure panics in the device server rather
+  than returning an error. The slice therefore claims only that **recoverable destination-preparation errors
+  before wait/copy submission return the publication unchanged**; the allocation substrate's panic behaviour
+  is unchanged, and an injected preparation failure is not evidence of recoverable CUDA OOM.
+- **One rejection representation selected: a new device-copy rejection variant**, not an optional buffer.
+  `PublicationError::Rejected` exposes `buffer: PinnedHostBuffer` and an existing test and the public
+  documentation destructure that field, so the field contract stays intact; callers with an exhaustive match
+  over the error variants need a new arm, which is the migration this choice costs (the alternative would
+  break every `.len()`/retry use of the buffer instead). `PublicationRejected` is untouched: it belongs to
+  `PublicationAdmissionError` and holds only `error` and `value`. The existing rejection `Display` prefix and
+  the `Debug` derives are preserved.
+- **Ownership wording corrected.** A successful `wait` releases the **locally owned** retention and event - a
+  waited handle was never queued - and returns the destination; drop detaches into the existing retirement
+  machinery, which releases completed drainable records but permanently retains them when the queue's
+  existing saturation policy requires it (the drain-then-`leaked` path), including at teardown.
+
 Revision 2. Revision 1 was reviewed before implementation; the review confirmed the scope ("a bounded,
 plausible slice", "the identity comparison is sound") and the ordering shape, and required corrections that
 do not reopen registry authorization or add substrate. They are applied below and recorded in §1.
@@ -68,10 +90,11 @@ not, and neither `raw::Session` nor `copy_bytes` activates a context. Inside tha
 `PendingRead` **owns** the package - the source value (which keeps the source allocation alive), the
 destination tensor and the completion event - until one of:
 
-- **`wait()`** succeeds: the record is removed and released once its event has completed, and the destination
-  tensor is returned;
-- **drop**: the package detaches into the consumer runtime's bounded retirement queue (drainable), which
-  releases it once the event completes; `Drop` itself never waits;
+- **`wait()`** succeeds: the **locally owned** source retention and event are released (a waited handle was
+  never queued) and the destination tensor is returned;
+- **drop**: the package detaches into the existing retirement machinery, which releases a completed drainable
+  record once its event completes, and permanently retains it when the queue's existing saturation policy
+  requires it (the drain-then-`leaked` path); `Drop` itself never waits;
 - **terminal failure**: the package detaches into permanent retention.
 
 `mem::forget(PendingRead)` leaks the owned package in place; it does not enqueue it. The record is the
@@ -86,9 +109,12 @@ which synchronizes initialized streams.
 
 `copy_into` returns `Result<PendingRead, PublicationError>`:
 
-- `PublicationError::Rejected` for a refusal before any enqueue (eligibility mismatch, terminal publication,
-  allocation failure), with the rejection representation extended so a device copy without a pinned buffer can
-  be returned along with the unchanged publication;
+- a new **device-copy rejection variant** (with the publication, and no pinned buffer) for a refusal before
+  any enqueue: an eligibility mismatch, a terminal publication, or a recoverable destination-preparation
+  error. `PublicationError::Rejected` keeps its `buffer: PinnedHostBuffer` field contract, so existing callers
+  that read the buffer are unaffected; callers with an exhaustive match over the variants need one new arm.
+  A genuine CUDA allocation failure is **not** claimed to be recoverable here: the typed allocation path is
+  infallible and the device server panics on reservation failure, which this slice does not change;
 - `PublicationError::Unproven` for an unproven submission, carrying diagnostics only, with the package
   permanently retained.
 
@@ -105,10 +131,11 @@ intact, so its eventual drop still follows the source half's permanent-retention
 | Different-device refusal | exercised only with a second real device; otherwise reported as untested rather than manufactured |
 | Ownership | a refusal returns the publication with its retention intact; an unproven submission leaves the package permanently retained; forgetting a `PendingRead` leaks it in place; release is observed on package/handle state (pooled allocation handles, not address reuse) |
 | Exclusion | the publication cannot be reused after `copy_into` (trybuild fixture in the existing harness: `download_into`/`copy_into` on a moved value); no safe write path exists (#2093) |
-| Fault injection | a private, `#[cfg(test)]`-reachable seam at the submission boundary drives a failed completion record and an allocation failure after the guard is armed (a refusal, not an unproven submission); the existing frontier query/wait failure path is driven for the terminal-source claim |
+| Fault injection | a private, `#[cfg(test)]`-reachable seam at the submission boundary drives a failed completion record and a **recoverable destination-preparation error** after the guard is armed (a refusal, not an unproven submission); the existing frontier query/wait failure path is driven for the terminal-source claim. No test claims recoverable CUDA OOM |
 | No regression | pending-transfer, publication and overlap suites keep passing; the audited CUDA test partition is updated; the `transfer_overlap` group (`crates/tenferro-gpu/benches/transfer_paths.rs`) gains a same-runtime consumer arm |
 
 ## 5. Open question for maintainers
 
-1. Should the extended rejection representation make the existing buffer field optional, or add a
-   device-copy rejection variant? This record has no preference; both keep `Rejected`/`Unproven` semantics.
+1. None blocking. The one public-API choice the review left open (optional buffer vs a device-copy rejection
+   variant) is settled in favour of the variant in §0/§3.4; a maintainer who prefers the optional-buffer form
+   should say so before implementation, because it changes the existing `Rejected` field contract instead.
