@@ -188,6 +188,7 @@ trait CutensorScalar: CubeElement + TensorScalar + CubePrimitive + Scalar + Clon
         dim: cubecl::prelude::CubeDim,
         out: cubecl::prelude::BufferArg,
         factor: cubecl::prelude::BufferArg,
+        len: usize,
     );
 }
 
@@ -236,11 +237,12 @@ impl CutensorScalar for f32 {
         dim: cubecl::prelude::CubeDim,
         out: cubecl::prelude::BufferArg,
         factor: cubecl::prelude::BufferArg,
+        len: usize,
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
             structural::scale_in_place_float_kernel::launch_unchecked::<f32>(
-                client, count, dim, out, factor,
+                client, count, dim, out, factor, len,
             );
         }
     }
@@ -266,11 +268,12 @@ impl CutensorScalar for f64 {
         dim: cubecl::prelude::CubeDim,
         out: cubecl::prelude::BufferArg,
         factor: cubecl::prelude::BufferArg,
+        len: usize,
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
             structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
-                client, count, dim, out, factor,
+                client, count, dim, out, factor, len,
             );
         }
     }
@@ -296,10 +299,13 @@ impl CutensorScalar for Complex32 {
         dim: cubecl::prelude::CubeDim,
         out: cubecl::prelude::BufferArg,
         factor: cubecl::prelude::BufferArg,
+        len: usize,
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
-            structural::scale_in_place_complex_kernel::launch_unchecked::<Complex32>(client, count, dim, out, factor);
+            structural::scale_in_place_complex_kernel::launch_unchecked::<Complex32>(
+                client, count, dim, out, factor, len,
+            );
         }
     }
 }
@@ -324,10 +330,13 @@ impl CutensorScalar for Complex64 {
         dim: cubecl::prelude::CubeDim,
         out: cubecl::prelude::BufferArg,
         factor: cubecl::prelude::BufferArg,
+        len: usize,
     ) {
         // SAFETY: caller validated residency, lengths, and launch domain.
         unsafe {
-            structural::scale_in_place_complex_kernel::launch_unchecked::<Complex64>(client, count, dim, out, factor);
+            structural::scale_in_place_complex_kernel::launch_unchecked::<Complex64>(
+                client, count, dim, out, factor, len,
+            );
         }
     }
 }

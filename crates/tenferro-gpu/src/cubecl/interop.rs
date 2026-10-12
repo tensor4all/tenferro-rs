@@ -546,6 +546,7 @@ where
         CubeDim,
         BufferArg,
         BufferArg,
+        usize,
     ),
 {
     scale_typed_tensor_for_op(rt, output, factor, SCALE_OP, launch)
@@ -566,6 +567,7 @@ where
         CubeDim,
         BufferArg,
         BufferArg,
+        usize,
     ),
 {
     dispatch::ensure_resident_on_runtime(rt, output, op)?;
@@ -578,7 +580,7 @@ where
     let dim = dispatch::cube_dim_1d();
     let mut output_view = output.as_view_mut();
     let output_arg = dispatch::typed_view_mut_array_arg(&mut output_view, op)?;
-    launch_scaled(rt, output_arg, factor, count, dim, op, launch)
+    launch_scaled(rt, output_arg, factor, len, count, dim, op, launch)
 }
 
 fn scale_typed_view<T, F>(
@@ -595,6 +597,7 @@ where
         CubeDim,
         BufferArg,
         BufferArg,
+        usize,
     ),
 {
     dispatch::ensure_view_mut_resident_on_runtime(rt, output, SCALE_OP)?;
@@ -617,7 +620,7 @@ where
     let count = dispatch::cube_count_for_len(len)?;
     let dim = dispatch::cube_dim_1d();
     let output_arg = dispatch::typed_view_mut_array_arg(output, SCALE_OP)?;
-    launch_scaled(rt, output_arg, factor, count, dim, SCALE_OP, launch)
+    launch_scaled(rt, output_arg, factor, len, count, dim, SCALE_OP, launch)
 }
 
 fn validate_scale_buffer(op: &'static str, len: usize, buffer_len: usize) -> crate::Result<()> {
@@ -636,6 +639,7 @@ fn launch_scaled<T, F>(
     rt: &CudaRuntime,
     output: BufferArg,
     factor: T,
+    len: usize,
     count: CubeCount,
     dim: CubeDim,
     op: &'static str,
@@ -649,11 +653,12 @@ where
         CubeDim,
         BufferArg,
         BufferArg,
+        usize,
     ),
 {
     let factor = upload_typed_tensor(rt, vec![1], vec![factor])?;
     let factor = dispatch::typed_tensor_array_arg(&factor, op)?;
-    launch(rt.client(), count, dim, output, factor);
+    launch(rt.client(), count, dim, output, factor, len);
     Ok(())
 }
 
@@ -663,6 +668,7 @@ fn launch_scale_f32(
     dim: CubeDim,
     output: BufferArg,
     factor: BufferArg,
+    len: usize,
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
@@ -670,7 +676,7 @@ fn launch_scale_f32(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f32>(client, count, dim, output, factor);
+        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f32>(client, count, dim, output, factor, len);
     }
 }
 
@@ -680,6 +686,7 @@ fn launch_scale_f64(
     dim: CubeDim,
     output: BufferArg,
     factor: BufferArg,
+    len: usize,
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
@@ -687,7 +694,7 @@ fn launch_scale_f64(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f64>(client, count, dim, output, factor);
+        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f64>(client, count, dim, output, factor, len);
     }
 }
 
@@ -697,6 +704,7 @@ fn launch_scale_c32(
     dim: CubeDim,
     output: BufferArg,
     factor: BufferArg,
+    len: usize,
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
@@ -704,7 +712,7 @@ fn launch_scale_c32(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex32>(client, count, dim, output, factor);
+        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex32>(client, count, dim, output, factor, len);
     }
 }
 
@@ -714,6 +722,7 @@ fn launch_scale_c64(
     dim: CubeDim,
     output: BufferArg,
     factor: BufferArg,
+    len: usize,
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
@@ -721,7 +730,7 @@ fn launch_scale_c64(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex64>(client, count, dim, output, factor);
+        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex64>(client, count, dim, output, factor, len);
     }
 }
 

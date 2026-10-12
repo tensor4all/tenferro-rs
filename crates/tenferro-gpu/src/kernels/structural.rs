@@ -71,16 +71,21 @@ pub fn copy_bool_kernel(out: &mut [u8], input: &[u8]) {
 /// `out[i] *= factor[0]`. Used by the dot-general accumulation path for the
 /// degenerate `out = beta * out` case (zero-sized contraction).
 #[cube(launch_unchecked)]
-pub fn scale_in_place_float_kernel<F: Float>(out: &mut [F], factor: &[F]) {
-    if ABSOLUTE_POS < out.len() {
+pub fn scale_in_place_float_kernel<F: Float>(out: &mut [F], factor: &[F], len: usize) {
+    // INVARIANT (0.11): a buffer's device-visible length is its handle's byte
+    // size, not the length the binding was built with, so a flat kernel that
+    // must stay inside a logical region takes the region length as an argument
+    // (the strided kernels already do). See
+    // docs/design/cubecl-011-a100-verification.md.
+    if ABSOLUTE_POS < len {
         out[ABSOLUTE_POS] = out[ABSOLUTE_POS] * factor[0];
     }
 }
 
 /// Complex twin of [`scale_in_place_float_kernel`].
 #[cube(launch_unchecked)]
-pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut [C], factor: &[C]) {
-    if ABSOLUTE_POS < out.len() {
+pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut [C], factor: &[C], len: usize) {
+    if ABSOLUTE_POS < len {
         out[ABSOLUTE_POS] = out[ABSOLUTE_POS] * factor[0];
     }
 }

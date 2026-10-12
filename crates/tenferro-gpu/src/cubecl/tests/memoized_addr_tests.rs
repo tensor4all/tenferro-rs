@@ -97,12 +97,12 @@ fn queued_scale_write_drops_the_memoized_device_address() {
     );
 
     let typed = x.as_typed_mut::<f64>().unwrap();
-    scale_typed_tensor(&rt, typed, 2.0_f64, |client, count, dim, out, factor| {
+    scale_typed_tensor(&rt, typed, 2.0_f64, |client, count, dim, out, factor, len| {
         // SAFETY: the scaling bridge validates residency, buffer length, and
         // the one-dimensional launch domain before this unchecked launch.
         unsafe {
             structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
-                client, count, dim, out, factor,
+                client, count, dim, out, factor, len,
             );
         }
     })
@@ -326,12 +326,12 @@ fn view_reads_share_the_root_memo_and_observe_queued_writes() {
         &rt,
         x.as_typed_mut::<f64>().unwrap(),
         2.0_f64,
-        |client, count, dim, out, factor| {
+        |client, count, dim, out, factor, len| {
             // SAFETY: the scaling bridge validates residency, buffer length, and
             // the one-dimensional launch domain before this unchecked launch.
             unsafe {
                 structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
-                    client, count, dim, out, factor,
+                    client, count, dim, out, factor, len,
                 );
             }
         },
