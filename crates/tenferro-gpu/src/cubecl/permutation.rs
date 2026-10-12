@@ -849,7 +849,7 @@ where
 {
     let resource = rt
         .client()
-        .get_resource(prepared_view_mut_access(view, op)?.into_handle())
+        .get_resource::<cubecl_cuda::CudaServer>(prepared_view_mut_access(view, op)?.into_handle())
         .map_err(|err| Error::backend_source(op, err))?;
     Ok(resource.resource().ptr)
 }
@@ -866,7 +866,7 @@ where
     let prepared = prepared_tensor_access(tensor, op)?;
     let resource = rt
         .client()
-        .get_resource(prepared.into_handle())
+        .get_resource::<cubecl_cuda::CudaServer>(prepared.into_handle())
         .map_err(|err| Error::backend_source(op, err))?;
     cuda_device_ptr_from_addr(resource.resource().ptr, op)
 }

@@ -1241,7 +1241,7 @@ impl CudaRuntimeState {
         self.flush_cubecl(op)?;
         let resource = self
             .client
-            .get_resource(handle)
+            .get_resource::<cubecl_cuda::CudaServer>(handle)
             .map_err(|err| crate::Error::backend_source(op, err))?;
         let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
         if available < len {

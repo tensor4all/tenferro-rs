@@ -56,7 +56,7 @@ macro_rules! binary_float_complex_kernel {
 }
 
 #[cube]
-fn broadcast_source_index<E: CubePrimitive>(
+fn broadcast_source_index<E: CubePrimitive + Scalar>(
     out_flat: usize,
     out: &Tensor<E>,
     input: &Tensor<E>,

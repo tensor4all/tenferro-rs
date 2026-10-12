@@ -3,7 +3,7 @@ use cubecl::prelude::*;
 use crate::kernels::helpers::{flat_to_tensor_index, multi_to_tensor_index, zero_value};
 
 #[cube(launch_unchecked)]
-pub fn extract_diagonal_kernel<E: CubePrimitive>(
+pub fn extract_diagonal_kernel<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     #[comptime] axis_a: usize,
@@ -31,7 +31,7 @@ pub fn extract_diagonal_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn embed_diagonal_copy_kernel<E: CubePrimitive>(
+pub fn embed_diagonal_copy_kernel<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     #[comptime] axis_a: usize,
@@ -59,7 +59,7 @@ pub fn embed_diagonal_copy_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn tril_kernel<E: CubePrimitive>(out: &mut Tensor<E>, input: &Tensor<E>, k: i64) {
+pub fn tril_kernel<E: CubePrimitive + Scalar>(out: &mut Tensor<E>, input: &Tensor<E>, k: i64) {
     if ABSOLUTE_POS < out.len() {
         let row = out.coordinate(ABSOLUTE_POS, 0) as i64;
         let col = out.coordinate(ABSOLUTE_POS, 1) as i64;
@@ -73,7 +73,7 @@ pub fn tril_kernel<E: CubePrimitive>(out: &mut Tensor<E>, input: &Tensor<E>, k: 
 }
 
 #[cube(launch_unchecked)]
-pub fn triu_kernel<E: CubePrimitive>(out: &mut Tensor<E>, input: &Tensor<E>, k: i64) {
+pub fn triu_kernel<E: CubePrimitive + Scalar>(out: &mut Tensor<E>, input: &Tensor<E>, k: i64) {
     if ABSOLUTE_POS < out.len() {
         let row = out.coordinate(ABSOLUTE_POS, 0) as i64;
         let col = out.coordinate(ABSOLUTE_POS, 1) as i64;

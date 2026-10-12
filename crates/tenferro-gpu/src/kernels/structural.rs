@@ -6,7 +6,7 @@ use crate::kernels::helpers::{
 };
 
 #[cube]
-fn strided_view_offset_from_tensor<E: CubePrimitive>(
+fn strided_view_offset_from_tensor<E: CubePrimitive + Scalar>(
     mut flat: usize,
     logical: &Tensor<E>,
     strides: &Sequence<i64>,
@@ -25,7 +25,7 @@ fn strided_view_offset_from_tensor<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut [E]) {
+pub fn fill_zero_kernel<E: CubePrimitive + Scalar>(out: &mut [E]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = zero_value::<E>();
     }
@@ -38,7 +38,7 @@ pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut [E]) {
 /// arguments: only the rank is compile-time, so one module serves every layout
 /// of a given rank.
 #[cube(launch_unchecked)]
-pub fn fill_zero_view_kernel<E: CubePrimitive>(
+pub fn fill_zero_view_kernel<E: CubePrimitive + Scalar>(
     out: &mut [E],
     dims: Sequence<usize>,
     strides: Sequence<i64>,
@@ -90,7 +90,7 @@ pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut [C], factor: &[C]
 /// The view's extents, signed strides, offset and length are runtime scalar
 /// arguments, so one module serves every layout of a given rank.
 #[cube(launch_unchecked)]
-pub fn materialize_strided_kernel<E: CubePrimitive>(
+pub fn materialize_strided_kernel<E: CubePrimitive + Scalar>(
     dst: &mut [E],
     src: &[E],
     dims: Sequence<usize>,
@@ -121,7 +121,7 @@ pub fn materialize_strided_kernel<E: CubePrimitive>(
 /// logical layout, and raw-array runtime metadata packing is ambiguous on Metal).
 /// CUDA launches [`materialize_strided_kernel`] instead.
 #[cube(launch_unchecked)]
-pub fn materialize_strided_comptime_layout_kernel<E: CubePrimitive>(
+pub fn materialize_strided_comptime_layout_kernel<E: CubePrimitive + Scalar>(
     dst: &mut [E],
     src: &[E],
     #[comptime] dims: Sequence<usize>,
@@ -152,7 +152,7 @@ pub fn materialize_strided_comptime_layout_kernel<E: CubePrimitive>(
 /// the tile shape, block rows, shared-memory padding and vector width are
 /// compile-time algorithm configuration.
 #[cube(launch_unchecked)]
-pub fn tiled_transpose_kernel<E: CubePrimitive>(
+pub fn tiled_transpose_kernel<E: CubePrimitive + Scalar>(
     dst: &mut [E],
     src: &[E],
     src_offset: usize,
@@ -215,7 +215,7 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
 /// [`materialize_strided_comptime_layout_kernel`]); CUDA launches
 /// [`tiled_transpose_kernel`] instead.
 #[cube(launch_unchecked)]
-pub fn tiled_transpose_comptime_layout_kernel<E: CubePrimitive>(
+pub fn tiled_transpose_comptime_layout_kernel<E: CubePrimitive + Scalar>(
     dst: &mut [E],
     src: &[E],
     src_offset: usize,
@@ -272,7 +272,7 @@ pub fn tiled_transpose_comptime_layout_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn contiguous_to_view_kernel<E: CubePrimitive>(
+pub fn contiguous_to_view_kernel<E: CubePrimitive + Scalar>(
     dst: &mut [E],
     src: &Tensor<E>,
     strides: Sequence<i64>,
@@ -287,7 +287,7 @@ pub fn contiguous_to_view_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn strided_to_strided_kernel<E: CubePrimitive>(
+pub fn strided_to_strided_kernel<E: CubePrimitive + Scalar>(
     dst: &mut [E],
     src: &[E],
     dims: Sequence<usize>,
@@ -315,7 +315,7 @@ pub fn strided_to_strided_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn broadcast_in_dim_kernel<E: CubePrimitive>(
+pub fn broadcast_in_dim_kernel<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     #[comptime] dims: Sequence<usize>,
@@ -414,7 +414,9 @@ pub fn convert_complex_raw_to_bool<F: Float>(out: &mut [u8], input: &[F]) {
 
 #[cube(launch_unchecked)]
 pub fn validate_real_cast<
-    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>,
+    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>
+        + LaunchArg
+        + cubecl::ScalarArgType,
 >(
     input: &[F],
     flag: &mut [Atomic<u32>],
@@ -537,7 +539,7 @@ pub fn convert_complex_raw<Out: Float, In: Float>(out: &mut [Out], input: &[In])
 }
 
 #[cube(launch_unchecked)]
-pub fn reverse_kernel<E: CubePrimitive>(
+pub fn reverse_kernel<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     #[comptime] axes: Sequence<usize>,
@@ -560,7 +562,7 @@ pub fn reverse_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn concatenate_copy_kernel<E: CubePrimitive>(
+pub fn concatenate_copy_kernel<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     #[comptime] axis: usize,

@@ -222,7 +222,7 @@ gpu_test!(test_trivial_cube_kernel, {
     let handle_out = client.empty(n * std::mem::size_of::<f64>());
 
     unsafe {
-        kernel_add_f64::launch_unchecked:(
+        kernel_add_f64::launch_unchecked(
             client,
             CubeCount::new_single(),
             CubeDim::new_1d(n as u32),
@@ -296,7 +296,7 @@ gpu_test!(test_cached_scalar_read_observes_queued_writes, {
         // SAFETY: all handles contain one f64; output is fresh and is only read
         // after the runtime's stream-ordered download completes each iteration.
         unsafe {
-            kernel_add_f64::launch_unchecked:(
+            kernel_add_f64::launch_unchecked(
                 rt.client(),
                 CubeCount::new_single(),
                 CubeDim::new_1d(1),

@@ -24,7 +24,9 @@ pub fn init_float_index_validation_flag<F: Float>(
 
 #[cube(launch_unchecked)]
 pub fn validate_float_indices_kernel<
-    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>,
+    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>
+        + LaunchArg
+        + cubecl::ScalarArgType,
 >(
     indices: &Tensor<F>,
     flag: &mut [Atomic<u32>],
@@ -105,7 +107,7 @@ pub(crate) fn index_component<I: Numeric + CubePrimitive>(
 }
 
 #[cube]
-pub(crate) fn flat_to_index_batch_index<I: CubePrimitive>(
+pub(crate) fn flat_to_index_batch_index<I: CubePrimitive + Scalar>(
     mut flat: usize,
     indices: &Tensor<I>,
     #[comptime] index_vector_dim: usize,
@@ -136,7 +138,7 @@ pub(crate) fn flat_to_index_batch_index<I: CubePrimitive>(
 }
 
 #[cube]
-pub(crate) fn flat_to_update_window_index<E: CubePrimitive>(
+pub(crate) fn flat_to_update_window_index<E: CubePrimitive + Scalar>(
     mut flat: usize,
     updates: &Tensor<E>,
     #[comptime] update_window_dims: Sequence<usize>,
@@ -157,7 +159,7 @@ pub(crate) fn flat_to_update_window_index<E: CubePrimitive>(
 }
 
 #[cube]
-pub(crate) fn update_window_len<E: CubePrimitive>(
+pub(crate) fn update_window_len<E: CubePrimitive + Scalar>(
     updates: &Tensor<E>,
     #[comptime] update_window_dims: Sequence<usize>,
 ) -> usize {
@@ -171,7 +173,7 @@ pub(crate) fn update_window_len<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn slice_kernel<E: CubePrimitive>(
+pub fn slice_kernel<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     starts: Sequence<usize>,
@@ -190,7 +192,7 @@ pub fn slice_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn dynamic_slice_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
+pub fn dynamic_slice_kernel<E: CubePrimitive + Scalar, I: Numeric + CubePrimitive>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     starts: &Tensor<I>,
@@ -212,7 +214,7 @@ pub fn dynamic_slice_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn pad_kernel<E: CubePrimitive>(
+pub fn pad_kernel<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     edge_padding_low: Sequence<i64>,
@@ -260,7 +262,7 @@ pub fn pad_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn gather_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
+pub fn gather_kernel<E: CubePrimitive + Scalar, I: Numeric + CubePrimitive>(
     out: &mut Tensor<E>,
     operand: &Tensor<E>,
     start_indices: &Tensor<I>,
@@ -340,7 +342,7 @@ pub fn gather_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn scatter_copy_kernel<E: CubePrimitive>(out: &mut Tensor<E>, operand: &Tensor<E>) {
+pub fn scatter_copy_kernel<E: CubePrimitive + Scalar>(out: &mut Tensor<E>, operand: &Tensor<E>) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = operand[ABSOLUTE_POS];
     }

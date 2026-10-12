@@ -75,7 +75,7 @@ use cubecl::prelude::{
     BufferArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
-use cubecl::prelude::{CubeCount, Int as CubeInt, TensorBinding, Type};
+use cubecl::prelude::{CubeCount, Int as CubeInt, Scalar, TensorBinding, Type};
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 
@@ -187,11 +187,11 @@ fn op_name(
     op_descriptor::require_gpu_descriptor(kind, launch).map(|descriptor| descriptor.name)
 }
 
-fn ensure_atomic_add_supported<T: CubePrimitive>(
+fn ensure_atomic_add_supported<T: CubePrimitive + Scalar>(
     client: &Client,
     op: &'static str,
 ) -> crate::Result<()> {
-    let elem = T::as_type_native_unchecked().elem_type();
+    let elem = T::elem_type_native();
     let atomic_ty = Type::atomic(elem);
     if client
         .properties()
@@ -248,7 +248,7 @@ fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
     })
 }
 
-fn launch_native_materialization<E: CubePrimitive>(
+fn launch_native_materialization<E: CubePrimitive + Scalar>(
     backend: &CudaBackend,
     output: BufferArg,
     input: BufferArg,
@@ -771,7 +771,7 @@ impl CudaBackend {
             input.shape(),
             op,
             |client, count, dim, out, input_arg| unsafe {
-                structural::copy_bool_kernel::launch_unchecked:(
+                structural::copy_bool_kernel::launch_unchecked(
                     client,
                     count,
                     dim,
@@ -2134,7 +2134,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f32_to_c32_raw::launch_unchecked:(
+                    structural::convert_f32_to_c32_raw::launch_unchecked(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2159,7 +2159,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f32_to_c64_raw::launch_unchecked:(
+                    structural::convert_f32_to_c64_raw::launch_unchecked(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2184,7 +2184,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f64_to_c32_raw::launch_unchecked:(
+                    structural::convert_f64_to_c32_raw::launch_unchecked(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2209,7 +2209,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f64_to_c64_raw::launch_unchecked:(
+                    structural::convert_f64_to_c64_raw::launch_unchecked(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2279,7 +2279,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c32_to_f32::launch_unchecked:(
+                structural::convert_c32_to_f32::launch_unchecked(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2296,7 +2296,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c32_to_f64::launch_unchecked:(
+                structural::convert_c32_to_f64::launch_unchecked(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2313,7 +2313,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c64_to_f32::launch_unchecked:(
+                structural::convert_c64_to_f32::launch_unchecked(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2330,7 +2330,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c64_to_f64::launch_unchecked:(
+                structural::convert_c64_to_f64::launch_unchecked(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2720,7 +2720,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_sum_float::<F>(
                     client,
                     input,
                     output,
@@ -2759,7 +2759,7 @@ impl CudaBackend {
 
         let mut current =
             self.launch_reduce_axis_typed(input, first_axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_squares_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_sum_squares_float::<F>(
                     client,
                     input,
                     output,
@@ -2770,7 +2770,7 @@ impl CudaBackend {
         for &axis in remaining_axes {
             current =
                 self.launch_reduce_axis_typed(&current, axis, op, |client, input, output| {
-                    cubecl_reduce::launch_sum_float::<CubeclCudaRuntime, F>(
+                    cubecl_reduce::launch_sum_float::<F>(
                         client,
                         input,
                         output,
@@ -2803,7 +2803,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_complex::<CubeclCudaRuntime, C>(
+                cubecl_reduce::launch_sum_complex::<C>(
                     client,
                     input,
                     output,
@@ -2834,7 +2834,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_int::<CubeclCudaRuntime, I>(
+                cubecl_reduce::launch_sum_int::<I>(
                     client,
                     input,
                     output,
@@ -2865,7 +2865,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_prod_float::<F>(
                     client,
                     input,
                     output,
@@ -2896,7 +2896,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_complex::<CubeclCudaRuntime, C>(
+                cubecl_reduce::launch_prod_complex::<C>(
                     client,
                     input,
                     output,
@@ -2927,7 +2927,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_int::<CubeclCudaRuntime, I>(
+                cubecl_reduce::launch_prod_int::<I>(
                     client,
                     input,
                     output,
@@ -2958,7 +2958,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_max_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_max_float::<F>(
                     client,
                     input,
                     output,
@@ -2989,7 +2989,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_max_int::<CubeclCudaRuntime, I>(
+                cubecl_reduce::launch_max_int::<I>(
                     client,
                     input,
                     output,
@@ -3020,7 +3020,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_min_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_min_float::<F>(
                     client,
                     input,
                     output,
@@ -3051,7 +3051,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_min_int::<CubeclCudaRuntime, I>(
+                cubecl_reduce::launch_min_int::<I>(
                     client,
                     input,
                     output,

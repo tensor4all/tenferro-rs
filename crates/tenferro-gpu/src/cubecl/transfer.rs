@@ -279,7 +279,7 @@ pub(crate) fn upload_tensor_chunked(
     runtime.check_errors(op)?;
     let resource = runtime
         .client()
-        .get_resource(handle.clone())
+        .get_resource::<cubecl_cuda::CudaServer>(handle.clone())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
     if available < byte_len {
@@ -788,7 +788,7 @@ pub fn download_pending(
     if let Err(error) = runtime.check_errors(OP) {
         return Err(rejected(error, source, buffer));
     }
-    let resource = match runtime.client().get_resource(handle) {
+    let resource = match runtime.client().get_resource::<cubecl_cuda::CudaServer>(handle) {
         Ok(resource) => resource,
         Err(err) => {
             return Err(rejected(
@@ -1115,7 +1115,7 @@ pub fn upload_pending(
     if let Err(error) = runtime.check_errors(OP) {
         return Err(rejected(error, destination, source));
     }
-    let resource = match runtime.client().get_resource(handle) {
+    let resource = match runtime.client().get_resource::<cubecl_cuda::CudaServer>(handle) {
         Ok(resource) => resource,
         Err(err) => {
             return Err(rejected(
