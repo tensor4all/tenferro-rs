@@ -33,3 +33,21 @@ still needs its tests and a re-review.
   keep the current patch while upstream settles the contract.
 - **log1p**: native where the target has it, with a dtype-appropriate fallback
   (and the doc wording corrected). The quartic/`1e-2` polyfill stays fork-only.
+
+### Why `log1p` needs its own PR: the mechanism, and the ready-made pattern
+
+- `cubecl-cpp`'s lowering for `Log1pOp` does not call the target's `log1p`: it
+  inlines the *frontend* polyfill (`cubecl-cpp/src/shared/unary.rs:3,315` import
+  `cubecl_core::frontend::polyfills::log1p`, which is `(1 + x).ln()`), while a
+  native C++ call is printed by the `shared_op!` mechanism other ops use, e.g.
+  `shared_op_with_out!(FRemOp, |op, ctx| format!("fmod({lhs}, {rhs})"))`
+  (`cubecl-cpp/src/shared/binary.rs:111`). The fix is therefore to give
+  `Log1pOp` a printing lowering (`log1p(...)`, with the half marker as `FRemOp`
+  carries) and keep the polyfill only for targets without it (Metal, as `ErfOp`
+  already does).
+- `cubecl-llvm` already has both paths: `lower_unary_math_arith!(... $gate)` in
+  `crates/cubecl-llvm/src/shared/polyfill/math.rs:38-56` emits the *native* libm
+  call unless the gate selects the polyfill, and `ExpOp`/`LogOp` use a gate
+  (`is_cpu_narrow_float_line`, lines 62-70) while `Log1pOp` has none, so it always
+  inlines the polyfill. Giving `Log1pOp` the same shape is the minimal change.
+- WGSL has no `log1p`, so a polyfill stays there with a documented accuracy limit.
