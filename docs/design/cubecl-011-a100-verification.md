@@ -75,6 +75,25 @@ depends on operand order and on the arithmetic identities the IR applies.
 elements match, the rest come back 4x the expected values, i.e. the elements
 outside the prefix were scaled as well.
 
+Root cause: 0.11 gives a buffer's device-visible length the **handle's** byte
+size, not the length the caller passed. `KernelLauncher::process_buffer`
+computes `buffer_len = array.handle.size_in_used() / elem_size` and ignores
+`BufferBinding.length` (`cubecl-core/src/compute/launcher.rs:202`), and the
+frontend's `length` field is only read by `BufferBinding::into_tensor()`
+(`cubecl-core/src/frontend/container/slice/launch.rs:118-133`). So
+`BufferArg::from_raw_parts(handle, 3)` over a 6-element allocation still shows
+`out.len() == 6` in the kernel, and the flat scale kernel correctly scales all
+six. tenferro's `CubeclPreparedAccess::into_array_arg(len)`
+(`cubecl/src/dispatch.rs:58`) must hand over a handle whose `size_in_used()` is
+the region — i.e. trim `offset_end` (and set `offset_start` in bytes for a
+non-zero view offset) instead of relying on the length. That needs the region's
+byte offset and element size threaded through the prepared access.
+
+This is a contract gap worth reporting with the other two: the safety comment on
+`from_raw_parts` ("Specifying the wrong length may lead to out-of-bounds reads
+and writes") implies the length governs the region, while the launcher ignores it
+in favour of the handle's size.
+
 **5. `download_tensor` errors in the axpby strided path (2 tests).**
 
 ## Next
