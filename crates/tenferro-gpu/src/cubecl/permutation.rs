@@ -38,7 +38,7 @@ pub(super) enum VendorAlpha {
 }
 
 pub(super) trait CutensorPermutationScalar:
-    CubeElement + TensorScalar + CubePrimitive + Clone + One + Send + Sync + 'static
+    CubeElement + TensorScalar + CubePrimitive + Scalar + Clone + One + Send + Sync + 'static
 {
     /// Element type of the cuTENSOR descriptors.
     ///

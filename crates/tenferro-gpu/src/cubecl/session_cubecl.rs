@@ -19,6 +19,7 @@ use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement, CubePrimitive,
 use tenferro_tensor::{TensorRank, TensorScalar, TensorWrite, TypedTensor};
 
 use super::runtime::CudaRuntime;
+use cubecl::frontend::Scalar;
 
 /// Public CubeCL extension session.
 ///
@@ -80,7 +81,7 @@ impl<'s> Session<'s> {
         op: &'static str,
     ) -> crate::Result<TensorBinding>
     where
-        T: CubeElement + TensorScalar + Clone,
+        T: CubeElement + TensorScalar + Scalar + Clone,
     {
         super::dispatch::ensure_resident_on_runtime(&self.runtime, tensor, op)?;
         super::interop::typed_tensor_binding(tensor, op)
@@ -104,7 +105,7 @@ impl<'s> Session<'s> {
         op: &'static str,
     ) -> crate::Result<BufferArg>
     where
-        T: CubeElement + TensorScalar + Clone,
+        T: CubeElement + TensorScalar + Scalar + Clone,
     {
         super::dispatch::ensure_resident_on_runtime(&self.runtime, tensor, op)?;
         super::interop::typed_tensor_array_arg(tensor, op)
@@ -118,7 +119,7 @@ impl<'s> Session<'s> {
     /// or [`crate::Error::BackendSource`] when allocation fails.
     pub fn alloc_output<T>(&self, shape: &[usize]) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + Scalar + Clone + Send + Sync + 'static,
     {
         super::interop::alloc_output(&self.runtime, shape)
     }

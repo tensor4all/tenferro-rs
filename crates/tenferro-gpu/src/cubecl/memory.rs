@@ -11,6 +11,7 @@ use crate::types::{
     CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
     Tensor, TensorScalar, TypedTensor,
 };
+use cubecl::frontend::Scalar;
 
 /// Upload a host tensor into a CubeCL-managed GPU allocation.
 ///
@@ -115,7 +116,7 @@ pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tenso
     }
 }
 
-fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
+fn upload_typed<T: CubeElement + TensorScalar + Scalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     client: &Client,
     typed: &TypedTensor<T>,
@@ -178,7 +179,7 @@ fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
 
 /// Read a compact tensor of at most `PINNED_SCALAR_BYTES` through the runtime's
 /// pinned staging slot.
-fn download_scalar<T: CubeElement + TensorScalar + Clone + 'static>(
+fn download_scalar<T: CubeElement + TensorScalar + Scalar + Clone + 'static>(
     rt: &CudaRuntime,
     typed: &TypedTensor<T>,
     byte_len: usize,
@@ -190,7 +191,7 @@ fn download_scalar<T: CubeElement + TensorScalar + Clone + 'static>(
     Ok(T::from_bytes(&bytes).to_vec())
 }
 
-fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
+fn download_typed<T: CubeElement + TensorScalar + Scalar + Clone + 'static>(
     rt: &CudaRuntime,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {

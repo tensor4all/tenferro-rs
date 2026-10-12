@@ -1397,7 +1397,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<TypedTensor<T, R>>
     where
-        T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + Scalar + Clone + Scalar + Send + Sync + 'static,
         R: TensorRank,
     {
         let len = checked_dim_product(op, "output shape", shape)?;
@@ -2647,7 +2647,7 @@ impl CudaBackend {
         ) -> crate::kernels::Result<()>,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + Clone + Scalar,
+        T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
     {
         let output_shape = reduction_keepdims_shape(input.shape(), axis);
         let input_binding = typed_tensor_binding(input, op)?;
@@ -4391,7 +4391,7 @@ fn launch_elementwise_binary_into<T>(
     ),
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Scalar,
+    T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
 {
     let lhs = lhs.as_typed::<T>().ok_or_else(|| {
         crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
@@ -4437,7 +4437,7 @@ fn launch_elementwise_unary_into<T>(
     ),
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Scalar,
+    T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
 {
     let input = input.as_typed::<T>().ok_or_else(|| {
         crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
