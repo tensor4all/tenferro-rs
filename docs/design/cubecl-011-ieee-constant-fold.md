@@ -32,6 +32,24 @@ is a class of defect rather than one typo. Note the `simplify!` rules next to
 them are narrower (`* 1.0`, `+ 0.0`, `% 1.0`), and the LLVM path explicitly
 lowers `FRemOp` with fast math off (`cubecl-llvm/src/shared/to_llvm/math.rs:404`).
 
+## Tenferro sites that the folds change
+
+- `kernels/elementwise.rs`, the two float remainder kernels: `x * 0.0` (fixed by
+  using `%`).
+- `kernels/elementwise.rs`, `scalar_real_complex_binary`: the component formulae
+  deliberately keep the zero cross terms ("they determine NaN, infinity,
+  overflow, and signed zero"), and the folds change them:
+  - `zero + im` with `im = -0.0` must be `+0.0`; the fold returns `im`.
+  - `zero * im` with `im = inf` must be `NaN`; the fold returns `+0.0`. Same for
+    `im * zero`, `zero * re`, `re * zero` — the fold silently removes NaN from
+    a mixed complex multiply.
+  - `zero - im` and `norm_sqr = scalar*scalar + zero*zero` happen to agree.
+  Because a runtime `+0.0` cannot be derived from an arbitrary runtime float
+  (`x - x` is NaN for `x = inf`), tenferro cannot express these formulae with a
+  non-constant zero either; either the folds are fixed upstream or each site is
+  rewritten as an explicit compare-and-select, which is the local workaround the
+  migration rules forbid.
+
 ## What tenferro changed
 
 `crates/tenferro-gpu/src/kernels/elementwise.rs`: the two float remainder
