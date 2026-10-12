@@ -58,7 +58,6 @@ use crate::{
     Error, Tensor, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use cubecl::frontend::Scalar;
 
 /// The Rust scalar type behind a preset variant name a macro received.

@@ -50,10 +50,13 @@ Delivered:
 Explicitly **not** claimed in this slice:
 
 - **Publication does not wait for *its own* retirement, but a device-free publication is not claimed.**
-  The copy is published through CubeCL's `check_errors` (§3), which reports producer errors and
-  dispatches the host queue without rotating the drop queue, so the boundary no longer performs a
-  device wait of its own — the two earlier alternatives failed here: `flush` waits the previous fence,
-  and `get_resource` alone silently drops producer error reporting. What remains is host dispatch
+  The copy is published through the published buffer's own claim: CubeCL reports a launch failure on
+  the buffers the failed launch never wrote, and resolving that resource is what asks for it
+  (`ServerStorage::get_resource` → `streams.ensure_written`), which dispatches the host queue without
+  rotating the drop queue, so the boundary no longer performs a device wait of its own — the two
+  earlier alternatives failed here: `flush` waits the previous fence, and a plain
+  `get_resource` on a fork that did not claim failed writes would drop producer error reporting.
+  What remains is host dispatch
   (a blocking host round trip), cross-stream resource resolution (bounded GC backpressure) and a
   preceding kernel that trips the staging policy. Those are named, not hidden.
 - **No dependent-device-consumer contract.** There is no `dependency()`: a same-domain CUDA event

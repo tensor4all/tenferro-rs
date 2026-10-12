@@ -45,33 +45,53 @@ the comment "The same claim check a read makes: a buffer a failed launch never
 filled reports the failure rather than handing back a pointer to whatever was
 there before" (`cubecl-runtime/src/server/base.rs:779-788`).
 
-## The two options
+## Decision: delete the checks, keep the resource boundary
 
-**A. Adopt the upstream shape (tenferro-side, public API only).** Replace the
-client-wide `check_errors(op)` with a handle-scoped `client.check([&handle])`,
-or rely on the `get_resource(handle)` claim that every one of the four call
-sites already performs one statement later. No shim, no upstream addition, and
-fork PR #27 is retired: upstream has the capability, better scoped and better
-specified. Cost: one wrapper change plus four call-site changes on a
-soundness-sensitive path (short design + independent review).
+Independently reviewed before implementing (openai/gpt-6.1-sol, read-only). The
+review verified, site by site, that the handle being published is in scope at
+each check, that both the check and the following `get_resource` failure map to
+the same `rejected`/`publication_rejected` outcome with unchanged owners, that no
+site depends on an unrelated buffer's failure, and that upstream's claim refuses
+the pointer for a buffer a failed launch never filled. It recommended the
+smallest variant over a handle-threaded wrapper, and this was implemented:
 
-**B. File #27 upstream as it stands.** Keep `check_errors` client-wide and add
-it to upstream. Cost: an upstream PR and its review, for a capability upstream
-has already chosen to expose per buffer; the client-wide form also has no way to
-say which buffers it answers for.
+- the four `runtime.check_errors(...)` calls (`transfer.rs` 279, 788, 1115, 1638)
+  and both wrappers (`runtime.rs` 716, 1008) are deleted;
+- the published buffer's `get_resource` claim, its error mapping and the
+  unchanged-owner rejection stay exactly as they were;
+- `publish_download`'s comment names the claim that rejects instead of the
+  deleted call.
 
-Recommendation: **A**. It follows the migration's rule (use public 0.11 APIs,
-propose upstream only what 0.11 genuinely lacks) and the goal's direction
-(retire the fork's soundness set rather than carry it). B should only be chosen
-if a client-wide "is this device healthy at all" query is wanted as an
-independent feature, which is a new upstream capability rather than a port.
+Option B (client-wide `check_errors` upstream) is not in scope: no caller needs a
+stream-wide diagnostic, and upstream has deliberately exposed the capability per
+buffer instead.
 
-## Evidence gap
+### Contract differences from the fork (recorded, not papered over)
 
-No execution was performed for this note: the four call sites were read, the
-upstream and fork APIs were read at the revisions above, and the outcome mapping
-(`Rejected` with value+buffer returned) was compared textually. Whether
-`client.check([&handle])` and the following `get_resource(handle)` report
-*identical* errors on a failed launch, and whether option A's error is observed
-at the same boundary in the tests, is to be established by running the transfer
-tests with a fault injection once the crate compiles.
+- The fork's check was current-stream-scoped and drained the stream's error vector
+  (`mem::take`), so unrelated work on the same stream could reject a publication
+  and the error cleared on report. Upstream's claim is scoped to the published
+  buffer and is persistent until the bytes are rewritten
+  (`cubecl-server/src/stream/failures.rs:80-108`). Narrower and not
+  self-clearing; no inspected caller relied on the old behaviour.
+- Upstream's `check`/`sync_buffers`/`get_resource` use `unwrap_or_resume()`: a
+disconnected device runner resumes a panic instead of returning the fork's typed
+`ServerError::Generic`. If a fallible dispatch-error propagation is wanted, that
+is a new upstream capability and would need its own proposal; it is not a reason
+for a tenferro shim.
+- Not literal equivalence, therefore: "the producer's failure still rejects
+  publication with the owners returned unchanged" is the claim, not "identical
+  error values".
+
+## Evidence gap / next test
+
+No execution was performed for this change. The one test that would catch a
+regression here does not exist: a deterministic rejected producer writing the
+published allocation, asserting the originating failure and the unchanged
+rejection package before DMA/frontier admission, per admission path
+(`transfer.rs` 270-348, 763-861, 1090-1187, 1626-1705). The existing tests cover
+validation rejection only (`tests/pending_download.rs:200`,
+`tests/pending_upload.rs:161`, `tests/source_publication.rs:224`), and
+`docs/design/owning-pending-transfers-1945-u4.md:116,122-124` already records
+that fault-injection coverage is absent. A compile-validation rejection should
+be enough; no fault-injection framework is needed.

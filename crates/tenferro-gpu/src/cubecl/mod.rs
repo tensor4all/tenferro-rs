@@ -97,7 +97,6 @@ use crate::{
     DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer, Tensor, TensorRank,
     TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {

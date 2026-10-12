@@ -11,7 +11,6 @@ use tenferro_tensor::{
     CapabilityAxis, CapabilityQuery, DType, DeviceAccessError, DeviceAccessRequest,
     PreparedDeviceAccess, TensorBackendCapability as TensorBackendCapabilityTrait, TensorScalar,
 };
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 /// The Rust scalar type behind a preset variant name a macro received.
 #[allow(unused_macros)]

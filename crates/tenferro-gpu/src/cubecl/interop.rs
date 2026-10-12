@@ -19,7 +19,6 @@ use tenferro_tensor::{DType, TensorRead, TensorViewMut, TensorWrite, TypedTensor
 
 use super::error::unsupported_dtype;
 use super::{dispatch, CudaRuntime};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use cubecl::frontend::Scalar;
 
 /// CubeCL-owned byte allocation kept alive for CUDA-library workspace calls.

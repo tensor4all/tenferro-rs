@@ -28,7 +28,6 @@ use tenferro_tensor::{
     CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorScalar,
     TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use cubecl::frontend::Scalar;
 
 const OP: &str = "dot_general";
