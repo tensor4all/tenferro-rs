@@ -245,14 +245,13 @@ macro_rules! scalar_binary_float_kernel {
 
 scalar_binary_float_kernel!(scalar_div_float, |x, y| x / y);
 scalar_binary_float_kernel!(scalar_pow_float, |x, y| x.powf(y));
-scalar_binary_float_kernel!(scalar_rem_float, |x, y| {
-    let remainder = x - (x / y).trunc() * y;
-    if remainder == F::new(0.0f32) {
-        x * F::new(0.0f32)
-    } else {
-        remainder
-    }
-});
+// `%` on a float is CubeCL's `math.f_rem`, which lowers to `fmod` (LLVM `frem`
+// with fast math off): the IEEE remainder, so a zero result keeps the
+// dividend's sign. The textbook formula that used to be written here needed
+// `x * 0.0` to restore that sign, and 0.11's `math.f_mul` constant fold turns
+// any multiply by a literal zero into `+0.0`, losing it. See
+// docs/design/cubecl-011-ieee-constant-fold.md.
+scalar_binary_float_kernel!(scalar_rem_float, |x, y| x % y);
 
 #[cube(launch_unchecked)]
 pub fn scalar_real_complex_binary<F: Float>(
@@ -401,14 +400,9 @@ pub fn div_int_checked<I: Int>(
 #[cube(launch_unchecked)]
 pub fn rem_float<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
     if ABSOLUTE_POS < out.len() {
-        let x = lhs[ABSOLUTE_POS];
-        let y = rhs[ABSOLUTE_POS];
-        let remainder = x - (x / y).trunc() * y;
-        out[ABSOLUTE_POS] = if remainder == F::new(0.0f32) {
-            x * F::new(0.0f32)
-        } else {
-            remainder
-        };
+        // `%` is `math.f_rem` (`fmod`), so the sign of a zero result follows the
+        // dividend; see the note on `scalar_rem_float`.
+        out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] % rhs[ABSOLUTE_POS];
     }
 }
 
