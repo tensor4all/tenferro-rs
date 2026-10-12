@@ -1,22 +1,26 @@
 # U4-2a: an unadmitted same-runtime consumer copy of a published value (#1945 U4)
 
-Revision 3. The second review found **no substrate-level blocker** and left two IMPORTANT issues and one MINOR
-wording issue, all applied here (revision 2's review table is in §1).
+Revision 4. **No substrate-level blocker remains**: three independent pre-implementation reviews rejected the
+registry-authorized designs (4b) but confirmed this scope, and the last review of this record left only wording
+corrections, applied in §0. The record's own review history is: revision 1 (scope and ordering confirmed; error
+channel, destination type and queue ownership corrected), revision 2 (corrections verified; allocation-failure
+claim and rejection representation settled), revision 3 (three wording corrections).
 
-## 0. Revision 3 changes
+## 0. What the reviews changed
 
-- **Allocation-failure claim narrowed.** `raw::alloc_output` -> `dispatch::alloc_output` -> CubeCL's
-  *infallible* `ComputeClient::empty`; a genuine CUDA reservation failure panics in the device server rather
-  than returning an error. The slice therefore claims only that **recoverable destination-preparation errors
-  before wait/copy submission return the publication unchanged**; the allocation substrate's panic behaviour
-  is unchanged, and an injected preparation failure is not evidence of recoverable CUDA OOM.
+- **Allocation-failure claim narrowed.** The typed allocation path calls infallible
+  `ComputeClient::empty`; CUDA reservation failure is **not** returned as a recoverable allocation error (the
+  device server panics). The slice therefore claims only that **recoverable destination-preparation errors
+  before this copy's frontier wait / copy / completion-record submission return the publication unchanged**;
+  the allocation substrate's panic behaviour is unchanged, and an injected preparation failure is not evidence
+  of recoverable CUDA OOM.
 - **One rejection representation selected: a new device-copy rejection variant**, not an optional buffer.
-  `PublicationError::Rejected` exposes `buffer: PinnedHostBuffer` and an existing test and the public
-  documentation destructure that field, so the field contract stays intact; callers with an exhaustive match
-  over the error variants need a new arm, which is the migration this choice costs (the alternative would
-  break every `.len()`/retry use of the buffer instead). `PublicationRejected` is untouched: it belongs to
-  `PublicationAdmissionError` and holds only `error` and `value`. The existing rejection `Display` prefix and
-  the `Debug` derives are preserved.
+  `PublicationError::Rejected` exposes `buffer: PinnedHostBuffer`; the existing test destructures that field
+  (and already has a catch-all arm), while the public rustdoc example exhaustively matches the enum without
+  destructuring it - so the field contract stays intact and the exhaustive match gains one arm, which is the
+  migration this choice costs (the alternative would break every `.len()`/retry use of the buffer instead).
+  `PublicationRejected` is untouched: it belongs to `PublicationAdmissionError` and holds only `error` and
+  `value`. The existing rejection `Display` prefix and the `Debug` derives are preserved.
 - **Ownership wording corrected.** A successful `wait` releases the **locally owned** retention and event - a
   waited handle was never queued - and returns the destination; drop detaches into the existing retirement
   machinery, which releases completed drainable records but permanently retains them when the queue's
@@ -109,9 +113,12 @@ which synchronizes initialized streams.
 
 `copy_into` returns `Result<PendingRead, PublicationError>`:
 
-- a new **device-copy rejection variant** (with the publication, and no pinned buffer) for a refusal before
-  any enqueue: an eligibility mismatch, a terminal publication, or a recoverable destination-preparation
-  error. `PublicationError::Rejected` keeps its `buffer: PinnedHostBuffer` field contract, so existing callers
+- a new **device-copy rejection variant** (with the publication, and no pinned buffer) for a refusal:
+  an eligibility mismatch or a terminal publication is refused **before `with_raw`**, so nothing at all is
+  submitted; a recoverable destination-preparation error is refused **before this copy's frontier wait / copy
+  / completion-record submission** (the captured-stream entry flushes CubeCL's drop queue first, so "no device
+  enqueue of any kind" would be an overclaim), and the publication still comes back unchanged because that
+  flush does not consume its storage. `PublicationError::Rejected` keeps its `buffer: PinnedHostBuffer` field contract, so existing callers
   that read the buffer are unaffected; callers with an exhaustive match over the variants need one new arm.
   A genuine CUDA allocation failure is **not** claimed to be recoverable here: the typed allocation path is
   infallible and the device server panics on reservation failure, which this slice does not change;
@@ -134,8 +141,8 @@ intact, so its eventual drop still follows the source half's permanent-retention
 | Fault injection | a private, `#[cfg(test)]`-reachable seam at the submission boundary drives a failed completion record and a **recoverable destination-preparation error** after the guard is armed (a refusal, not an unproven submission); the existing frontier query/wait failure path is driven for the terminal-source claim. No test claims recoverable CUDA OOM |
 | No regression | pending-transfer, publication and overlap suites keep passing; the audited CUDA test partition is updated; the `transfer_overlap` group (`crates/tenferro-gpu/benches/transfer_paths.rs`) gains a same-runtime consumer arm |
 
-## 5. Open question for maintainers
+## 5. Maintainer note
 
-1. None blocking. The one public-API choice the review left open (optional buffer vs a device-copy rejection
-   variant) is settled in favour of the variant in §0/§3.4; a maintainer who prefers the optional-buffer form
-   should say so before implementation, because it changes the existing `Rejected` field contract instead.
+No open question blocks implementation. One public-API choice is recorded rather than asked: the device-copy
+rejection is a new variant (§0/§3.4); a maintainer who prefers making the existing `Rejected` buffer optional
+should say so before implementation, because that changes an existing field contract.
