@@ -50,7 +50,7 @@ impl<'s> Session<'s> {
     }
 
     /// Borrow the tenferro CubeCL client.
-    pub fn client(&self) -> &Client> {
+    pub fn client(&self) -> &Client {
         self.runtime.client()
     }
 
@@ -78,7 +78,7 @@ impl<'s> Session<'s> {
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,
         op: &'static str,
-    ) -> crate::Result<TensorBinding>>
+    ) -> crate::Result<TensorBinding>
     where
         T: CubeElement + TensorScalar + Clone,
     {
@@ -102,7 +102,7 @@ impl<'s> Session<'s> {
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,
         op: &'static str,
-    ) -> crate::Result<BufferArg>>
+    ) -> crate::Result<BufferArg>
     where
         T: CubeElement + TensorScalar + Clone,
     {

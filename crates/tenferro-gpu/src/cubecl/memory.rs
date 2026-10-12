@@ -117,7 +117,7 @@ pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tenso
 
 fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
-    client: &Client>,
+    client: &Client,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let host_data = match typed.buffer() {
@@ -292,7 +292,7 @@ pub(super) fn download_owned_vec<T: CubeElement>(
 
 fn upload_bool(
     rt: &CudaRuntime,
-    client: &Client>,
+    client: &Client,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
     let host_data = match typed.buffer() {

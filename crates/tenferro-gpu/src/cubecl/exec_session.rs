@@ -34,14 +34,14 @@ use super::{
 /// work.
 struct CubeclExitFlush<'a> {
     op: &'static str,
-    client: &'a cubecl::client::Client<cubecl_cuda::CudaRuntime>,
+    client: &'a cubecl::client::Client,
     flushed: bool,
 }
 
 impl<'a> CubeclExitFlush<'a> {
     fn new(
         op: &'static str,
-        client: &'a cubecl::client::Client<cubecl_cuda::CudaRuntime>,
+        client: &'a cubecl::client::Client,
     ) -> Self {
         Self {
             op,

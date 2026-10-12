@@ -195,7 +195,7 @@ fn every_write_binding_helper_invalidates_the_memoized_address() {
         // Only CubeCL array bindings can queue a scheduler-managed write.
         // `prepared_*_mut_access` returns a raw provider access instead and
         // keeps its own explicit enqueue ordering.
-        if !body.contains("BufferArg>") || !body.contains("prepare_device_write") {
+        if !body.contains("BufferArg") || !body.contains("prepare_device_write") {
             continue;
         }
         assert!(

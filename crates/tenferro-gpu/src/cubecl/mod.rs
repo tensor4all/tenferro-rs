@@ -75,7 +75,7 @@ use cubecl::prelude::{
     BufferArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
-use cubecl::prelude::{CubeCount, Int as CubeInt, StorageType, TensorBinding, Type};
+use cubecl::prelude::{CubeCount, Int as CubeInt, TensorBinding, Type};
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 
@@ -188,11 +188,11 @@ fn op_name(
 }
 
 fn ensure_atomic_add_supported<T: CubePrimitive>(
-    client: &Client>,
+    client: &Client,
     op: &'static str,
 ) -> crate::Result<()> {
     let elem = T::as_type_native_unchecked().elem_type();
-    let atomic_ty = Type::new(StorageType::Atomic(elem));
+    let atomic_ty = Type::atomic(elem);
     if client
         .properties()
         .atomic_type_usage(atomic_ty)
@@ -250,8 +250,8 @@ fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
 
 fn launch_native_materialization<E: CubePrimitive>(
     backend: &CudaBackend,
-    output: BufferArg>,
-    input: BufferArg>,
+    output: BufferArg,
+    input: BufferArg,
     plan: &NativePermutationPlan,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -771,7 +771,7 @@ impl CudaBackend {
             input.shape(),
             op,
             |client, count, dim, out, input_arg| unsafe {
-                structural::copy_bool_kernel::launch_unchecked::<CubeclCudaRuntime>(
+                structural::copy_bool_kernel::launch_unchecked:(
                     client,
                     count,
                     dim,
@@ -1917,11 +1917,11 @@ impl CudaBackend {
         &self,
         input: &TypedTensor<In>,
         launch: impl FnOnce(
-            &Client>,
+            &Client,
             CubeCount,
             CubeDim,
-            BufferArg>,
-            BufferArg>,
+            BufferArg,
+            BufferArg,
         ),
     ) -> crate::Result<TypedTensor<Out>>
     where
@@ -2028,11 +2028,7 @@ impl CudaBackend {
             input,
             |client, out, input, count| {
                 unsafe {
-                    structural::convert_numeric_to_complex_raw::launch_unchecked::<
-                        OutFloat,
-                        In,
-                        CubeclCudaRuntime,
-                    >(client, count, cube_dim_1d(), out, input);
+                    structural::convert_numeric_to_complex_raw::launch_unchecked::<OutFloat, In>(client, count, cube_dim_1d(), out, input);
                 }
                 Ok(())
             },
@@ -2138,7 +2134,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f32_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
+                    structural::convert_f32_to_c32_raw::launch_unchecked:(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2163,7 +2159,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f32_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
+                    structural::convert_f32_to_c64_raw::launch_unchecked:(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2188,7 +2184,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f64_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
+                    structural::convert_f64_to_c32_raw::launch_unchecked:(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2213,7 +2209,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f64_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
+                    structural::convert_f64_to_c64_raw::launch_unchecked:(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2234,9 +2230,9 @@ impl CudaBackend {
         &self,
         input: &TypedTensor<InFloat>,
         launch: impl FnOnce(
-            &cubecl::client::Client>,
-            BufferArg>,
-            BufferArg>,
+            &cubecl::client::Client,
+            BufferArg,
+            BufferArg,
             CubeCount,
         ) -> crate::Result<()>,
     ) -> crate::Result<TypedTensor<OutComplex>>
@@ -2283,7 +2279,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c32_to_f32::launch_unchecked::<CubeclCudaRuntime>(
+                structural::convert_c32_to_f32::launch_unchecked:(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2300,7 +2296,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c32_to_f64::launch_unchecked::<CubeclCudaRuntime>(
+                structural::convert_c32_to_f64::launch_unchecked:(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2317,7 +2313,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c64_to_f32::launch_unchecked::<CubeclCudaRuntime>(
+                structural::convert_c64_to_f32::launch_unchecked:(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2334,7 +2330,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c64_to_f64::launch_unchecked::<CubeclCudaRuntime>(
+                structural::convert_c64_to_f64::launch_unchecked:(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2645,9 +2641,9 @@ impl CudaBackend {
         axis: usize,
         op: &'static str,
         launch: impl FnOnce(
-            &Client>,
-            TensorBinding>,
-            TensorBinding>,
+            &Client,
+            TensorBinding,
+            TensorBinding,
         ) -> crate::kernels::Result<()>,
     ) -> crate::Result<TypedTensor<T>>
     where
@@ -4050,13 +4046,13 @@ fn launch_checked_integer_binary<I>(
     dtype: crate::DType,
     domain: CheckedIntegerDomain,
     launch: impl FnOnce(
-        &Client>,
+        &Client,
         CubeCount,
         CubeDim,
-        BufferArg>,
-        BufferArg>,
-        BufferArg>,
-        BufferArg>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<TypedTensor<I>>
 where
@@ -4111,12 +4107,12 @@ fn launch_scalar_binary<I>(
     rhs: &TypedTensor<I>,
     op: &'static str,
     launch: impl FnOnce(
-        &Client>,
+        &Client,
         CubeCount,
         CubeDim,
-        BufferArg>,
-        BufferArg>,
-        BufferArg>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
         bool,
     ),
 ) -> crate::Result<TypedTensor<I>>
@@ -4280,13 +4276,13 @@ fn launch_checked_integer_scalar_binary<I>(
     dtype: crate::DType,
     domain: CheckedIntegerDomain,
     launch: impl FnOnce(
-        &Client>,
+        &Client,
         CubeCount,
         CubeDim,
-        BufferArg>,
-        BufferArg>,
-        BufferArg>,
-        BufferArg>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
+        BufferArg,
         bool,
     ),
 ) -> crate::Result<TypedTensor<I>>
@@ -4386,12 +4382,12 @@ fn launch_elementwise_binary_into<T>(
     out: &mut Tensor,
     op: &'static str,
     launch: impl FnOnce(
-        &Client>,
+        &Client,
         CubeCount,
         CubeDim,
-        BufferArg>,
-        BufferArg>,
-        BufferArg>,
+        BufferArg,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<()>
 where
@@ -4433,11 +4429,11 @@ fn launch_elementwise_unary_into<T>(
     out: &mut Tensor,
     op: &'static str,
     launch: impl FnOnce(
-        &Client>,
+        &Client,
         CubeCount,
         CubeDim,
-        BufferArg>,
-        BufferArg>,
+        BufferArg,
+        BufferArg,
     ),
 ) -> crate::Result<()>
 where
@@ -4860,7 +4856,7 @@ impl<T: TensorScalar + Clone + 'static> CompactOperand<'_, T> {
         }
     }
 
-    fn binding(&self, op: &'static str) -> crate::Result<TensorBinding>> {
+    fn binding(&self, op: &'static str) -> crate::Result<TensorBinding> {
         match self {
             Self::Tensor(tensor) => dispatch::typed_tensor_binding(tensor, op),
             Self::View(view) => dispatch::typed_view_binding(view, op),

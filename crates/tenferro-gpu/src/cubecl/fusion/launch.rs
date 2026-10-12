@@ -92,7 +92,7 @@ where
             .address_type(self.address_type)
     }
 
-    fn address_type(&self) -> cubecl::prelude::StorageType {
+    fn address_type(&self) -> cubecl::prelude::ElemType {
         self.address_type.unsigned_type()
     }
 }

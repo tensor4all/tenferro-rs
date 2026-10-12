@@ -388,7 +388,7 @@ pub(super) fn abs_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
                 tensor.shape(),
                 op,
                 |client, count, dim, out, input_arg| unsafe {
-                    elementwise::abs_complex32::launch_unchecked::<CubeclCudaRuntime>(
+                    elementwise::abs_complex32::launch_unchecked:(
                         client, count, dim, out, input_arg,
                     );
                 },
@@ -403,7 +403,7 @@ pub(super) fn abs_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
                 tensor.shape(),
                 op,
                 |client, count, dim, out, input_arg| unsafe {
-                    elementwise::abs_complex64::launch_unchecked::<CubeclCudaRuntime>(
+                    elementwise::abs_complex64::launch_unchecked:(
                         client, count, dim, out, input_arg,
                     );
                 },
