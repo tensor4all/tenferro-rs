@@ -15,6 +15,26 @@ that names each capability, and the adoption gates that follow from them.
 
 "Released" below means merged with its gates green, not "planned".
 
+### Pin state and the cubecl 0.11 decision (2026-10-12)
+
+`scripts/check-git-pin-content.py` currently fails on `main`: `t4a-cubecl 0.10.2` was republished from a
+different commit (`eb2c8894…`) whose content is upstream 0.10.2 without the fork patches, so the pinned
+`1811309…` and the registry archive no longer agree. Measured options:
+
+- pinning the republished `eb2c8894…` satisfies the content check but drops the fork patches
+  (`ComputeClient::check_errors` disappears), so the workspace does not build;
+- pinning the fork's `release/t4a-cubecl-0.11.0` (`8aeafdf5…`, published as 0.11.0) satisfies the content
+  check and is the coherent pin, but upstream 0.11 reorganized the public API
+  (`cubecl::Runtime`, `cubecl::client::ComputeClient`, `cubecl::prelude::{ArrayArg,StorageType}`,
+  `cubecl::stream_id`, `cubecl_runtime::server::ComputeServer`) and `tenferro-gpu` reports 565 errors
+  (390 `E0277`, 83 `E0425`, 50 `E0107`, 21 `E0432`, 17 `E0405`) - a port, not a one-line bump;
+- the one-revision-per-graph rule requires the `cubek` pin to move to a revision that pins cubecl 0.11.0
+  first (`release/t4a-0.2.2` pins 0.10.2, cubek `main` pins 0.10.0).
+
+An existing worktree branch `migration/cubecl-0.11-upstream` already carries 60 commits of that migration.
+Until the port lands, U4-2a and U4-2b are pinned at `1811309…` and the content check stays red for reasons
+outside those slices.
+
 ## 2. Capability matrix
 
 | Capability | State | Evidence | Downstream milestone |
@@ -27,7 +47,7 @@ that names each capability, and the adoption gates that follow from them.
 | **Cubecl-side boundary changes** — `check_errors` publication boundary (#27), bounded staging retention on the write path (#28), write authority required for server writes (#29) | released in the fork | fork PRs, `docs/design/cubecl-fork-exit-1945.md` | prerequisite for the routes above; not yet proposed upstream |
 | **Optional held AD adapter (U2-AD)** | **deferred, not solved** | upstream design record D12; our measurement puts session entry at ≈5% of a 13.5 µs op, so the measured-signal precondition is unmet | must not be advertised; B3 depends on it |
 | **Consumer copy of a published value (U4-2a)** — same-runtime, same-device device-side copy with the pending-transfer ownership model | **specified, not implemented** (`docs/design/consumer-copy-1945-u4-2a.md`): exact-instance runtime/device eligibility, raw `alloc_bytes`/`wait_event`/`copy_bytes` on the consumer's captured stream, the existing `TransferRetirement` record (raw event, no runtime-owning completion), and an explicit `CopyRefusal` | design only; the token/registry revisions 1-3 were rejected by three independent pre-implementation reviews, and this scope needs its own review before implementation | must not be advertised until implemented and measured |
-| **Registry-authorized cross-runtime handoff (U4-2b)** — domain-scoped dependency token admitted into the consumer's run | **deferred: needs a substrate decision** (`docs/design/consumer-read-handoff-1945-u4-2.md`, revision-4 direction): an exact-instance binding seam, a two-runtime authorization model, a consumer-path admission surface, and a cycle-free completion owner do not exist yet | three pre-implementation reviews rejected the token/registry designs (revisions 1-3) for those gaps | must not be advertised; this is the part of #1945 item 1 that says "authorized read access plus a domain-scoped dependency token obtained from the runtime registry" |
+| **Registry-authorized consumer read (U4-2b)** — a published value read from another event domain of the same owning runtime and provider runtime, through a registry-bound admission | **scoped, not implemented** (`docs/design/consumer-read-handoff-1945-u4-2.md`): needs an external-completion registration surface on the owning runtime (so the scheduler's provenance check applies) and a weak-runtime owner for the returned completion | design only; the four earlier cross-runtime designs were rejected by pre-implementation reviews, and the axis-1 shape still needs its own review | **cross-runtime and cross-device reads are explicitly unsupported**; must not be advertised until implemented and measured |
 | **Direct-required / allow-staging route policy, P2P capability registration** | not implemented | route inventory only | no frontend redesign required to add them |
 | **Producer/consumer overlap** | measured | #2106, the `transfer_overlap` group in `crates/tenferro-gpu/benches/transfer_paths.rs` (controlled schedule) | measured claim only |
 | **Cross-stream readiness, host-wait-free publication, fault-injected terminal paths** | not established | every transfer/publication test uses the ambient captured stream; the host bridge is still the only cross-domain route | claims must stay bounded until measured |
