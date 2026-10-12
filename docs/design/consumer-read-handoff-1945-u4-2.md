@@ -35,7 +35,8 @@ half needs substrate contracts this repository does not have yet:
 
 Those four are a substrate decision, not a bounded consumer slice. Revision 4 therefore splits this record:
 
-- **4a (implementable now, review-endorsed):** an **unadmitted same-runtime, same-device consumer copy** -
+- **4a (implementable now, review-endorsed):** an **unadmitted same-runtime, same-device consumer copy**, specified in
+  `docs/design/consumer-copy-1945-u4-2a.md` -
   `SourcePublication::copy_into(&mut CudaHeldSession<'_>)` with an eligibility check that both ends belong to
   the same CUDA runtime and device, the pending-transfer ownership model, the consumer-stream copy and
   completion, and the private fault-injection seam. No registry, no token, no run admission, no new
