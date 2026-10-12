@@ -330,7 +330,7 @@ pub(crate) fn launch_sum_int<I: Int + CubeElement>(
 }
 
 /// Launch a complex sum reduction.
-pub(crate) fn launch_sum_complex<C: ComplexCore + CubeElement>(
+pub(crate) fn launch_sum_complex<C: ComplexCore + CubeElement + PlaneReduce>(
     client: &Client,
     input: TensorBinding,
     output: TensorBinding,
@@ -462,7 +462,7 @@ pub(crate) fn launch_prod_int<I: Int + CubeElement>(
 }
 
 /// Launch a complex product reduction.
-pub(crate) fn launch_prod_complex<C: ComplexCore + CubeElement>(
+pub(crate) fn launch_prod_complex<C: ComplexCore + CubeElement + PlaneReduce>(
     client: &Client,
     input: TensorBinding,
     output: TensorBinding,

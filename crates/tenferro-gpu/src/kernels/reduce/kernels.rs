@@ -418,11 +418,11 @@ pub(crate) fn reduce_sum_int_plane<T: Int>(
         reduce_index += plane_width;
         while reduce_index < axis_len {
             let input_offset = input_base_offset + reduce_index * axis_stride;
-            acc = wrapping_add::<I>(acc, input[input_offset]);
+            acc = wrapping_add::<T>(acc, input[input_offset]);
             reduce_index += plane_width;
         }
 
-        let reduced = wrapping_plane_sum::<I>(acc);
+        let reduced = wrapping_plane_sum::<T>(acc);
         if UNIT_POS == 0 {
             output[output_offset] = reduced;
         }
@@ -460,11 +460,11 @@ pub(crate) fn reduce_prod_int_plane<T: Int>(
         reduce_index += plane_width;
         while reduce_index < axis_len {
             let input_offset = input_base_offset + reduce_index * axis_stride;
-            acc = wrapping_mul::<I>(acc, input[input_offset]);
+            acc = wrapping_mul::<T>(acc, input[input_offset]);
             reduce_index += plane_width;
         }
 
-        let reduced = wrapping_plane_prod::<I>(acc);
+        let reduced = wrapping_plane_prod::<T>(acc);
         if UNIT_POS == 0 {
             output[output_offset] = reduced;
         }
