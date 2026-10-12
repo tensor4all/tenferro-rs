@@ -87,13 +87,27 @@ Metal evidence: #2114.
 
 | # | branch | content | open item |
 | --- | --- | --- | --- |
-| 1 | `feat/tenferro-upstream-arith-fixes` `5941a32b9` | sound folds; FMA stays real | a test per commit |
-| 2 | (from the Mac stack) | CUDA interop | split into server interop + complex plane reductions (`with_server` hunk already absent) |
-| 3 | `feat/tenferro-upstream-log1p-native` `c02cc079a` | native `log1p` in C++/LLVM, polyfill only for Metal | upstream accuracy test |
+| 1 | `feat/tenferro-upstream-arith-fixes` `23b6cd7a5` | sound folds; FMA stays real | **done**: each commit carries a device-verified test |
+| 2 | `feat/tenferro-upstream-cuda-interop` `9344bd4e0` | CUDA interop, split | **done**: two topic commits, content-identical to the Mac's single commit (`git diff 1883fd93b HEAD` empty) |
+| 3 | `feat/tenferro-upstream-log1p-native` `5fc8da47e` | native `log1p` in the C++ backend, polyfill only for Metal | upstream accuracy test: needs a dtype-correct shape first (the LLVM backend has no native `log1p` lowering, so a generic test would fail there) |
 | 4 | `feat/tenferro-upstream-bool-buffers` `5d0fa26b5` | sized `BoolType` | part 2: the refusal (narrow the wgpu tables, shared compile-time check, tests) |
 | 5 | `feat/tenferro-upstream-host-visible` `3098a1558` | completion, primary memory, device-server accessor | — |
 | 6 | cubek `feat/tenferro-upstream-kernels`, `...-interleaved-fft` | matmul C32, interleaved FFT | — |
 
 Each goes through the gpt-6.1-sol review and then the user's approval before
 filing.
+
+## Verification of the new candidate tests (this session)
+
+- fold test (`test_ieee_constant_folds`, in the folds commit): CPU backend —
+  **passes with the change, fails without it** (`cargo test -p cubecl-cpu --lib --
+  test_ieee_constant_folds`, the pre-fix failure is the `v % 1.0 -> v` assertion).
+- complex mul-add test (`test_complex_mul_add_cf32/cf64`, in the FMA commit):
+  A100 with `--features cpp` — **both pass with the change and fail to launch
+  without it** (`cargo test -p cubecl-cuda --features cpp --lib --
+  test_complex_mul_add`; the pre-fix run reports "A launch error happened").
+- `log1p`: the consumer's own `test_log1p_small_x_f32_precision` is the reproducer
+  (fails against the pre-fix revision, passes with the C++ native lowering), and
+  it is cited in the commit. A portable upstream accuracy test is not yet written
+  for the reason above.
 
