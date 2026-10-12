@@ -102,6 +102,38 @@ launcher ignores it in favour of the handle's size.
 
 **5. `download_tensor` errors in the axpby strided path (2 tests).**
 
+Not a transfer bug: the download's claim check surfaces a real launch failure
+from earlier in the test, which the 0.11 `get_resource` claim reports ("The bytes
+were never written ... A launch error happened"). The launch failed because the
+generated CUDA does not compile:
+
+```
+default_program(111): error: no instance of overloaded function "fma" matches the argument list
+            argument types are: (const cuDoubleComplex, const cuDoubleComplex, const cuDoubleComplex)
+  cuDoubleComplex const v223 = fma(v49, v56, v69);
+```
+
+Cause: `cubecl-opt/src/passes/inst_combine.rs` turns `a*b + c` into an `FmaOp`
+(`lone_product`/`as_fma`, lines 28-47) without restricting it to real float
+scalars, and the C++ backend lowers `FmaOp` to `fma(...)`, which has no complex
+overload. Tenferro's complex axpby kernel forms exactly that pattern
+(`y + alpha * x` with a single use of the product). Upstream fix: keep complex
+out of the FMA formation.
+
+## Upstream items found by this run
+
+All five are things the fork had solved, or upstream defects that the migration
+exposes. Each needs an upstream change (`tracel-ai/*`), i.e. the user's approval.
+
+1. IEEE-unsound constant folds in the math dialect — three tenferro sites, one
+   fixed locally, one still failing. [cubecl-011-ieee-constant-fold.md](./cubecl-011-ieee-constant-fold.md)
+2. `&[bool]` launch arguments panic (`BoolType` is not `SizedType`) — 3 tests.
+3. `Log1pOp` loses precision in the C++ backend where the fork called the native
+   `log1pf` — 1 test.
+4. `BufferArg`'s length is ignored by the launcher in favour of the handle's
+   byte size — 1 test; the local handle-trim fix was measured and ruled out.
+5. `inst_combine` forms `FmaOp` on complex operands — 2 tests.
+
 ## Next
 
 Diagnose 3-5 (tenferro-side), then decide the two upstream items: the
