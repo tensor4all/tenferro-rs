@@ -11,7 +11,7 @@ use tenferro_tensor::TensorRead;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 #[cube(launch_unchecked)]
-fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {
+fn kernel_add_f64(output: &mut [f64], a: &[f64], b: &[f64]) {
     if ABSOLUTE_POS < output.len() {
         output[ABSOLUTE_POS] = a[ABSOLUTE_POS] + b[ABSOLUTE_POS];
     }
