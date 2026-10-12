@@ -71,7 +71,7 @@ Explicitly **not** claimed in this slice:
 
 | Issue #1945 requirement | Slice 1 |
 | --- | --- |
-| "Pinned H2D/D2H can enqueue and return without a host wait" | **partly**: both directions return a pending handle without waiting for their copy, and their publication boundary no longer performs its own drop-queue rotation (CubeCL's `check_errors`). Two waits remain: host dispatch is a blocking host round trip, and both cross-stream resource resolution (bounded GC backpressure) and a preceding kernel that trips the staging policy can still wait for device progress (§3, §5) |
+| "Pinned H2D/D2H can enqueue and return without a host wait" | **partly**: both directions return a pending handle without waiting for their copy, and their publication boundary no longer performs its own drop-queue rotation (upstream reports a launch failure on the published buffer's own claim, `get_resource` → `streams.ensure_written`; see [cubecl-011-check-errors-disposition.md](./cubecl-011-check-errors-disposition.md)). Two waits remain: host dispatch is a blocking host round trip, and both cross-stream resource resolution (bounded GC backpressure) and a preceding kernel that trips the staging policy can still wait for device progress (§3, §5) |
 | "An owned/guarded pending result retains source read leases, destination allocation, pinned/staging buffers and provider/event resources" | **yes**, as owned state: `ManagedResource`, the owned pinned buffer, the `CudaRuntime` pin and the event |
 | "CPU reads/mutation cannot observe a pending or aliased buffer" | **yes in both directions**: the value and the buffer are owned by the handle until `wait()` returns them |
 | "GPU consumers import a valid stream/event dependency without host synchronization" | **no**: needs the frozen-domain admission seam (§4) |
@@ -246,12 +246,15 @@ PendingDownload                 // owns the submitted value and the pinned buffe
   └── resolved: bool
 ```
 
-- The copy is published through CubeCL's `check_errors` (tensor4all/cubecl#27): it reports the
-  stream's accumulated producer errors and dispatches every queued task to the server thread — so the
-  producer's kernels are on the stream before the raw copy — without rotating the drop queue, so the
-  call does not wait for device progress. A producer failure therefore surfaces as the transfer's own
-  error instead of being masked by a successfully completed copy, and the transfer's own CUDA event
-  is the completion witness.
+- The copy is published through the published buffer's own claim: resolving that resource asks for
+  the buffer (upstream's `Client::get_resource`, whose CUDA implementation rejects a failed write with
+  `streams.ensure_written`), and that resolution dispatches the host task queue — so the producer's
+  kernels are on the stream before the raw copy — without rotating the drop queue, so the call does
+  not wait for device progress. A producer failure therefore surfaces as the transfer's own error
+  instead of being masked by a successfully completed copy, and the transfer's own CUDA event is the
+  completion witness. (The fork did this with `Client::check_errors`, fork PR #27, which
+  [cubecl-011-check-errors-disposition.md](./cubecl-011-check-errors-disposition.md) retires: 0.11
+  reports the same failures on the affected buffers.)
 - Staged host bytes are retired by CubeCL's staging policy, which the write path enforces as well
   (tensor4all/cubecl#28): with the boundary no longer flushing, a transfer-only workload that stages
   bytes and runs no kernel would otherwise retain them, because the policy counters are only evaluated
@@ -284,8 +287,9 @@ PendingDownload                 // owns the submitted value and the pinned buffe
 3. **Owning asynchronous submission** as the repository's storage-ownership contract requires: both
    transfer directions now own their admitted package, detach on drop and leak on `mem::forget`
    ([owning-pending-transfers-1945-u4.md](./owning-pending-transfers-1945-u4.md)). What stays open is
-   the publication boundary: it no longer performs its own drop-queue rotation (CubeCL's
-   `check_errors`), but host dispatch, cross-stream GC backpressure and a preceding kernel that trips
+   the publication boundary: it no longer performs its own drop-queue rotation (the published
+   buffer's claim; CubeCL's `check_errors` in the fork, retired in the 0.11 migration), but host
+   dispatch, cross-stream GC backpressure and a preceding kernel that trips
    the staging policy can still wait for device progress.
 4. **Bounded chunked staging, event amortization, and the route capability model** (including why
    P2P is unavailable on a given device pair).

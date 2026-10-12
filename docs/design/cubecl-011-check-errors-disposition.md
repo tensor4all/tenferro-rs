@@ -1,7 +1,8 @@
 # Disposition: the fork's `Client::check_errors` against upstream 0.11
 
-Status: awaiting a decision. This is the last compile error of the tenferro-gpu
-0.11 migration (564 -> 1).
+Status: implemented (the migration's last compile error) and reviewed. Fork PR
+#27 is retired rather than proposed: 0.11 has the capability, scoped to the
+buffers the caller names.
 
 ## What the fork had
 
@@ -17,8 +18,10 @@ pub fn check_errors(&self) -> Result<(), ServerError> {
 
 and the server side is `flush_errors(stream_id)` collected into
 `ServerError::ServerUnhealthy`. tenferro calls it at four publication boundaries
-in `cubecl/transfer.rs` (279, 788, 1115, 1638) and maps any error to
-`Rejected`/`publication_rejected` with the value and buffer returned unchanged.
+in `cubecl/transfer.rs` (279, 788, 1115, 1638). Three of them map any error to
+`Rejected`/`publication_rejected` with the value and pinned owner returned
+unchanged; `upload_tensor_chunked` (279) borrows its inputs and returns
+`crate::Result<()>`.
 
 ## What upstream 0.11 actually has
 
@@ -39,11 +42,12 @@ this is not an API that 0.11 lacks:
   report: it lives on the buffers the launch never wrote and surfaces on any
   read, `check` or `sync_buffers` of those" (`client.rs:1394-1398`).
 
-The ports add nothing here, and the interop port relies on the same mechanism:
-`ServerStorage::get_resource` performs `streams.ensure_written([&binding])` with
-the comment "The same claim check a read makes: a buffer a failed launch never
-filled reports the failure rather than handing back a pointer to whatever was
-there before" (`cubecl-runtime/src/server/base.rs:779-788`).
+The interop port relies on the same mechanism. The `ServerStorage` trait declares
+`get_resource` as the claim (`cubecl-runtime/src/server/base.rs:779-792`); the
+executable CUDA check is `cubecl-cuda/src/compute/server.rs:1340-1350`, with the
+comment "The same claim check a read makes: a buffer a failed launch never filled
+reports the failure rather than handing back a pointer to whatever was there
+before".
 
 ## Decision: delete the checks, keep the resource boundary
 
@@ -59,7 +63,7 @@ smallest variant over a handle-threaded wrapper, and this was implemented:
   and both wrappers (`runtime.rs` 716, 1008) are deleted;
 - the published buffer's `get_resource` claim, its error mapping and the
   unchanged-owner rejection stay exactly as they were;
-- `publish_download`'s comment names the claim that rejects instead of the
+- `download_pending`'s comment names the claim that rejects instead of the
   deleted call.
 
 Option B (client-wide `check_errors` upstream) is not in scope: no caller needs a
