@@ -1,7 +1,8 @@
 # Order and gate for contributing the ports upstream
 
-Status: agreed sequencing. Nothing is published and nothing is filed upstream
-yet.
+Status: agreed sequencing. The same procedure, with owners and current state,
+is tracked in the umbrella issue #2116. Nothing is published and nothing is
+filed upstream yet.
 
 ## Order
 
