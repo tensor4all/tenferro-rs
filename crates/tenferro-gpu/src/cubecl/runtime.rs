@@ -6,6 +6,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use cubecl::client::Client;
+use cubecl::server::ServerStorage;
 use cubecl_environment::stream::StreamId;
 use cubecl::Device;
 use cubecl_cuda::CudaDevice;
