@@ -20,6 +20,7 @@ use tenferro_tensor::{DType, TensorRead, TensorViewMut, TensorWrite, TypedTensor
 use super::error::unsupported_dtype;
 use super::{dispatch, CudaRuntime};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::frontend::Scalar;
 
 /// CubeCL-owned byte allocation kept alive for CUDA-library workspace calls.
 // INVARIANT: dropping the handle needs no retirement event. The buffer is only
@@ -98,7 +99,7 @@ pub fn cube_dim_1d() -> CubeDim {
 ///
 /// Returns [`crate::Error::Validation`] with `InvalidArgument` when the shape
 /// product overflows, or [`crate::Error::BackendSource`] when allocation fails.
-pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
+pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static>(
     rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -121,7 +122,7 @@ pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'stati
 #[doc(hidden)]
 pub fn alloc_zero_output<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static + Scalar,
 {
     let mut output = alloc_output::<T>(rt, shape)?;
     // One stream-ordered memset over the fresh allocation: dtype-agnostic,
@@ -143,7 +144,7 @@ where
 ///
 /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
 /// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
-pub fn typed_tensor_binding<T: CubeElement + TensorScalar + Clone>(
+pub fn typed_tensor_binding<T: CubeElement + TensorScalar + Clone + Scalar>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TensorBinding> {
@@ -155,7 +156,7 @@ pub fn typed_tensor_binding<T: CubeElement + TensorScalar + Clone>(
 ///
 /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
 /// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
-pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
+pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone + Scalar>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<BufferArg> {
@@ -187,7 +188,7 @@ pub fn upload_typed_tensor<T>(
     data: Vec<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
 {
     let byte_len = T::as_bytes(&data).len();
     // `data` is owned: hand its allocation to CubeCL instead of staging a copy.
@@ -216,7 +217,7 @@ pub fn download_typed_tensor<T>(
     op: &'static str,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + TensorScalar + Clone + 'static,
+    T: CubeElement + TensorScalar + Clone + Scalar + 'static,
 {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
     let prepared = dispatch::prepared_tensor_access(tensor, op)?;
@@ -314,7 +315,7 @@ fn device_bytes_from_handle(
 ) -> crate::Result<DeviceByteBuffer> {
     let resource = rt
         .client()
-        .get_resource(handle.clone())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle.clone())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(DeviceByteBuffer {
         handle: Some(handle),
@@ -344,7 +345,7 @@ pub(crate) fn offset_device_ptr<T: 'static>(
     })?;
     let resource = rt
         .client()
-        .get_resource(prepared.into_handle())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     let offset_bytes = offset
         .checked_mul(std::mem::size_of::<T>())
@@ -539,7 +540,7 @@ pub(crate) fn scale_typed_tensor<T, F>(
     launch: F,
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
     F: FnOnce(
         &Client,
         CubeCount,
@@ -559,7 +560,7 @@ pub(crate) fn scale_typed_tensor_for_op<T, F>(
     launch: F,
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
     F: FnOnce(
         &Client,
         CubeCount,
@@ -588,7 +589,7 @@ fn scale_typed_view<T, F>(
     launch: F,
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
     F: FnOnce(
         &Client,
         CubeCount,
@@ -642,7 +643,7 @@ fn launch_scaled<T, F>(
     launch: F,
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
     F: FnOnce(
         &Client,
         CubeCount,
@@ -771,7 +772,7 @@ pub fn fill_zero_write(rt: &CudaRuntime, output: TensorWrite<'_>) -> crate::Resu
 
 fn fill_zero_typed_tensor<T>(rt: &CudaRuntime, output: &mut crate::Tensor) -> crate::Result<()>
 where
-    T: TensorScalar + Clone + Send + Sync + 'static,
+    T: TensorScalar + Scalar + Clone + Send + Sync + 'static,
 {
     let output = output
         .as_typed_mut::<T>()
@@ -793,7 +794,7 @@ fn fill_zero_typed_view<T>(
     output: &mut TypedTensorViewMut<'_, T>,
 ) -> crate::Result<()>
 where
-    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static + Scalar,
 {
     dispatch::ensure_view_mut_resident_on_runtime(rt, output, FILL_ZERO_OP)?;
     let len = output.n_elements();
@@ -837,7 +838,7 @@ fn fill_zero_view_span<T>(
     len: usize,
 ) -> crate::Result<()>
 where
-    T: TensorScalar + Clone + 'static,
+    T: TensorScalar + Clone + 'static + Scalar,
 {
     let handle = dispatch::cubecl_view_mut_buffer(output, FILL_ZERO_OP)?
         .handle()
@@ -909,7 +910,7 @@ fn fill_zero_strided_view<T>(
     len: usize,
 ) -> crate::Result<()>
 where
-    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static + Scalar,
 {
     let dims = output.shape().to_vec();
     let strides = output

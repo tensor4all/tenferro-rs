@@ -10,13 +10,14 @@ use crate::cubecl::dispatch::{
 };
 use crate::cubecl::runtime::CudaRuntime;
 use crate::types::{TensorScalar, TypedTensor};
+use cubecl::frontend::Scalar;
 
 pub(crate) fn launch<T>(
     runtime: &CudaRuntime,
     classified: ClassifiedFusion<'_, T>,
 ) -> crate::Result<Vec<TypedTensor<T>>>
 where
-    T: CubeElement + TensorScalar + CubePrimitive + Clone,
+    T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
 {
     let mut outputs = Vec::with_capacity(classified.plan.outputs().len());
     for _ in classified.plan.outputs() {

@@ -59,6 +59,7 @@ use crate::{
     TypedTensorViewMut,
 };
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::frontend::Scalar;
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {
@@ -223,7 +224,7 @@ enum ReadRef<'a, 'b, T> {
     View(&'a TypedTensorView<'b, T>),
 }
 
-impl<T: TensorScalar + 'static> ReadRef<'_, '_, T> {
+impl<T: TensorScalar + 'static + Scalar> ReadRef<'_, '_, T> {
     fn n_elements(&self) -> usize {
         match self {
             Self::Owned(tensor) => tensor.n_elements(),
@@ -271,7 +272,7 @@ enum WriteRef<'a, 'b, T> {
     View(&'a mut TypedTensorViewMut<'b, T>),
 }
 
-impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
+impl<T: TensorScalar + 'static + Scalar> WriteRef<'_, '_, T> {
     fn ensure_resident(&self, rt: &CudaRuntime, op: &'static str) -> crate::Result<()> {
         match self {
             Self::Owned(tensor) => ensure_resident_on_runtime(rt, tensor, op),
@@ -308,7 +309,7 @@ impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
     }
 }
 
-impl<T: CubeElement + TensorScalar + Clone + 'static> WriteRef<'_, '_, T> {
+impl<T: CubeElement + TensorScalar + Clone + Scalar + 'static> WriteRef<'_, '_, T> {
     /// Bind the destination's whole root allocation for a native kernel launch.
     fn array_arg(&mut self, op: &'static str) -> crate::Result<BufferArg> {
         match self {

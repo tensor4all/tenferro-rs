@@ -231,7 +231,7 @@ fn owned_raw_vendor_writes_use_the_round_trip_path() {
         "\n}\n",
     );
     assert!(
-        write_body.contains(".get_resource("),
+        write_body.contains(".get_resource::<cubecl_cuda::ffi_interop::CudaServer>("),
         "write_device_ptr must resolve through get_resource"
     );
     for memoized in [

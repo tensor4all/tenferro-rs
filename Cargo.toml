@@ -88,12 +88,12 @@ lapack-inject = "0.1.2"
 # gating keeps the baseline compatible with CUDA 12.4 driver/NVRTC libraries.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
 # Local upstream migration verification only; replace paths with merged upstream pins before release.
-cubecl = { path = "../cubecl-upstream-verify/crates/cubecl", default-features = false }
-cubecl-cuda = { path = "../cubecl-upstream-verify/crates/cubecl-cuda", features = ["cpp"] }
-cubecl-common = { path = "../cubecl-upstream-verify/crates/cubecl-common" }
-cubecl-environment = { path = "../cubecl-upstream-verify/crates/cubecl-environment" }
-cubecl-runtime = { path = "../cubecl-upstream-verify/crates/cubecl-runtime" }
-cubecl-wgpu = { path = "../cubecl-upstream-verify/crates/cubecl-wgpu" }
+cubecl = { path = "../cubecl-ports-combined/crates/cubecl", default-features = false }
+cubecl-cuda = { path = "../cubecl-ports-combined/crates/cubecl-cuda", features = ["cpp"] }
+cubecl-common = { path = "../cubecl-ports-combined/crates/cubecl-common" }
+cubecl-environment = { path = "../cubecl-ports-combined/crates/cubecl-environment" }
+cubecl-runtime = { path = "../cubecl-ports-combined/crates/cubecl-runtime" }
+cubecl-wgpu = { path = "../cubecl-ports-combined/crates/cubecl-wgpu" }
 cubek-matmul = { path = "../cubek-upstream-tenferro/crates/cubek-matmul", default-features = false, features = ["multi-level"] }
 cubek-std = { path = "../cubek-upstream-tenferro/crates/cubek-std", default-features = false }
 cubek-fft = { path = "../cubek-upstream-fft/crates/cubek-fft", default-features = false }
@@ -102,10 +102,10 @@ omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }
 
 [patch."https://github.com/tracel-ai/cubecl"]
-cubecl = { path = "../cubecl-upstream-verify/crates/cubecl" }
-cubecl-common = { path = "../cubecl-upstream-verify/crates/cubecl-common" }
-cubecl-environment = { path = "../cubecl-upstream-verify/crates/cubecl-environment" }
-cubecl-ir = { path = "../cubecl-upstream-verify/crates/cubecl-ir" }
+cubecl = { path = "../cubecl-ports-combined/crates/cubecl" }
+cubecl-common = { path = "../cubecl-ports-combined/crates/cubecl-common" }
+cubecl-environment = { path = "../cubecl-ports-combined/crates/cubecl-environment" }
+cubecl-ir = { path = "../cubecl-ports-combined/crates/cubecl-ir" }
 
 [profile.dev]
 opt-level = 0

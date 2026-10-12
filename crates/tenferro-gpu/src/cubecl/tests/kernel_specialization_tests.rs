@@ -33,7 +33,7 @@ fn loaded_modules(backend: &CudaBackend, kernel: &str) -> usize {
     backend
         .runtime()
         .client()
-        .with_server(|server| server.compiled_kernel_ids())
+        .with_server::<cubecl_cuda::ffi_interop::CudaServer, _>(|server| server.compiled_kernel_ids())
         .expect("CubeCL CUDA server should answer")
         .iter()
         .filter(|id| id.stable_format().contains(&needle))

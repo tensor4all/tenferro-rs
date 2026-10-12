@@ -114,7 +114,7 @@ impl WebGpuBuffer {
         };
         let managed = rt
             .client()
-            .get_resource(handle.clone())
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle.clone())
             .map_err(|error| crate::Error::backend_source(op, error))?;
         let allocation_id = AllocationId::from_backend_id(managed.resource().allocation_id());
         Ok(Self {

@@ -275,7 +275,7 @@ impl<'s> Session<'s> {
         let resource = self
             .runtime
             .client()
-            .get_resource::<cubecl_cuda::CudaServer>(prepared.handle().clone())
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.handle().clone())
             .map_err(|err| crate::Error::backend_source("raw.tensor", err))?;
         let base =
             super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, "raw.tensor")?;
@@ -312,7 +312,7 @@ impl<'s> Session<'s> {
         let resource = self
             .runtime
             .client()
-            .get_resource::<cubecl_cuda::CudaServer>(prepared.handle().clone())
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.handle().clone())
             .map_err(|err| crate::Error::backend_source("raw.tensor_mut", err))?;
         let base =
             super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, "raw.tensor_mut")?;

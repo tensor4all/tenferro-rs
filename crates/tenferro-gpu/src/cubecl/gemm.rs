@@ -29,6 +29,7 @@ use tenferro_tensor::{
     TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::frontend::Scalar;
 
 const OP: &str = "dot_general";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
@@ -428,7 +429,7 @@ struct CutensorContractionKey {
 }
 
 impl CutensorContractionKey {
-    fn from_spec<T: CutensorScalar>(spec: &CutensorContractionSpec<'_>) -> Self {
+    fn from_spec<T: CutensorScalar + Scalar>(spec: &CutensorContractionSpec<'_>) -> Self {
         Self {
             dtype: T::DTYPE,
             lhs: CutensorOperandLayoutKey::new(
@@ -498,7 +499,7 @@ unsafe impl Send for CachedCutensorContraction {}
 impl CachedCutensorContraction {
     fn new<T>(cutensor: &CutensorHandle, spec: &CutensorContractionSpec<'_>) -> crate::Result<Self>
     where
-        T: CutensorScalar,
+        T: CutensorScalar + Scalar,
     {
         let desc_a = TensorDescriptor::new(
             cutensor,
@@ -563,7 +564,7 @@ impl CachedCutensorContraction {
 /// key. Field order mirrors [`CutensorContractionKey::from_spec`]; the stored
 /// key is compared with [`key_matches_spec`] on lookup, so a 64-bit collision
 /// degrades to a plan rebuild instead of a wrong plan.
-fn spec_hash<T: CutensorScalar>(spec: &CutensorContractionSpec<'_>) -> u64 {
+fn spec_hash<T: CutensorScalar + Scalar>(spec: &CutensorContractionSpec<'_>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     T::DTYPE.hash(&mut hasher);
@@ -586,7 +587,7 @@ fn spec_hash<T: CutensorScalar>(spec: &CutensorContractionSpec<'_>) -> u64 {
 }
 
 /// Verify a stored materialized key against a borrowed spec.
-fn key_matches_spec<T: CutensorScalar>(
+fn key_matches_spec<T: CutensorScalar + Scalar>(
     key: &CutensorContractionKey,
     spec: &CutensorContractionSpec<'_>,
 ) -> bool {
@@ -609,7 +610,7 @@ fn key_matches_spec<T: CutensorScalar>(
 }
 
 /// The typed operands behind a same-dtype pair, or the refusal a mismatched pair reports.
-fn gemm_pair_operands<'a, T: TensorScalar>(
+fn gemm_pair_operands<'a, T: TensorScalar + Scalar>(
     op: &'static str,
     lhs: &'a Tensor,
     rhs: &'a Tensor,
@@ -707,7 +708,7 @@ impl<T: 'static> ReadOperand<'_, '_, T> {
     }
 }
 
-fn read_operand_alignment_requirement<T: CutensorScalar>(operand: &ReadOperand<'_, '_, T>) -> u32 {
+fn read_operand_alignment_requirement<T: CutensorScalar + Scalar>(operand: &ReadOperand<'_, '_, T>) -> u32 {
     match operand {
         ReadOperand::Owned(_) => CUDA_ALLOCATION_ALIGNMENT,
         ReadOperand::View(_) => view_descriptor_alignment_requirement::<T>(),
@@ -754,7 +755,7 @@ fn cross_stream_handles<'a>(
         .collect()
 }
 
-fn write_operand_alignment_requirement<T: CutensorScalar>(
+fn write_operand_alignment_requirement<T: CutensorScalar + Scalar>(
     operand: &WriteOperand<'_, '_, T>,
 ) -> u32 {
     match operand {
@@ -763,7 +764,7 @@ fn write_operand_alignment_requirement<T: CutensorScalar>(
     }
 }
 
-fn view_descriptor_alignment_requirement<T: CutensorScalar>() -> u32 {
+fn view_descriptor_alignment_requirement<T: CutensorScalar + Scalar>() -> u32 {
     u32::try_from(std::mem::size_of::<T>()).unwrap_or(CUDA_ALLOCATION_ALIGNMENT)
 }
 
@@ -776,7 +777,7 @@ struct ResolvedOperand<'a> {
     alignment: u32,
 }
 
-fn read_operand<'a, 'b, T: CutensorScalar>(
+fn read_operand<'a, 'b, T: CutensorScalar + Scalar>(
     read: &'a TensorRead<'b>,
 ) -> Option<ReadOperand<'a, 'b, T>> {
     match read {
@@ -785,7 +786,7 @@ fn read_operand<'a, 'b, T: CutensorScalar>(
     }
 }
 
-fn write_operand<'a, 'b, T: CutensorScalar>(
+fn write_operand<'a, 'b, T: CutensorScalar + Scalar>(
     write: &'a mut TensorWrite<'b>,
 ) -> Option<WriteOperand<'a, 'b, T>> {
     match write {
@@ -873,7 +874,7 @@ fn accum_erased<T>(
     out: &mut TensorWrite<'_>,
 ) -> crate::Result<()>
 where
-    T: CutensorScalar + FromContractionScalar + PartialEq + tenferro_tensor::TensorScalar,
+    T: CutensorScalar + Scalar + FromContractionScalar + PartialEq + tenferro_tensor::TensorScalar,
 {
     let (lhs_dtype, rhs_dtype, out_dtype) = (lhs.dtype(), rhs.dtype(), out.dtype());
     let (Some(lhs), Some(rhs), Some(out)) = (
@@ -914,7 +915,7 @@ fn dot_general_typed_into_accum<T>(
     mut out: WriteOperand<'_, '_, T>,
 ) -> crate::Result<()>
 where
-    T: CutensorScalar + PartialEq + tenferro_tensor::TensorScalar,
+    T: CutensorScalar + PartialEq + tenferro_tensor::TensorScalar + Scalar,
 {
     backend.runtime().set_current_cuda_context(OP)?;
     validate_dot_general(lhs.shape(), rhs.shape(), config)?;
@@ -1005,7 +1006,7 @@ fn resolve_read_operand<'a, T>(
     compact_strides: &'a [i64],
 ) -> crate::Result<ResolvedOperand<'a>>
 where
-    T: CutensorScalar + 'static,
+    T: CutensorScalar + 'static + Scalar,
 {
     match operand {
         ReadOperand::Owned(tensor) => Ok(ResolvedOperand {
@@ -1030,7 +1031,7 @@ fn resolve_write_operand<'a, T>(
     compact_strides: &'a [i64],
 ) -> crate::Result<ResolvedOperand<'a>>
 where
-    T: CutensorScalar + 'static,
+    T: CutensorScalar + 'static + Scalar,
 {
     match operand {
         WriteOperand::Owned(tensor) => Ok(ResolvedOperand {
@@ -1045,7 +1046,7 @@ where
             // orders the vendor write after queued CubeCL work on the stream.
             let base = rt
                 .client()
-                .get_resource(prepared.into_handle())
+                .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
                 .map_err(|err| Error::backend_source(OP, err))?
                 .resource()
                 .ptr;
@@ -1058,7 +1059,7 @@ where
 /// cuTENSOR operand: `ptr = base + offset * size_of::<T>()`, the view's own
 /// element strides, and the alignment actually guaranteed by the effective
 /// byte address.
-fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
+fn resolve_prepared_device_region<T: CutensorScalar + 'static + Scalar>(
     base_addr: u64,
     strides: &[isize],
     offset: isize,
@@ -1100,7 +1101,7 @@ fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
 /// operand tensors are never transferred.
 fn scale_in_place<T>(rt: &CudaRuntime, out: &mut TypedTensor<T>, beta: T) -> crate::Result<()>
 where
-    T: CutensorScalar + PartialEq + tenferro_tensor::TensorScalar,
+    T: CutensorScalar + PartialEq + tenferro_tensor::TensorScalar + Scalar,
 {
     if beta == T::one() {
         return Ok(());
@@ -1131,7 +1132,7 @@ fn dot_general_typed_with_conj<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CutensorScalar,
+    T: CutensorScalar + Scalar,
 {
     backend.runtime().set_current_cuda_context(OP)?;
     validate_dot_general(lhs.shape(), rhs.shape(), config)?;
@@ -1212,7 +1213,7 @@ where
     Ok(output)
 }
 
-fn cutensor_conj_op<T: CutensorScalar>(conj: bool) -> CutensorOperator {
+fn cutensor_conj_op<T: CutensorScalar + Scalar>(conj: bool) -> CutensorOperator {
     if conj && T::IS_COMPLEX {
         CutensorOperator::Conj
     } else {
@@ -1351,7 +1352,7 @@ fn cached_cutensor_contraction<T, R>(
     execute: impl FnOnce(&CutensorHandle, &Plan, &Workspace) -> crate::Result<R>,
 ) -> crate::Result<R>
 where
-    T: CutensorScalar,
+    T: CutensorScalar + Scalar,
 {
     let cutensor = backend.cutensor_handle()?;
     let hash = spec_hash::<T>(spec);
@@ -1502,7 +1503,7 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     let handle = rt.client().empty(workspace_len);
     let resource = rt
         .client()
-        .get_resource(handle.clone())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle.clone())
         .map_err(|err| crate::Error::backend_source(OP, err))?;
     let stream = rt.raw_cuda_stream()?;
     Ok(Workspace {
@@ -1514,7 +1515,7 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     })
 }
 
-pub(super) fn typed_device_ptr<T: TensorScalar + 'static>(
+pub(super) fn typed_device_ptr<T: TensorScalar + 'static + Scalar>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
     op: &'static str,
@@ -1545,7 +1546,7 @@ pub(super) fn typed_device_ptr<T: TensorScalar + 'static>(
 /// resolved address is memoized so a later raw read can reuse it (reads need
 /// no ordering against queued reads, and any intervening queued write
 /// invalidates it).
-pub(super) fn write_device_ptr<T: TensorScalar + 'static>(
+pub(super) fn write_device_ptr<T: TensorScalar + 'static + Scalar>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
     op: &'static str,
@@ -1554,7 +1555,7 @@ pub(super) fn write_device_ptr<T: TensorScalar + 'static>(
     let prepared = prepared_tensor_access(tensor, op)?;
     let resource = rt
         .client()
-        .get_resource(prepared.into_handle())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     let addr = resource.resource().ptr;
     // See `CubeclBuffer::device_addr` for the address-stability invariant.
@@ -1593,7 +1594,7 @@ pub(super) fn memoized_device_addr(
     }
     let resource = rt
         .client()
-        .get_resource(prepared.into_handle())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     let addr = resource.resource().ptr;
     // See `CubeclBuffer::device_addr` for the address-stability invariant.

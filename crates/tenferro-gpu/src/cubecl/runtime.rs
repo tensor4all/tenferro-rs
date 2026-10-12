@@ -864,7 +864,7 @@ impl CudaRuntime {
     /// Resolve `handle`'s device address on the current stream, then flush
     /// pending CubeCL work, in one device-thread hand-off.
     ///
-    /// This is exactly `client().get_resource(handle)` followed by
+    /// This is exactly `client().get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)` followed by
     /// `flush_cubecl`, in that order and on the same stream, so the ordering a
     /// raw vendor enqueue relies on is unchanged; it only saves the second
     /// blocking round trip (#1887). It does not publish a write (that remains
@@ -881,7 +881,7 @@ impl CudaRuntime {
         let resolved = self
             .inner
             .client
-            .with_server(move |server| {
+            .with_server::<cubecl_cuda::ffi_interop::CudaServer, _>(move |server| {
                 let resource = server.get_resource(binding, stream_id);
                 server.flush(stream_id).map(|()| resource)
             })
@@ -986,7 +986,7 @@ impl CudaRuntimeState {
         }
         let stream = self
             .client
-            .with_server(move |server| {
+            .with_server::<cubecl_cuda::ffi_interop::CudaServer, _>(move |server| {
                 server
                     .raw_stream(stream_id)
                     .map(|stream| stream as u64)
@@ -1241,7 +1241,7 @@ impl CudaRuntimeState {
         self.flush_cubecl(op)?;
         let resource = self
             .client
-            .get_resource::<cubecl_cuda::CudaServer>(handle)
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
             .map_err(|err| crate::Error::backend_source(op, err))?;
         let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
         if available < len {
