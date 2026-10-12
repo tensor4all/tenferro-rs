@@ -75,7 +75,7 @@ use cubecl::prelude::{
     BufferArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
-use cubecl::prelude::{CubeCount, Int as CubeInt, Scalar, TensorBinding, Type};
+use cubecl::prelude::{CubeCount, Int as CubeInt, PlaneReduce, Scalar, TensorBinding, Type};
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 
@@ -2787,6 +2787,7 @@ impl CudaBackend {
         C: CubeElement
             + CubePrimitive
             + CubeComplex
+            + PlaneReduce
             + tenferro_tensor::TensorScalar
             + Clone
             + Send
@@ -2880,6 +2881,7 @@ impl CudaBackend {
         C: CubeElement
             + CubePrimitive
             + CubeComplex
+            + PlaneReduce
             + tenferro_tensor::TensorScalar
             + Clone
             + Send
