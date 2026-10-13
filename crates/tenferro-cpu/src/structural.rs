@@ -217,8 +217,10 @@ fn host_view<'a, T: Copy + TensorScalar>(
     if tensor.backend_buffer().is_some() {
         return Err(cpu_backend_buffer_error(op));
     }
+    // The tensor stores no strides, so the compact column-major layout is
+    // computed here and the view owns it.
     let strides = col_major_strides(tensor.shape());
-    StridedView::new(tensor.host_data()?, tensor.shape(), &strides, 0)
+    StridedView::new_owned(tensor.host_data()?, tensor.shape().to_vec(), strides, 0)
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 

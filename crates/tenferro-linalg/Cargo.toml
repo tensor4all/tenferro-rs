@@ -102,8 +102,8 @@ faer = { workspace = true, optional = true }
 # lives in this crate. Spelled with both a git rev and a version so that Cargo uses the rev locally
 # while a packaged manifest keeps only the version requirement, matching the workspace's
 # pre-publish staging pattern for its fork dependencies. Keep the two revs identical.
-tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "c1a73af5d68bad07f484cf27989a13aece3d0fa0", version = "0.1.0", optional = true }
-tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "c1a73af5d68bad07f484cf27989a13aece3d0fa0", version = "0.1.0", optional = true }
+tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "ce53e1b68f56452dd0a048439506b498d65cc504", version = "0.1.0", optional = true }
+tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "ce53e1b68f56452dd0a048439506b498d65cc504", version = "0.1.0", optional = true }
 rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }

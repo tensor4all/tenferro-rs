@@ -64,18 +64,22 @@ lru = "0.18.5"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# Published strided v0.4.7, shared with the CPU contraction/linalg stack (#2004).
-# Keep exact registry requirements aligned with this release revision, and keep the
-# pinned providers (cpueinsum, tlinalg) on the same source: a split strided source
-# gives two `RawStridedRef` types that cannot meet at a crate boundary.
-strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "4373ba0bcb4bdc02f4c03a8a2d4896b84a47dd7c", version = "=0.4.8" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "4373ba0bcb4bdc02f4c03a8a2d4896b84a47dd7c", version = "=0.4.8" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "4373ba0bcb4bdc02f4c03a8a2d4896b84a47dd7c", version = "=0.4.8", features = ["parallel"] }
-cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "50fa7785067f30c39bfc3c25ced4cbee423e90a9", version = "0.1.0" }
-cpueinsum-blas = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "50fa7785067f30c39bfc3c25ced4cbee423e90a9", version = "0.1.0" }
-strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "4373ba0bcb4bdc02f4c03a8a2d4896b84a47dd7c", version = "=0.4.8", default-features = false }
-strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "4373ba0bcb4bdc02f4c03a8a2d4896b84a47dd7c", version = "=0.4.8", default-features = false, features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "4373ba0bcb4bdc02f4c03a8a2d4896b84a47dd7c", version = "=0.4.8", features = ["parallel"] }
+# strided v0.5.0 (borrowed-or-owned view metadata), shared with the CPU
+# contraction/linalg stack (#2004). Keep exact registry requirements aligned with
+# this revision, and keep the pinned providers (cpueinsum, tlinalg) on the same
+# source: a split strided source gives two `StridedView` types that cannot meet at
+# a crate boundary. This revision is the pre-merge branch of
+# tensor4all/strided-rs#297; re-point every strided rev here at once when it
+# merges. The providers follow the same rule through
+# tensor4all/cpueinsum-rs#18 and tensor4all/tlinalg-rs#52.
+strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "e6241732e9c445d5be7b97c15dfb142fd14737ea", version = "=0.5.0" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "e6241732e9c445d5be7b97c15dfb142fd14737ea", version = "=0.5.0" }
+strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "e6241732e9c445d5be7b97c15dfb142fd14737ea", version = "=0.5.0", features = ["parallel"] }
+cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "9b128a651956cfe51e64501689d21bfc0b8373f1", version = "0.1.0" }
+cpueinsum-blas = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "9b128a651956cfe51e64501689d21bfc0b8373f1", version = "0.1.0" }
+strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "e6241732e9c445d5be7b97c15dfb142fd14737ea", version = "=0.5.0", default-features = false }
+strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "e6241732e9c445d5be7b97c15dfb142fd14737ea", version = "=0.5.0", default-features = false, features = ["parallel"] }
+strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "e6241732e9c445d5be7b97c15dfb142fd14737ea", version = "=0.5.0", features = ["parallel"] }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
