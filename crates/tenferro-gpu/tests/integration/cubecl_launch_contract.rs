@@ -1236,7 +1236,7 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     let gemm_source = cubecl_source("gemm.rs");
     let gemm_ptr = source_section(
         &gemm_source,
-        "fn typed_device_ptr<T: TensorScalar + 'static>(",
+        "fn typed_device_ptr<T: TensorScalar + 'static + Scalar>(",
         "fn build_layout(",
     );
     assert_ordered_needles(
@@ -1247,7 +1247,7 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
             "let prepared = prepared_tensor_access(tensor, op)?;",
             "memoized_device_addr(rt, buffer, prepared, op)?;",
             "fn memoized_device_addr(",
-            ".get_resource(prepared.into_handle())",
+            ".get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())",
         ],
     );
 }
@@ -1297,7 +1297,7 @@ fn cubecl_host_download_paths_synchronize_before_reading() {
     let memory_source = cubecl_source("memory.rs");
     let typed_download = source_section(
         &memory_source,
-        "fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(",
+        "fn download_typed<T: CubeElement + TensorScalar + Scalar + Clone + 'static>(",
         "fn upload_bool(",
     );
     assert_ordered_needles(
@@ -1500,7 +1500,7 @@ fn cubecl_runtime_initializes_context_before_client_and_retires_streams_on_drop(
             "cudarc::driver::result::ctx::set_current",
             "cudarc::runtime::result::device::set(cuda_ordinal)",
             "let device = CudaDevice::new(device_ordinal);",
-            "let client = CubeclCudaRuntime::client(&device);",
+            "let client = Device::Cuda(device).client();",
         ],
     );
 

@@ -1,7 +1,6 @@
 //! End-to-end run of the fixture kernel through the public session seam.
 
-use cubecl::prelude::{ArrayArg, CubeCount};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::prelude::{BufferArg, CubeCount};
 use tenferro_gpu::cuda::{
     download_tensor, upload_tensor, with_cuda_exec_session, CudaBackend, CudaExecSession,
     CudaRuntime,
@@ -86,8 +85,8 @@ fn run_in_cuda_session(
 
         // SAFETY: every binding here is created for a tensor this call owns, and the
         // kernel writes only into those buffers.
-        let input_binding: ArrayArg<CubeclCudaRuntime> = unsafe { cubecl.array_arg(input_typed, op) }?;
-        let output_binding: ArrayArg<CubeclCudaRuntime> = unsafe { cubecl.array_arg(output_typed, op) }?;
+        let input_binding: BufferArg = unsafe { cubecl.array_arg(input_typed, op) }?;
+        let output_binding: BufferArg = unsafe { cubecl.array_arg(output_typed, op) }?;
 
         let cube_count = cubecl.cube_count_1d(n)?;
         let CubeCount::Static(x, y, z) = cube_count else {
@@ -103,7 +102,7 @@ fn run_in_cuda_session(
         // `output[i]` only for `i < n`, with the domain sized to exactly
         // `n` elements above (no bounds elision by the launcher).
         unsafe {
-            scale::launch_unchecked::<CubeclCudaRuntime>(
+            scale::launch_unchecked(
                 cubecl.client(),
                 CubeCount::Static(x, y, z),
                 cube_dim,

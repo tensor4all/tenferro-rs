@@ -15,21 +15,16 @@ use cubecl::prelude::*;
 /// upload → launch → sync → download flow.
 ///
 /// ```
-/// use cubecl::client::ComputeClient;
-/// use cubecl::prelude::{ArrayArg, CubeCount, CubeDim};
-/// use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+/// use cubecl::client::Client;
+/// use cubecl::prelude::{BufferArg, CubeCount, CubeDim};
 /// use cubecl_kernel_sample::kernel::scale;
 ///
-/// fn launch(
-///     client: &ComputeClient<CubeclCudaRuntime>,
-///     input: ArrayArg<CubeclCudaRuntime>,
-///     output: ArrayArg<CubeclCudaRuntime>,
-/// ) {
+/// fn launch(client: &Client, input: BufferArg, output: BufferArg) {
 ///     // SAFETY: the kernel reads `input[i]` and writes `output[i]` only for
 ///     // `i < n` with the domain sized to the argument count; the bindings
 ///     // are validated resident spans on the caller's runtime.
 ///     unsafe {
-///         scale::launch_unchecked::<CubeclCudaRuntime>(
+///         scale::launch_unchecked(
 ///             client,
 ///             CubeCount::Static(1, 1, 1),
 ///             CubeDim::new_1d(1),
@@ -41,7 +36,7 @@ use cubecl::prelude::*;
 /// }
 /// ```
 #[cube(launch_unchecked)]
-pub fn scale(input: &Array<f32>, output: &mut Array<f32>, factor: f32) {
+pub fn scale(input: &[f32], output: &mut [f32], factor: f32) {
     let i = ABSOLUTE_POS;
     output[i] = input[i] * factor;
 }

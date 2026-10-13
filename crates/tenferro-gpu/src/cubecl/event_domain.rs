@@ -3,7 +3,7 @@ use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use cudarc::driver::result as cuda_result;
 use cudarc::driver::sys::{CUevent, CUevent_flags, CUevent_wait_flags, CUstream};
 use tenferro_runtime::runtime::{EventDomainDriver, EventDomainId, EventDomainRun, EventToken};

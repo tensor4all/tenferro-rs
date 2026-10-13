@@ -9,21 +9,18 @@ error[E0382]: borrow of moved value: `publication`
   |                       ^^^^^^^^^^^ value borrowed here after move
   |
 note: `SourcePublication::copy_into` takes ownership of the receiver `self`, which moves `publication`
- --> src/cubecl/transfer.rs:1754:12
+ --> src/cubecl/transfer.rs:1788:12
 
 error[E0382]: use of moved value: `publication`
   --> tests/ui/cuda_publication_copy_consumes_the_publication.rs:18:19
    |
 13 |     publication: SourcePublication,
    |     ----------- move occurs because `publication` has type `SourcePublication`, which does not implement the `Copy` trait
-14 |     consumer: &mut CudaHeldSession<'_>,
-15 |     buffer: PinnedHostBuffer,
-   |     ------ move occurs because `buffer` has type `PinnedHostBuffer`, which does not implement the `Copy` trait
-16 | ) {
+...
 17 |     let _pending = publication.copy_into(consumer).expect("submitted");
-   |                               ------------------- `publication` moved due to this method call
+   |                                ------------------- `publication` moved due to this method call
 18 |     let _second = publication.download_into(buffer);
    |                   ^^^^^^^^^^^ value used here after move
    |
 note: `SourcePublication::copy_into` takes ownership of the receiver `self`, which moves `publication`
- --> src/cubecl/transfer.rs:1754:12
+  --> src/cubecl/transfer.rs:1788:12

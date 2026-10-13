@@ -7,7 +7,7 @@
 //! the consumer's captured stream. These tests are ignored by default; explicitly running them requires
 //! a CUDA device.
 
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use tenferro_gpu::cuda::{
     download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId, CudaRuntime,
     PublicationError,

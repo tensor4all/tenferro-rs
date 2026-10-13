@@ -1,8 +1,10 @@
+use cubecl::frontend::Scalar;
 use cubecl::prelude::{CubeElement, CubePrimitive};
-use cubecl_wgpu::WgpuRuntime;
 use cubek_matmul::{
     definition::MatmulElems,
-    launch::{launch_c32_ref, launch_ref, ComplexMatmulOptions, Strategy},
+    launch::{launch_c32_ref, launch_ref, ComplexMatmulOptions},
+    multi_level,
+    strategy::Strategy,
 };
 use cubek_std::InputBinding;
 use num_complex::Complex32;
@@ -272,7 +274,7 @@ fn pack_lhs_operand<T>(
     plan: &DotGeneralPlan,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubePrimitive + CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubePrimitive + CubeElement + TensorScalar + Scalar + Clone + Send + Sync + 'static,
 {
     let output = alloc_output::<T>(backend.runtime(), &plan.lhs_cubek_shape, DOT_GENERAL_OP)?;
     let len = output.n_elements();
@@ -296,7 +298,7 @@ where
         // partition the input rank. Both tensor bindings cover their backing
         // allocations exactly, and the kernel writes one packed output element
         // per guarded launch position.
-        kernels::pack_lhs_dot_general::launch_unchecked::<T, WgpuRuntime>(
+        kernels::pack_lhs_dot_general::launch_unchecked::<T>(
             backend.runtime().client(),
             cube_count_for_len(len)?,
             cube_dim_1d(),
@@ -319,7 +321,7 @@ fn pack_rhs_operand<T>(
     plan: &DotGeneralPlan,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubePrimitive + CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubePrimitive + CubeElement + TensorScalar + Scalar + Clone + Send + Sync + 'static,
 {
     let output = alloc_output::<T>(backend.runtime(), &plan.rhs_cubek_shape, DOT_GENERAL_OP)?;
     let len = output.n_elements();
@@ -341,7 +343,7 @@ where
     unsafe {
         // SAFETY: Same invariant as the lhs pack launch, with rhs axes mapped
         // to CubeK `[batch..., K, N]` order.
-        kernels::pack_rhs_dot_general::launch_unchecked::<T, WgpuRuntime>(
+        kernels::pack_rhs_dot_general::launch_unchecked::<T>(
             backend.runtime().client(),
             cube_count_for_len(len)?,
             cube_dim_1d(),
@@ -364,7 +366,7 @@ fn prepare_lhs_operand<'a, T>(
     plan: &DotGeneralPlan,
 ) -> crate::Result<PreparedOperand<'a, T>>
 where
-    T: CubePrimitive + CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubePrimitive + CubeElement + TensorScalar + Scalar + Clone + Send + Sync + 'static,
 {
     let tensor = match &plan.lhs_cubek_strides {
         Some(strides) => {
@@ -389,7 +391,7 @@ fn prepare_rhs_operand<'a, T>(
     plan: &DotGeneralPlan,
 ) -> crate::Result<PreparedOperand<'a, T>>
 where
-    T: CubePrimitive + CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubePrimitive + CubeElement + TensorScalar + Scalar + Clone + Send + Sync + 'static,
 {
     let tensor = match &plan.rhs_cubek_strides {
         Some(strides) => {
@@ -406,6 +408,16 @@ where
         shape: plan.rhs_cubek_shape.clone(),
         strides: dense_layout_strides(&plan.rhs_cubek_shape)?,
     })
+}
+
+/// The strategy the webgpu dot-general path requests.
+///
+/// 0.11 moved the fork's `Naive` kernel — the simple, always-available routine
+/// that computes one output element per unit — under the `multi-level` family.
+/// `MultiLevel(Naive)` is that same routine; `Auto` would try an accelerated
+/// kernel first and change the webgpu path's kernel choice.
+fn matmul_strategy() -> Strategy {
+    Strategy::MultiLevel(multi_level::Strategy::Naive)
 }
 
 fn dot_general_f32(
@@ -431,7 +443,7 @@ fn dot_general_f32(
     let lhs = prepare_lhs_operand(backend, lhs, &plan)?;
     let rhs = prepare_rhs_operand(backend, rhs, &plan)?;
 
-    let dtype = f32::as_type_native_unchecked().storage_type();
+    let dtype = f32::elem_type_native();
     let lhs_binding = InputBinding::new(
         typed_tensor_binding_with_layout(
             lhs.tensor.as_ref(),
@@ -456,17 +468,17 @@ fn dot_general_f32(
         &plan.out_cubek_strides,
         DOT_GENERAL_OP,
     )?;
-    let mut dtypes = MatmulElems::from_single_dtype(f32::as_type_native_unchecked());
+    let mut dtypes = MatmulElems::from_single_dtype(f32::elem_type_native());
 
     launch_ref(
-        &Strategy::Naive,
+        &matmul_strategy(),
         backend.runtime().client(),
         lhs_binding,
         rhs_binding,
         output_binding,
         &mut dtypes,
     )
-    .map_err(|err| Error::backend_source(DOT_GENERAL_OP, err))?;
+    .map_err(|err| Error::backend_source(DOT_GENERAL_OP, std::io::Error::other(err.to_string())))?;
 
     Ok(output)
 }
@@ -496,7 +508,7 @@ fn dot_general_c32(
     let lhs = prepare_lhs_operand(backend, lhs, &plan)?;
     let rhs = prepare_rhs_operand(backend, rhs, &plan)?;
 
-    let dtype = Complex32::as_type_native_unchecked().storage_type();
+    let dtype = Complex32::elem_type_native();
     let lhs_binding = InputBinding::new(
         typed_tensor_binding_with_layout(
             lhs.tensor.as_ref(),
@@ -521,10 +533,10 @@ fn dot_general_c32(
         &plan.out_cubek_strides,
         DOT_GENERAL_OP,
     )?;
-    let mut dtypes = MatmulElems::from_single_dtype(Complex32::as_type_native_unchecked());
+    let mut dtypes = MatmulElems::from_single_dtype(Complex32::elem_type_native());
 
     launch_c32_ref(
-        &Strategy::Naive,
+        &matmul_strategy(),
         backend.runtime().client(),
         lhs_binding,
         rhs_binding,
@@ -532,7 +544,7 @@ fn dot_general_c32(
         &mut dtypes,
         ComplexMatmulOptions { lhs_conj, rhs_conj },
     )
-    .map_err(|err| Error::backend_source(DOT_GENERAL_OP, err))?;
+    .map_err(|err| Error::backend_source(DOT_GENERAL_OP, std::io::Error::other(err.to_string())))?;
 
     Ok(output)
 }

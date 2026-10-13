@@ -7,7 +7,4 @@ error[E0308]: mismatched types
   |             arguments to this function are incorrect
   |
 note: associated function defined here
- --> src/cubecl/mod.rs
-  |
-  |     pub fn new(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {
-  |            ^^^
+ --> src/cubecl/mod.rs:801:11

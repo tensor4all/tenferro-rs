@@ -39,25 +39,3 @@ issue = "https://github.com/tensor4all/elem-simd-math-rs/issues/2"
 # The strided exceptions for the #292 permutation and axis-reduction kernels are
 # gone: the workspace now pins the published strided-rs v0.4.7 revision, which
 # this check verifies against the crates.io archive.
-
-# tensor4all/cubecl 0.10.2 was published from upstream content (eb2c8894)
-# without the fork patches (#27 `ComputeClient::check_errors`, #28/#29 write
-# path), while the workspace pins the fork revision 1811309 that carries them.
-# Pinning the registry's content does not build, so the pins stay on the fork
-# revision and the deviation is accepted, visibly, until the 0.11 pins retire
-# it (issue #2125). Do not publish the tenferro crates while the 0.10.2 pins
-# are in place.
-[[exception]]
-package = "t4a-cubecl-cuda"
-reason = "Registry 0.10.2 was built without the fork patches; the pinned fork revision is required to build."
-issue = "https://github.com/tensor4all/tenferro-rs/issues/2125"
-
-[[exception]]
-package = "t4a-cubecl-runtime"
-reason = "Registry 0.10.2 was built without the fork patches; the pinned fork revision is required to build."
-issue = "https://github.com/tensor4all/tenferro-rs/issues/2125"
-
-[[exception]]
-package = "t4a-cubecl-wgpu"
-reason = "Registry 0.10.2 was built without the fork patches; the pinned fork revision is required to build."
-issue = "https://github.com/tensor4all/tenferro-rs/issues/2125"

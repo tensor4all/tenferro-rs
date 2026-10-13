@@ -10,9 +10,8 @@
 use std::ffi::c_void;
 use std::fmt;
 
-use cubecl::client::ComputeClient;
-use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive, TensorBinding};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::client::Client;
+use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement, CubePrimitive, TensorBinding};
 use num_complex::{Complex32, Complex64};
 
 use crate::{TensorRank, TensorScalar, TypedTensor};
@@ -20,6 +19,7 @@ use tenferro_tensor::{DType, TensorRead, TensorViewMut, TensorWrite, TypedTensor
 
 use super::error::unsupported_dtype;
 use super::{dispatch, CudaRuntime};
+use cubecl::frontend::Scalar;
 
 /// CubeCL-owned byte allocation kept alive for CUDA-library workspace calls.
 // INVARIANT: dropping the handle needs no retirement event. The buffer is only
@@ -98,7 +98,7 @@ pub fn cube_dim_1d() -> CubeDim {
 ///
 /// Returns [`crate::Error::Validation`] with `InvalidArgument` when the shape
 /// product overflows, or [`crate::Error::BackendSource`] when allocation fails.
-pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
+pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static>(
     rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -121,7 +121,7 @@ pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'stati
 #[doc(hidden)]
 pub fn alloc_zero_output<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static + Scalar,
 {
     let mut output = alloc_output::<T>(rt, shape)?;
     // One stream-ordered memset over the fresh allocation: dtype-agnostic,
@@ -143,10 +143,10 @@ where
 ///
 /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
 /// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
-pub fn typed_tensor_binding<T: CubeElement + TensorScalar + Clone>(
+pub fn typed_tensor_binding<T: CubeElement + TensorScalar + Clone + Scalar>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
+) -> crate::Result<TensorBinding> {
     dispatch::typed_tensor_binding(tensor, op)
 }
 
@@ -155,10 +155,10 @@ pub fn typed_tensor_binding<T: CubeElement + TensorScalar + Clone>(
 ///
 /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
 /// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
-pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
+pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone + Scalar>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+) -> crate::Result<BufferArg> {
     dispatch::typed_tensor_array_arg(tensor, op)
 }
 
@@ -187,7 +187,7 @@ pub fn upload_typed_tensor<T>(
     data: Vec<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
 {
     let byte_len = T::as_bytes(&data).len();
     // `data` is owned: hand its allocation to CubeCL instead of staging a copy.
@@ -216,7 +216,7 @@ pub fn download_typed_tensor<T>(
     op: &'static str,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + TensorScalar + Clone + 'static,
+    T: CubeElement + TensorScalar + Clone + Scalar + 'static,
 {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
     let prepared = dispatch::prepared_tensor_access(tensor, op)?;
@@ -314,7 +314,7 @@ fn device_bytes_from_handle(
 ) -> crate::Result<DeviceByteBuffer> {
     let resource = rt
         .client()
-        .get_resource(handle.clone())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle.clone())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(DeviceByteBuffer {
         handle: Some(handle),
@@ -344,7 +344,7 @@ pub(crate) fn offset_device_ptr<T: 'static>(
     })?;
     let resource = rt
         .client()
-        .get_resource(prepared.into_handle())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     let offset_bytes = offset
         .checked_mul(std::mem::size_of::<T>())
@@ -539,14 +539,8 @@ pub(crate) fn scale_typed_tensor<T, F>(
     launch: F,
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
-    F: FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-    ),
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
+    F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
     scale_typed_tensor_for_op(rt, output, factor, SCALE_OP, launch)
 }
@@ -559,14 +553,8 @@ pub(crate) fn scale_typed_tensor_for_op<T, F>(
     launch: F,
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
-    F: FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-    ),
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
+    F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
     dispatch::ensure_resident_on_runtime(rt, output, op)?;
     let len = output.n_elements();
@@ -574,11 +562,9 @@ where
     if len == 0 {
         return Ok(());
     }
-    let count = dispatch::cube_count_for_len(len)?;
-    let dim = dispatch::cube_dim_1d();
     let mut output_view = output.as_view_mut();
     let output_arg = dispatch::typed_view_mut_array_arg(&mut output_view, op)?;
-    launch_scaled(rt, output_arg, factor, count, dim, op, launch)
+    launch_scaled(rt, output_arg, factor, len, op, launch)
 }
 
 fn scale_typed_view<T, F>(
@@ -588,14 +574,8 @@ fn scale_typed_view<T, F>(
     launch: F,
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
-    F: FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-    ),
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
+    F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
     dispatch::ensure_view_mut_resident_on_runtime(rt, output, SCALE_OP)?;
     if output.offset() != 0 || !output.is_col_major_contiguous()? {
@@ -614,10 +594,8 @@ where
     if len == 0 {
         return Ok(());
     }
-    let count = dispatch::cube_count_for_len(len)?;
-    let dim = dispatch::cube_dim_1d();
     let output_arg = dispatch::typed_view_mut_array_arg(output, SCALE_OP)?;
-    launch_scaled(rt, output_arg, factor, count, dim, SCALE_OP, launch)
+    launch_scaled(rt, output_arg, factor, len, SCALE_OP, launch)
 }
 
 fn validate_scale_buffer(op: &'static str, len: usize, buffer_len: usize) -> crate::Result<()> {
@@ -634,35 +612,31 @@ fn validate_scale_buffer(op: &'static str, len: usize, buffer_len: usize) -> cra
 
 fn launch_scaled<T, F>(
     rt: &CudaRuntime,
-    output: ArrayArg<CubeclCudaRuntime>,
+    output: BufferArg,
     factor: T,
-    count: CubeCount,
-    dim: CubeDim,
+    len: usize,
     op: &'static str,
     launch: F,
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
-    F: FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-    ),
+    T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
+    F: FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, usize),
 {
+    let count = dispatch::cube_count_for_len(len)?;
+    let dim = dispatch::cube_dim_1d();
     let factor = upload_typed_tensor(rt, vec![1], vec![factor])?;
     let factor = dispatch::typed_tensor_array_arg(&factor, op)?;
-    launch(rt.client(), count, dim, output, factor);
+    launch(rt.client(), count, dim, output, factor, len);
     Ok(())
 }
 
 fn launch_scale_f32(
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client,
     count: CubeCount,
     dim: CubeDim,
-    output: ArrayArg<CubeclCudaRuntime>,
-    factor: ArrayArg<CubeclCudaRuntime>,
+    output: BufferArg,
+    factor: BufferArg,
+    len: usize,
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
@@ -670,19 +644,19 @@ fn launch_scale_f32(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<
-            f32,
-            CubeclCudaRuntime,
-        >(client, count, dim, output, factor);
+        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f32>(
+            client, count, dim, output, factor, len,
+        );
     }
 }
 
 fn launch_scale_f64(
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client,
     count: CubeCount,
     dim: CubeDim,
-    output: ArrayArg<CubeclCudaRuntime>,
-    factor: ArrayArg<CubeclCudaRuntime>,
+    output: BufferArg,
+    factor: BufferArg,
+    len: usize,
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
@@ -690,19 +664,19 @@ fn launch_scale_f64(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<
-            f64,
-            CubeclCudaRuntime,
-        >(client, count, dim, output, factor);
+        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
+            client, count, dim, output, factor, len,
+        );
     }
 }
 
 fn launch_scale_c32(
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client,
     count: CubeCount,
     dim: CubeDim,
-    output: ArrayArg<CubeclCudaRuntime>,
-    factor: ArrayArg<CubeclCudaRuntime>,
+    output: BufferArg,
+    factor: BufferArg,
+    len: usize,
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
@@ -710,19 +684,19 @@ fn launch_scale_c32(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<
-            Complex32,
-            CubeclCudaRuntime,
-        >(client, count, dim, output, factor);
+        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex32>(
+            client, count, dim, output, factor, len,
+        );
     }
 }
 
 fn launch_scale_c64(
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client,
     count: CubeCount,
     dim: CubeDim,
-    output: ArrayArg<CubeclCudaRuntime>,
-    factor: ArrayArg<CubeclCudaRuntime>,
+    output: BufferArg,
+    factor: BufferArg,
+    len: usize,
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
@@ -730,10 +704,9 @@ fn launch_scale_c64(
     // compact span with len <= buffer_len, and cube_count_for_len(len) before
     // this binding is consumed.
     unsafe {
-        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<
-            Complex64,
-            CubeclCudaRuntime,
-        >(client, count, dim, output, factor);
+        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<Complex64>(
+            client, count, dim, output, factor, len,
+        );
     }
 }
 
@@ -783,7 +756,7 @@ pub fn fill_zero_write(rt: &CudaRuntime, output: TensorWrite<'_>) -> crate::Resu
 
 fn fill_zero_typed_tensor<T>(rt: &CudaRuntime, output: &mut crate::Tensor) -> crate::Result<()>
 where
-    T: TensorScalar + Clone + Send + Sync + 'static,
+    T: TensorScalar + Scalar + Clone + Send + Sync + 'static,
 {
     let output = output
         .as_typed_mut::<T>()
@@ -805,7 +778,7 @@ fn fill_zero_typed_view<T>(
     output: &mut TypedTensorViewMut<'_, T>,
 ) -> crate::Result<()>
 where
-    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static + Scalar,
 {
     dispatch::ensure_view_mut_resident_on_runtime(rt, output, FILL_ZERO_OP)?;
     let len = output.n_elements();
@@ -849,7 +822,7 @@ fn fill_zero_view_span<T>(
     len: usize,
 ) -> crate::Result<()>
 where
-    T: TensorScalar + Clone + 'static,
+    T: TensorScalar + Clone + 'static + Scalar,
 {
     let handle = dispatch::cubecl_view_mut_buffer(output, FILL_ZERO_OP)?
         .handle()
@@ -921,7 +894,7 @@ fn fill_zero_strided_view<T>(
     len: usize,
 ) -> crate::Result<()>
 where
-    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static + Scalar,
 {
     let dims = output.shape().to_vec();
     let strides = output
@@ -953,7 +926,7 @@ where
         // allocation, the view layout was validated as reachable and injective
         // when the view was created, and the launch domain visits each logical
         // coordinate of the region exactly once.
-        crate::kernels::structural::fill_zero_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+        crate::kernels::structural::fill_zero_view_kernel::launch_unchecked::<T>(
             rt.client(),
             count,
             dim,

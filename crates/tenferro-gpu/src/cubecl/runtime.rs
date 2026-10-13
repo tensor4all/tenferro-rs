@@ -5,10 +5,11 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use cubecl::client::ComputeClient;
-use cubecl::stream_id::StreamId;
-use cubecl::Runtime;
-use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
+use cubecl::client::Client;
+use cubecl::server::ServerStorage;
+use cubecl::Device;
+use cubecl_cuda::CudaDevice;
+use cubecl_environment::stream::StreamId;
 use cubecl_runtime::config::{CubeClRuntimeConfig, RuntimeConfig};
 use cudarc::cublas::sys as cublas_sys;
 use cudarc::driver::result::DriverError;
@@ -196,7 +197,7 @@ pub struct CudaRuntime {
 }
 
 pub(crate) struct CudaRuntimeState {
-    client: ComputeClient<CubeclCudaRuntime>,
+    client: Client,
     device_id: CudaDeviceId,
     device_ordinal: usize,
     device_info: CudaDeviceInfo,
@@ -209,7 +210,7 @@ pub(crate) struct CudaRuntimeState {
     // INVARIANT: in pinned CubeCL rev a2adda17, the CUDA server maps each
     // `StreamId` to a fixed `StreamPool` slot whose `CUstream` is created once
     // and never destroyed or replaced while the server is alive, and the
-    // server outlives the `ComputeClient` clone owned by this state. The table
+    // server outlives the `Client` clone owned by this state. The table
     // is owned by this runtime object (not thread-local/global), holds one
     // entry per CubeCL stream slot, and is dropped with the runtime.
     raw_streams: Box<[OnceLock<u64>]>,
@@ -526,7 +527,7 @@ impl CudaRuntime {
         cudarc::runtime::result::device::set(cuda_ordinal)
             .map_err(|source| cuda_initialization_error(device_id, "set_device", source))?;
         let device = CudaDevice::new(device_ordinal);
-        let client = CubeclCudaRuntime::client(&device);
+        let client = Device::Cuda(device).client();
         let discovered = cuda_devices()?;
         let device_info = discovered
             .iter()
@@ -558,7 +559,7 @@ impl CudaRuntime {
         })
     }
 
-    pub(crate) fn client(&self) -> &ComputeClient<CubeclCudaRuntime> {
+    pub(crate) fn client(&self) -> &Client {
         &self.inner.client
     }
 
@@ -704,16 +705,6 @@ impl CudaRuntime {
     /// previously enqueued CubeCL work.
     pub(crate) fn flush_cubecl(&self, op: &'static str) -> crate::Result<()> {
         self.inner.flush_cubecl(op)
-    }
-
-    /// Report the errors of work already submitted, without waiting for device progress.
-    ///
-    /// CubeCL's `flush` reports producer errors but also retires staged host bytes and arms a fence
-    /// the next submission synchronizes; a raw copy that must be ordered after pending kernels but
-    /// must not wait for the device uses this instead. The host task queue is dispatched either way,
-    /// so work queued before this call has reached the stream when it returns.
-    pub(crate) fn check_errors(&self, op: &'static str) -> crate::Result<()> {
-        self.inner.check_errors(op)
     }
 
     /// A weak handle to this runtime's state, for values that must not keep it alive.
@@ -864,7 +855,7 @@ impl CudaRuntime {
     /// Resolve `handle`'s device address on the current stream, then flush
     /// pending CubeCL work, in one device-thread hand-off.
     ///
-    /// This is exactly `client().get_resource(handle)` followed by
+    /// This is exactly `client().get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)` followed by
     /// `flush_cubecl`, in that order and on the same stream, so the ordering a
     /// raw vendor enqueue relies on is unchanged; it only saves the second
     /// blocking round trip (#1887). It does not publish a write (that remains
@@ -874,14 +865,14 @@ impl CudaRuntime {
         handle: cubecl_runtime::server::Handle,
         op: &'static str,
     ) -> crate::Result<u64> {
-        use cubecl_runtime::server::ComputeServer;
+        use cubecl::server::Server;
 
         let stream_id = StreamId::current();
         let binding = handle.binding();
         let resolved = self
             .inner
             .client
-            .with_server(move |server| {
+            .with_server::<cubecl_cuda::ffi_interop::CudaServer, _>(move |server| {
                 let resource = server.get_resource(binding, stream_id);
                 server.flush(stream_id).map(|()| resource)
             })
@@ -967,7 +958,9 @@ impl CudaRuntime {
     /// let _trim: fn(&CudaRuntime) = CudaRuntime::trim_memory;
     /// ```
     pub fn trim_memory(&self) {
-        self.client().memory_cleanup();
+        // 0.11 reports the cleanup result; the trim has no error channel of its
+        // own (a pool that cannot serve a request panics on the device thread).
+        let _ = self.client().memory_cleanup();
     }
 }
 
@@ -1024,7 +1017,7 @@ impl CudaRuntimeState {
         }
         let stream = self
             .client
-            .with_server(move |server| {
+            .with_server::<cubecl_cuda::ffi_interop::CudaServer, _>(move |server| {
                 server
                     .raw_stream(stream_id)
                     .map(|stream| stream as u64)
@@ -1039,12 +1032,6 @@ impl CudaRuntimeState {
     fn flush_cubecl(&self, op: &'static str) -> crate::Result<()> {
         self.client
             .flush()
-            .map_err(|err| crate::Error::backend_source(op, err))
-    }
-
-    fn check_errors(&self, op: &'static str) -> crate::Result<()> {
-        self.client
-            .check_errors()
             .map_err(|err| crate::Error::backend_source(op, err))
     }
 
@@ -1279,7 +1266,7 @@ impl CudaRuntimeState {
         self.flush_cubecl(op)?;
         let resource = self
             .client
-            .get_resource(handle)
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
             .map_err(|err| crate::Error::backend_source(op, err))?;
         let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
         if available < len {

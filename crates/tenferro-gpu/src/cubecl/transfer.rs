@@ -36,7 +36,7 @@
 //! ```
 
 use cubecl::prelude::CubeElement;
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use cudarc::driver::result as cuda_result;
 use cudarc::driver::sys::{CUevent, CUevent_flags, CUevent_wait_flags, CUresult, CUstream};
 use cudarc::runtime::sys as cuda_sys;
@@ -277,10 +277,9 @@ pub(crate) fn upload_tensor_chunked(
     bytes: &[u8],
     op: &'static str,
 ) -> crate::Result<()> {
-    runtime.check_errors(op)?;
     let resource = runtime
         .client()
-        .get_resource(handle.clone())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle.clone())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
     if available < byte_len {
@@ -824,8 +823,9 @@ fn rejected(error: crate::Error, value: Tensor, buffer: PinnedHostBuffer) -> Tra
 
 /// Start a device→host copy, taking ownership of `source` and `buffer`.
 ///
-/// The copy is published through CubeCL's `check_errors` (producer errors reported, host queue
-/// dispatched, no drop-queue rotation) and the source allocation is retained for the whole flight.
+/// The copy is published through the published buffer's own claim: CubeCL reports a producer
+/// failure on the buffers the failed launch never wrote, and resolving the resource below is
+/// what asks for that buffer (host queue dispatched, no drop-queue rotation) and the source allocation is retained for the whole flight.
 /// `wait` is the only way to get the value and the buffer back.
 ///
 /// # Errors
@@ -882,11 +882,10 @@ pub fn download_pending(
             buffer,
         ));
     }
-
-    if let Err(error) = runtime.check_errors(OP) {
-        return Err(rejected(error, source, buffer));
-    }
-    let resource = match runtime.client().get_resource(handle) {
+    let resource = match runtime
+        .client()
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+    {
         Ok(resource) => resource,
         Err(err) => {
             return Err(rejected(
@@ -1285,11 +1284,10 @@ pub fn upload_pending(
             source,
         ));
     }
-
-    if let Err(error) = runtime.check_errors(OP) {
-        return Err(rejected(error, destination, source));
-    }
-    let resource = match runtime.client().get_resource(handle) {
+    let resource = match runtime
+        .client()
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+    {
         Ok(resource) => resource,
         Err(err) => {
             return Err(rejected(
@@ -1859,7 +1857,10 @@ impl SourcePublication {
                 ),
             ));
         }
-        let destination_pointer = match runtime.client().get_resource(handle) {
+        let destination_pointer = match runtime
+            .client()
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+        {
             Ok(resource) => resource.resource().ptr,
             Err(error) => {
                 return Err(copy_refused(
@@ -2039,10 +2040,10 @@ pub(crate) fn publish_in_stream(
     };
     // The dispatch and the resource resolution happen on the stream the caller entered, so the
     // frontier recorded below is ordered after everything that produced the value on that stream.
-    if let Err(error) = runtime.check_errors(PUBLICATION_OP) {
-        return Err(publication_rejected(error, value));
-    }
-    let resource = match runtime.client().get_resource(handle) {
+    let resource = match runtime
+        .client()
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+    {
         Ok(resource) => resource,
         Err(err) => {
             return Err(publication_rejected(

@@ -38,6 +38,7 @@ cuda = [
     "cubecl/cuda",
     "dep:cubecl-cuda",
     "dep:cubecl-runtime",
+    "dep:cubecl-environment",
     "dep:cudarc",
 ]
 webgpu = [
@@ -47,6 +48,7 @@ webgpu = [
     "cubecl/wgpu",
     "dep:cubecl-common",
     "dep:cubecl-runtime",
+    "dep:cubecl-environment",
     "dep:cubecl-wgpu",
     "dep:cubek-matmul",
     "dep:cubek-std",
@@ -62,6 +64,7 @@ tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-fe
 cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
 cubecl-common = { workspace = true, optional = true }
+cubecl-environment = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
 cubecl-wgpu = { workspace = true, optional = true }
 cubek-matmul = { workspace = true, optional = true }
@@ -79,6 +82,9 @@ thiserror.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 trybuild.workspace = true
+# Unit tests build handles that only carry tenferro's own bookkeeping; 0.11's
+# `Handle` needs the service id those handles name.
+cubecl-common.workspace = true
 
 [[example]]
 name = "cuda_quickstart"
