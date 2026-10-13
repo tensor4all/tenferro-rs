@@ -2578,7 +2578,7 @@ impl EagerSession<'_> {
     pub fn scale_real(&mut self, input: &EagerTensor, factor: f64) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
         let scalar = tenferro_runtime::scale::real_scale_scalar(input.dtype(), factor)?;
-        let scalar = self.constant_from(scalar)?;
+        let scalar = self.constant_from_host(scalar)?;
         self.mul(input, &scalar)
     }
 
@@ -2604,7 +2604,7 @@ impl EagerSession<'_> {
     pub fn scale_complex(&mut self, input: &EagerTensor, factor: Complex64) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
         let scalar = tenferro_runtime::scale::complex_scale_scalar(input.dtype(), factor)?;
-        let scalar = self.constant_from(scalar)?;
+        let scalar = self.constant_from_host(scalar)?;
         self.mul(input, &scalar)
     }
 

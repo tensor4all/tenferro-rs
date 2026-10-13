@@ -2,8 +2,9 @@ use std::ffi::c_void;
 use std::ops::Neg;
 use std::os::raw::c_char;
 
-use cubecl::prelude::{ComplexCore, CubeElement, CubePrimitive};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::prelude::{
+    ComplexCore, CubeElement, CubeMul, CubeNeg, CubePartialOrd, CubePrimitive, Scalar,
+};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
@@ -652,7 +653,7 @@ fn upper_trapezoidal_violation_typed<T>(
     op: &'static str,
 ) -> Result<TypedTensor<i32>>
 where
-    T: LinalgScalar + TensorScalar + PartialEq,
+    T: LinalgScalar + TensorScalar + PartialEq + Scalar,
 {
     backend.with_cubecl(op, |cubecl| {
         let output = cubecl.alloc_output::<i32>(input.shape())?;
@@ -667,7 +668,7 @@ where
         // SAFETY: bindings are live device tensors and each thread writes one
         // independent validation flag.
         unsafe {
-            cubecl_linalg::upper_trapezoidal_violation::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::upper_trapezoidal_violation::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -1246,19 +1247,19 @@ fn cholesky_typed<T>(
     input: &TypedTensor<T>,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     const OP: &str = "cholesky";
 
     let n = square_matrix_dim(OP, input.shape())?;
     if has_zero_dim(input.shape()) {
-        return Ok(backend.with_raw(OP, |raw| {
+        return backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
             // empty output: `raw.tensor` checks the tensor is resident on this
             // runtime/device.
             raw.tensor(input)?;
             raw.alloc_output(input.shape())
-        })?);
+        });
     }
 
     // All CUDA work for this operation happens inside a single raw session:
@@ -1394,6 +1395,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn triangular_solve_typed_with_op<T>(
     backend: &mut CudaExecSession<'_>,
     a: &TypedTensor<T>,
@@ -1452,7 +1454,7 @@ where
         raw.tensor(a)?;
         raw.tensor(b)?;
         if zero_dim {
-            return Ok(raw.alloc_output::<T>(b.shape())?);
+            return raw.alloc_output::<T>(b.shape());
         }
 
         // Clone `b` into a fresh output tensor on the session stream.
@@ -1569,6 +1571,7 @@ where
     })
 }
 
+#[allow(clippy::type_complexity)]
 fn lu_typed<T>(
     backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
@@ -1579,7 +1582,7 @@ fn lu_typed<T>(
     TypedTensor<T>,
 )>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
 {
     const OP: &str = "lu";
 
@@ -1595,7 +1598,7 @@ fn lu_factor_typed<T>(
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
 {
     const OP: &str = "lu_factor";
 
@@ -1734,7 +1737,7 @@ fn lu_solve_prepared_typed<T>(
     conjugate_a: bool,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     const OP: &str = "lu_solve_prepared";
 
@@ -1743,13 +1746,13 @@ where
     ensure_cubecl_resident_typed(OP, b)?;
     validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), b.shape())?;
     if has_zero_dim(packed_lu.shape()) || has_zero_dim(b.shape()) {
-        return Ok(backend.with_raw(OP, |raw| {
+        return backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
             // empty output: `raw.tensor` checks both tensors are resident.
             raw.tensor(packed_lu)?;
             raw.tensor(b)?;
             raw.alloc_output::<T>(b.shape())
-        })?);
+        });
     }
 
     match (transpose_a, conjugate_a) {
@@ -1804,7 +1807,7 @@ fn copy_matrix_adjoint_real<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     backend.with_cubecl(op, |cubecl| {
         let vt = cubecl.alloc_output::<T>(vt_shape)?;
@@ -1863,7 +1866,14 @@ fn apply_positive_qr_gauge_real<T>(
     op: &'static str,
 ) -> Result<()>
 where
-    T: LinalgScalar + TensorScalar + PartialOrd + std::ops::Mul<Output = T>,
+    T: LinalgScalar
+        + TensorScalar
+        + CubeMul
+        + CubeNeg
+        + CubePartialOrd
+        + PartialOrd
+        + std::ops::Mul<Output = T>
+        + Scalar,
 {
     backend.with_cubecl(op, |cubecl| {
         let mut phase_shape = vec![r.shape()[0]];
@@ -1880,7 +1890,7 @@ where
         let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
         // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
         unsafe {
-            cubecl_linalg::qr_phase_real::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::qr_phase_real::launch_unchecked::<T>(
                 cubecl.client(),
                 phase_count,
                 cubecl.cube_dim_1d(),
@@ -1899,7 +1909,7 @@ where
         // SAFETY: phase computation is stream-ordered before scaling, Q/R are
         // live mutable outputs, and the launch covers both domains.
         unsafe {
-            cubecl_linalg::qr_apply_phase_real::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::qr_apply_phase_real::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -1936,7 +1946,7 @@ fn apply_positive_qr_gauge_c32(
         let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
         // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
         unsafe {
-            cubecl_linalg::qr_phase_c32::launch_unchecked::<CubeclCudaRuntime>(
+            cubecl_linalg::qr_phase_c32::launch_unchecked(
                 cubecl.client(),
                 phase_count,
                 cubecl.cube_dim_1d(),
@@ -1955,7 +1965,7 @@ fn apply_positive_qr_gauge_c32(
         // SAFETY: phase computation is stream-ordered before scaling and the
         // second launch covers Q/R exactly.
         unsafe {
-            cubecl_linalg::qr_apply_phase_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
+            cubecl_linalg::qr_apply_phase_complex::launch_unchecked::<Complex32>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -1992,7 +2002,7 @@ fn apply_positive_qr_gauge_c64(
         let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
         // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
         unsafe {
-            cubecl_linalg::qr_phase_c64::launch_unchecked::<CubeclCudaRuntime>(
+            cubecl_linalg::qr_phase_c64::launch_unchecked(
                 cubecl.client(),
                 phase_count,
                 cubecl.cube_dim_1d(),
@@ -2011,7 +2021,7 @@ fn apply_positive_qr_gauge_c64(
         // SAFETY: phase computation is stream-ordered before scaling and the
         // second launch covers Q/R exactly.
         unsafe {
-            cubecl_linalg::qr_apply_phase_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
+            cubecl_linalg::qr_apply_phase_complex::launch_unchecked::<Complex64>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -2033,7 +2043,7 @@ fn launch_matrix_adjoint_real<T>(
     op: &'static str,
 ) -> Result<()>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     if vt.n_elements() == 0 {
         return Ok(());
@@ -2046,7 +2056,7 @@ where
     // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
     // covers exactly the output domain for the matrix-adjoint copy kernel.
     unsafe {
-        cubecl_linalg::matrix_adjoint_real::launch_unchecked::<T, CubeclCudaRuntime>(
+        cubecl_linalg::matrix_adjoint_real::launch_unchecked::<T>(
             cubecl.client(),
             launch_count,
             cubecl.cube_dim_1d(),
@@ -2078,7 +2088,7 @@ where
     // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
     // covers exactly the output domain for the conjugating matrix-adjoint kernel.
     unsafe {
-        cubecl_linalg::matrix_adjoint_complex::launch_unchecked::<T, CubeclCudaRuntime>(
+        cubecl_linalg::matrix_adjoint_complex::launch_unchecked::<T>(
             cubecl.client(),
             launch_count,
             cubecl.cube_dim_1d(),
@@ -2090,6 +2100,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::type_complexity)]
 fn svd_typed<T>(
     backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
@@ -2499,6 +2510,7 @@ where
 /// The identity is materialized on the host and uploaded. Nothing is read back
 /// from the device: the input carries no elements, so this is a constant
 /// upload, not a device-to-host-to-device roundtrip of computed values.
+#[allow(clippy::type_complexity)]
 fn empty_svd_outputs<T>(
     backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
@@ -2585,12 +2597,12 @@ where
     let mut s_shape = vec![k];
     s_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
-        return Ok(backend.with_raw(OP, |raw| {
+        return backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
             // empty output: `raw.tensor` checks the tensor is resident.
             raw.tensor(input)?;
             raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)
-        })?);
+        });
     }
     let batch_total = batch_count(OP, batch_shape)?;
     let a_stride = checked_mul_usize(OP, "svd_values input stride", m, n)?;
@@ -2925,7 +2937,7 @@ fn qr_typed<T>(
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     const OP: &str = "qr";
 
@@ -2938,7 +2950,7 @@ where
     let mut r_shape = vec![k, n];
     r_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
-        return Ok(backend.with_raw(OP, |raw| {
+        return backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
             // empty outputs: `raw.tensor` checks the tensor is resident.
             raw.tensor(input)?;
@@ -2946,7 +2958,7 @@ where
                 raw.alloc_output::<T>(&q_shape)?,
                 raw.alloc_output::<T>(&r_shape)?,
             ))
-        })?);
+        });
     }
 
     let m_i32 = as_i32(m, OP, "m")?;
@@ -3162,7 +3174,7 @@ where
     let lda_i64 = i64::from(lda);
     let batch_total_i64 = i64::from(batch_total_i32);
     if has_zero_dim(input.shape()) {
-        return Ok(backend.with_raw(OP, |raw| {
+        return backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
             // empty outputs: `raw.tensor` checks the tensor is resident.
             raw.tensor(input)?;
@@ -3170,7 +3182,7 @@ where
                 raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?,
                 raw.alloc_output::<T>(input.shape())?,
             ))
-        })?);
+        });
     }
 
     let (values, work) = backend.with_raw(OP, |raw| {
@@ -3477,12 +3489,12 @@ where
     let lda_i64 = i64::from(lda);
     let batch_total_i64 = i64::from(batch_total_i32);
     if has_zero_dim(input.shape()) {
-        return Ok(backend.with_raw(OP, |raw| {
+        return backend.with_raw(OP, |raw| {
             // The fast path still validates residency before allocating the
             // empty output: `raw.tensor` checks the tensor is resident.
             raw.tensor(input)?;
             raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)
-        })?);
+        });
     }
 
     let values = backend.with_raw(OP, |raw| {
@@ -3762,6 +3774,7 @@ where
     Ok(values)
 }
 
+#[allow(clippy::type_complexity)]
 fn build_lu_outputs_device<T>(
     backend: &mut CudaExecSession<'_>,
     lu: &TypedTensor<T>,
@@ -3776,7 +3789,7 @@ fn build_lu_outputs_device<T>(
     TypedTensor<T>,
 )>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
 {
     let k = m.min(n);
     let mut p_shape = vec![m, m];
@@ -3811,7 +3824,7 @@ where
         // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
         // covers the maximum P/L/U/parity output domain consumed by the kernel.
         unsafe {
-            cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::lu_extract_outputs::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -3836,7 +3849,7 @@ fn build_lu_parity_device<T>(
     batch_shape: &[usize],
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
 {
     backend.with_cubecl("lu_factor", |cubecl| {
         let parity = cubecl.alloc_output::<T>(batch_shape)?;
@@ -3848,7 +3861,7 @@ where
         // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
         // covers exactly the parity output domain.
         unsafe {
-            cubecl_linalg::lu_parity::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::lu_parity::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -3867,7 +3880,7 @@ fn fill_one_device_tensor<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     backend.with_cubecl(op, |cubecl| {
         let out = cubecl.alloc_output::<T>(shape)?;
@@ -3878,7 +3891,7 @@ where
         // SAFETY: `out_arg` describes a live CUDA output tensor, and
         // `launch_count` covers every output element exactly once.
         unsafe {
-            cubecl_linalg::fill_one_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::fill_one_kernel::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -3896,7 +3909,7 @@ fn apply_lu_pivots_typed<T>(
     inverse: bool,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     backend.with_cubecl("lu_solve_prepared", |cubecl| {
         let out = cubecl.alloc_output::<T>(input.shape())?;
@@ -3914,7 +3927,7 @@ where
         // SAFETY: tensor bindings describe live CUDA tensors, pivot metadata
         // matches the validated LU shape, and `launch_count` covers the output domain.
         unsafe {
-            cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::lu_apply_pivots::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -3935,7 +3948,7 @@ fn zero_sized_lu_factor_outputs<T>(
     shape: &[usize],
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     let m = shape[0];
     let n = shape[1];
@@ -4101,7 +4114,9 @@ fn as_i32(value: usize, op: &'static str, label: &'static str) -> Result<i32> {
 /// same allocation. The caller is responsible for ensuring any later FFI call
 /// observes CUDA aliasing and mutability requirements.
 unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
-    base.cast::<T>().add(offset).cast()
+    // SAFETY: the caller guarantees `base` covers `offset` further `T`
+    // elements inside one device allocation (see `# Safety` above).
+    unsafe { base.cast::<T>().add(offset).cast() }
 }
 
 /// Offset an immutable device pointer by `offset` typed elements.
@@ -4112,7 +4127,9 @@ unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
 /// additional `T` elements, and the resulting pointer must remain within the
 /// same allocation for the lifetime required by the receiving CUDA library.
 unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_void {
-    base.cast::<T>().add(offset).cast()
+    // SAFETY: the caller guarantees `base` covers `offset` further `T`
+    // elements inside one device allocation (see `# Safety` above).
+    unsafe { base.cast::<T>().add(offset).cast() }
 }
 
 fn zero_like_linalg_device_tensor(
@@ -4241,7 +4258,7 @@ fn complex32_magnitude(
         // SAFETY: bindings describe live CUDA tensors, and `launch_count`
         // covers exactly the complex32 magnitude output domain.
         unsafe {
-            cubecl_linalg::complex32_magnitude::launch_unchecked::<CubeclCudaRuntime>(
+            cubecl_linalg::complex32_magnitude::launch_unchecked(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -4270,7 +4287,7 @@ fn complex64_magnitude(
         // SAFETY: bindings describe live CUDA tensors, and `launch_count`
         // covers exactly the complex64 magnitude output domain.
         unsafe {
-            cubecl_linalg::complex64_magnitude::launch_unchecked::<CubeclCudaRuntime>(
+            cubecl_linalg::complex64_magnitude::launch_unchecked(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),

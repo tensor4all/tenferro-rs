@@ -7,7 +7,7 @@
 //! visitation, and numerics that agree with the CPU backend. They are ignored by default;
 //! explicitly running them requires a CUDA device and fails if none is available.
 
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_gpu::cuda::{

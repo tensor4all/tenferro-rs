@@ -1,4 +1,4 @@
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use std::num::NonZeroUsize;
 use std::panic;
 
@@ -19,13 +19,13 @@ use tenferro_tensor::{
 fn cubecl_buffers_keep_domain_and_distinguish_allocations() {
     let domain = AllocationDomainId::fresh();
     let first = CubeclBuffer::new(
-        cubecl::server::Handle::new(StreamId::current(), 4),
+        cubecl::server::Handle::new(bookkeeping_service(), StreamId::current(), 4),
         4,
         0,
         domain,
     );
     let second = CubeclBuffer::new(
-        cubecl::server::Handle::new(StreamId::current(), 4),
+        cubecl::server::Handle::new(bookkeeping_service(), StreamId::current(), 4),
         4,
         0,
         domain,
@@ -314,6 +314,7 @@ fn cubecl_tensor_with_len(
 ) -> tenferro_tensor::Result<TypedTensor<f32>> {
     let domain = AllocationDomainId::fresh();
     let handle = cubecl::server::Handle::new(
+        bookkeeping_service(),
         StreamId::current(),
         (len * core::mem::size_of::<f32>()) as u64,
     );
@@ -334,4 +335,12 @@ fn cubecl_tensor_with_len(
             cpu_affinity: None,
         },
     )
+}
+
+/// A service id for handles that carry only tenferro's own bookkeeping.
+///
+/// 0.11's `Handle` names the service whose memory it addresses; these handles
+/// never reach a device, so any service is consistent.
+fn bookkeeping_service() -> cubecl_common::device::ServiceId {
+    cubecl_common::device::ServiceId::of::<()>(cubecl_common::device::DeviceId::new(0, 0))
 }

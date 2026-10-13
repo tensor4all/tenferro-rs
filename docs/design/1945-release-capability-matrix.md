@@ -9,15 +9,21 @@ that names each capability, and the adoption gates that follow from them.
 | Repository | Revision |
 | --- | --- |
 | `tensor4all/tenferro-rs` | `main` at `7f3094ae8` (#2093); later upstream commits are tests, docs and examples only |
-| `tensor4all/cubecl` (fork) | `main` at `1811309791f675125379b326bf748f2ec1e29f2a` (#27, #28, #29) |
-| `tensor4all/cubek` (fork) | `release/t4a-0.2.2` at `507c91f5a70e284595755b72598f60c684d1132b` |
+| `tensor4all/cubecl` (fork) | `release/t4a-cubecl-0.11.0` at `8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9` (the 0.10.2 line's #27/#28/#29 superseded by 0.11) |
+| `tensor4all/cubek` (fork) | `release/t4a-cubek-0.3.0` at `a1a106096a09fd27e1fbe9dbd2253d244f2df677` |
 | `tensor4all/tensor4all-rs` | `main` at `11f29ff0` (tenferro pin `ff94aeded…`), with the B1 frontend surface |
 
-"Released" below means merged with its gates green, not "planned".
+"Released" below means merged with its gates green, not "planned". The fork rows name the release
+branches those revisions belong to; each is published as `t4a-cubecl*` 0.11.0 and `t4a-cubek*` 0.3.0,
+which is what the workspace now requires.
 
 ### Pin state and the cubecl 0.11 decision (2026-10-12)
 
-`scripts/check-git-pin-content.py` currently fails on `main`: `t4a-cubecl 0.10.2` was republished from a
+**Resolved by the 0.11 migration (#2132), and superseded by the dependency move that followed:** the
+fork releases `t4a-cubecl*` 0.11.0 and `t4a-cubek*` 0.3.0 are published, and the workspace now requires
+those versions from crates.io, so no git pin remains and `check-git-pin-content.py` reports nothing. The
+measurements below are the record of why the port was needed. At the time,
+`scripts/check-git-pin-content.py` failed on `main`: `t4a-cubecl 0.10.2` was republished from a
 different commit (`eb2c8894…`) whose content is upstream 0.10.2 without the fork patches, so the pinned
 `1811309…` and the registry archive no longer agree. Measured options:
 
@@ -44,7 +50,7 @@ outside those slices.
 | **Held CUDA session (U3)** — held reservation, typed reentry/contention, logical `StreamId` capture, no per-op flush, `Drop` does not flush | released | #2059, 7 A100 tests, 3 compile-fail fixtures, `docs/design/held-cuda-session-1945-u3.md`, guide #2071 | tensor4all-rs CUDA/async milestone |
 | **Owning pending transfers (U4 items 2–3)** — `download_pending` / `upload_pending`, admission that returns the package on refusal and retains on unproven enqueue, bounded retirement queue, no wait in `Drop` | released | #2061, #2065, #2073, #2076, `docs/design/{asynchronous-transfer,owning-pending-transfers}-1945-u4.md`, transfer bench #2066 | CUDA/async milestone; the only route that moves a value without host export/import |
 | **Source publication (U4 item 1, source half)** — a produced value published with its producer frontier; the session, backend handle and source tensor may go away; the publication owns the value, its allocation address and readiness | released | #2101, `crates/tenferro-gpu/tests/source_publication.rs` (7 A100 tests), 2 compile-fail fixtures, `docs/design/source-publication-1945-u4.md` (revision 5) | CUDA/async milestone |
-| **Cubecl-side boundary changes** — `check_errors` publication boundary (#27), bounded staging retention on the write path (#28), write authority required for server writes (#29) | released in the fork | fork PRs, `docs/design/cubecl-fork-exit-1945.md` | prerequisite for the routes above; not yet proposed upstream |
+| **Cubecl-side boundary changes** — `check_errors` publication boundary (#27), bounded staging retention on the write path (#28), write authority required for server writes (#29) | released in the fork | fork PRs, `docs/design/cubecl-fork-exit-1945.md` | prerequisite for the routes above; #27 retired by the 0.11 migration (upstream reports failed launches on the affected buffers) — `docs/design/cubecl-011-check-errors-disposition.md`; #28/#29 not yet proposed upstream |
 | **Optional held AD adapter (U2-AD)** | **deferred, not solved** | upstream design record D12; our measurement puts session entry at ≈5% of a 13.5 µs op, so the measured-signal precondition is unmet | must not be advertised; B3 depends on it |
 | **Consumer copy of a published value (U4-2a)** — same-runtime, same-device device-side copy with the pending-transfer ownership model | **implemented and measured** (`docs/design/consumer-copy-1945-u4-2a.md`): exact-instance runtime eligibility before the captured-stream entry, `wait_event` + `copy_bytes` + recorded completion on the consumer's captured stream, an owned typed destination, `PendingRead` ownership, and `PublicationError::CopyRejected` | 3 A100 tests (cross-stream copy with exact bytes, ordering behind a pending chained frontier, another-runtime refusal with the publication returned), 2 fault-injection tests, a trybuild exclusion fixture, and the unchanged `source_publication`/`pending_*` suites | CUDA/async milestone; claims bounded to the same runtime instance and device |
 | **Registry-authorized consumer read (U4-2b)** — a published value read from another event domain through a registry-bound admission | **out of scope under the current domain model** (`docs/design/consumer-read-handoff-1945-u4-2.md`): the native CUDA adapter fixes one provider target per device and a second registration with that target is rejected, so the two distinct event domains the capability needs cannot exist in one configuration; revisiting it needs either cross-epoch admission semantics or a registration/domain-model change | four pre-implementation reviews rejected the cross-runtime designs, and the axis-1 narrowing was then falsified on the registration rule | **must not be advertised**; cross-runtime and cross-device reads are unsupported as well |

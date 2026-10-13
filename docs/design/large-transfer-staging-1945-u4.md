@@ -99,10 +99,10 @@ record the call's event, wait for it, then reuse the lease. One event per call, 
 repeatedly, never allocated per chunk. Failures after the first possible enqueue retire the lease, the
 event and the retained `get_resource` guard, so nothing is freed while DMA may be in flight.
 
-Before the loop, once: the placement/dtype checks the caller already made, `check_errors` (the
-publication boundary: it flushes and reports queued producer errors without rotating the drop queue),
-`get_resource` on the captured stream, the resolved resource's extent check, and context plus stream
-capture.
+Before the loop, once: the placement/dtype checks the caller already made, `get_resource` on the
+captured stream (the publication boundary: upstream's published-buffer claim rejects a failed
+producer write and reports queued producer errors without rotating the drop queue), the resolved
+resource's extent check, and context plus stream capture.
 
 ### 4.3 What the tests caught
 

@@ -1,3 +1,5 @@
+use cubecl::prelude::Scalar;
+
 use super::*;
 
 fn initialize_q_columns_typed<T>(
@@ -8,7 +10,7 @@ fn initialize_q_columns_typed<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     let width = end
         .checked_sub(start)
@@ -25,7 +27,7 @@ where
         // SAFETY: output is a live device tensor and each launched thread
         // writes one selected identity-column element.
         unsafe {
-            cubecl_linalg::householder_q_columns_identity::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::householder_q_columns_identity::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -44,7 +46,7 @@ fn build_explicit_v<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     backend.with_cubecl(op, |cubecl| {
         let output = cubecl.alloc_output::<T>(&[packed.shape()[0], columns])?;
@@ -59,7 +61,7 @@ where
         // SAFETY: bindings are live device tensors and each thread writes one
         // explicit reflector-vector entry. The output is function-local scratch.
         unsafe {
-            cubecl_linalg::householder_explicit_v::launch_unchecked::<T, CubeclCudaRuntime>(
+            cubecl_linalg::householder_explicit_v::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -92,7 +94,7 @@ fn apply_householder_reflectors_typed<T>(
     op: &'static str,
 ) -> Result<()>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     let (m, _, k) = compact_qr_state_dims(packed, coeff, op)?;
     ensure_cubecl_resident_typed(op, target)?;
@@ -502,7 +504,7 @@ fn assemble_from_factors_typed<T>(
     op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     let rows = packed_q.shape()[0];
     let factor_width = packed_q.shape()[1];
@@ -526,10 +528,7 @@ where
         // SAFETY: bindings describe live device tensors and the launch covers
         // both packed and coefficient outputs.
         unsafe {
-            cubecl_linalg::householder_from_factors_assemble::launch_unchecked::<
-                T,
-                CubeclCudaRuntime,
-            >(
+            cubecl_linalg::householder_from_factors_assemble::launch_unchecked::<T>(
                 cubecl.client(),
                 launch_count,
                 cubecl.cube_dim_1d(),
@@ -552,7 +551,7 @@ pub(super) fn compact_qr_from_factors_typed<T>(
     op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     ensure_cubecl_resident_typed(op, q)?;
     ensure_cubecl_resident_typed(op, r)?;
@@ -581,7 +580,7 @@ pub(super) fn compact_qr_append_typed<T>(
     op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     let (m, _, k) = compact_qr_state_dims(packed, coeff, op)?;
     ensure_cubecl_resident_typed(op, block)?;
@@ -633,7 +632,7 @@ pub(super) fn compact_qr_q_columns_typed<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     let (m, _, _k) = compact_qr_state_dims(packed, coeff, op)?;
     // Full-Q width: columns `k..m` span the orthogonal complement of the
@@ -663,7 +662,7 @@ pub(super) fn compact_qr_r_typed<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar,
+    T: LinalgScalar + TensorScalar + Scalar,
 {
     let (m, n, k) = compact_qr_state_dims(packed, coeff, op)?;
     let input = backend.slice_typed(packed, &matrix_slice_config(packed.shape(), k, n))?;

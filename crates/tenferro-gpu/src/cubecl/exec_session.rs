@@ -1,5 +1,5 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use num_complex::{Complex32, Complex64};
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -26,6 +26,7 @@ use super::{
     raw, session_cubecl, CudaBackend, CudaBackendState, CudaDeviceInfo, CudaExtensionCache,
     CudaRuntime, CudaRuntimeIdentity,
 };
+use cubecl::frontend::Scalar;
 
 /// Best-effort exit flush for a `with_cubecl` session.
 ///
@@ -34,15 +35,12 @@ use super::{
 /// work.
 struct CubeclExitFlush<'a> {
     op: &'static str,
-    client: &'a cubecl::client::ComputeClient<cubecl_cuda::CudaRuntime>,
+    client: &'a cubecl::client::Client,
     flushed: bool,
 }
 
 impl<'a> CubeclExitFlush<'a> {
-    fn new(
-        op: &'static str,
-        client: &'a cubecl::client::ComputeClient<cubecl_cuda::CudaRuntime>,
-    ) -> Self {
+    fn new(op: &'static str, client: &'a cubecl::client::Client) -> Self {
         Self {
             op,
             client,
@@ -315,7 +313,7 @@ impl CudaExecSession<'_> {
         //    without arming a fence the next submission would synchronize:
         //    entering a raw scope must not become a host barrier (tenferro-rs
         //    #2078). The host task queue is drained either way.
-        runtime.check_errors(op)?;
+        runtime.flush_cubecl(op)?;
         // 3-4. Save previous context, activate the tenferro primary context.
         let device_ordinal = i32::try_from(runtime.device_ordinal())
             .map_err(|source| crate::Error::backend_source(op, source))?;
@@ -377,7 +375,7 @@ impl CudaExecSession<'_> {
     #[doc(hidden)]
     pub fn tril_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
     {
         self.backend.tril_typed(input, k)
     }
@@ -389,7 +387,7 @@ impl CudaExecSession<'_> {
         config: &SliceConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
     {
         self.backend.slice_typed(input, config)
     }
@@ -403,7 +401,7 @@ impl CudaExecSession<'_> {
     #[doc(hidden)]
     pub fn triu_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
     {
         self.backend.triu_typed(input, k)
     }

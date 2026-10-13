@@ -81,12 +81,12 @@ pub(crate) fn plane_propagate_nan<F: Float>(value: F) -> F {
 }
 
 #[cube]
-pub(crate) fn zero_value<E: CubePrimitive>() -> E {
+pub(crate) fn zero_value<E: CubePrimitive + Scalar>() -> E {
     E::cast_from(0u32)
 }
 
 #[cube]
-pub(crate) fn flat_to_tensor_index<E: CubePrimitive>(
+pub(crate) fn flat_to_tensor_index<E: CubePrimitive + Scalar>(
     flat: usize,
     tensor: &Tensor<E>,
     #[comptime] rank: usize,
@@ -100,7 +100,7 @@ pub(crate) fn flat_to_tensor_index<E: CubePrimitive>(
 }
 
 #[cube]
-pub(crate) fn multi_to_tensor_index<E: CubePrimitive>(
+pub(crate) fn multi_to_tensor_index<E: CubePrimitive + Scalar>(
     indices: &Array<usize>,
     tensor: &Tensor<E>,
     #[comptime] rank: usize,

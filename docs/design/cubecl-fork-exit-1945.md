@@ -1,18 +1,19 @@
 # The cubecl fork: what it carries, what stays upstream, and the own-backend contingency (#1945)
 
-Decision record for the `tensor4all/cubecl` fork that `tenferro-rs` pins, written after the held-CUDA
+Decision record for the `tensor4all/cubecl` fork that `tenferro-rs` consumes, written after the held-CUDA
 session (#2059), the owning pending transfers (#2073, #2076) and the source publication (#2101) were
-delivered against it.
+delivered against it. tenferro depends on the fork's **published** releases (`t4a-cubecl*` 0.11.0 /
+`t4a-cubek*` 0.3.0 from crates.io); the revisions in this table are what those releases carry.
 
 ## 1. What the pin is
 
 | Item | Value |
 | --- | --- |
-| Fork | `tensor4all/cubecl`, `main` at `1811309791f675125379b326bf748f2ec1e29f2a` |
+| Fork | `tensor4all/cubecl`, release branch `release/t4a-cubecl-0.11.0` at `8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9` |
 | Upstream | `tracel-ai/cubecl`, whose `main` (`4362f783f`) is 388 commits ahead of the fork's merge base |
 | Fork-only commits | 62 |
-| Version line | releases `v0.10.1`, `v0.10.2` of the fork's packages |
-| Downstream pin | `cubek` fork release branch `release/t4a-0.2.2` (`507c91f5a`), which carries one cubecl revision |
+| Version line | releases `v0.10.1`, `v0.10.2` and `v0.11.0` of the fork's packages |
+| Downstream pin | `cubek` fork release branch `release/t4a-cubek-0.3.0` (`a1a106096a09fd27e1fbe9dbd2253d244f2df677`), which carries one cubecl revision |
 
 The fork is therefore **not** a thin overlay of the #1945 work. It is the release fork that this
 workspace's CUDA stack builds on, and it already carried, before #1945: CUDA OOM reclaim, complex-plane
@@ -24,7 +25,7 @@ diagnostic, and the release/CI plumbing that keeps those packages publishable.
 
 | Change | Fork PR | Why `tenferro-rs` needs it |
 | --- | --- | --- |
-| `ComputeServer::check_errors` / `Client::check_errors`: report producer errors and dispatch the host queue without rotating the drop queue | #27 | The held session's publication boundary must surface backend errors without a `flush`, which would wait for the previous fence. `download_pending` / `upload_pending` / `publish` all publish through it. |
+| `ComputeServer::check_errors` / `Client::check_errors`: report producer errors and dispatch the host queue without rotating the drop queue | #27 | The held session's publication boundary had to surface backend errors without a `flush`, which would wait for the previous fence. **Retired by the 0.11 migration**: upstream reports a failed launch on the buffers the launch never wrote, through the published buffer's own `get_resource` claim and `Client::check`/`sync_buffers`, so the four publication sites rely on that claim instead (`docs/design/cubecl-011-check-errors-disposition.md`). |
 | CUDA write path evaluates the staging policy | #28 | `Command::write_to_gpu` queued staged host bytes but only the kernel path checked `drop_queue.should_flush()`. With a publication boundary that no longer flushes, a write-only workload never reached the default 64-allocation / 64 MiB thresholds and retained staged bytes indefinitely. |
 | `ComputeServer::write` is `unsafe fn` with a write-authority contract | #29 | A safe server write accepted a lifetime-free binding, so a borrowed value could be written through a binding derived from the borrow. `Session::tensor_binding` and `Session::array_arg` are `unsafe` on our side (#2093); this is the substrate half of the same contract. |
 
@@ -76,15 +77,14 @@ where the loss would show.
 
 **A bump also has to keep the declared version honest.** `scripts/check-git-pin-content.py` fails closed
 when a git-pinned dependency's `version` does not identify the content the pinned revision actually has:
-the crates.io release of that version must match the pinned revision file by file. The workspace pins
-`t4a-cubecl-*` at the fork revision that contains #27/#28/#29 while still declaring `=0.10.2`, and the
-published 0.10.2 came from `eb2c8894d` (before those fixes). As of this record that mismatch is a
-pre-existing failure of `main`'s `CI configuration checks` job, not of any single pull request. The
-sanctioned fix is a fork release at the pinned revision (`0.10.3`) plus pin/version bumps here, in
-`cubek`, and downstream - the exception file is reserved for dependencies with no crates.io release and
-requires a tracked issue, so it is not the right tool for an already-published package. Whichever way it
-is fixed, the rule for every future bump is: advance the declared version together with the revision, or
-release the fork.
+the crates.io release of that version must match the pinned revision file by file. The workspace once
+pinned `t4a-cubecl-*` at the fork revision that contains #27/#28/#29 while still declaring `=0.10.2`,
+and the published 0.10.2 came from `eb2c8894d` (before those fixes); that mismatch failed `main`'s `CI
+configuration checks` job. **Resolved**: the 0.11 fork releases publish the ported content, the workspace
+now requires `t4a-cubecl* = =0.11.0` / `t4a-cubek* = =0.3.0` from the registry, and no workspace git pin
+remains. The rule for any future pin is unchanged: advance the declared version together with the
+revision, or release the fork, and the exception file stays reserved for dependencies with no crates.io
+release.
 
 ## 5. Own-backend contingency inventory
 

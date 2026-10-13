@@ -22,6 +22,7 @@ use super::ffi::cutensor::{
 use super::interop::cuda_device_ptr_from_addr;
 use super::{CudaBackend, CudaRuntime};
 use crate::{col_major_strides, Error, TypedTensor};
+use cubecl::frontend::Scalar;
 
 const OP_TRANSPOSE: &str = "transpose";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
@@ -37,7 +38,7 @@ pub(super) enum VendorAlpha {
 }
 
 pub(super) trait CutensorPermutationScalar:
-    CubeElement + TensorScalar + CubePrimitive + Clone + One + Send + Sync + 'static
+    CubeElement + TensorScalar + CubePrimitive + Scalar + Clone + One + Send + Sync + 'static
 {
     /// Element type of the cuTENSOR descriptors.
     ///
@@ -797,7 +798,7 @@ fn resolve_owned_operand<T, R>(
     op: &'static str,
 ) -> crate::Result<ResolvedPermutationOperand>
 where
-    T: TensorScalar + 'static,
+    T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
     ensure_resident_on_runtime(rt, tensor, op)?;
@@ -810,7 +811,7 @@ fn resolve_view_operand<T, R>(
     op: &'static str,
 ) -> crate::Result<ResolvedPermutationOperand>
 where
-    T: TensorScalar + 'static,
+    T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
     ensure_view_resident_on_runtime(rt, view, op)?;
@@ -825,7 +826,7 @@ fn view_read_base_addr<T, R>(
     op: &'static str,
 ) -> crate::Result<u64>
 where
-    T: TensorScalar + 'static,
+    T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
     super::gemm::memoized_device_addr(
@@ -844,12 +845,14 @@ fn view_write_base_addr<T, R>(
     op: &'static str,
 ) -> crate::Result<u64>
 where
-    T: TensorScalar + 'static,
+    T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
     let resource = rt
         .client()
-        .get_resource(prepared_view_mut_access(view, op)?.into_handle())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(
+            prepared_view_mut_access(view, op)?.into_handle(),
+        )
         .map_err(|err| Error::backend_source(op, err))?;
     Ok(resource.resource().ptr)
 }
@@ -860,18 +863,18 @@ fn typed_device_ptr<T, R>(
     op: &'static str,
 ) -> crate::Result<*mut c_void>
 where
-    T: TensorScalar + 'static,
+    T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
     let prepared = prepared_tensor_access(tensor, op)?;
     let resource = rt
         .client()
-        .get_resource(prepared.into_handle())
+        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
         .map_err(|err| Error::backend_source(op, err))?;
     cuda_device_ptr_from_addr(resource.resource().ptr, op)
 }
 
-fn resolve_prepared_device_region<T: TensorScalar + 'static>(
+fn resolve_prepared_device_region<T: TensorScalar + 'static + Scalar>(
     base_addr: u64,
     offset: isize,
     op: &'static str,

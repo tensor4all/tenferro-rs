@@ -305,9 +305,16 @@ pub(crate) fn broadcast_ternary(
 
 fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> Result<TracedTensor> {
     let scalar = apply_nullary(op, 0, input.dtype, Some(vec![]))?;
+    // A binary op applies to operands of one shape, so the rank-0 factor has to be
+    // broadcast here, exactly as `TracedTensor::add`/`mul` do through
+    // `broadcast_binary`. Without it the graph carries a rank-0 `Mul` operand: the
+    // CPU backend happens to accept one, the CUDA backend rejects it with
+    // `incompatible shapes: lhs=[], rhs=<input shape>`, so the same graph would run
+    // on one backend and not the other.
+    let (input, scalar) = broadcast_binary(input, &scalar)?;
     apply_binary(
         StdTensorOp::Mul,
-        input,
+        &input,
         &scalar,
         input.rank,
         input.shape_hint.clone(),

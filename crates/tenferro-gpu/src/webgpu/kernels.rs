@@ -1,7 +1,8 @@
+use cubecl::frontend::Scalar;
 use cubecl::prelude::*;
 
 #[cube(launch_unchecked)]
-pub fn pack_lhs_dot_general<E: CubePrimitive>(
+pub fn pack_lhs_dot_general<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     #[comptime] free_axes: Sequence<usize>,
@@ -47,7 +48,7 @@ pub fn pack_lhs_dot_general<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn pack_rhs_dot_general<E: CubePrimitive>(
+pub fn pack_rhs_dot_general<E: CubePrimitive + Scalar>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     #[comptime] contract_axes: Sequence<usize>,

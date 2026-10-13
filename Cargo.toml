@@ -52,7 +52,7 @@ num-complex = "0.4"
 num-traits = "0.2"
 # Scalar `erf`/`erff` for the CPU analytic kernels (`f64::erf` is unstable in std).
 libm = "0.2.16"
-elem-simd-math = { git = "https://github.com/tensor4all/elem-simd-math-rs.git", version = "=0.1.0", rev = "63d3f8df42425f3e6398da765261a5a5d1999c30" }
+elem-simd-math = "=0.1.0"
 thiserror = "2"
 smallvec = { version = "1", features = ["union"] }
 rayon = "1"
@@ -64,22 +64,24 @@ lru = "0.18.5"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# strided v0.5.0 (borrowed-or-owned view metadata), shared with the CPU
-# contraction/linalg stack (#2004). Keep exact registry requirements aligned with
-# this revision, and keep the pinned providers (cpueinsum, tlinalg) on the same
-# source: a split strided source gives two `StridedView` types that cannot meet at
-# a crate boundary. This revision is the pre-merge branch of
-# tensor4all/strided-rs#297; re-point every strided rev here at once when it
-# merges. The providers follow the same rule through
-# tensor4all/cpueinsum-rs#18 and tensor4all/tlinalg-rs#52.
-strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "49dd63aac7af12a9a3e7de90cffb0337f26025c8", version = "=0.5.0" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "49dd63aac7af12a9a3e7de90cffb0337f26025c8", version = "=0.5.0" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "49dd63aac7af12a9a3e7de90cffb0337f26025c8", version = "=0.5.0", features = ["parallel"] }
-cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "68d86326b85f3ce94be2b9fe928430abd29a877a", version = "0.1.0" }
-cpueinsum-blas = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "68d86326b85f3ce94be2b9fe928430abd29a877a", version = "0.1.0" }
-strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "49dd63aac7af12a9a3e7de90cffb0337f26025c8", version = "=0.5.0", default-features = false }
-strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "49dd63aac7af12a9a3e7de90cffb0337f26025c8", version = "=0.5.0", default-features = false, features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "49dd63aac7af12a9a3e7de90cffb0337f26025c8", version = "=0.5.0", features = ["parallel"] }
+# Published strided v0.5.0 and the matching providers, shared with the CPU
+# contraction/linalg stack (#2004). Keep the exact requirements aligned across
+# this stack, and keep the providers (cpueinsum, tlinalg, strided) on one
+# registry source: a split strided source gives two `StridedView` types that
+# cannot meet at a crate boundary.
+#
+# These requirements name the releases that carry the borrowed-or-owned view
+# metadata (tensor4all/strided-rs#297, cpueinsum-rs#18, tlinalg-rs#52). They
+# resolve only once those versions are on crates.io, so this PR follows the
+# publication of strided-* 0.5.0, tcontract-* 0.2.0 and cpueinsum/tlinalg 0.2.0.
+strided-view = "=0.5.0"
+strided-traits = "=0.5.0"
+strided-perm = { version = "=0.5.0", features = ["parallel"] }
+cpueinsum = "=0.2.0"
+cpueinsum-blas = "=0.2.0"
+strided-basic = { version = "=0.5.0", default-features = false }
+strided-fused = { version = "=0.5.0", default-features = false, features = ["parallel"] }
+strided-kernel = { version = "=0.5.0", features = ["parallel"] }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
@@ -91,19 +93,23 @@ lapack-inject = "0.1.2"
 # Compile both CubeCL runtime paths with CUDA 12.8 bindings. Dynamic runtime
 # gating keeps the baseline compatible with CUDA 12.4 driver/NVRTC libraries.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
-# Pre-publish staging: Cargo uses these fork commits locally, while packaged
-# manifests retain only the crates.io version requirements.
-cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2", default-features = false }
-cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2" }
-cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2" }
-cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2" }
-cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2" }
-cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "507c91f5a70e284595755b72598f60c684d1132b", version = "=0.2.2", default-features = false }
-cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "507c91f5a70e284595755b72598f60c684d1132b", version = "=0.2.2", default-features = false }
-cubek-fft = { package = "t4a-cubek-fft", git = "https://github.com/tensor4all/cubek.git", rev = "507c91f5a70e284595755b72598f60c684d1132b", version = "=0.2.2", default-features = false }
+# The published 0.11.0 / 0.3.0 fork releases of the ported content:
+# - https://github.com/tensor4all/cubecl branch release/t4a-cubecl-0.11.0
+# - https://github.com/tensor4all/cubek  branch release/t4a-cubek-0.3.0
+# Both carry the ported upstream content plus the migration's fixes. Replace
+# them with merged upstream revisions when the ports land upstream (#2116).
+cubecl = { package = "t4a-cubecl", version = "=0.11.0", default-features = false }
+cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.11.0", features = ["cpp"] }
+cubecl-common = { package = "t4a-cubecl-common", version = "=0.11.0" }
+cubecl-environment = { package = "t4a-cubecl-environment", version = "=0.11.0" }
+cubecl-runtime = { package = "t4a-cubecl-runtime", version = "=0.11.0" }
+cubecl-wgpu = { package = "t4a-cubecl-wgpu", version = "=0.11.0" }
+cubek-matmul = { package = "t4a-cubek-matmul", version = "=0.3.0", default-features = false, features = ["multi-level"] }
+cubek-std = { package = "t4a-cubek-std", version = "=0.3.0", default-features = false }
+cubek-fft = { package = "t4a-cubek-fft", version = "=0.3.0", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
-computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }
+computegraph = "=0.1.0"
 
 [profile.dev]
 opt-level = 0

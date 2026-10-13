@@ -1,5 +1,4 @@
-use cubecl::stream_id::StreamId;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl_environment::stream::StreamId;
 
 use super::super::dispatch::{cubecl_buffer, launch_nullary_into};
 use super::super::gemm::typed_device_ptr;
@@ -47,9 +46,7 @@ fn queued_cubecl_write_drops_the_memoized_device_address() {
         cube_count_for_len(typed.n_elements()).unwrap(),
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
-                client, count, dim, out,
-            );
+            structural::fill_zero_kernel::launch_unchecked::<f64>(client, count, dim, out);
         },
     )
     .unwrap();
@@ -98,15 +95,20 @@ fn queued_scale_write_drops_the_memoized_device_address() {
     );
 
     let typed = x.as_typed_mut::<f64>().unwrap();
-    scale_typed_tensor(&rt, typed, 2.0_f64, |client, count, dim, out, factor| {
-        // SAFETY: the scaling bridge validates residency, buffer length, and
-        // the one-dimensional launch domain before this unchecked launch.
-        unsafe {
-            structural::scale_in_place_float_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
-                client, count, dim, out, factor,
-            );
-        }
-    })
+    scale_typed_tensor(
+        &rt,
+        typed,
+        2.0_f64,
+        |client, count, dim, out, factor, len| {
+            // SAFETY: the scaling bridge validates residency, buffer length, and
+            // the one-dimensional launch domain before this unchecked launch.
+            unsafe {
+                structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
+                    client, count, dim, out, factor, len,
+                );
+            }
+        },
+    )
     .unwrap();
     assert!(
         cubecl_buffer::<f64>(x.as_typed::<f64>().unwrap(), "test")
@@ -170,7 +172,7 @@ fn every_in_place_launch_helper_invalidates_the_memoized_address() {
 
 /// Issue #1875: the same rule must hold at the mutable CubeCL binding helpers.
 ///
-/// A helper that converts a mutable tensor or view into an `ArrayArg` is about
+/// A helper that converts a mutable tensor or view into an `BufferArg` is about
 /// to have a kernel write that buffer, whatever the caller's shape. The older
 /// check keyed on `launch_*` names with a `&TypedTensor` output and therefore
 /// never reached `typed_tensor_mut_array_arg` / `typed_view_mut_array_arg`,
@@ -195,7 +197,7 @@ fn every_write_binding_helper_invalidates_the_memoized_address() {
         // Only CubeCL array bindings can queue a scheduler-managed write.
         // `prepared_*_mut_access` returns a raw provider access instead and
         // keeps its own explicit enqueue ordering.
-        if !body.contains("ArrayArg<CubeclCudaRuntime>") || !body.contains("prepare_device_write") {
+        if !body.contains("BufferArg") || !body.contains("prepare_device_write") {
             continue;
         }
         assert!(
@@ -227,11 +229,11 @@ fn owned_raw_vendor_writes_use_the_round_trip_path() {
 
     let write_body = section_between(
         gemm,
-        "pub(super) fn write_device_ptr<T: TensorScalar + 'static>(",
+        "pub(super) fn write_device_ptr<T: TensorScalar + 'static + Scalar>(",
         "\n}\n",
     );
     assert!(
-        write_body.contains(".get_resource("),
+        write_body.contains(".get_resource::<cubecl_cuda::ffi_interop::CudaServer>("),
         "write_device_ptr must resolve through get_resource"
     );
     for memoized in [
@@ -327,12 +329,12 @@ fn view_reads_share_the_root_memo_and_observe_queued_writes() {
         &rt,
         x.as_typed_mut::<f64>().unwrap(),
         2.0_f64,
-        |client, count, dim, out, factor| {
+        |client, count, dim, out, factor, len| {
             // SAFETY: the scaling bridge validates residency, buffer length, and
             // the one-dimensional launch domain before this unchecked launch.
             unsafe {
-                structural::scale_in_place_float_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
-                    client, count, dim, out, factor,
+                structural::scale_in_place_float_kernel::launch_unchecked::<f64>(
+                    client, count, dim, out, factor, len,
                 );
             }
         },

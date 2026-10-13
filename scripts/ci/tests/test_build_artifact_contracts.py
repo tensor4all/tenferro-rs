@@ -10,6 +10,11 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def dependency_spec(value: object) -> dict[str, object]:
+    """Normalize a dependency that may be spelled as a bare version string."""
+    return value if isinstance(value, dict) else {"version": value}
 CONSOLIDATED_CRATES = (
     "tenferro-ad",
     "tenferro-cpu",
@@ -107,7 +112,10 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
 
-        revision = "4373ba0bcb4bdc02f4c03a8a2d4896b84a47dd7c"
+        # Published strided v0.4.8: the content the CPU contraction/linalg stack is
+        # developed and tested against, and the same registry source the provider
+        # crates (cpueinsum, tlinalg) are built from, so the `RawStridedRef` types
+        # can meet at a crate boundary.
         for name in (
             "strided-view",
             "strided-traits",
@@ -117,9 +125,10 @@ class BuildArtifactContracts(unittest.TestCase):
             "strided-kernel",
         ):
             with self.subTest(dependency=name):
-                self.assertEqual(dependencies[name]["rev"], revision)
-                # Exact, so a newer registry release cannot replace the pinned content.
-                self.assertEqual(dependencies[name]["version"], "=0.4.8")
+                spec = dependency_spec(dependencies[name])
+                self.assertNotIn("git", spec)
+                # Exact, so a newer registry release cannot replace the tested content.
+                self.assertEqual(spec["version"], "=0.4.8")
 
         self.assertNotIn("strided-einsum2", dependencies)
 
@@ -139,22 +148,26 @@ class BuildArtifactContracts(unittest.TestCase):
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         dependencies = manifest["workspace"]["dependencies"]
 
-        # Published as `t4a-cubecl* 0.10.2`: the CUDA complex-cast and complex
-        # plane warp-reduce shuffle fixes, the upload copy removal and the
-        # loaded-kernel-id diagnostic (#2009, #2010), plus `Client::check_errors`
-        # (tensor4all/cubecl#27), which reports producer errors without retiring
-        # staged bytes so a raw-copy publication boundary need not wait for the
-        # device.
-        revision = "1811309791f675125379b326bf748f2ec1e29f2a"
+        # Released as `t4a-cubecl* 0.11.0`: the ported upstream 0.11 content plus
+        # the migration's fixes, on the fork's `release/t4a-cubecl-0.11.0` branch.
+        # The 0.10.2 line and its `Client::check_errors` patch (#27) are retired -
+        # 0.11 reports a failed launch on the buffers it never wrote, so the raw
+        # publication boundaries use the buffer-scoped claim instead
+        # (`docs/design/cubecl-011-check-errors-disposition.md`).
         for name in (
             "cubecl",
             "cubecl-cuda",
             "cubecl-common",
+            "cubecl-environment",
             "cubecl-runtime",
             "cubecl-wgpu",
         ):
             with self.subTest(dependency=name):
-                self.assertEqual(dependencies[name]["rev"], revision)
+                spec = dependencies[name]
+                self.assertNotIn("git", spec)
+                # Exact, so a newer registry release cannot replace the tested content,
+                # and one copy of the CubeCL runtime stays in the graph.
+                self.assertEqual(spec["version"], "=0.11.0")
 
         cudarc = dependencies["cudarc"]
         self.assertFalse(cudarc["default-features"])
@@ -173,40 +186,39 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertIn("dep:cubek-matmul", features["webgpu"])
         self.assertIn("dep:cubek-std", features["webgpu"])
 
-    def test_sample_workspaces_patch_cubecl_to_the_workspace_revision(self) -> None:
-        """`samples/cubecl-kernel` sits outside the root workspace, so its
-        `[patch.crates-io]` block is the only thing holding it to the same
-        CubeCL fork revision `tenferro-gpu` pins. When the two drift apart both
-        revisions land in one dependency graph, and the sample fails against
-        same-named types from different crate versions: an `E0308` mismatch on
-        `ComputeClient` and `CubeDim` rather than a legible version conflict.
-        Comparing the manifests catches that at the source.
+    def test_sample_workspace_requires_the_workspace_cubecl_release(self) -> None:
+        """`samples/cubecl-kernel` sits outside the root workspace, so nothing but
+        its own manifest holds it to the same CubeCL release `tenferro-gpu`
+        resolves through the workspace. When the two drift apart, two copies of
+        the CubeCL runtime land in one dependency graph, and the sample fails
+        against same-named types from different crate versions: an `E0308`
+        mismatch on `ComputeClient` and `CubeDim` rather than a legible version
+        conflict. Comparing the manifests catches that at the source.
         """
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        expected = workspace["workspace"]["dependencies"]["cubecl"]["rev"]
+        expected = workspace["workspace"]["dependencies"]["cubecl"]["version"]
+        self.assertEqual(expected, "=0.11.0")
 
         for sample in ("cubecl-kernel",):
             manifest = tomllib.loads(
                 (ROOT / "samples" / sample / "Cargo.toml").read_text()
             )
-            patches = manifest.get("patch", {}).get("crates-io", {})
-            cubecl_patches = {
-                name: spec
-                for name, spec in patches.items()
-                if name.startswith("t4a-cubecl")
-            }
-            self.assertTrue(
-                cubecl_patches,
-                f"samples/{sample} should patch its CubeCL line to the fork",
-            )
-            for name, spec in cubecl_patches.items():
-                self.assertEqual(
-                    spec.get("rev"),
-                    expected,
-                    f"samples/{sample} patches {name} at {spec.get('rev')}, but the "
-                    f"workspace pins CubeCL at {expected}; both revisions would end "
-                    "up in one dependency graph",
-                )
+            dependencies = manifest["dependencies"]
+            for name, package in (
+                ("cubecl", "t4a-cubecl"),
+                ("cubecl-cuda", "t4a-cubecl-cuda"),
+            ):
+                with self.subTest(dependency=name):
+                    spec = dependencies[name]
+                    self.assertEqual(spec.get("package"), package)
+                    self.assertNotIn("git", spec)
+                    self.assertEqual(
+                        spec.get("version"),
+                        expected,
+                        f"samples/{sample} requires {name} at {spec.get('version')}, "
+                        f"but the workspace requires {expected}; both versions would "
+                        "end up in one dependency graph",
+                    )
 
 
 if __name__ == "__main__":

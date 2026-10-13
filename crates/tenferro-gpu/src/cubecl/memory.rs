@@ -1,8 +1,7 @@
 //! Host-to-device and device-to-host transfers via CubeCL-managed allocations.
 
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::prelude::CubeElement;
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::DType;
 
@@ -12,6 +11,7 @@ use crate::types::{
     CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
     Tensor, TensorScalar, TypedTensor,
 };
+use cubecl::frontend::Scalar;
 
 /// Upload a host tensor into a CubeCL-managed GPU allocation.
 ///
@@ -116,9 +116,9 @@ pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tenso
     }
 }
 
-fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
+fn upload_typed<T: CubeElement + TensorScalar + Scalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let host_data = match typed.buffer() {
@@ -179,7 +179,7 @@ fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
 
 /// Read a compact tensor of at most `PINNED_SCALAR_BYTES` through the runtime's
 /// pinned staging slot.
-fn download_scalar<T: CubeElement + TensorScalar + Clone + 'static>(
+fn download_scalar<T: CubeElement + TensorScalar + Scalar + Clone + 'static>(
     rt: &CudaRuntime,
     typed: &TypedTensor<T>,
     byte_len: usize,
@@ -191,7 +191,7 @@ fn download_scalar<T: CubeElement + TensorScalar + Clone + 'static>(
     Ok(T::from_bytes(&bytes).to_vec())
 }
 
-fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
+fn download_typed<T: CubeElement + TensorScalar + Scalar + Clone + 'static>(
     rt: &CudaRuntime,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
@@ -293,7 +293,7 @@ pub(super) fn download_owned_vec<T: CubeElement>(
 
 fn upload_bool(
     rt: &CudaRuntime,
-    client: &ComputeClient<CubeclCudaRuntime>,
+    client: &Client,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
     let host_data = match typed.buffer() {

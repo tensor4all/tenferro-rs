@@ -69,14 +69,15 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::features::AtomicUsage;
 use cubecl::prelude::{
-    ArrayArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
+    BufferArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
-use cubecl::prelude::{CubeCount, Int as CubeInt, StorageType, TensorBinding, Type};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::prelude::{
+    CubeCount, Int as CubeInt, LaunchArg, PlaneReduce, Scalar, TensorBinding, Type,
+};
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 
@@ -187,12 +188,12 @@ fn op_name(
     op_descriptor::require_gpu_descriptor(kind, launch).map(|descriptor| descriptor.name)
 }
 
-fn ensure_atomic_add_supported<T: CubePrimitive>(
-    client: &ComputeClient<CubeclCudaRuntime>,
+fn ensure_atomic_add_supported<T: CubePrimitive + Scalar>(
+    client: &Client,
     op: &'static str,
 ) -> crate::Result<()> {
-    let elem = T::as_type_native_unchecked().elem_type();
-    let atomic_ty = Type::new(StorageType::Atomic(elem));
+    let elem = T::elem_type_native();
+    let atomic_ty = Type::atomic(elem);
     if client
         .properties()
         .atomic_type_usage(atomic_ty)
@@ -248,10 +249,10 @@ fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
     })
 }
 
-fn launch_native_materialization<E: CubePrimitive>(
+fn launch_native_materialization<E: CubePrimitive + Scalar>(
     backend: &CudaBackend,
-    output: ArrayArg<CubeclCudaRuntime>,
-    input: ArrayArg<CubeclCudaRuntime>,
+    output: BufferArg,
+    input: BufferArg,
     plan: &NativePermutationPlan,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -282,7 +283,7 @@ fn launch_native_materialization<E: CubePrimitive>(
                     // SAFETY: The tiled classification proves a compact 2D
                     // transpose. Bounds guards cover edge tiles and every unit
                     // reaches the shared-memory barrier.
-                    structural::tiled_transpose_kernel::launch_unchecked::<E, CubeclCudaRuntime>(
+                    structural::tiled_transpose_kernel::launch_unchecked::<E>(
                         backend.runtime().client(),
                         CubeCount::Static(cubes_x, cubes_y, cubes_z),
                         CubeDim::new_2d(config.tile / config.vector_width, config.block_rows),
@@ -307,7 +308,7 @@ fn launch_native_materialization<E: CubePrimitive>(
     unsafe {
         // SAFETY: `NativePermutationPlan` validated both allocation ranges,
         // destination non-overlap, and disjoint source/destination storage.
-        structural::materialize_strided_kernel::launch_unchecked::<E, CubeclCudaRuntime>(
+        structural::materialize_strided_kernel::launch_unchecked::<E>(
             backend.runtime().client(),
             cube_count_for_len(plan.len)?,
             cube_dim_1d(),
@@ -752,7 +753,7 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
 impl CudaBackend {
     fn duplicate_typed<T>(&self, input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar + Send + Sync + 'static,
     {
         // Same-dtype casts are explicit copies. Use the native materialization
         // path so an identity copy preserves NaN payloads instead of routing
@@ -771,12 +772,12 @@ impl CudaBackend {
             input.shape(),
             op,
             |client, count, dim, out, input_arg| unsafe {
-                structural::copy_bool_kernel::launch_unchecked::<CubeclCudaRuntime>(
+                structural::copy_bool_kernel::launch_unchecked(
                     client,
                     count,
                     dim,
-                    out.into_array_arg(),
-                    input_arg.into_array_arg(),
+                    out.into_buffer_arg(),
+                    input_arg.into_buffer_arg(),
                 );
             },
         )
@@ -1232,7 +1233,7 @@ impl CudaBackend {
         perm: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar + Send + Sync + 'static,
     {
         validate_permutation("transpose", perm, input.shape().len())?;
         let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
@@ -1290,7 +1291,7 @@ impl CudaBackend {
         dims: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         validate_broadcast_in_dim(input.shape(), shape, dims)?;
         launch_unary_tensor(
@@ -1299,7 +1300,7 @@ impl CudaBackend {
             shape,
             "broadcast_in_dim",
             |client, count, dim, out, input_arg| unsafe {
-                structural::broadcast_in_dim_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::broadcast_in_dim_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -1325,7 +1326,7 @@ impl CudaBackend {
             shape,
             "broadcast_in_dim",
             |client, count, dim, out, input_arg| unsafe {
-                structural::broadcast_in_dim_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                structural::broadcast_in_dim_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -1344,7 +1345,7 @@ impl CudaBackend {
         axes: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         ensure_axes_unique("reverse", "axes", axes, input.shape().len())?;
         launch_unary_tensor(
@@ -1353,7 +1354,7 @@ impl CudaBackend {
             input.shape(),
             "reverse",
             |client, count, dim, out, input_arg| unsafe {
-                structural::reverse_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::reverse_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -1378,7 +1379,7 @@ impl CudaBackend {
             input.shape(),
             "reverse",
             |client, count, dim, out, input_arg| unsafe {
-                structural::reverse_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                structural::reverse_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -1397,7 +1398,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<TypedTensor<T, R>>
     where
-        T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + Scalar + Clone + Scalar + Send + Sync + 'static,
         R: TensorRank,
     {
         let len = checked_dim_product(op, "output shape", shape)?;
@@ -1436,7 +1437,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<TypedTensor<T, R>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar + Send + Sync + 'static,
         R: TensorRank,
     {
         ensure_view_resident_on_runtime(self.runtime(), view, op)?;
@@ -1520,7 +1521,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<()>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar + Send + Sync + 'static,
         R: TensorRank,
     {
         ensure_view_resident_on_runtime(self.runtime(), src, op)?;
@@ -1599,7 +1600,7 @@ impl CudaBackend {
                 // has validated reachable offsets and no internal overlap, and
                 // the launch domain covers each source element and destination
                 // logical coordinate exactly once.
-                structural::contiguous_to_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                structural::contiguous_to_view_kernel::launch_unchecked::<T>(
                     self.runtime().client(),
                     cube_count_for_len(len)?,
                     cube_dim_1d(),
@@ -1626,7 +1627,7 @@ impl CudaBackend {
             // destination is injective, and (with the allocation identity
             // check above) that the two allocations are distinct. The launch
             // domain visits each logical coordinate exactly once.
-            structural::strided_to_strided_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+            structural::strided_to_strided_kernel::launch_unchecked::<T>(
                 self.runtime().client(),
                 cube_count_for_len(plan.len)?,
                 cube_dim_1d(),
@@ -1662,7 +1663,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<bool>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar + Send + Sync + 'static,
         R: TensorRank,
     {
         let Some((dst_fast_extent, src_fast_extent)) = plan.tiled_transpose_matrix() else {
@@ -1720,7 +1721,7 @@ impl CudaBackend {
             // destination column-major over the same matrix, which is the
             // kernel's indexing contract; its bounds guards cover edge tiles
             // and every unit reaches the shared-memory barrier.
-            structural::tiled_transpose_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+            structural::tiled_transpose_kernel::launch_unchecked::<T>(
                 self.runtime().client(),
                 CubeCount::Static(cubes_x, cubes_y, cubes_z),
                 CubeDim::new_2d(config.tile / config.vector_width, config.block_rows),
@@ -1764,7 +1765,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<Option<NativePermutationPlan>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar + Send + Sync + 'static,
         R: TensorRank,
     {
         let shape = dst.shape();
@@ -1894,7 +1895,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_float_to_float::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+                structural::convert_float_to_float::launch_unchecked::<Out, In>(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -1907,7 +1908,7 @@ impl CudaBackend {
         Out: CubeElement + TensorScalar + CubeNumeric + Clone,
     {
         self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
-            structural::convert_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+            structural::convert_numeric::launch_unchecked::<Out, In>(
                 client, count, dim, out, input,
             );
         })
@@ -1916,13 +1917,7 @@ impl CudaBackend {
     fn launch_cast_unary<In, Out>(
         &self,
         input: &TypedTensor<In>,
-        launch: impl FnOnce(
-            &ComputeClient<CubeclCudaRuntime>,
-            CubeCount,
-            CubeDim,
-            ArrayArg<CubeclCudaRuntime>,
-            ArrayArg<CubeclCudaRuntime>,
-        ),
+        launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg),
     ) -> crate::Result<TypedTensor<Out>>
     where
         In: CubeElement + TensorScalar + Clone,
@@ -1972,7 +1967,7 @@ impl CudaBackend {
         };
         let output_arg = bool_tensor_array_arg(&output, "cast")?;
         unsafe {
-            structural::convert_numeric_to_bool::launch_unchecked::<In, CubeclCudaRuntime>(
+            structural::convert_numeric_to_bool::launch_unchecked::<In>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2004,7 +1999,7 @@ impl CudaBackend {
         };
         let output_arg = typed_tensor_array_arg(&output, "cast")?;
         unsafe {
-            structural::convert_bool_to_numeric::launch_unchecked::<Out, CubeclCudaRuntime>(
+            structural::convert_bool_to_numeric::launch_unchecked::<Out>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2028,11 +2023,13 @@ impl CudaBackend {
             input,
             |client, out, input, count| {
                 unsafe {
-                    structural::convert_numeric_to_complex_raw::launch_unchecked::<
-                        OutFloat,
-                        In,
-                        CubeclCudaRuntime,
-                    >(client, count, cube_dim_1d(), out, input);
+                    structural::convert_numeric_to_complex_raw::launch_unchecked::<OutFloat, In>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
                 }
                 Ok(())
             },
@@ -2064,7 +2061,7 @@ impl CudaBackend {
         };
         let out = typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, part_len, "cast")?;
         unsafe {
-            structural::convert_bool_to_complex_raw::launch_unchecked::<OutFloat, CubeclCudaRuntime>(
+            structural::convert_bool_to_complex_raw::launch_unchecked::<OutFloat>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2084,7 +2081,7 @@ impl CudaBackend {
         Out: CubeElement + TensorScalar + CubeNumeric + Clone,
     {
         self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
-            structural::convert_complex_to_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+            structural::convert_complex_to_numeric::launch_unchecked::<Out, In>(
                 client, count, dim, out, input,
             );
         })
@@ -2115,7 +2112,7 @@ impl CudaBackend {
         };
         let output_arg = bool_tensor_array_arg(&output, "cast")?;
         unsafe {
-            structural::convert_complex_raw_to_bool::launch_unchecked::<F, CubeclCudaRuntime>(
+            structural::convert_complex_raw_to_bool::launch_unchecked::<F>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2138,7 +2135,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f32_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
+                    structural::convert_f32_to_c32_raw::launch_unchecked(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2163,7 +2160,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f32_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
+                    structural::convert_f32_to_c64_raw::launch_unchecked(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2188,7 +2185,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f64_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
+                    structural::convert_f64_to_c32_raw::launch_unchecked(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2213,7 +2210,7 @@ impl CudaBackend {
                     // `input` has `n` elements and `out` has `2 * n` scalar
                     // components. The kernel launches exactly `n` logical input
                     // positions and guards with `ABSOLUTE_POS < input.len()`.
-                    structural::convert_f64_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
+                    structural::convert_f64_to_c64_raw::launch_unchecked(
                         client,
                         count,
                         cube_dim_1d(),
@@ -2234,9 +2231,9 @@ impl CudaBackend {
         &self,
         input: &TypedTensor<InFloat>,
         launch: impl FnOnce(
-            &cubecl::client::ComputeClient<CubeclCudaRuntime>,
-            ArrayArg<CubeclCudaRuntime>,
-            ArrayArg<CubeclCudaRuntime>,
+            &cubecl::client::Client,
+            BufferArg,
+            BufferArg,
             CubeCount,
         ) -> crate::Result<()>,
     ) -> crate::Result<TypedTensor<OutComplex>>
@@ -2283,7 +2280,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c32_to_f32::launch_unchecked::<CubeclCudaRuntime>(
+                structural::convert_c32_to_f32::launch_unchecked(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2300,7 +2297,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c32_to_f64::launch_unchecked::<CubeclCudaRuntime>(
+                structural::convert_c32_to_f64::launch_unchecked(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2317,7 +2314,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c64_to_f32::launch_unchecked::<CubeclCudaRuntime>(
+                structural::convert_c64_to_f32::launch_unchecked(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2334,7 +2331,7 @@ impl CudaBackend {
             input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
-                structural::convert_c64_to_f64::launch_unchecked::<CubeclCudaRuntime>(
+                structural::convert_c64_to_f64::launch_unchecked(
                     client, count, dim, out, input_arg,
                 );
             },
@@ -2367,7 +2364,7 @@ impl CudaBackend {
         };
         let output_arg = typed_tensor_array_arg_as::<Out, OutFloat>(&output, parts, "cast")?;
         unsafe {
-            structural::convert_complex_raw::launch_unchecked::<OutFloat, InFloat, CubeclCudaRuntime>(
+            structural::convert_complex_raw::launch_unchecked::<OutFloat, InFloat>(
                 self.runtime().client(),
                 count,
                 cube_dim_1d(),
@@ -2385,7 +2382,7 @@ impl CudaBackend {
         axis_b: usize,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         let (output_shape, diag_output_axis) =
             extract_diagonal_shape(input.shape(), axis_a, axis_b)?;
@@ -2395,7 +2392,7 @@ impl CudaBackend {
             &output_shape,
             "extract_diagonal",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::extract_diagonal_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                diagonal::extract_diagonal_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -2425,7 +2422,7 @@ impl CudaBackend {
             &output_shape,
             "extract_diagonal",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::extract_diagonal_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                diagonal::extract_diagonal_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -2448,7 +2445,7 @@ impl CudaBackend {
         axis_b: usize,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         let output_shape = embed_diagonal_shape(input.shape(), axis_a, axis_b)?;
         let output = alloc_output::<T>(self.runtime(), &output_shape)?;
@@ -2459,9 +2456,7 @@ impl CudaBackend {
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
-                    client, count, dim, out,
-                );
+                structural::fill_zero_kernel::launch_unchecked::<T>(client, count, dim, out);
             },
         )?;
         launch_unary_tensor_into(
@@ -2472,7 +2467,7 @@ impl CudaBackend {
             cube_count_for_len(input.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -2508,9 +2503,7 @@ impl CudaBackend {
             output_count,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
-                    client, count, dim, out,
-                );
+                structural::fill_zero_kernel::launch_unchecked::<u8>(client, count, dim, out);
             },
         )?;
         launch_bool_tensor_into(
@@ -2521,7 +2514,7 @@ impl CudaBackend {
             input_count,
             cube_dim_1d(),
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -2543,7 +2536,7 @@ impl CudaBackend {
         k: i64,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         if input.shape().len() < 2 {
             return Err(crate::Error::rank_mismatch("tril", 2, input.shape().len()));
@@ -2554,7 +2547,7 @@ impl CudaBackend {
             input.shape(),
             "tril",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::tril_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                diagonal::tril_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -2576,7 +2569,7 @@ impl CudaBackend {
             input.shape(),
             "tril",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::tril_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                diagonal::tril_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -2594,7 +2587,7 @@ impl CudaBackend {
         k: i64,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         if input.shape().len() < 2 {
             return Err(crate::Error::rank_mismatch("triu", 2, input.shape().len()));
@@ -2605,7 +2598,7 @@ impl CudaBackend {
             input.shape(),
             "triu",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::triu_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                diagonal::triu_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -2627,7 +2620,7 @@ impl CudaBackend {
             input.shape(),
             "triu",
             |client, count, dim, out, input_arg| unsafe {
-                diagonal::triu_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                diagonal::triu_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -2644,14 +2637,10 @@ impl CudaBackend {
         input: &TypedTensor<T>,
         axis: usize,
         op: &'static str,
-        launch: impl FnOnce(
-            &ComputeClient<CubeclCudaRuntime>,
-            TensorBinding<CubeclCudaRuntime>,
-            TensorBinding<CubeclCudaRuntime>,
-        ) -> crate::kernels::Result<()>,
+        launch: impl FnOnce(&Client, TensorBinding, TensorBinding) -> crate::kernels::Result<()>,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + Clone,
+        T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
     {
         let output_shape = reduction_keepdims_shape(input.shape(), axis);
         let input_binding = typed_tensor_binding(input, op)?;
@@ -2677,6 +2666,7 @@ impl CudaBackend {
         T: CubeElement
             + CubePrimitive
             + tenferro_tensor::TensorScalar
+            + Scalar
             + Clone
             + Send
             + Sync
@@ -2724,7 +2714,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_sum_float::<F>(
                     client,
                     input,
                     output,
@@ -2763,7 +2753,7 @@ impl CudaBackend {
 
         let mut current =
             self.launch_reduce_axis_typed(input, first_axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_squares_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_sum_squares_float::<F>(
                     client,
                     input,
                     output,
@@ -2774,7 +2764,7 @@ impl CudaBackend {
         for &axis in remaining_axes {
             current =
                 self.launch_reduce_axis_typed(&current, axis, op, |client, input, output| {
-                    cubecl_reduce::launch_sum_float::<CubeclCudaRuntime, F>(
+                    cubecl_reduce::launch_sum_float::<F>(
                         client,
                         input,
                         output,
@@ -2791,6 +2781,7 @@ impl CudaBackend {
         C: CubeElement
             + CubePrimitive
             + CubeComplex
+            + PlaneReduce
             + tenferro_tensor::TensorScalar
             + Clone
             + Send
@@ -2807,7 +2798,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_complex::<CubeclCudaRuntime, C>(
+                cubecl_reduce::launch_sum_complex::<C>(
                     client,
                     input,
                     output,
@@ -2838,7 +2829,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_int::<CubeclCudaRuntime, I>(
+                cubecl_reduce::launch_sum_int::<I>(
                     client,
                     input,
                     output,
@@ -2869,7 +2860,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_prod_float::<F>(
                     client,
                     input,
                     output,
@@ -2884,6 +2875,7 @@ impl CudaBackend {
         C: CubeElement
             + CubePrimitive
             + CubeComplex
+            + PlaneReduce
             + tenferro_tensor::TensorScalar
             + Clone
             + Send
@@ -2900,7 +2892,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_complex::<CubeclCudaRuntime, C>(
+                cubecl_reduce::launch_prod_complex::<C>(
                     client,
                     input,
                     output,
@@ -2931,7 +2923,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_int::<CubeclCudaRuntime, I>(
+                cubecl_reduce::launch_prod_int::<I>(
                     client,
                     input,
                     output,
@@ -2962,7 +2954,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_max_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_max_float::<F>(
                     client,
                     input,
                     output,
@@ -2993,7 +2985,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_max_int::<CubeclCudaRuntime, I>(
+                cubecl_reduce::launch_max_int::<I>(
                     client,
                     input,
                     output,
@@ -3024,7 +3016,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_min_float::<CubeclCudaRuntime, F>(
+                cubecl_reduce::launch_min_float::<F>(
                     client,
                     input,
                     output,
@@ -3055,7 +3047,7 @@ impl CudaBackend {
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_min_int::<CubeclCudaRuntime, I>(
+                cubecl_reduce::launch_min_int::<I>(
                     client,
                     input,
                     output,
@@ -3072,7 +3064,7 @@ impl CudaBackend {
         config: &SliceConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         let output_shape = validate_slice(input.shape(), config)?;
         launch_unary_tensor(
@@ -3081,7 +3073,7 @@ impl CudaBackend {
             &output_shape,
             "slice",
             |client, count, dim, out, input_arg| unsafe {
-                indexing::slice_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                indexing::slice_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -3106,7 +3098,7 @@ impl CudaBackend {
             &output_shape,
             "slice",
             |client, count, dim, out, input_arg| unsafe {
-                indexing::slice_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                indexing::slice_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -3126,7 +3118,7 @@ impl CudaBackend {
         slice_sizes: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
         I: CubeElement + TensorScalar + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
@@ -3163,7 +3155,7 @@ impl CudaBackend {
             slice_sizes,
             "dynamic_slice",
             |client, count, dim, out, input_arg, starts_arg| unsafe {
-                indexing::dynamic_slice_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                indexing::dynamic_slice_kernel::launch_unchecked::<T, I>(
                     client,
                     count,
                     dim,
@@ -3230,7 +3222,7 @@ impl CudaBackend {
             slice_sizes,
             "dynamic_slice",
             |client, count, dim, out, input_arg, starts_arg| unsafe {
-                indexing::dynamic_slice_kernel::launch_unchecked::<u8, I, CubeclCudaRuntime>(
+                indexing::dynamic_slice_kernel::launch_unchecked::<u8, I>(
                     client,
                     count,
                     dim,
@@ -3250,7 +3242,7 @@ impl CudaBackend {
         config: &PadConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         let output_shape = pad_output_shape(input.shape(), config)?;
         launch_unary_tensor(
@@ -3259,7 +3251,7 @@ impl CudaBackend {
             &output_shape,
             "pad",
             |client, count, dim, out, input_arg| unsafe {
-                indexing::pad_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                indexing::pad_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -3285,7 +3277,7 @@ impl CudaBackend {
             &output_shape,
             "pad",
             |client, count, dim, out, input_arg| unsafe {
-                indexing::pad_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                indexing::pad_kernel::launch_unchecked::<u8>(
                     client,
                     count,
                     dim,
@@ -3305,7 +3297,7 @@ impl CudaBackend {
         axis: usize,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
     {
         let output_shape = concatenate_output_shape(inputs, axis)?;
         let output = alloc_output::<T>(self.runtime(), &output_shape)?;
@@ -3319,7 +3311,7 @@ impl CudaBackend {
                 cube_count_for_len(input.n_elements())?,
                 cube_dim_1d(),
                 |client, count, dim, out, input_arg| unsafe {
-                    structural::concatenate_copy_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    structural::concatenate_copy_kernel::launch_unchecked::<T>(
                         client,
                         count,
                         dim,
@@ -3364,7 +3356,7 @@ impl CudaBackend {
                 launch_count,
                 cube_dim_1d(),
                 |client, count, dim, out, input_arg| unsafe {
-                    structural::concatenate_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    structural::concatenate_copy_kernel::launch_unchecked::<u8>(
                         client,
                         count,
                         dim,
@@ -3388,7 +3380,7 @@ impl CudaBackend {
         config: &GatherConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
         I: CubeElement + TensorScalar + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
@@ -3408,7 +3400,7 @@ impl CudaBackend {
             &meta.output_shape,
             "gather",
             |client, count, dim, out, operand_arg, indices_arg| unsafe {
-                indexing::gather_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                indexing::gather_kernel::launch_unchecked::<T, I>(
                     client,
                     count,
                     dim,
@@ -3440,7 +3432,7 @@ impl CudaBackend {
         config: &GatherConfig,
     ) -> crate::Result<Option<TypedTensor<T>>>
     where
-        T: dispatch::ReadScalar + CubeElement + TensorScalar + CubePrimitive + Clone,
+        T: dispatch::ReadScalar + CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
         I: dispatch::ReadScalar
             + CubeElement
             + TensorScalar
@@ -3478,7 +3470,7 @@ impl CudaBackend {
             &meta.output_shape,
             "gather",
             |client, count, dim, out, operand_arg, indices_arg| unsafe {
-                indexing::gather_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                indexing::gather_kernel::launch_unchecked::<T, I>(
                     client,
                     count,
                     dim,
@@ -3525,7 +3517,7 @@ impl CudaBackend {
             &meta.output_shape,
             "gather",
             |client, count, dim, out, operand_arg, indices_arg| unsafe {
-                indexing::gather_kernel::launch_unchecked::<u8, I, CubeclCudaRuntime>(
+                indexing::gather_kernel::launch_unchecked::<u8, I>(
                     client,
                     count,
                     dim,
@@ -3592,7 +3584,7 @@ impl CudaBackend {
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out_arg, operand_arg| unsafe {
-                indexing::scatter_copy_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                indexing::scatter_copy_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -3618,7 +3610,7 @@ impl CudaBackend {
             // within its backing allocation. The launch domain is
             // `scatter_update_len(meta)`, and the kernel maps each launched
             // update through the validated metadata before indexing.
-            indexing::scatter_float_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+            indexing::scatter_float_kernel::launch_unchecked::<T, I>(
                 client,
                 cube_count_for_len(update_len)?,
                 cube_dim_1d(),
@@ -3701,7 +3693,7 @@ impl CudaBackend {
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out_arg, operand_arg| unsafe {
-                indexing::scatter_copy_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                indexing::scatter_copy_kernel::launch_unchecked::<T>(
                     client,
                     count,
                     dim,
@@ -3729,7 +3721,7 @@ impl CudaBackend {
             // backing allocations. The launch domain is
             // `scatter_update_len(meta)` and the kernel indexes via the
             // validated metadata.
-            indexing::scatter_complex_kernel::launch_unchecked::<T, F, I, CubeclCudaRuntime>(
+            indexing::scatter_complex_kernel::launch_unchecked::<T, F, I>(
                 client,
                 cube_count_for_len(update_len)?,
                 cube_dim_1d(),
@@ -3772,6 +3764,7 @@ trait CudaCastFloat:
     + TensorScalar
     + CubeFloat
     + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
+    + LaunchArg<RuntimeArg = Self>
     + Clone
     + Send
     + Sync
@@ -3885,7 +3878,7 @@ where
     let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
     let flag_values = typed_tensor_array_arg(&flag, "cast")?;
     unsafe {
-        indexing::init_float_index_validation_flag::launch_unchecked::<F, CubeclCudaRuntime>(
+        indexing::init_float_index_validation_flag::launch_unchecked::<F>(
             backend.runtime().client(),
             CubeCount::Static(1, 1, 1),
             cube_dim_1d(),
@@ -3896,7 +3889,7 @@ where
     let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
     let (min, max, inclusive) = F::bounds(target);
     unsafe {
-        structural::validate_real_cast::launch_unchecked::<F, CubeclCudaRuntime>(
+        structural::validate_real_cast::launch_unchecked::<F>(
             backend.runtime().client(),
             count,
             cube_dim_1d(),
@@ -3912,7 +3905,7 @@ where
     let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
     let flag_values = typed_tensor_array_arg(&flag, "cast")?;
     unsafe {
-        structural::extract_invalid_real_cast::launch_unchecked::<F, CubeclCudaRuntime>(
+        structural::extract_invalid_real_cast::launch_unchecked::<F>(
             backend.runtime().client(),
             CubeCount::Static(1, 1, 1),
             cube_dim_1d(),
@@ -3955,6 +3948,7 @@ trait CudaFloatIndex:
     + TensorScalar
     + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
     + CubeFloat
+    + LaunchArg<RuntimeArg = Self>
     + Clone
     + Send
     + Sync
@@ -4073,7 +4067,7 @@ where
     unsafe {
         // SAFETY: the flag allocation has two `F` elements, and the checked
         // reinterpretation above proves the atomic-u32 view fits that buffer.
-        indexing::init_float_index_validation_flag::launch_unchecked::<F, CubeclCudaRuntime>(
+        indexing::init_float_index_validation_flag::launch_unchecked::<F>(
             backend.runtime().client(),
             CubeCount::Static(1, 1, 1),
             cube_dim_1d(),
@@ -4086,7 +4080,7 @@ where
         // SAFETY: the input binding was validated before allocation, the
         // launch domain is the checked input length, and the scalar flag view
         // was bounds-checked above.
-        indexing::validate_float_indices_kernel::launch_unchecked::<F, CubeclCudaRuntime>(
+        indexing::validate_float_indices_kernel::launch_unchecked::<F>(
             backend.runtime().client(),
             count,
             cube_dim_1d(),
@@ -4101,7 +4095,7 @@ where
     unsafe {
         // SAFETY: one worker reads the atomically selected in-range index and
         // copies that single value into the second element of the same flag.
-        indexing::extract_invalid_float_index_kernel::launch_unchecked::<F, CubeclCudaRuntime>(
+        indexing::extract_invalid_float_index_kernel::launch_unchecked::<F>(
             backend.runtime().client(),
             CubeCount::Static(1, 1, 1),
             cube_dim_1d(),
@@ -4128,15 +4122,7 @@ fn launch_checked_integer_binary<I>(
     op: &'static str,
     dtype: crate::DType,
     domain: CheckedIntegerDomain,
-    launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<TypedTensor<I>>
 where
     I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
@@ -4158,9 +4144,7 @@ where
         cube_count_for_len(flag.n_elements())?,
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<i32, CubeclCudaRuntime>(
-                client, count, dim, out,
-            );
+            structural::fill_zero_kernel::launch_unchecked::<i32>(client, count, dim, out);
         },
     )?;
 
@@ -4189,15 +4173,7 @@ fn launch_scalar_binary<I>(
     lhs: &TypedTensor<I>,
     rhs: &TypedTensor<I>,
     op: &'static str,
-    launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        bool,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg, bool),
 ) -> crate::Result<TypedTensor<I>>
 where
     I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
@@ -4284,7 +4260,7 @@ where
         return Ok(output);
     }
     unsafe {
-        elementwise::scalar_real_complex_binary::launch_unchecked::<R, CubeclCudaRuntime>(
+        elementwise::scalar_real_complex_binary::launch_unchecked::<R>(
             backend.runtime().client(),
             cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
@@ -4358,16 +4334,7 @@ fn launch_checked_integer_scalar_binary<I>(
     op: &'static str,
     dtype: crate::DType,
     domain: CheckedIntegerDomain,
-    launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        bool,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg, BufferArg, bool),
 ) -> crate::Result<TypedTensor<I>>
 where
     I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
@@ -4400,9 +4367,7 @@ where
         cube_count_for_len(flag.n_elements())?,
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<i32, CubeclCudaRuntime>(
-                client, count, dim, out,
-            );
+            structural::fill_zero_kernel::launch_unchecked::<i32>(client, count, dim, out);
         },
     )?;
 
@@ -4464,17 +4429,10 @@ fn launch_elementwise_binary_into<T>(
     rhs: &Tensor,
     out: &mut Tensor,
     op: &'static str,
-    launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg, BufferArg),
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone,
+    T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
 {
     let lhs = lhs.as_typed::<T>().ok_or_else(|| {
         crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
@@ -4511,16 +4469,10 @@ fn launch_elementwise_unary_into<T>(
     input: &Tensor,
     out: &mut Tensor,
     op: &'static str,
-    launch: impl FnOnce(
-        &ComputeClient<CubeclCudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CubeclCudaRuntime>,
-        ArrayArg<CubeclCudaRuntime>,
-    ),
+    launch: impl FnOnce(&Client, CubeCount, CubeDim, BufferArg, BufferArg),
 ) -> crate::Result<()>
 where
-    T: CubeElement + TensorScalar + Clone,
+    T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
 {
     let input = input.as_typed::<T>().ok_or_else(|| {
         crate::Error::unsupported(op, "the GPU dispatch requires a preset scalar")
@@ -4584,7 +4536,7 @@ impl CudaBackend {
                     // validate_read_into_destination checks overlap, and the launch helper
                     // validates runtime residency and prepares the exclusive output write.
                     |client, count, dim, out, lhs, rhs| unsafe {
-                        elementwise::$kernel::launch_unchecked::<$ty, CubeclCudaRuntime>(
+                        elementwise::$kernel::launch_unchecked::<$ty>(
                             client, count, dim, out, lhs, rhs,
                         );
                     },
@@ -4602,7 +4554,7 @@ impl CudaBackend {
                     // validate_read_into_destination checks overlap, and the launch helper
                     // validates runtime residency and prepares the exclusive output write.
                     |client, count, dim, out, input| unsafe {
-                        elementwise::$kernel::launch_unchecked::<$ty, CubeclCudaRuntime>(
+                        elementwise::$kernel::launch_unchecked::<$ty>(
                             client, count, dim, out, input,
                         );
                     },
@@ -4684,7 +4636,7 @@ impl CudaBackend {
                     // SAFETY: launch_binary_views validates equal shapes, zero-offset
                     // compact layouts and residency, and allocates an independent output.
                     |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::$kernel::launch_unchecked::<$ty, CubeclCudaRuntime>(
+                        elementwise::$kernel::launch_unchecked::<$ty>(
                             client, count, dim, out, lhs_arg, rhs_arg,
                         );
                     },
@@ -4714,7 +4666,7 @@ impl CudaBackend {
                     // zero-offset compact layouts and residency, and allocates an
                     // independent output; the parts kernel guards its index domain.
                     |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::div_complex_parts::launch_unchecked::<$float, CubeclCudaRuntime>(
+                        elementwise::div_complex_parts::launch_unchecked::<$float>(
                             client, count, dim, out, lhs_arg, rhs_arg,
                         );
                     },
@@ -4814,7 +4766,7 @@ impl CudaBackend {
                             // SAFETY: launch_unary_view validates the shape, zero-offset
                             // compact layout and residency, and allocates a fresh output.
                             |client, count, dim, out, input_arg| unsafe {
-                                elementwise::$kernel::launch_unchecked::<$ty, CubeclCudaRuntime>(
+                                elementwise::$kernel::launch_unchecked::<$ty>(
                                     client, count, dim, out, input_arg,
                                 );
                             },
@@ -4870,7 +4822,9 @@ impl CudaBackend {
 }
 
 /// The typed tensor behind a contiguous-read adapter's tensor, or its refusal.
-fn contiguous_read_typed<T: TensorScalar>(tensor: &Tensor) -> crate::Result<&TypedTensor<T>> {
+fn contiguous_read_typed<T: TensorScalar + Scalar>(
+    tensor: &Tensor,
+) -> crate::Result<&TypedTensor<T>> {
     tensor.as_typed::<T>().ok_or_else(|| {
         crate::Error::unsupported(
             "CudaBackend::to_contiguous_read",
@@ -4880,7 +4834,7 @@ fn contiguous_read_typed<T: TensorScalar>(tensor: &Tensor) -> crate::Result<&Typ
 }
 
 /// The typed tensor behind a copy read's tensor, or its refusal.
-fn copy_read_typed<T: TensorScalar>(tensor: &Tensor) -> crate::Result<&TypedTensor<T>> {
+fn copy_read_typed<T: TensorScalar + Scalar>(tensor: &Tensor) -> crate::Result<&TypedTensor<T>> {
     tensor.as_typed::<T>().ok_or_else(|| {
         crate::Error::unsupported(
             "copy_read_into",
@@ -4924,7 +4878,7 @@ enum CompactOperand<'a, T> {
     View(TypedTensorView<'a, T>),
 }
 
-impl<T: TensorScalar + Clone + 'static> CompactOperand<'_, T> {
+impl<T: TensorScalar + Clone + 'static + Scalar> CompactOperand<'_, T> {
     fn shape(&self) -> &[usize] {
         match self {
             Self::Tensor(tensor) => tensor.shape(),
@@ -4939,7 +4893,7 @@ impl<T: TensorScalar + Clone + 'static> CompactOperand<'_, T> {
         }
     }
 
-    fn binding(&self, op: &'static str) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
+    fn binding(&self, op: &'static str) -> crate::Result<TensorBinding> {
         match self {
             Self::Tensor(tensor) => dispatch::typed_tensor_binding(tensor, op),
             Self::View(view) => dispatch::typed_view_binding(view, op),
@@ -4964,7 +4918,7 @@ enum BroadcastMultiplyView<'a> {
 /// same requirement [`dispatch::typed_view_binding`] enforces; other view
 /// forms keep the caller's materializing fallback.
 fn compact_view(view: TensorView<'_>) -> crate::Result<Option<BroadcastMultiplyView<'_>>> {
-    fn usable<T: TensorScalar + Clone + 'static>(
+    fn usable<T: TensorScalar + Clone + 'static + Scalar>(
         view: TypedTensorView<'_, T>,
     ) -> crate::Result<Option<TypedTensorView<'_, T>>> {
         Ok((view.offset() == 0 && view.is_col_major_contiguous()?).then_some(view))
@@ -5026,7 +4980,7 @@ where
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-            elementwise::broadcast_multiply_float::launch_unchecked::<T, CubeclCudaRuntime>(
+            elementwise::broadcast_multiply_float::launch_unchecked::<T>(
                 client,
                 count,
                 dim,
@@ -5065,7 +5019,7 @@ where
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-            elementwise::broadcast_multiply_int::launch_unchecked::<T, CubeclCudaRuntime>(
+            elementwise::broadcast_multiply_int::launch_unchecked::<T>(
                 client,
                 count,
                 dim,
@@ -5104,7 +5058,7 @@ where
         lhs_shape,
         "broadcast_multiply",
         |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-            elementwise::broadcast_multiply_complex::launch_unchecked::<T, CubeclCudaRuntime>(
+            elementwise::broadcast_multiply_complex::launch_unchecked::<T>(
                 client,
                 count,
                 dim,
