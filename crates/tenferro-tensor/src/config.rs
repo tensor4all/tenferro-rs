@@ -50,6 +50,69 @@ pub struct DotGeneralConfig {
     pub rhs_batch_dims: SmallVec<[usize; 4]>,
 }
 
+/// The degenerate algebra a `DotGeneral` actually is when it is not a
+/// contraction, classified from the config and the operand shapes alone.
+///
+/// The semantic rewrite and the eager executor share this rule so a degenerate
+/// form is rewritten once, in one place, instead of each backend implementing
+/// it implicitly (invariant I4 of the #2112 umbrella).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DegenerateDotKind {
+    /// No contracting and no batch dims, and both operands carry the same
+    /// dimensions: an elementwise product.
+    Hadamard,
+    /// No contracting and no batch dims, free dims on both sides: an outer
+    /// product (the concatenated product).
+    OuterProduct,
+    /// No contracting and no batch dims, free dims on one side only: that
+    /// operand, permuted into the output's order and scaled by the other.
+    ScalarTranspose,
+    /// Every dimension contracts: a product reduced to rank 0.
+    FullContraction,
+}
+
+/// Classify a `DotGeneral` whose algebra is not a contraction.
+///
+/// Returns `None` when the form is a real contraction (or a shape this rule
+/// does not model), so callers fall through to their general path.
+#[must_use]
+pub fn degenerate_dot_kind<T: PartialEq>(
+    config: &DotGeneralConfig,
+    lhs_shape: &[T],
+    rhs_shape: &[T],
+) -> Option<DegenerateDotKind> {
+    if !config.lhs_contracting_dims.is_empty() || !config.rhs_contracting_dims.is_empty() {
+        let all_contract = |rank: usize, dims: &[usize]| {
+            dims.len() == rank
+                && dims
+                    .iter()
+                    .enumerate()
+                    .all(|(position, &axis)| axis == position)
+        };
+        return (config.lhs_batch_dims.is_empty()
+            && config.rhs_batch_dims.is_empty()
+            && all_contract(lhs_shape.len(), &config.lhs_contracting_dims)
+            && all_contract(rhs_shape.len(), &config.rhs_contracting_dims))
+        .then_some(DegenerateDotKind::FullContraction);
+    }
+    // Nothing contracts. When every axis of both operands is a batch axis,
+    // nothing is free either and the product is elementwise.
+    let every_axis_is_batch = config.lhs_batch_dims.len() == lhs_shape.len()
+        && config.rhs_batch_dims.len() == rhs_shape.len();
+    if every_axis_is_batch && lhs_shape == rhs_shape {
+        return Some(DegenerateDotKind::Hadamard);
+    }
+    if !config.lhs_batch_dims.is_empty() || !config.rhs_batch_dims.is_empty() {
+        return None;
+    }
+    match (lhs_shape.is_empty(), rhs_shape.is_empty()) {
+        (false, false) if lhs_shape == rhs_shape => Some(DegenerateDotKind::Hadamard),
+        (false, false) => Some(DegenerateDotKind::OuterProduct),
+        (true, false) | (false, true) => Some(DegenerateDotKind::ScalarTranspose),
+        (true, true) => None,
+    }
+}
+
 impl DotGeneralConfig {
     fn check_no_duplicates(dims: &[usize], label: &'static str) -> Result<()> {
         let mut seen = std::collections::HashSet::new();

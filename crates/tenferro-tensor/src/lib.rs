@@ -106,7 +106,8 @@ pub use capability::{
     SupportLevel, TensorBackendCapability,
 };
 pub use config::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    degenerate_dot_kind, CompareDir, DegenerateDotKind, DotGeneralConfig, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig,
 };
 pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
