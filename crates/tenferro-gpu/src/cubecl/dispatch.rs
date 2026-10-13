@@ -692,7 +692,11 @@ pub(crate) fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync +
             format!("output byte length overflow for shape {shape:?}"),
         )
     })?;
-    let handle = rt.client().empty(byte_len);
+    // A dropped output of this exact length is reused instead of asking the
+    // device thread for a fresh allocation (invariant: the handle is only here
+    // because no live tensor references it).
+    let handle = crate::take_output_handle(rt.device_ordinal(), byte_len)
+        .unwrap_or_else(|| rt.client().empty(byte_len));
     typed_from_cubecl(
         shape.to_vec(),
         CubeclBuffer::new(
