@@ -199,17 +199,19 @@ pub(crate) fn execute_in_place(
         ));
     }
     let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
-    session.with_linalg_pool(|context, _| match input.dtype() {
+    session.with_linalg_pool(|context, buffers| match input.dtype() {
         tenferro_tensor::DType::C64 => in_place_typed(
             in_place_operand::<f64>(&mut *input)?,
             spec,
             &mut plans,
+            buffers,
             context.native_thread_count(),
         ),
         tenferro_tensor::DType::C32 => in_place_typed(
             in_place_operand::<f32>(&mut *input)?,
             spec,
             &mut plans,
+            buffers,
             context.native_thread_count(),
         ),
         other => Err(crate::tensor_unsupported_dtype(
@@ -242,10 +244,11 @@ fn in_place_typed<T: CachedFftPlanScalar + TensorScalar>(
     input: &mut TypedTensor<Complex<T>>,
     spec: &FftPlanSpec,
     plans: &mut (impl FftPlanProvider + ?Sized),
+    buffers: &mut BufferPool,
     threads: usize,
 ) -> tenferro_tensor::Result<()>
 where
-    Complex<T>: TensorScalar,
+    Complex<T>: TensorScalar + PoolScalar,
 {
     let shape = input.shape().to_vec();
     let axis = spec.normalized_axis();
@@ -270,6 +273,7 @@ where
                 spec.operation(),
                 spec.norm(),
                 plans,
+                buffers,
                 output,
                 threads,
                 |v| v,
@@ -394,7 +398,10 @@ fn transform<I: TensorScalar, T: CachedFftPlanScalar, O: PoolScalar>(
     threads: usize,
     wrap: for<'a> fn(&'a [I]) -> lanes::Input<'a, T>,
     project: impl Fn(Complex<T>) -> O + Sync,
-) -> tenferro_tensor::Result<TypedTensor<O>> {
+) -> tenferro_tensor::Result<TypedTensor<O>>
+where
+    Complex<T>: PoolScalar,
+{
     let mut produce = |read: &[I]| {
         pooled_transform(
             wrap(read),
@@ -466,7 +473,10 @@ fn pooled_transform<T: CachedFftPlanScalar, O: PoolScalar>(
     buffers: &mut BufferPool,
     threads: usize,
     project: impl Fn(Complex<T>) -> O + Sync,
-) -> tenferro_tensor::Result<TypedTensor<O>> {
+) -> tenferro_tensor::Result<TypedTensor<O>>
+where
+    Complex<T>: PoolScalar,
+{
     let shape = output_shape(in_shape, spec)?;
     let axis = spec.normalized_axis();
     let out_axis_len = shape[axis];
@@ -490,6 +500,7 @@ fn pooled_transform<T: CachedFftPlanScalar, O: PoolScalar>(
             spec.operation(),
             spec.norm(),
             plans,
+            buffers,
             output.as_uninit_slice_mut(),
             threads,
             project,

@@ -210,19 +210,6 @@ macro_rules! dispatch_tensor_unary_with_bool_special_result {
     }};
 }
 
-fn host_view<'a, T: Copy + TensorScalar>(
-    op: &'static str,
-    tensor: &'a TypedTensor<T>,
-) -> crate::Result<StridedView<'a, T, Identity>> {
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    // The tensor caches its compact layout, so the view borrows both metadata
-    // vectors instead of allocating a pair per call.
-    StridedView::new(tensor.host_data()?, tensor.shape(), tensor.strides(), 0)
-        .map_err(|err| crate::Error::backend_source(op, err))
-}
-
 #[cfg(test)]
 fn copy_view_to_array<T: Copy + Clone + Send + Sync + TensorScalar + 'static>(
     op: &'static str,
@@ -801,7 +788,7 @@ pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync + TensorScalar + 'st
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     validate_permutation("transpose", perm, tensor.shape().len())?;
-    let src = host_view("transpose", tensor)?;
+    let src = typed_view("transpose", tensor)?;
     let permuted = src
         .permute(perm)
         .map_err(|err| crate::Error::backend_source("transpose", err))?;
@@ -1089,7 +1076,7 @@ pub(crate) fn typed_extract_diagonal<T: Copy + Clone + Send + Sync + TensorScala
     validate_axis("extract_diagonal", axis_b, tensor.shape().len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
-    let diag = host_view("extract_diagonal", tensor)?
+    let diag = typed_view("extract_diagonal", tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     // SAFETY: copy_into overwrites every output element.
@@ -1112,7 +1099,7 @@ where
     validate_axis("extract_diagonal", axis_b, tensor.shape().len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
-    let diag = host_view("extract_diagonal", tensor)?
+    let diag = typed_view("extract_diagonal", tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims().to_vec())?;

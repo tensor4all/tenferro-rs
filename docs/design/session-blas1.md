@@ -34,7 +34,7 @@ Shared backend-neutral validation runs before allocation or destination mutation
 
 - `vdot_read`: identical dtype, shape, element count, and compatible placement; result is a rank-0 tensor of the input dtype; computes `sum(conj(lhs) * rhs)`.
 - `norm_squared_read`: supported dtype and placement; result is rank-0 F32 for F32/C32 and F64 for F64/C64; computes the real nonnegative sum of squared magnitudes without `sqrt`.
-- `axpby_read_into_accum`: exact x/y shape, dtype, placement, scalar dtype, compact/injective destination, and conservative x/y non-overlap. All failures occur before mutation. It computes `y <- alpha*x + beta*y` in one destination pass.
+- `axpby_read_into_accum`: exact x/y shape, dtype, placement, scalar dtype, write-injective destination (compact, strided, or offset), and conservative x/y non-overlap. All failures occur before mutation. It computes `y <- alpha*x + beta*y` in one destination pass.
 
 Any x/y storage overlap is rejected with the existing typed destination-overlap validation error. Supporting exact alias is unnecessary and would weaken the simple mutation proof. Empty tensors preserve the same contracts: dot/norm return zero and AXPBY is a validated no-op.
 
@@ -50,15 +50,18 @@ Use `strided_kernel::reduce` directly over the input view with a squared-magnitu
 
 ### Fused AXPBY
 
-No current strided-rs primitive expresses read-modify-write over one destination. Issue #1713 is the accepted benchmark-backed exception: implement one compact destination pass in tenferro-cpu, with the rationale and `// INVARIANT:` mutation/alias proof at the kernel. Compact x is borrowed; a noncompact same-placement x view is explicitly materialized exactly once and reused. Noncompact y is rejected rather than hidden copy-out.
+The dense path (`strided_kernel::axpby_accum`) stays for a compact column-major destination; it keeps a local compactness guard and still materializes a noncompact same-placement `x` view exactly once and reuses it.
 
-The loop executes inside the repository CPU context. One-thread sessions use a serial zip loop; multi-thread sessions use Rayon only inside `CpuExecutionContext::with_native_parallelism`, with disjoint compact destination chunks. It allocates no full-size temporary.
+When `y` is strided or offset, build a `StridedViewMut` for the destination and a `StridedView` for `x`, and let the pinned `strided_basic::zip_update2_into` (re-exported through `strided_kernel`) own the traversal with `|y, x| alpha*x + beta*y`. No compactness guard is needed there because both operands are stride-addressed. This path stages nothing tensor-sized: `strided_basic::zip_update2_into` re-validates destination injectivity and allocates bounded traversal metadata, so it is not byte-for-byte allocation-free, but the instrumented compact-staging path no longer runs (`MATERIALIZATIONS == 0` is the evidence). Compact `x` and strided `x` are both accepted directly; the prior one-time materialization of a strided `x` happens only on the dense compact-destination path.
+
+Both loops execute inside the repository CPU context. One-thread sessions use a serial zip loop; multi-thread sessions use Rayon only inside `CpuExecutionContext::with_native_parallelism`, with disjoint destination chunks. Neither path allocates a full-size temporary.
 
 ## Tests and benchmark
 
 - CPU F32/F64/C32/C64 compact values for all operations against scalar references; complex VDOT conjugates only lhs.
-- Strided lhs/rhs VDOT and norm consume provider/strided views; strided x AXPBY records exactly one materialization; compact paths record none.
-- Invalid dtype/shape/placement/scalar/overlap/noncompact-y cases prove destination bytes unchanged.
+- Strided lhs/rhs VDOT and norm consume provider/strided views; strided x AXPBY into a compact destination records exactly one materialization; the strided-destination path records none.
+- Strided/offset destination regions inside a larger allocation (with compact and with strided `x`) accumulate the expected values and leave the surrounding bytes byte-identical.
+- Invalid dtype/shape/placement/scalar/overlap cases prove destination bytes unchanged.
 - A fake unsupported session returns typed `Unsupported` and records no transfer/fallback.
 - Allocation instrumentation proves norm and fused AXPBY allocate no full-size temporary; VDOT allocates only rank-0 output plus provider-bounded bookkeeping.
 - A downstream-style CG microfixture uses `copy_read_into`, VDOT, norm-squared, and AXPBY without manual element loops.

@@ -150,13 +150,13 @@ macro_rules! unary_both_kernel {
     };
 }
 
-/// `y[i] <- coefficients[0] * x[strided(i)] + coefficients[1] * y[i]` for a
-/// strided or offset `x`.
+/// `y[strided_y(i)] <- coefficients[0] * x[strided_x(i)] + coefficients[1] * y[strided_y(i)]`
+/// for a strided or offset `x` and `y`.
 ///
-/// The compact `x` layout is served by cuBLAS `geam`; this kernel covers the
-/// arbitrary-stride source layouts no BLAS-1 vendor entry can address, so the
-/// caller never has to canonicalize `x` into scratch first. `y` stays compact
-/// per the shared accumulate contract and is addressed as `y_offset + i`.
+/// The compact `x`/`y` layout is served by cuBLAS `geam`; this kernel covers
+/// the arbitrary-stride operand layouts no BLAS-1 vendor entry can address, so
+/// the caller never has to canonicalize an operand into scratch first. Both
+/// operands are addressed axis by axis through their own strides and offsets.
 ///
 /// INVARIANT: the coefficients arrive as a two-element device array rather than
 /// kernel scalars because the CUDA dialect's kernel-argument type info panics
@@ -171,6 +171,7 @@ macro_rules! axpby_strided_source_kernel {
             coefficients: &[E],
             dims: Sequence<usize>,
             x_strides: Sequence<i64>,
+            y_strides: Sequence<i64>,
             x_offset: i64,
             y_offset: i64,
             len: usize,
@@ -179,16 +180,18 @@ macro_rules! axpby_strided_source_kernel {
             if ABSOLUTE_POS < len {
                 let mut flat = ABSOLUTE_POS;
                 let mut x_index = x_offset;
+                let mut y_index = y_offset;
                 #[unroll]
                 for axis in 0..rank {
                     let dim = dims[axis];
                     let coordinate = flat % dim;
                     flat /= dim;
                     x_index += (coordinate as i64) * x_strides[axis];
+                    y_index += (coordinate as i64) * y_strides[axis];
                 }
-                let y_index = usize::cast_from(y_offset) + ABSOLUTE_POS;
-                y[y_index] =
-                    coefficients[0] * x[usize::cast_from(x_index)] + coefficients[1] * y[y_index];
+                let x_index = usize::cast_from(x_index);
+                let y_index = usize::cast_from(y_index);
+                y[y_index] = coefficients[0] * x[x_index] + coefficients[1] * y[y_index];
             }
         }
     };

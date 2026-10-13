@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    ContractionScalar, DType, MemoryKind, TensorRead, TensorViewMut, TensorWrite,
+    ContractionScalar, DType, MemoryKind, TensorRead, TensorView, TensorViewMut, TensorWrite,
 };
 
 use crate::buffer_pool::BufferPool;
@@ -65,6 +65,31 @@ pub(crate) fn axpby_read_into_accum(
 ) -> crate::Result<()> {
     validate_cpu_read("BackendSession::axpby_read_into_accum", &x)?;
     validate_cpu_read("BackendSession::axpby_read_into_accum", &y.as_read())?;
+    if !y.as_read().is_col_major_contiguous()? {
+        // The dense `strided_kernel::axpby_accum` entry addresses a compact
+        // destination span, so a strided or offset destination view runs the
+        // pinned update primitive instead. It consumes a strided `x` directly,
+        // so this path never stages `x` into a compact buffer.
+        return match (x.dtype(), alpha, beta) {
+            (DType::F32, ContractionScalar::F32(alpha), ContractionScalar::F32(beta)) => {
+                axpby_strided_write_f32(context, x, y, alpha, beta)
+            }
+            (DType::F64, ContractionScalar::F64(alpha), ContractionScalar::F64(beta)) => {
+                axpby_strided_write_f64(context, x, y, alpha, beta)
+            }
+            (DType::C32, ContractionScalar::C32(alpha), ContractionScalar::C32(beta)) => {
+                axpby_strided_write_c32(context, x, y, alpha, beta)
+            }
+            (DType::C64, ContractionScalar::C64(alpha), ContractionScalar::C64(beta)) => {
+                axpby_strided_write_c64(context, x, y, alpha, beta)
+            }
+            // INVARIANT: shared validation proves x, y, alpha, and beta have one
+            // identical supported dtype before execution dispatch.
+            _ => Err(crate::Error::Internal(
+                "validated AXPBY dtype changed before execution".into(),
+            )),
+        };
+    }
     let mut materialized_x = None;
     if !x.is_col_major_contiguous()? {
         #[cfg(test)]
@@ -173,3 +198,71 @@ axpby_write!(axpby_write_f32, F32, f32);
 axpby_write!(axpby_write_f64, F64, f64);
 axpby_write!(axpby_write_c32, C32, Complex32);
 axpby_write!(axpby_write_c64, C64, Complex64);
+
+/// Apply `y <- alpha * x + beta * y` into a strided/offset destination view.
+///
+/// `strided_kernel::zip_update2_into` owns the traversal. The destination view
+/// is write-injective and disjoint from `x` (shared validation plus
+/// `TensorViewMut` construction), and the source may itself be strided, so no
+/// compact staging buffer is needed on this path.
+macro_rules! axpby_strided_write {
+    ($name:ident, $variant:ident, $ty:ty) => {
+        fn $name(
+            context: &CpuExecutionContext<'_>,
+            x: TensorRead<'_>,
+            y: TensorWrite<'_>,
+            alpha: $ty,
+            beta: $ty,
+        ) -> crate::Result<()> {
+            let TensorWrite::View(TensorViewMut::$variant(mut destination)) = y else {
+                // INVARIANT: an owned runtime tensor is always compact
+                // column-major, so shared validation only routes a non-compact
+                // destination here through `TensorWrite::View`.
+                return Err(crate::Error::Internal(
+                    "non-compact AXPBY destination is not a strided view".into(),
+                ));
+            };
+            let source = match x.tensor_view() {
+                TensorView::$variant(view) => view,
+                // INVARIANT: shared validation proves x has the dtype selected
+                // by the outer dispatch before this helper is called.
+                _ => {
+                    return Err(crate::Error::Internal(
+                        "validated AXPBY input dtype changed before execution".into(),
+                    ))
+                }
+            };
+            let source = strided_kernel::StridedView::<_, strided_kernel::Identity>::new(
+                source.host_storage()?,
+                source.shape(),
+                source.strides(),
+                source.offset(),
+            )
+            .map_err(|err| crate::Error::backend_source("axpby", err))?;
+            let shape = destination.shape().to_vec();
+            let strides = destination.strides().to_vec();
+            let offset = destination.offset();
+            let mut destination = strided_kernel::StridedViewMut::new(
+                destination.host_storage_mut()?,
+                &shape,
+                &strides,
+                offset,
+            )
+            .map_err(|err| crate::Error::backend_source("axpby", err))?;
+            context.with_native_parallelism(|| {
+                strided_kernel::zip_update2_into::<
+                    _,
+                    _,
+                    strided_kernel::Identity,
+                    strided_kernel::Identity,
+                >(&mut destination, &source, |y, x| alpha * x + beta * y)
+                .map_err(|err| crate::Error::backend_source("axpby", err))
+            })
+        }
+    };
+}
+
+axpby_strided_write!(axpby_strided_write_f32, F32, f32);
+axpby_strided_write!(axpby_strided_write_f64, F64, f64);
+axpby_strided_write!(axpby_strided_write_c32, C32, Complex32);
+axpby_strided_write!(axpby_strided_write_c64, C64, Complex64);

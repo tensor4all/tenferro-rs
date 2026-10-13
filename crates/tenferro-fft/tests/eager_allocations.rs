@@ -3,6 +3,7 @@
 use num_complex::Complex64;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{EagerSessionFftExt, EagerTensorFftExt, FftNorm};
@@ -10,6 +11,9 @@ use tenferro_tensor::{BackendSessionHost, Tensor};
 
 const LEN: usize = 4096;
 const INPUT_BYTES: usize = LEN * size_of::<Complex64>();
+// The allocation counters below are process-global, so the measurement cases
+// must not run concurrently in one test binary.
+static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static COUNT: AtomicUsize = AtomicUsize::new(0);
 static BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -78,6 +82,9 @@ fn measured<T>(expected: (usize, usize), f: impl FnOnce() -> T) -> T {
 
 #[test]
 fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations() {
+    let _serial = MEASUREMENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut backend = CpuBackend::with_threads(1).unwrap();
     assert_eq!(backend.num_threads(), 1);
     let runtime = EagerRuntime::with_cpu_backend(backend.clone()).unwrap();
@@ -161,4 +168,38 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     );
     drop(output);
     assert!(backend.buffer_pool_stats().unwrap().buffers >= 1);
+}
+
+#[test]
+fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
+    // The transformed axis is the whole tensor here, so the per-call lane and
+    // the RustFFT in-place scratch are both full `LEN`-element complex buffers
+    // and therefore visible to the input-sized counter (the short-axis case
+    // above hides them). The r2c output is only half that size, so the count
+    // observes the lane and the scratch alone. Before the lane was pooled, each
+    // call added a fresh full-length lane allocation on top of the scratch;
+    // the steady state below pins the reduced count.
+    let _serial = MEASUREMENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let backend = CpuBackend::with_threads(1).unwrap();
+    assert_eq!(backend.num_threads(), 1);
+    let runtime = EagerRuntime::with_cpu_backend(backend.clone()).unwrap();
+    let input = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major([LEN], vec![1.0f64; LEN]).unwrap(),
+        runtime.clone(),
+    )
+    .unwrap();
+    let transform = || {
+        runtime
+            .with_eager_session(|s| s.rfft(&input, None, 0, FftNorm::Backward))
+            .unwrap()
+    };
+    // Warm the plan cache and the buffer pool; only a steady-state call shows
+    // whether the lane is recycled.
+    drop(transform());
+    let output = measured((1, INPUT_BYTES), transform);
+    drop(output);
+    let output = measured((1, INPUT_BYTES), transform);
+    drop(output);
 }

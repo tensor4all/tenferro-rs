@@ -657,7 +657,7 @@ CUDA library calls:
 | Indexing | gather and dynamic_slice support `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with CPU-supported `F32`, `F64`, `I32`, or `I64` index tensors; additive scatter remains limited to floating and complex data and explicitly excludes Bool data |
 | Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes |
 | Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, LU solve, and triangular solve for supported real and complex floating dtypes |
-| BLAS-1 | cuBLAS-backed `vdot_read`, `norm_squared_read`, and `axpby_read_into_accum` for `F32`/`F64`/`C32`/`C64`. An arbitrary-stride or offset `x` runs one native strided-source pass, a layout the vendor vector entries cannot address; the destination stays compact per the shared accumulate contract |
+| BLAS-1 | cuBLAS-backed `vdot_read`, `norm_squared_read`, and `axpby_read_into_accum` for `F32`/`F64`/`C32`/`C64`. An arbitrary-stride or offset `x` or `y` runs one native strided-update pass, a layout the vendor vector entries cannot address; the compact/compact case keeps the cuBLAS `geam` path |
 
 A cuTENSOR operand descriptor advertises the alignment its pointer guarantees,
 and cuTENSOR selects vectorized kernels from it. A region view folds its
