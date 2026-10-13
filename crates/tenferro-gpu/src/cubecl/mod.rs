@@ -3428,6 +3428,77 @@ impl CudaBackend {
         )
     }
 
+    /// Gather from reads: the operand stays where it is when the device can
+    /// bind it directly, so a pooled or borrowed table is not materialized.
+    ///
+    /// Returns `Ok(None)` when this backend cannot bind the reads without a
+    /// copy, and the caller falls back to the owned path.
+    fn gather_typed_read<T, I>(
+        &self,
+        operand: &TensorRead<'_>,
+        start_indices: &TensorRead<'_>,
+        config: &GatherConfig,
+    ) -> crate::Result<Option<TypedTensor<T>>>
+    where
+        T: dispatch::ReadScalar + CubeElement + TensorScalar + CubePrimitive + Clone,
+        I: dispatch::ReadScalar
+            + CubeElement
+            + TensorScalar
+            + CubePrimitive
+            + CubeNumeric
+            + Clone
+            + CudaIndexValidation,
+    {
+        let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
+        let output_len = checked_dim_product("gather", "output shape", &meta.output_shape)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        let Some(operand_arg) = dispatch::typed_read_binding::<T>(operand, "gather")? else {
+            return Ok(None);
+        };
+        let indices_tensor = match start_indices {
+            TensorRead::Tensor(tensor) => I::unwrap_tensor(tensor),
+            TensorRead::View(_) => None,
+        };
+        if I::VALIDATES_VALUES && indices_tensor.is_none() {
+            return Ok(None);
+        }
+        dispatch::ensure_read_resident::<T>(self.runtime(), operand, "gather")?;
+        if let Some(indices) = indices_tensor {
+            I::validate(self, indices)?;
+        }
+        let Some(indices_arg) = dispatch::typed_read_binding::<I>(start_indices, "gather")? else {
+            return Ok(None);
+        };
+        let output = dispatch::launch_binary_bindings(
+            self.runtime(),
+            operand_arg,
+            indices_arg,
+            &meta.output_shape,
+            "gather",
+            |client, count, dim, out, operand_arg, indices_arg| unsafe {
+                indexing::gather_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
+                    indices_arg.into_tensor_arg(),
+                    comptime_sequence(&meta.window_dims),
+                    comptime_sequence(&config.offset_dims),
+                    comptime_sequence(&config.start_index_map),
+                    runtime_sequence(&config.slice_sizes),
+                    config.index_vector_dim,
+                    operand.shape().len(),
+                    meta.output_shape.len(),
+                    start_indices.shape().len(),
+                );
+            },
+        )?;
+        Ok(Some(output))
+    }
+
     fn gather_bool<I>(
         &self,
         operand: &TypedTensor<bool>,
@@ -3897,16 +3968,24 @@ trait CudaFloatIndex:
 }
 
 trait CudaIndexValidation: Sized {
+    /// Whether validation reads the index values on the device (a read-based
+    /// caller then has to hand over a tensor, not a borrowed view).
+    const VALIDATES_VALUES: bool = false;
+
     fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()>;
 }
 
 impl CudaIndexValidation for f32 {
+    const VALIDATES_VALUES: bool = true;
+
     fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()> {
         validate_float_index_tensor(backend, indices)
     }
 }
 
 impl CudaIndexValidation for f64 {
+    const VALIDATES_VALUES: bool = true;
+
     fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()> {
         validate_float_index_tensor(backend, indices)
     }

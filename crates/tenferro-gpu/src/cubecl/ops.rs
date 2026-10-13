@@ -2288,6 +2288,58 @@ pub(super) fn dot_general_read_into_accum(
     gemm::dot_general_read_into_accum(backend, &lhs, &rhs, config, accumulation, &mut out)
 }
 
+/// Gather from reads, binding the operand where it is when the device can.
+///
+/// Returns `Ok(None)` when this backend cannot bind the reads without a copy;
+/// the session then falls back to materializing them (invariant I1 keeps the
+/// decision at the boundary: the runtime does not copy by default).
+pub(super) fn gather_read(
+    backend: &mut CudaBackend,
+    operand: &TensorRead<'_>,
+    start_indices: &TensorRead<'_>,
+    config: &GatherConfig,
+) -> crate::Result<Option<Tensor>> {
+    macro_rules! dispatch_read {
+        ($($dtype:pat => ($operand_ty:ty, $out_ty:ty, $index_ty:ty)),* $(,)?) => {
+            match (operand.dtype(), start_indices.dtype()) {
+                $($dtype => {
+                    if let Some(output) = backend.gather_typed_read::<$operand_ty, $index_ty>(
+                        operand,
+                        start_indices,
+                        config,
+                    )? {
+                        return Ok(Some(Tensor::from_typed::<$out_ty>(output)));
+                    }
+                })*
+                _ => {}
+            }
+        };
+    }
+    dispatch_read! {
+        (DType::F32, DType::F32) => (f32, f32, f32),
+        (DType::F64, DType::F32) => (f64, f64, f32),
+        (DType::C32, DType::F32) => (Complex32, num_complex::Complex32, f32),
+        (DType::C64, DType::F32) => (Complex64, num_complex::Complex64, f32),
+        (DType::I32, DType::F32) => (i32, i32, f32),
+        (DType::F32, DType::F64) => (f32, f32, f64),
+        (DType::F64, DType::F64) => (f64, f64, f64),
+        (DType::C32, DType::F64) => (Complex32, num_complex::Complex32, f64),
+        (DType::C64, DType::F64) => (Complex64, num_complex::Complex64, f64),
+        (DType::I32, DType::F64) => (i32, i32, f64),
+        (DType::F32, DType::I32) => (f32, f32, i32),
+        (DType::F64, DType::I32) => (f64, f64, i32),
+        (DType::C32, DType::I32) => (Complex32, num_complex::Complex32, i32),
+        (DType::C64, DType::I32) => (Complex64, num_complex::Complex64, i32),
+        (DType::I32, DType::I32) => (i32, i32, i32),
+        (DType::F32, DType::I64) => (f32, f32, i64),
+        (DType::F64, DType::I64) => (f64, f64, i64),
+        (DType::C32, DType::I64) => (Complex32, num_complex::Complex32, i64),
+        (DType::C64, DType::I64) => (Complex64, num_complex::Complex64, i64),
+        (DType::I32, DType::I64) => (i32, i32, i64),
+    }
+    Ok(None)
+}
+
 pub(super) fn gather(
     backend: &mut CudaBackend,
     operand: &Tensor,

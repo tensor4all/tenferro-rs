@@ -10,7 +10,8 @@ use crate::types::{
 };
 use tenferro_tensor::{
     CapabilityAxis, CapabilityQuery, DType, DeviceAccessError, DeviceAccessRequest,
-    PreparedDeviceAccess, TensorBackendCapability as TensorBackendCapabilityTrait, TensorScalar,
+    PreparedDeviceAccess, TensorBackendCapability as TensorBackendCapabilityTrait, TensorRead,
+    TensorScalar, TensorView,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -355,6 +356,92 @@ pub(crate) fn typed_view_binding<T: TensorScalar + Clone + 'static>(
         ));
     }
     Ok(downcast_prepared(view.prepare_device_read(op)?, op)?.into_binding())
+}
+
+/// Scalar types a read-based kernel can bind without materializing.
+///
+/// The dtype-erased [`TensorRead`] hides the typed view, so a kernel that takes
+/// reads needs one unwrap per supported scalar. Types outside this set fall
+/// back to the materializing path.
+pub(super) trait ReadScalar: TensorScalar + Clone + 'static {
+    fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>>;
+    fn unwrap_view<'a, 'b>(view: &'a TensorView<'b>) -> Option<&'a TypedTensorView<'b, Self>>;
+}
+
+macro_rules! impl_read_scalar {
+    ($ty:ty, $variant:ident) => {
+        impl ReadScalar for $ty {
+            fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
+                tensor.as_typed::<$ty>()
+            }
+
+            fn unwrap_view<'a, 'b>(
+                view: &'a TensorView<'b>,
+            ) -> Option<&'a TypedTensorView<'b, Self>> {
+                match view {
+                    TensorView::$variant(inner) => Some(inner),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+impl_read_scalar!(f32, F32);
+impl_read_scalar!(f64, F64);
+impl_read_scalar!(i32, I32);
+impl_read_scalar!(i64, I64);
+impl_read_scalar!(num_complex::Complex32, C32);
+impl_read_scalar!(num_complex::Complex64, C64);
+
+/// Ensure a read's storage lives on this runtime, without materializing it.
+pub(crate) fn ensure_read_resident<T: ReadScalar>(
+    rt: &CudaRuntime,
+    read: &TensorRead<'_>,
+    op: &'static str,
+) -> crate::Result<()> {
+    match read {
+        TensorRead::Tensor(tensor) => {
+            let Some(tensor) = T::unwrap_tensor(tensor) else {
+                return Ok(());
+            };
+            ensure_resident_on_runtime(rt, tensor, op)
+        }
+        TensorRead::View(view) => {
+            let Some(view) = T::unwrap_view(view) else {
+                return Ok(());
+            };
+            ensure_view_resident_on_runtime(rt, view, op)
+        }
+    }
+}
+
+/// Bind one operand of a read-based kernel, or `None` when this backend cannot
+/// bind that read without materializing it (an unsupported scalar or a view
+/// that is not compact), in which case the caller falls back to the owned path.
+pub(crate) fn typed_read_binding<T: ReadScalar>(
+    read: &TensorRead<'_>,
+    op: &'static str,
+) -> crate::Result<Option<TensorBinding<CubeclCudaRuntime>>> {
+    match read {
+        TensorRead::Tensor(tensor) => {
+            let Some(tensor) = T::unwrap_tensor(tensor) else {
+                return Ok(None);
+            };
+            Ok(Some(typed_tensor_binding(tensor, op)?))
+        }
+        TensorRead::View(view) => {
+            let Some(view) = T::unwrap_view(view) else {
+                return Ok(None);
+            };
+            match typed_view_binding(view, op) {
+                Ok(binding) => Ok(Some(binding)),
+                // A strided or offset view stays on the materializing path
+                // until the kernel consumes strides in place.
+                Err(_) => Ok(None),
+            }
+        }
+    }
 }
 
 pub(crate) fn launch_unary_bool_tensor(

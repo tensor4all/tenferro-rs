@@ -538,8 +538,9 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.concatenate(&refs, *axis)?]
         }
         StdTensorOp::Gather(config) => {
-            let tensors = concrete_tensor_reads(exec, inputs)?;
-            vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), config)?]
+            // Both operands stay reads: the backend decides whether it can
+            // consume them in place (invariant I1).
+            vec![exec.gather_read(inputs[0].clone(), inputs[1].clone(), config)?]
         }
         StdTensorOp::GatherDynamicSliceSizes {
             offset_dims,
@@ -556,8 +557,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                 index_vector_dim: *index_vector_dim,
                 slice_sizes,
             };
-            let tensors = concrete_tensor_reads(exec, inputs)?;
-            vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), &config)?]
+            vec![exec.gather_read(inputs[0].clone(), inputs[1].clone(), &config)?]
         }
         StdTensorOp::Scatter(config) => {
             let operand =
