@@ -11,10 +11,13 @@ through review; tenferro keeps consuming a **fork release** in the meantime.
 - Every fork release is rebased onto the then-latest upstream release and carries
   **only** the ports upstream has not taken yet, so the delta shrinks as PRs
   merge. A port that upstream adopts is dropped from the next fork release.
-- The tenferro pin names the fork version and the exact release revision, so
-  `check-git-pin-content.py` verifies content, and the pin's comment records which
-  upstream release it mirrors (the fork's `0.11.0` is *not* upstream's `0.11.0`
-  content, only the same number in the fork's own crate namespace).
+- tenferro depends on the fork's published release at an exact version
+  (`t4a-cubecl*` 0.11.0 / `t4a-cubek*` 0.3.0 from crates.io), and the
+  requirement's comment records which upstream release it mirrors (the fork's
+  `0.11.0` is *not* upstream's `0.11.0` content, only the same number in the
+  fork's own crate namespace). While the pin was a git revision,
+  `check-git-pin-content.py` verified the pinned content against the archive of
+  that version; with the release published there is no pin left to verify.
 - While the PRs wait, rebase them onto new upstream releases so they do not rot.
 - **Exit**: once the last port is merged upstream and a release contains it,
   tenferro pins the upstream revision, this fork release line stops, and no new

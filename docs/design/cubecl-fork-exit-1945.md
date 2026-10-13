@@ -1,8 +1,9 @@
 # The cubecl fork: what it carries, what stays upstream, and the own-backend contingency (#1945)
 
-Decision record for the `tensor4all/cubecl` fork that `tenferro-rs` pins, written after the held-CUDA
+Decision record for the `tensor4all/cubecl` fork that `tenferro-rs` consumes, written after the held-CUDA
 session (#2059), the owning pending transfers (#2073, #2076) and the source publication (#2101) were
-delivered against it.
+delivered against it. tenferro depends on the fork's **published** releases (`t4a-cubecl*` 0.11.0 /
+`t4a-cubek*` 0.3.0 from crates.io); the revisions in this table are what those releases carry.
 
 ## 1. What the pin is
 
@@ -76,15 +77,14 @@ where the loss would show.
 
 **A bump also has to keep the declared version honest.** `scripts/check-git-pin-content.py` fails closed
 when a git-pinned dependency's `version` does not identify the content the pinned revision actually has:
-the crates.io release of that version must match the pinned revision file by file. The workspace pins
-`t4a-cubecl-*` at the fork revision that contains #27/#28/#29 while still declaring `=0.10.2`, and the
-published 0.10.2 came from `eb2c8894d` (before those fixes). As of this record that mismatch is a
-pre-existing failure of `main`'s `CI configuration checks` job, not of any single pull request. The
-sanctioned fix is a fork release at the pinned revision (`0.10.3`) plus pin/version bumps here, in
-`cubek`, and downstream - the exception file is reserved for dependencies with no crates.io release and
-requires a tracked issue, so it is not the right tool for an already-published package. Whichever way it
-is fixed, the rule for every future bump is: advance the declared version together with the revision, or
-release the fork.
+the crates.io release of that version must match the pinned revision file by file. The workspace once
+pinned `t4a-cubecl-*` at the fork revision that contains #27/#28/#29 while still declaring `=0.10.2`,
+and the published 0.10.2 came from `eb2c8894d` (before those fixes); that mismatch failed `main`'s `CI
+configuration checks` job. **Resolved**: the 0.11 fork releases publish the ported content, the workspace
+now requires `t4a-cubecl* = =0.11.0` / `t4a-cubek* = =0.3.0` from the registry, and no workspace git pin
+remains. The rule for any future pin is unchanged: advance the declared version together with the
+revision, or release the fork, and the exception file stays reserved for dependencies with no crates.io
+release.
 
 ## 5. Own-backend contingency inventory
 

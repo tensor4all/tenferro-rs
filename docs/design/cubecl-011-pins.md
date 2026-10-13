@@ -1,8 +1,11 @@
 # Pins for the 0.11 migration: what the pin-content policy allows
 
-Status: the migration branch stages cubecl/cubek from local working trees; a
-*git* pin at the ported revisions is not permitted by the repository's policy
-until a stable release contains them.
+Status: resolved. The fork published the ported content as the 0.11.0 / 0.3.0
+releases, so the workspace takes them from the **registry** directly
+(`Cargo.toml`: `cubecl = { package = "t4a-cubecl", version = "=0.11.0", ... }`),
+no workspace git pin remains, and `scripts/check-git-pin-content.py` reports
+nothing. The policy below is what a future pin must follow; the constraint that
+blocked pinning during the migration is history.
 
 ## The policy
 
@@ -17,8 +20,9 @@ cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl",
 
 `scripts/check-git-pin-content.py` then compares the pinned revision against the
 **crate archive of the version Cargo would resolve** and fails on any content
-difference (that is what reports `t4a-cubecl-{cuda,runtime,wgpu} 0.10.2: registry
-release content differs from the pinned revision` on `main` today).
+difference (that is what reported `t4a-cubecl-{cuda,runtime,wgpu} 0.10.2:
+registry release content differs from the pinned revision` on `main` before the
+0.11 releases landed).
 
 ## Why the ported 0.11 revisions cannot be pinned yet
 
@@ -36,23 +40,18 @@ So a git pin can only be written once a **stable release contains the ports**:
   (`t4a-cubecl` / `t4a-cubek` at a stable version), or
 - the ports merged upstream and pinned at a stable upstream release.
 
-## What the branch does instead
+## Resolution
 
-`Cargo.toml` on `migration/cubecl-0.11-upstream` resolves cubecl and cubek from
-three sibling working trees, checked out at the pushed revisions:
+The first option landed: `tensor4all/cubecl` `release/t4a-cubecl-0.11.0` is
+published as `t4a-cubecl*` 0.11.0 and `tensor4all/cubek`
+`release/t4a-cubek-0.3.0` as `t4a-cubek*` 0.3.0, so the workspace depends on
+those versions instead of a revision. That also removes the `[patch.crates-io]`
+the interim git pin needed: the CubeK release already names
+`t4a-cubecl = "=0.11.0"` from the registry, so both sides resolve one CubeCL
+copy (`cargo tree -d` reports no duplicate of any `t4a-cubecl*` crate).
 
-| Path | Repository and revision |
-| --- | --- |
-| `../cubecl-ports-combined` | `tensor4all/cubecl` `feat/tenferro-upstream-0.11-fixes` `9f097e00e` |
-| `../cubek-upstream-tenferro` | `tensor4all/cubek` `feat/tenferro-upstream-kernels` `24435486` |
-| `../cubek-upstream-fft` | `tensor4all/cubek` `feat/tenferro-upstream-interleaved-fft` `a25de257` |
-
-`python3 scripts/check-git-pin-content.py` on that tree: **no content drift**
-(4 warnings, all unrelated to cubecl/cubek: two allowlisted `cpueinsum` entries
-and a non-exact `computegraph` pin). The `[patch."https://github.com/tracel-ai/cubecl"]`
-entries exist because the CubeK revisions still name upstream cubecl; they
-disappear once the CubeK ports carry the fork's cubecl pin, or once cubecl's
-ports land upstream.
+The second option is the remaining fork-exit step: replace the `t4a-` names with
+merged upstream revisions once the ports land upstream (#2116).
 
 ## Downstream order (unchanged)
 

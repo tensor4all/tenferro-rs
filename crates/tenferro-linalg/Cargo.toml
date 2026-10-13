@@ -99,11 +99,10 @@ cudarc = { workspace = true, optional = true }
 faer = { workspace = true, optional = true }
 # The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
 # and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
-# lives in this crate. Spelled with both a git rev and a version so that Cargo uses the rev locally
-# while a packaged manifest keeps only the version requirement, matching the workspace's
-# pre-publish staging pattern for its fork dependencies. Keep the two revs identical.
-tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "c1a73af5d68bad07f484cf27989a13aece3d0fa0", version = "0.1.0", optional = true }
-tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "c1a73af5d68bad07f484cf27989a13aece3d0fa0", version = "0.1.0", optional = true }
+# lives in this crate. Published 0.1.0, whose sources are identical to the revision this crate was
+# developed against. Keep the two requirements identical.
+tlinalg = { version = "=0.1.0", optional = true }
+tlinalg-blas = { version = "=0.1.0", optional = true }
 rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }

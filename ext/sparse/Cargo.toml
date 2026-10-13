@@ -25,7 +25,7 @@ tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false, opt
 tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops", default-features = false }
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
 tenferro-tensor = { path = "../../crates/tenferro-tensor", default-features = false }
-computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7" }
+computegraph = "=0.1.0"
 
 [dev-dependencies]
 tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false, features = ["native"] }
