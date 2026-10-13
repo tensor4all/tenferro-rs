@@ -118,23 +118,49 @@ iterations.
 
 The launch functions receive `TensorBinding`s and do not allocate: `launch_*` is
 called from `BackendSession::launch_reduce_axis_typed`, which owns `alloc_output`
-and the binding construction. Two options:
+and the binding construction. Two options were weighed, and the first was
+rejected after reading the binding path:
 
-- **allocate inside the reduce layer** and build the binding by hand.
-  `TensorBinding`'s fields are public, and `client.empty(bytes)` plus
-  `Handle::binding()` yields the handle, so the whole split stays inside
-  `kernels/reduce/**`. The scratch then sits outside the output pool, so a split
-  reduction pays one `Client::empty` per launch - measured at 1.06 us for 4096
-  bytes - against the ~38 ms it saves.
-- **allocate in the backend layer** and thread a third binding through the
-  launch closure. That reuses the pool, but it changes all twelve launch sites
-  and the reduce plan API.
+- **allocate inside the reduce layer** and build the `TensorBinding` by hand from
+  `client.empty(bytes)` plus `Handle::binding()`. `TensorBinding`'s fields are
+  public, so this compiles - but it bypasses `prepare_device_read` and
+  `prepare_device_write`, which are where tenferro keeps its device-read
+  ownership, memoized-address and claim discipline, and where a write binding
+  invalidates the memoized device address (`#1868`, `#1875`). A scratch buffer
+  built behind that layer's back is exactly the kind of bypass the discipline
+  exists to prevent.
+- **allocate in the backend layer** and thread the binding through the launch
+  closure. That reuses `alloc_output` (so the scratch is pool-backed like every
+  other output) and stays inside the prepared-access contract.
 
-Chosen: allocate inside the reduce layer. The scratch is a per-launch resource
-whose lifetime is exactly the two launches, the allocation cost is two orders of
-magnitude below the saving, and keeping the change inside the reduce module is
-what makes it reviewable. If the per-launch allocation ever shows up in a
-measurement, moving it behind the pool is a local change to this module.
+Chosen: the backend layer. The cost is an API change - a reduce plan that carries
+both the resolution and the split, and one more binding parameter on the twelve
+`launch_*` functions - which is why the plan is computed once, in the reduce
+module, and the backend layer only allocates what it asks for:
+
+```rust
+// kernels/reduce/routines.rs
+pub(crate) struct ReduceLaunchPlan {
+    pub kind: ResolvedReduceStrategy,
+    pub cube_count: CubeCount,
+    pub cube_dim: CubeDim,
+    pub axis: usize,
+    pub output_len: usize,
+    pub split: Option<ReduceSplit>,   // None = run the unsplit kernel
+}
+
+/// Validate, resolve the strategy and decide the split, without launching.
+pub(crate) fn plan(client: &Client, input: &TensorBinding, output: &TensorBinding,
+                   axis: usize, strategy: ReduceStrategy) -> Result<ReduceLaunchPlan>
+
+/// The partials tensor this plan needs, as a keepdims shape whose reduce axis is
+/// `splits`. The caller allocates it and passes the binding to `launch_*`.
+pub(crate) fn partials_shape(plan: &ReduceLaunchPlan, output_shape: &[usize]) -> Option<Vec<usize>>
+```
+
+`launch_reduce_axis_typed` then allocates `partials_shape(...)` through
+`alloc_output` when it is `Some`, and each `launch_*` runs pass 1 over that
+binding and pass 2 over the same binding as its input.
 
 ### Determinism and numerics
 
