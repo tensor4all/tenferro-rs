@@ -44,7 +44,10 @@ to `tenferro-gpu`.
 
 Owned runtime tensors are compact column-major. The leftmost dimension has
 stride `1`, so compact strides for shape `[d0, d1, d2]` are
-`[1, d0, d0 * d1]`.
+`[1, d0, d0 * d1]`. An owned tensor caches that stride vector at construction
+and exposes it through `TypedTensor::strides`, so a strided view of a tensor
+borrows the shape and the strides instead of recomputing (and allocating) a
+metadata pair per operation.
 
 Arbitrary strides, non-zero offsets, transposes, slices, and reverse layouts
 belong to views or `TensorLayout` metadata. Metadata-only transformations use

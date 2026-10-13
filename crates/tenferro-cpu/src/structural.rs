@@ -217,10 +217,9 @@ fn host_view<'a, T: Copy + TensorScalar>(
     if tensor.backend_buffer().is_some() {
         return Err(cpu_backend_buffer_error(op));
     }
-    // The tensor stores no strides, so the compact column-major layout is
-    // computed here and the view owns it.
-    let strides = col_major_strides(tensor.shape());
-    StridedView::new_owned(tensor.host_data()?, tensor.shape().to_vec(), strides, 0)
+    // The tensor caches its compact layout, so the view borrows both metadata
+    // vectors instead of allocating a pair per call.
+    StridedView::new(tensor.host_data()?, tensor.shape(), tensor.strides(), 0)
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
@@ -1362,3 +1361,6 @@ fn checked_triangular_offset(
             )
         })
 }
+
+#[cfg(test)]
+mod tests;
