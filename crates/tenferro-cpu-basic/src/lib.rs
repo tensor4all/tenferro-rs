@@ -26,8 +26,8 @@ use num_complex::{Complex32, Complex64};
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use strided_basic::{
-    col_major_strides as kernel_col_major_strides, ErasedRawStridedMut, ErasedRawStridedPtr,
-    ErasedRawStridedRef, ErasedRawStridedUninitMut, KernelDType, StridedView,
+    ErasedRawStridedMut, ErasedRawStridedPtr, ErasedRawStridedRef, ErasedRawStridedUninitMut,
+    KernelDType, StridedView,
 };
 
 /// Error returned when a CPU-only operation receives backend storage.
@@ -139,10 +139,9 @@ pub fn typed_view<'a, T: Copy + TensorScalar>(
         return Err(cpu_backend_buffer_error(op));
     }
     let data = tensor.host_data()?;
-    // The tensor stores no strides, so the compact column-major layout is
-    // computed here and the view owns it.
-    let strides = kernel_col_major_strides(tensor.shape());
-    StridedView::new_owned(data, tensor.shape().to_vec(), strides, 0)
+    // The tensor caches its compact layout, so the view borrows both metadata
+    // vectors instead of allocating a pair per call.
+    StridedView::new(data, tensor.shape(), tensor.strides(), 0)
         .map_err(|err| Error::backend_source(op, err))
 }
 
