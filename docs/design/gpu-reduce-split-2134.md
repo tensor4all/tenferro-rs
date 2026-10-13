@@ -92,6 +92,28 @@ launch limit and keeps the partials small relative to the input. The exact
 target is chosen when measuring; the acceptance below is what it is tuned
 against, not a number picked in advance.
 
+### Where the partials buffer comes from
+
+The launch functions receive `TensorBinding`s and do not allocate: `launch_*` is
+called from `BackendSession::launch_reduce_axis_typed`, which owns `alloc_output`
+and the binding construction. Two options:
+
+- **allocate inside the reduce layer** and build the binding by hand.
+  `TensorBinding`'s fields are public, and `client.empty(bytes)` plus
+  `Handle::binding()` yields the handle, so the whole split stays inside
+  `kernels/reduce/**`. The scratch then sits outside the output pool, so a split
+  reduction pays one `Client::empty` per launch - measured at 1.06 us for 4096
+  bytes - against the ~38 ms it saves.
+- **allocate in the backend layer** and thread a third binding through the
+  launch closure. That reuses the pool, but it changes all twelve launch sites
+  and the reduce plan API.
+
+Chosen: allocate inside the reduce layer. The scratch is a per-launch resource
+whose lifetime is exactly the two launches, the allocation cost is two orders of
+magnitude below the saving, and keeping the change inside the reduce module is
+what makes it reviewable. If the per-launch allocation ever shows up in a
+measurement, moving it behind the pool is a local change to this module.
+
 ### Determinism and numerics
 
 The split order is fixed by `split = CUBE_POS_X % splits`, and pass 2 reduces the
