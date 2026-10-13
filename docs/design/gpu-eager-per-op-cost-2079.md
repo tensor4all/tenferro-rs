@@ -72,14 +72,27 @@ Genuine, and stated so they are not mistaken for candidates:
    `broadcast_shape`, borrow instead of cloning), `PromotedTensorRead` borrowing
    instead of boxing, the single-slot `read_view` instead of `read_views(&[slot])`,
    a fixed-arity input-read array, and the one-element result array.
-2. **Cache the binding metadata** (`cubecl_shape_and_strides`): keyed on the
-   shape's extents, held in the runtime, returning a shared
-   `Arc<[usize]>`/inline array so a recurring shape costs no allocation. This is
-   the "plan/analysis cache by shape/stride/dtype" half of the issue, in its
-   smallest useful form: the elementwise path has *no* runtime plan to cache
-   (the kernel is a static dtype match, `cubecl/mod.rs:4703`), so the metadata is
-   what recurs.
-3. **Re-measure** after each step against the floor, on the streaming arm.
+2. **Cache/Build the binding metadata without a `Vec`** (`cubecl_shape_and_strides`,
+   `dispatch.rs:235`): *tried and measured worse, not landed.* CubeCL's
+   `Shape`/`Strides` are `SmallVec<[usize; 5]>`-backed, so building them directly
+   (instead of a `Vec` each that is converted at the binding) removes two
+   allocations and two conversions per binding - six allocations per eager op -
+   but it also makes `CubeclPreparedAccess`, which is boxed once per binding, about
+   100 bytes larger and copies the metadata inline. Measured on the A100 with the
+   harness below, five samples each:
+
+   | metadata | streaming samples | best |
+   | --- | --- | --- |
+   | `Vec` per binding (kept) | 8.35, 8.33, 8.46, 8.88, 8.94 | **8.33 us/op** |
+   | `SmallVec` built inline | 9.36, 9.28, 9.45, 9.51, 9.07 | 9.07 us/op |
+
+   The allocation count is lower and the host cost is 8% higher; the measurement
+   wins, so the `Vec` stays. An allocation-count argument is not a host-cost
+   argument. A shape-keyed *cache* would have to return the `Shape`/`Strides`
+   themselves to avoid the conversion, and the same struct-size effect would
+   apply, so it is not obviously better than the status quo.
+3. **Re-measure** after each step against the floor, on the streaming arm. Step 1
+   is the only step that measured better; step 2 measured worse and was dropped.
 
 Explicitly **not** in this design:
 

@@ -577,7 +577,16 @@ fn eager_op_f64_decode_add_host_cost_benchmark() {
     };
 
     let _ = warm(200, false);
-    let streaming = warm(iters, false);
+    // The per-op cost is a few microseconds, so one 2000-iteration average still
+    // carries a few percent of run-to-run noise: report several and let the
+    // reader take the minimum, which is the least noisy estimate of host cost.
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        samples.push(warm(iters, false));
+    }
     let retained = warm(iters, true);
-    eprintln!("[2079] eager add 1024x8 f64: streaming {streaming:.2} us/op, retained {retained:.2} us/op");
+    let best = samples.iter().cloned().fold(f64::INFINITY, f64::min);
+    eprintln!(
+        "[2079] eager add 1024x8 f64: streaming {samples:?} (best {best:.2} us/op), retained {retained:.2} us/op"
+    );
 }
