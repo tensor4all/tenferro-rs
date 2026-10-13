@@ -1,4 +1,4 @@
-use cubecl::prelude::{CubeCount, CubeDim, TensorBinding};
+use cubecl::prelude::{CubeCount, CubeDim, Scalar, TensorBinding};
 use tenferro_tensor::DType;
 
 use super::*;
@@ -31,7 +31,7 @@ macro_rules! preset_scalar {
 const OP: &str = "rank_revealing_qr";
 const RRQR_PLANE_WIDTH: u32 = 32;
 
-type CudaTensorBinding = TensorBinding<CubeclCudaRuntime>;
+type CudaTensorBinding = TensorBinding;
 
 trait CudaRrqrScalar: LinalgScalar + TensorScalar {
     fn device_imaginary_unit(
@@ -48,6 +48,7 @@ trait CudaRrqrScalar: LinalgScalar + TensorScalar {
         n: usize,
     ) -> Result<()>;
 
+    #[allow(clippy::too_many_arguments)]
     fn launch_pivot(
         cubecl: &CubeclSession<'_>,
         norms: &TypedTensor<<Self as LinalgScalar>::Real>,
@@ -59,6 +60,7 @@ trait CudaRrqrScalar: LinalgScalar + TensorScalar {
         n: usize,
     ) -> Result<()>;
 
+    #[allow(clippy::too_many_arguments)]
     fn launch_reflector(
         cubecl: &CubeclSession<'_>,
         work: &TypedTensor<Self>,
@@ -102,7 +104,7 @@ trait CudaRrqrScalar: LinalgScalar + TensorScalar {
 
 fn rrqr_binding<T>(cubecl: &CubeclSession<'_>, tensor: &TypedTensor<T>) -> Result<CudaTensorBinding>
 where
-    T: cubecl::prelude::CubeElement + TensorScalar + Clone,
+    T: cubecl::prelude::CubeElement + TensorScalar + Clone + Scalar,
 {
     unsafe { cubecl.tensor_binding(tensor, OP) }
 }
@@ -130,7 +132,7 @@ macro_rules! impl_cuda_rrqr_real {
                 // SAFETY: dense same-runtime bindings are live for this launch;
                 // one plane owns each (trailing column, batch) norm.
                 unsafe {
-                    cubecl_linalg::column_norms_real::launch_unchecked::<Self, CubeclCudaRuntime>(
+                    cubecl_linalg::column_norms_real::launch_unchecked::<Self>(
                         cubecl.client(),
                         count,
                         rrqr_cube_dim(),
@@ -181,7 +183,7 @@ macro_rules! impl_cuda_rrqr_real {
                 // SAFETY: one plane owns each batch reflector and lanes write
                 // disjoint entries of its packed vector.
                 unsafe {
-                    cubecl_linalg::reflector_real::launch_unchecked::<Self, CubeclCudaRuntime>(
+                    cubecl_linalg::reflector_real::launch_unchecked::<Self>(
                         cubecl.client(),
                         count,
                         rrqr_cube_dim(),
@@ -217,10 +219,7 @@ macro_rules! impl_cuda_rrqr_real {
                 // SAFETY: one plane owns each (target column, batch) update;
                 // target columns never overlap the packed reflector column.
                 unsafe {
-                    cubecl_linalg::apply_reflector_real::launch_unchecked::<
-                        Self,
-                        CubeclCudaRuntime,
-                    >(
+                    cubecl_linalg::apply_reflector_real::launch_unchecked::<Self>(
                         cubecl.client(),
                         count,
                         rrqr_cube_dim(),
@@ -255,7 +254,7 @@ macro_rules! impl_cuda_rrqr_real {
                 // SAFETY: one plane owns each batch rank and scans disjoint
                 // diagonal subsequences before a plane minimum reduction.
                 unsafe {
-                    cubecl_linalg::prefix_rank_real::launch_unchecked::<Self, CubeclCudaRuntime>(
+                    cubecl_linalg::prefix_rank_real::launch_unchecked::<Self>(
                         cubecl.client(),
                         count,
                         rrqr_cube_dim(),
@@ -277,6 +276,7 @@ macro_rules! impl_cuda_rrqr_real {
 impl_cuda_rrqr_real!(f32, F32);
 impl_cuda_rrqr_real!(f64, F64);
 
+#[allow(clippy::too_many_arguments)]
 fn launch_pivot_real<F>(
     cubecl: &CubeclSession<'_>,
     norms: &TypedTensor<F>,
@@ -301,7 +301,7 @@ where
     // SAFETY: one plane owns each batch pivot/status output; permutation is
     // read-only and the lowest original index resolves exact norm ties.
     unsafe {
-        cubecl_linalg::select_pivot::launch_unchecked::<F, CubeclCudaRuntime>(
+        cubecl_linalg::select_pivot::launch_unchecked::<F>(
             cubecl.client(),
             count,
             rrqr_cube_dim(),
@@ -347,7 +347,7 @@ macro_rules! impl_cuda_rrqr_complex {
                 let norms = rrqr_binding(cubecl, norms)?;
                 // SAFETY: one plane owns each (trailing column, batch) norm.
                 unsafe {
-                    cubecl_linalg::$norms::launch_unchecked::<CubeclCudaRuntime>(
+                    cubecl_linalg::$norms::launch_unchecked(
                         cubecl.client(),
                         count,
                         rrqr_cube_dim(),
@@ -398,7 +398,7 @@ macro_rules! impl_cuda_rrqr_complex {
                 // SAFETY: one plane owns each batch reflector and lanes write
                 // disjoint entries of its packed vector.
                 unsafe {
-                    cubecl_linalg::$reflector::launch_unchecked::<CubeclCudaRuntime>(
+                    cubecl_linalg::$reflector::launch_unchecked(
                         cubecl.client(),
                         count,
                         rrqr_cube_dim(),
@@ -438,7 +438,7 @@ macro_rules! impl_cuda_rrqr_complex {
                 // SAFETY: one plane owns each (target column, batch) update;
                 // target columns never overlap the packed reflector column.
                 unsafe {
-                    cubecl_linalg::$apply::launch_unchecked::<CubeclCudaRuntime>(
+                    cubecl_linalg::$apply::launch_unchecked(
                         cubecl.client(),
                         count,
                         rrqr_cube_dim(),
@@ -473,7 +473,7 @@ macro_rules! impl_cuda_rrqr_complex {
                 let status = rrqr_binding(cubecl, status)?;
                 // SAFETY: one plane owns each batch rank and status output.
                 unsafe {
-                    cubecl_linalg::$rank_kernel::launch_unchecked::<CubeclCudaRuntime>(
+                    cubecl_linalg::$rank_kernel::launch_unchecked(
                         cubecl.client(),
                         count,
                         rrqr_cube_dim(),
@@ -581,6 +581,7 @@ fn gpu_linalg_typed<'a, T: tenferro_tensor::TensorScalar>(
         .ok_or_else(|| unsupported_linalg_dtype(op, input))
 }
 
+#[allow(clippy::type_complexity)]
 fn rank_revealing_qr_typed<T>(
     backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
@@ -592,7 +593,8 @@ fn rank_revealing_qr_typed<T>(
     TypedTensor<i64>,
 )>
 where
-    T: CudaRrqrScalar + RrqrTensorVariant,
+    T: CudaRrqrScalar + RrqrTensorVariant + Scalar,
+    <T as LinalgScalar>::Real: Scalar,
 {
     ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
@@ -759,7 +761,7 @@ fn launch_initialize_permutation(
     let count = cubecl.cube_count_1d(permutation.n_elements())?;
     // SAFETY: each worker initializes one distinct permutation element.
     unsafe {
-        cubecl_linalg::initialize_permutation::launch_unchecked::<CubeclCudaRuntime>(
+        cubecl_linalg::initialize_permutation::launch_unchecked(
             cubecl.client(),
             count,
             cubecl.cube_dim_1d(),
@@ -782,7 +784,7 @@ fn launch_swap_columns<T>(
     batch_total: usize,
 ) -> Result<()>
 where
-    T: CudaRrqrScalar,
+    T: CudaRrqrScalar + Scalar,
 {
     let work_arg = rrqr_binding(cubecl, work)?;
     let permutation_arg = rrqr_binding(cubecl, permutation)?;
@@ -792,7 +794,7 @@ where
     // SAFETY: each worker swaps one row in one batch; only row zero updates
     // that batch's permutation, and pivot indices came from the bounded scan.
     unsafe {
-        cubecl_linalg::swap_columns::launch_unchecked::<T, CubeclCudaRuntime>(
+        cubecl_linalg::swap_columns::launch_unchecked::<T>(
             cubecl.client(),
             count,
             cubecl.cube_dim_1d(),
@@ -814,13 +816,13 @@ fn launch_initialize_q<T>(
     k: usize,
 ) -> Result<()>
 where
-    T: CudaRrqrScalar,
+    T: CudaRrqrScalar + Scalar,
 {
     let q_arg = rrqr_binding(cubecl, q)?;
     let count = cubecl.cube_count_1d(q.n_elements())?;
     // SAFETY: each worker initializes one distinct Q element.
     unsafe {
-        cubecl_linalg::initialize_q::launch_unchecked::<T, CubeclCudaRuntime>(
+        cubecl_linalg::initialize_q::launch_unchecked::<T>(
             cubecl.client(),
             count,
             cubecl.cube_dim_1d(),
@@ -841,7 +843,7 @@ fn launch_extract_r<T>(
     k: usize,
 ) -> Result<()>
 where
-    T: CudaRrqrScalar,
+    T: CudaRrqrScalar + Scalar,
 {
     let work_arg = rrqr_binding(cubecl, work)?;
     let r_arg = rrqr_binding(cubecl, r)?;
@@ -849,7 +851,7 @@ where
     // SAFETY: each worker writes one R element from the corresponding packed
     // upper trapezoid or writes zero below it.
     unsafe {
-        cubecl_linalg::extract_r::launch_unchecked::<T, CubeclCudaRuntime>(
+        cubecl_linalg::extract_r::launch_unchecked::<T>(
             cubecl.client(),
             count,
             cubecl.cube_dim_1d(),

@@ -1262,119 +1262,143 @@ struct CusolverVtable {
 
 impl CusolverVtable {
     unsafe fn load(lib: &Library) -> Result<Self> {
-        Ok(Self {
-            create: load_symbol(lib, b"cusolverDnCreate\0", "cuSOLVER")?,
-            destroy: load_symbol(lib, b"cusolverDnDestroy\0", "cuSOLVER")?,
-            create_params: load_symbol(lib, b"cusolverDnCreateParams\0", "cuSOLVER")?,
-            destroy_params: load_symbol(lib, b"cusolverDnDestroyParams\0", "cuSOLVER")?,
-            set_stream: load_symbol(lib, b"cusolverDnSetStream\0", "cuSOLVER")?,
-            spotrf_buffer_size: load_symbol(lib, b"cusolverDnSpotrf_bufferSize\0", "cuSOLVER")?,
-            dpotrf_buffer_size: load_symbol(lib, b"cusolverDnDpotrf_bufferSize\0", "cuSOLVER")?,
-            cpotrf_buffer_size: load_symbol(lib, b"cusolverDnCpotrf_bufferSize\0", "cuSOLVER")?,
-            zpotrf_buffer_size: load_symbol(lib, b"cusolverDnZpotrf_bufferSize\0", "cuSOLVER")?,
-            spotrf: load_symbol(lib, b"cusolverDnSpotrf\0", "cuSOLVER")?,
-            dpotrf: load_symbol(lib, b"cusolverDnDpotrf\0", "cuSOLVER")?,
-            cpotrf: load_symbol(lib, b"cusolverDnCpotrf\0", "cuSOLVER")?,
-            zpotrf: load_symbol(lib, b"cusolverDnZpotrf\0", "cuSOLVER")?,
-            sgetrf_buffer_size: load_symbol(lib, b"cusolverDnSgetrf_bufferSize\0", "cuSOLVER")?,
-            dgetrf_buffer_size: load_symbol(lib, b"cusolverDnDgetrf_bufferSize\0", "cuSOLVER")?,
-            cgetrf_buffer_size: load_symbol(lib, b"cusolverDnCgetrf_bufferSize\0", "cuSOLVER")?,
-            zgetrf_buffer_size: load_symbol(lib, b"cusolverDnZgetrf_bufferSize\0", "cuSOLVER")?,
-            sgetrf: load_symbol(lib, b"cusolverDnSgetrf\0", "cuSOLVER")?,
-            dgetrf: load_symbol(lib, b"cusolverDnDgetrf\0", "cuSOLVER")?,
-            cgetrf: load_symbol(lib, b"cusolverDnCgetrf\0", "cuSOLVER")?,
-            zgetrf: load_symbol(lib, b"cusolverDnZgetrf\0", "cuSOLVER")?,
-            sgeqrf_buffer_size: load_symbol(lib, b"cusolverDnSgeqrf_bufferSize\0", "cuSOLVER")?,
-            dgeqrf_buffer_size: load_symbol(lib, b"cusolverDnDgeqrf_bufferSize\0", "cuSOLVER")?,
-            cgeqrf_buffer_size: load_symbol(lib, b"cusolverDnCgeqrf_bufferSize\0", "cuSOLVER")?,
-            zgeqrf_buffer_size: load_symbol(lib, b"cusolverDnZgeqrf_bufferSize\0", "cuSOLVER")?,
-            sgeqrf: load_symbol(lib, b"cusolverDnSgeqrf\0", "cuSOLVER")?,
-            dgeqrf: load_symbol(lib, b"cusolverDnDgeqrf\0", "cuSOLVER")?,
-            cgeqrf: load_symbol(lib, b"cusolverDnCgeqrf\0", "cuSOLVER")?,
-            zgeqrf: load_symbol(lib, b"cusolverDnZgeqrf\0", "cuSOLVER")?,
-            xlarft_buffer_size: load_symbol(lib, b"cusolverDnXlarft_bufferSize\0", "cuSOLVER")?,
-            xlarft: load_symbol(lib, b"cusolverDnXlarft\0", "cuSOLVER")?,
-            // SAFETY: signatures match the documented cuSOLVER 64-bit API.
-            xgesvdp_buffer_size: unsafe {
-                load_symbol(lib, b"cusolverDnXgesvdp_bufferSize\0", "cuSOLVER")?
-            },
-            // SAFETY: signature matches the documented cuSOLVER 64-bit API.
-            xgesvdp: unsafe { load_symbol(lib, b"cusolverDnXgesvdp\0", "cuSOLVER")? },
-            // SAFETY: signatures match the documented cuSOLVER 64-bit API.
-            xsyev_batched_buffer_size: unsafe {
-                load_symbol(lib, b"cusolverDnXsyevBatched_bufferSize\0", "cuSOLVER")?
-            },
-            // SAFETY: signature matches the documented cuSOLVER 64-bit API.
-            xsyev_batched: unsafe { load_symbol(lib, b"cusolverDnXsyevBatched\0", "cuSOLVER")? },
-            sorgqr_buffer_size: load_symbol(lib, b"cusolverDnSorgqr_bufferSize\0", "cuSOLVER")?,
-            dorgqr_buffer_size: load_symbol(lib, b"cusolverDnDorgqr_bufferSize\0", "cuSOLVER")?,
-            cungqr_buffer_size: load_symbol(lib, b"cusolverDnCungqr_bufferSize\0", "cuSOLVER")?,
-            zungqr_buffer_size: load_symbol(lib, b"cusolverDnZungqr_bufferSize\0", "cuSOLVER")?,
-            sorgqr: load_symbol(lib, b"cusolverDnSorgqr\0", "cuSOLVER")?,
-            dorgqr: load_symbol(lib, b"cusolverDnDorgqr\0", "cuSOLVER")?,
-            cungqr: load_symbol(lib, b"cusolverDnCungqr\0", "cuSOLVER")?,
-            zungqr: load_symbol(lib, b"cusolverDnZungqr\0", "cuSOLVER")?,
-            sgesvd_buffer_size: load_symbol(lib, b"cusolverDnSgesvd_bufferSize\0", "cuSOLVER")?,
-            dgesvd_buffer_size: load_symbol(lib, b"cusolverDnDgesvd_bufferSize\0", "cuSOLVER")?,
-            cgesvd_buffer_size: load_symbol(lib, b"cusolverDnCgesvd_bufferSize\0", "cuSOLVER")?,
-            zgesvd_buffer_size: load_symbol(lib, b"cusolverDnZgesvd_bufferSize\0", "cuSOLVER")?,
-            sgesvd: load_symbol(lib, b"cusolverDnSgesvd\0", "cuSOLVER")?,
-            dgesvd: load_symbol(lib, b"cusolverDnDgesvd\0", "cuSOLVER")?,
-            cgesvd: load_symbol(lib, b"cusolverDnCgesvd\0", "cuSOLVER")?,
-            zgesvd: load_symbol(lib, b"cusolverDnZgesvd\0", "cuSOLVER")?,
-            create_gesvdj_info: load_symbol(lib, b"cusolverDnCreateGesvdjInfo\0", "cuSOLVER")?,
-            destroy_gesvdj_info: load_symbol(lib, b"cusolverDnDestroyGesvdjInfo\0", "cuSOLVER")?,
-            sgesvdj_buffer_size: load_symbol(lib, b"cusolverDnSgesvdj_bufferSize\0", "cuSOLVER")?,
-            dgesvdj_buffer_size: load_symbol(lib, b"cusolverDnDgesvdj_bufferSize\0", "cuSOLVER")?,
-            cgesvdj_buffer_size: load_symbol(lib, b"cusolverDnCgesvdj_bufferSize\0", "cuSOLVER")?,
-            zgesvdj_buffer_size: load_symbol(lib, b"cusolverDnZgesvdj_bufferSize\0", "cuSOLVER")?,
-            sgesvdj: load_symbol(lib, b"cusolverDnSgesvdj\0", "cuSOLVER")?,
-            dgesvdj: load_symbol(lib, b"cusolverDnDgesvdj\0", "cuSOLVER")?,
-            cgesvdj: load_symbol(lib, b"cusolverDnCgesvdj\0", "cuSOLVER")?,
-            zgesvdj: load_symbol(lib, b"cusolverDnZgesvdj\0", "cuSOLVER")?,
-            ssyevd_buffer_size: load_symbol(lib, b"cusolverDnSsyevd_bufferSize\0", "cuSOLVER")?,
-            dsyevd_buffer_size: load_symbol(lib, b"cusolverDnDsyevd_bufferSize\0", "cuSOLVER")?,
-            cheevd_buffer_size: load_symbol(lib, b"cusolverDnCheevd_bufferSize\0", "cuSOLVER")?,
-            zheevd_buffer_size: load_symbol(lib, b"cusolverDnZheevd_bufferSize\0", "cuSOLVER")?,
-            ssyevd: load_symbol(lib, b"cusolverDnSsyevd\0", "cuSOLVER")?,
-            dsyevd: load_symbol(lib, b"cusolverDnDsyevd\0", "cuSOLVER")?,
-            cheevd: load_symbol(lib, b"cusolverDnCheevd\0", "cuSOLVER")?,
-            zheevd: load_symbol(lib, b"cusolverDnZheevd\0", "cuSOLVER")?,
-            create_syevj_info: load_symbol(lib, b"cusolverDnCreateSyevjInfo\0", "cuSOLVER")?,
-            destroy_syevj_info: load_symbol(lib, b"cusolverDnDestroySyevjInfo\0", "cuSOLVER")?,
-            ssyevj_buffer_size: load_symbol(lib, b"cusolverDnSsyevj_bufferSize\0", "cuSOLVER")?,
-            dsyevj_buffer_size: load_symbol(lib, b"cusolverDnDsyevj_bufferSize\0", "cuSOLVER")?,
-            cheevj_buffer_size: load_symbol(lib, b"cusolverDnCheevj_bufferSize\0", "cuSOLVER")?,
-            zheevj_buffer_size: load_symbol(lib, b"cusolverDnZheevj_bufferSize\0", "cuSOLVER")?,
-            ssyevj: load_symbol(lib, b"cusolverDnSsyevj\0", "cuSOLVER")?,
-            dsyevj: load_symbol(lib, b"cusolverDnDsyevj\0", "cuSOLVER")?,
-            cheevj: load_symbol(lib, b"cusolverDnCheevj\0", "cuSOLVER")?,
-            zheevj: load_symbol(lib, b"cusolverDnZheevj\0", "cuSOLVER")?,
-            ssyevj_batched_buffer_size: load_symbol(
-                lib,
-                b"cusolverDnSsyevjBatched_bufferSize\0",
-                "cuSOLVER",
-            )?,
-            dsyevj_batched_buffer_size: load_symbol(
-                lib,
-                b"cusolverDnDsyevjBatched_bufferSize\0",
-                "cuSOLVER",
-            )?,
-            cheevj_batched_buffer_size: load_symbol(
-                lib,
-                b"cusolverDnCheevjBatched_bufferSize\0",
-                "cuSOLVER",
-            )?,
-            zheevj_batched_buffer_size: load_symbol(
-                lib,
-                b"cusolverDnZheevjBatched_bufferSize\0",
-                "cuSOLVER",
-            )?,
-            ssyevj_batched: load_symbol(lib, b"cusolverDnSsyevjBatched\0", "cuSOLVER")?,
-            dsyevj_batched: load_symbol(lib, b"cusolverDnDsyevjBatched\0", "cuSOLVER")?,
-            cheevj_batched: load_symbol(lib, b"cusolverDnCheevjBatched\0", "cuSOLVER")?,
-            zheevj_batched: load_symbol(lib, b"cusolverDnZheevjBatched\0", "cuSOLVER")?,
-        })
+        // SAFETY: every `load_symbol` below resolves a documented cuSOLVER symbol and
+        // stores it under the exact FFI signature its `*Fn` type declares.
+        unsafe {
+            Ok(Self {
+                create: load_symbol(lib, b"cusolverDnCreate\0", "cuSOLVER")?,
+                destroy: load_symbol(lib, b"cusolverDnDestroy\0", "cuSOLVER")?,
+                create_params: load_symbol(lib, b"cusolverDnCreateParams\0", "cuSOLVER")?,
+                destroy_params: load_symbol(lib, b"cusolverDnDestroyParams\0", "cuSOLVER")?,
+                set_stream: load_symbol(lib, b"cusolverDnSetStream\0", "cuSOLVER")?,
+                spotrf_buffer_size: load_symbol(lib, b"cusolverDnSpotrf_bufferSize\0", "cuSOLVER")?,
+                dpotrf_buffer_size: load_symbol(lib, b"cusolverDnDpotrf_bufferSize\0", "cuSOLVER")?,
+                cpotrf_buffer_size: load_symbol(lib, b"cusolverDnCpotrf_bufferSize\0", "cuSOLVER")?,
+                zpotrf_buffer_size: load_symbol(lib, b"cusolverDnZpotrf_bufferSize\0", "cuSOLVER")?,
+                spotrf: load_symbol(lib, b"cusolverDnSpotrf\0", "cuSOLVER")?,
+                dpotrf: load_symbol(lib, b"cusolverDnDpotrf\0", "cuSOLVER")?,
+                cpotrf: load_symbol(lib, b"cusolverDnCpotrf\0", "cuSOLVER")?,
+                zpotrf: load_symbol(lib, b"cusolverDnZpotrf\0", "cuSOLVER")?,
+                sgetrf_buffer_size: load_symbol(lib, b"cusolverDnSgetrf_bufferSize\0", "cuSOLVER")?,
+                dgetrf_buffer_size: load_symbol(lib, b"cusolverDnDgetrf_bufferSize\0", "cuSOLVER")?,
+                cgetrf_buffer_size: load_symbol(lib, b"cusolverDnCgetrf_bufferSize\0", "cuSOLVER")?,
+                zgetrf_buffer_size: load_symbol(lib, b"cusolverDnZgetrf_bufferSize\0", "cuSOLVER")?,
+                sgetrf: load_symbol(lib, b"cusolverDnSgetrf\0", "cuSOLVER")?,
+                dgetrf: load_symbol(lib, b"cusolverDnDgetrf\0", "cuSOLVER")?,
+                cgetrf: load_symbol(lib, b"cusolverDnCgetrf\0", "cuSOLVER")?,
+                zgetrf: load_symbol(lib, b"cusolverDnZgetrf\0", "cuSOLVER")?,
+                sgeqrf_buffer_size: load_symbol(lib, b"cusolverDnSgeqrf_bufferSize\0", "cuSOLVER")?,
+                dgeqrf_buffer_size: load_symbol(lib, b"cusolverDnDgeqrf_bufferSize\0", "cuSOLVER")?,
+                cgeqrf_buffer_size: load_symbol(lib, b"cusolverDnCgeqrf_bufferSize\0", "cuSOLVER")?,
+                zgeqrf_buffer_size: load_symbol(lib, b"cusolverDnZgeqrf_bufferSize\0", "cuSOLVER")?,
+                sgeqrf: load_symbol(lib, b"cusolverDnSgeqrf\0", "cuSOLVER")?,
+                dgeqrf: load_symbol(lib, b"cusolverDnDgeqrf\0", "cuSOLVER")?,
+                cgeqrf: load_symbol(lib, b"cusolverDnCgeqrf\0", "cuSOLVER")?,
+                zgeqrf: load_symbol(lib, b"cusolverDnZgeqrf\0", "cuSOLVER")?,
+                xlarft_buffer_size: load_symbol(lib, b"cusolverDnXlarft_bufferSize\0", "cuSOLVER")?,
+                xlarft: load_symbol(lib, b"cusolverDnXlarft\0", "cuSOLVER")?,
+                xgesvdp_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnXgesvdp_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                xgesvdp: load_symbol(lib, b"cusolverDnXgesvdp\0", "cuSOLVER")?,
+                xsyev_batched_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnXsyevBatched_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                xsyev_batched: load_symbol(lib, b"cusolverDnXsyevBatched\0", "cuSOLVER")?,
+                sorgqr_buffer_size: load_symbol(lib, b"cusolverDnSorgqr_bufferSize\0", "cuSOLVER")?,
+                dorgqr_buffer_size: load_symbol(lib, b"cusolverDnDorgqr_bufferSize\0", "cuSOLVER")?,
+                cungqr_buffer_size: load_symbol(lib, b"cusolverDnCungqr_bufferSize\0", "cuSOLVER")?,
+                zungqr_buffer_size: load_symbol(lib, b"cusolverDnZungqr_bufferSize\0", "cuSOLVER")?,
+                sorgqr: load_symbol(lib, b"cusolverDnSorgqr\0", "cuSOLVER")?,
+                dorgqr: load_symbol(lib, b"cusolverDnDorgqr\0", "cuSOLVER")?,
+                cungqr: load_symbol(lib, b"cusolverDnCungqr\0", "cuSOLVER")?,
+                zungqr: load_symbol(lib, b"cusolverDnZungqr\0", "cuSOLVER")?,
+                sgesvd_buffer_size: load_symbol(lib, b"cusolverDnSgesvd_bufferSize\0", "cuSOLVER")?,
+                dgesvd_buffer_size: load_symbol(lib, b"cusolverDnDgesvd_bufferSize\0", "cuSOLVER")?,
+                cgesvd_buffer_size: load_symbol(lib, b"cusolverDnCgesvd_bufferSize\0", "cuSOLVER")?,
+                zgesvd_buffer_size: load_symbol(lib, b"cusolverDnZgesvd_bufferSize\0", "cuSOLVER")?,
+                sgesvd: load_symbol(lib, b"cusolverDnSgesvd\0", "cuSOLVER")?,
+                dgesvd: load_symbol(lib, b"cusolverDnDgesvd\0", "cuSOLVER")?,
+                cgesvd: load_symbol(lib, b"cusolverDnCgesvd\0", "cuSOLVER")?,
+                zgesvd: load_symbol(lib, b"cusolverDnZgesvd\0", "cuSOLVER")?,
+                create_gesvdj_info: load_symbol(lib, b"cusolverDnCreateGesvdjInfo\0", "cuSOLVER")?,
+                destroy_gesvdj_info: load_symbol(
+                    lib,
+                    b"cusolverDnDestroyGesvdjInfo\0",
+                    "cuSOLVER",
+                )?,
+                sgesvdj_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnSgesvdj_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                dgesvdj_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnDgesvdj_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                cgesvdj_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnCgesvdj_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                zgesvdj_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnZgesvdj_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                sgesvdj: load_symbol(lib, b"cusolverDnSgesvdj\0", "cuSOLVER")?,
+                dgesvdj: load_symbol(lib, b"cusolverDnDgesvdj\0", "cuSOLVER")?,
+                cgesvdj: load_symbol(lib, b"cusolverDnCgesvdj\0", "cuSOLVER")?,
+                zgesvdj: load_symbol(lib, b"cusolverDnZgesvdj\0", "cuSOLVER")?,
+                ssyevd_buffer_size: load_symbol(lib, b"cusolverDnSsyevd_bufferSize\0", "cuSOLVER")?,
+                dsyevd_buffer_size: load_symbol(lib, b"cusolverDnDsyevd_bufferSize\0", "cuSOLVER")?,
+                cheevd_buffer_size: load_symbol(lib, b"cusolverDnCheevd_bufferSize\0", "cuSOLVER")?,
+                zheevd_buffer_size: load_symbol(lib, b"cusolverDnZheevd_bufferSize\0", "cuSOLVER")?,
+                ssyevd: load_symbol(lib, b"cusolverDnSsyevd\0", "cuSOLVER")?,
+                dsyevd: load_symbol(lib, b"cusolverDnDsyevd\0", "cuSOLVER")?,
+                cheevd: load_symbol(lib, b"cusolverDnCheevd\0", "cuSOLVER")?,
+                zheevd: load_symbol(lib, b"cusolverDnZheevd\0", "cuSOLVER")?,
+                create_syevj_info: load_symbol(lib, b"cusolverDnCreateSyevjInfo\0", "cuSOLVER")?,
+                destroy_syevj_info: load_symbol(lib, b"cusolverDnDestroySyevjInfo\0", "cuSOLVER")?,
+                ssyevj_buffer_size: load_symbol(lib, b"cusolverDnSsyevj_bufferSize\0", "cuSOLVER")?,
+                dsyevj_buffer_size: load_symbol(lib, b"cusolverDnDsyevj_bufferSize\0", "cuSOLVER")?,
+                cheevj_buffer_size: load_symbol(lib, b"cusolverDnCheevj_bufferSize\0", "cuSOLVER")?,
+                zheevj_buffer_size: load_symbol(lib, b"cusolverDnZheevj_bufferSize\0", "cuSOLVER")?,
+                ssyevj: load_symbol(lib, b"cusolverDnSsyevj\0", "cuSOLVER")?,
+                dsyevj: load_symbol(lib, b"cusolverDnDsyevj\0", "cuSOLVER")?,
+                cheevj: load_symbol(lib, b"cusolverDnCheevj\0", "cuSOLVER")?,
+                zheevj: load_symbol(lib, b"cusolverDnZheevj\0", "cuSOLVER")?,
+                ssyevj_batched_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnSsyevjBatched_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                dsyevj_batched_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnDsyevjBatched_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                cheevj_batched_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnCheevjBatched_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                zheevj_batched_buffer_size: load_symbol(
+                    lib,
+                    b"cusolverDnZheevjBatched_bufferSize\0",
+                    "cuSOLVER",
+                )?,
+                ssyevj_batched: load_symbol(lib, b"cusolverDnSsyevjBatched\0", "cuSOLVER")?,
+                dsyevj_batched: load_symbol(lib, b"cusolverDnDsyevjBatched\0", "cuSOLVER")?,
+                cheevj_batched: load_symbol(lib, b"cusolverDnCheevjBatched\0", "cuSOLVER")?,
+                zheevj_batched: load_symbol(lib, b"cusolverDnZheevjBatched\0", "cuSOLVER")?,
+            })
+        }
     }
 }
 
@@ -1416,24 +1440,28 @@ struct CublasVtable {
 
 impl CublasVtable {
     unsafe fn load(lib: &Library) -> Result<Self> {
-        Ok(Self {
-            create: load_symbol(lib, b"cublasCreate_v2\0", "cuBLAS")?,
-            destroy: load_symbol(lib, b"cublasDestroy_v2\0", "cuBLAS")?,
-            set_stream: load_symbol(lib, b"cublasSetStream_v2\0", "cuBLAS")?,
-            set_pointer_mode: load_symbol(lib, b"cublasSetPointerMode_v2\0", "cuBLAS")?,
-            strsm: load_symbol(lib, b"cublasStrsm_v2\0", "cuBLAS")?,
-            dtrsm: load_symbol(lib, b"cublasDtrsm_v2\0", "cuBLAS")?,
-            ctrsm: load_symbol(lib, b"cublasCtrsm_v2\0", "cuBLAS")?,
-            ztrsm: load_symbol(lib, b"cublasZtrsm_v2\0", "cuBLAS")?,
-            strsm_batched: load_symbol(lib, b"cublasStrsmBatched\0", "cuBLAS")?,
-            dtrsm_batched: load_symbol(lib, b"cublasDtrsmBatched\0", "cuBLAS")?,
-            ctrsm_batched: load_symbol(lib, b"cublasCtrsmBatched\0", "cuBLAS")?,
-            ztrsm_batched: load_symbol(lib, b"cublasZtrsmBatched\0", "cuBLAS")?,
-            sgemm: load_symbol(lib, b"cublasSgemm_v2\0", "cuBLAS")?,
-            dgemm: load_symbol(lib, b"cublasDgemm_v2\0", "cuBLAS")?,
-            cgemm: load_symbol(lib, b"cublasCgemm_v2\0", "cuBLAS")?,
-            zgemm: load_symbol(lib, b"cublasZgemm_v2\0", "cuBLAS")?,
-        })
+        // SAFETY: every `load_symbol` below resolves a documented cuBLAS symbol and
+        // stores it under the exact FFI signature its `*Fn` type declares.
+        unsafe {
+            Ok(Self {
+                create: load_symbol(lib, b"cublasCreate_v2\0", "cuBLAS")?,
+                destroy: load_symbol(lib, b"cublasDestroy_v2\0", "cuBLAS")?,
+                set_stream: load_symbol(lib, b"cublasSetStream_v2\0", "cuBLAS")?,
+                set_pointer_mode: load_symbol(lib, b"cublasSetPointerMode_v2\0", "cuBLAS")?,
+                strsm: load_symbol(lib, b"cublasStrsm_v2\0", "cuBLAS")?,
+                dtrsm: load_symbol(lib, b"cublasDtrsm_v2\0", "cuBLAS")?,
+                ctrsm: load_symbol(lib, b"cublasCtrsm_v2\0", "cuBLAS")?,
+                ztrsm: load_symbol(lib, b"cublasZtrsm_v2\0", "cuBLAS")?,
+                strsm_batched: load_symbol(lib, b"cublasStrsmBatched\0", "cuBLAS")?,
+                dtrsm_batched: load_symbol(lib, b"cublasDtrsmBatched\0", "cuBLAS")?,
+                ctrsm_batched: load_symbol(lib, b"cublasCtrsmBatched\0", "cuBLAS")?,
+                ztrsm_batched: load_symbol(lib, b"cublasZtrsmBatched\0", "cuBLAS")?,
+                sgemm: load_symbol(lib, b"cublasSgemm_v2\0", "cuBLAS")?,
+                dgemm: load_symbol(lib, b"cublasDgemm_v2\0", "cuBLAS")?,
+                cgemm: load_symbol(lib, b"cublasCgemm_v2\0", "cuBLAS")?,
+                zgemm: load_symbol(lib, b"cublasZgemm_v2\0", "cuBLAS")?,
+            })
+        }
     }
 }
 
@@ -1442,21 +1470,23 @@ unsafe fn load_symbol<T: Copy>(
     name: &[u8],
     library_name: &'static str,
 ) -> Result<T> {
-    // SAFETY: `name` is a NUL-terminated CUDA library symbol and `T` is the
-    // exact FFI function-pointer type declared in this module's vtables.
-    let symbol = lib.get::<T>(name).map_err(|err| {
-        Error::io_source(
-            "cubecl_linalg",
-            CudaLibraryLoadError::Symbol {
-                library: library_name,
-                name: String::from_utf8_lossy(name)
-                    .trim_end_matches('\0')
-                    .to_owned(),
-                source: err,
-            },
-        )
-    })?;
-    Ok(*symbol)
+    unsafe {
+        // SAFETY: `name` is a NUL-terminated CUDA library symbol and `T` is the
+        // exact FFI function-pointer type declared in this module's vtables.
+        let symbol = lib.get::<T>(name).map_err(|err| {
+            Error::io_source(
+                "cubecl_linalg",
+                CudaLibraryLoadError::Symbol {
+                    library: library_name,
+                    name: String::from_utf8_lossy(name)
+                        .trim_end_matches('\0')
+                        .to_owned(),
+                    source: err,
+                },
+            )
+        })?;
+        Ok(*symbol)
+    }
 }
 
 type GetVersionFn = unsafe extern "C" fn(*mut i32) -> CusolverStatus;
@@ -1901,6 +1931,7 @@ impl CusolverDnHandle {
     ///
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
     /// reports a factorization/backend status such as a non-positive pivot.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn potrf(
         &self,
         dtype: CudaDataType,
@@ -1913,49 +1944,51 @@ impl CusolverDnHandle {
         info: *mut i32,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.spotrf)(
-                self.raw,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dpotrf)(
-                self.raw,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cpotrf)(
-                self.raw,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zpotrf)(
-                self.raw,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*potrf")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.spotrf)(
+                    self.raw,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dpotrf)(
+                    self.raw,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cpotrf)(
+                    self.raw,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zpotrf)(
+                    self.raw,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*potrf")
+        }
     }
 
     /// Query the workspace required by LU factorization.
@@ -2008,6 +2041,7 @@ impl CusolverDnHandle {
     ///
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
     /// reports a non-success factorization status.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn getrf(
         &self,
         dtype: CudaDataType,
@@ -2020,49 +2054,51 @@ impl CusolverDnHandle {
         info: *mut i32,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.sgetrf)(
-                self.raw,
-                m,
-                n,
-                a.cast(),
-                lda,
-                workspace.cast(),
-                pivots,
-                info,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dgetrf)(
-                self.raw,
-                m,
-                n,
-                a.cast(),
-                lda,
-                workspace.cast(),
-                pivots,
-                info,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cgetrf)(
-                self.raw,
-                m,
-                n,
-                a.cast(),
-                lda,
-                workspace.cast(),
-                pivots,
-                info,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zgetrf)(
-                self.raw,
-                m,
-                n,
-                a.cast(),
-                lda,
-                workspace.cast(),
-                pivots,
-                info,
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*getrf")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.sgetrf)(
+                    self.raw,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    workspace.cast(),
+                    pivots,
+                    info,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dgetrf)(
+                    self.raw,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    workspace.cast(),
+                    pivots,
+                    info,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cgetrf)(
+                    self.raw,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    workspace.cast(),
+                    pivots,
+                    info,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zgetrf)(
+                    self.raw,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    workspace.cast(),
+                    pivots,
+                    info,
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*getrf")
+        }
     }
 
     /// Query the workspace required by QR factorization.
@@ -2115,6 +2151,7 @@ impl CusolverDnHandle {
     ///
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
     /// reports a non-success factorization status.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn geqrf(
         &self,
         dtype: CudaDataType,
@@ -2128,53 +2165,55 @@ impl CusolverDnHandle {
         info: *mut i32,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.sgeqrf)(
-                self.raw,
-                m,
-                n,
-                a.cast(),
-                lda,
-                tau.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dgeqrf)(
-                self.raw,
-                m,
-                n,
-                a.cast(),
-                lda,
-                tau.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cgeqrf)(
-                self.raw,
-                m,
-                n,
-                a.cast(),
-                lda,
-                tau.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zgeqrf)(
-                self.raw,
-                m,
-                n,
-                a.cast(),
-                lda,
-                tau.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*geqrf")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.sgeqrf)(
+                    self.raw,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    tau.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dgeqrf)(
+                    self.raw,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    tau.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cgeqrf)(
+                    self.raw,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    tau.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zgeqrf)(
+                    self.raw,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    tau.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*geqrf")
+        }
     }
 
     /// Query Xgesvdp device and host workspace sizes, in bytes.
@@ -2318,35 +2357,37 @@ impl CusolverDnHandle {
         batch_size: i64,
         op: &'static str,
     ) -> Result<()> {
-        let real = match dtype {
-            CudaDataType::F32 | CudaDataType::Complex32 => CudaDataType::F32,
-            CudaDataType::F64 | CudaDataType::Complex64 => CudaDataType::F64,
-        };
-        // cuSOLVER computes in the type of A: a Hermitian input takes a
-        // complex computeType even though the spectrum W is real (#1923).
-        let compute = cuda_data_type_abi(dtype);
-        let real = cuda_data_type_abi(real);
-        let dtype = cuda_data_type_abi(dtype);
-        let status = (self.lib.vtable.xsyev_batched)(
-            self.raw,
-            self.params,
-            jobz as i32,
-            uplo as i32,
-            n,
-            dtype,
-            a,
-            lda,
-            real,
-            w,
-            compute,
-            device_workspace,
-            device_bytes,
-            host_workspace,
-            host_bytes,
-            info,
-            batch_size,
-        );
-        self.lib.check_status(status, op, "cusolverDnXsyevBatched")
+        unsafe {
+            let real = match dtype {
+                CudaDataType::F32 | CudaDataType::Complex32 => CudaDataType::F32,
+                CudaDataType::F64 | CudaDataType::Complex64 => CudaDataType::F64,
+            };
+            // cuSOLVER computes in the type of A: a Hermitian input takes a
+            // complex computeType even though the spectrum W is real (#1923).
+            let compute = cuda_data_type_abi(dtype);
+            let real = cuda_data_type_abi(real);
+            let dtype = cuda_data_type_abi(dtype);
+            let status = (self.lib.vtable.xsyev_batched)(
+                self.raw,
+                self.params,
+                jobz as i32,
+                uplo as i32,
+                n,
+                dtype,
+                a,
+                lda,
+                real,
+                w,
+                compute,
+                device_workspace,
+                device_bytes,
+                host_workspace,
+                host_bytes,
+                info,
+                batch_size,
+            );
+            self.lib.check_status(status, op, "cusolverDnXsyevBatched")
+        }
     }
 
     /// Compute a column-major Xgesvdp SVD, returning V rather than Vᴴ.
@@ -2495,29 +2536,31 @@ impl CusolverDnHandle {
         host_workspace_bytes: usize,
         op: &'static str,
     ) -> Result<()> {
-        let dtype = cuda_data_type_abi(dtype);
-        let status = (self.lib.vtable.xlarft)(
-            self.raw,
-            self.params,
-            0,
-            0,
-            n,
-            k,
-            dtype,
-            v,
-            ldv,
-            dtype,
-            tau,
-            dtype,
-            t,
-            ldt,
-            dtype,
-            device_workspace,
-            device_workspace_bytes,
-            host_workspace,
-            host_workspace_bytes,
-        );
-        self.lib.check_status(status, op, "cusolverDnXlarft")
+        unsafe {
+            let dtype = cuda_data_type_abi(dtype);
+            let status = (self.lib.vtable.xlarft)(
+                self.raw,
+                self.params,
+                0,
+                0,
+                n,
+                k,
+                dtype,
+                v,
+                ldv,
+                dtype,
+                tau,
+                dtype,
+                t,
+                ldt,
+                dtype,
+                device_workspace,
+                device_workspace_bytes,
+                host_workspace,
+                host_workspace_bytes,
+            );
+            self.lib.check_status(status, op, "cusolverDnXlarft")
+        }
     }
 
     /// Query the workspace required to form the explicit Q factor.
@@ -2527,6 +2570,7 @@ impl CusolverDnHandle {
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
     /// leading dimension, pointer, dtype, or reports another non-success
     /// status.
+    #[allow(clippy::too_many_arguments)]
     pub fn orgqr_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -2600,6 +2644,7 @@ impl CusolverDnHandle {
     ///
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
     /// reports a non-success factorization status.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn orgqr(
         &self,
         dtype: CudaDataType,
@@ -2614,57 +2659,59 @@ impl CusolverDnHandle {
         info: *mut i32,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.sorgqr)(
-                self.raw,
-                m,
-                n,
-                k,
-                a.cast(),
-                lda,
-                tau.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dorgqr)(
-                self.raw,
-                m,
-                n,
-                k,
-                a.cast(),
-                lda,
-                tau.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cungqr)(
-                self.raw,
-                m,
-                n,
-                k,
-                a.cast(),
-                lda,
-                tau.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zungqr)(
-                self.raw,
-                m,
-                n,
-                k,
-                a.cast(),
-                lda,
-                tau.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*orgqr")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.sorgqr)(
+                    self.raw,
+                    m,
+                    n,
+                    k,
+                    a.cast(),
+                    lda,
+                    tau.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dorgqr)(
+                    self.raw,
+                    m,
+                    n,
+                    k,
+                    a.cast(),
+                    lda,
+                    tau.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cungqr)(
+                    self.raw,
+                    m,
+                    n,
+                    k,
+                    a.cast(),
+                    lda,
+                    tau.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zungqr)(
+                    self.raw,
+                    m,
+                    n,
+                    k,
+                    a.cast(),
+                    lda,
+                    tau.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*orgqr")
+        }
     }
 
     /// Query the workspace required by the standard SVD routine.
@@ -2709,6 +2756,7 @@ impl CusolverDnHandle {
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
     /// leading dimensions, device pointers, Jacobi parameters, dtype, or
     /// reports another non-success status.
+    #[allow(clippy::too_many_arguments)]
     pub fn gesvdj_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -2812,6 +2860,7 @@ impl CusolverDnHandle {
     ///
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
     /// reports a non-success SVD status.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn gesvd(
         &self,
         dtype: CudaDataType,
@@ -2832,81 +2881,83 @@ impl CusolverDnHandle {
         info: *mut i32,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.sgesvd)(
-                self.raw,
-                jobu,
-                jobvt,
-                m,
-                n,
-                a.cast(),
-                lda,
-                s.cast(),
-                u.cast(),
-                ldu,
-                vt.cast(),
-                ldvt,
-                workspace.cast(),
-                lwork,
-                rwork.cast(),
-                info,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dgesvd)(
-                self.raw,
-                jobu,
-                jobvt,
-                m,
-                n,
-                a.cast(),
-                lda,
-                s.cast(),
-                u.cast(),
-                ldu,
-                vt.cast(),
-                ldvt,
-                workspace.cast(),
-                lwork,
-                rwork.cast(),
-                info,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cgesvd)(
-                self.raw,
-                jobu,
-                jobvt,
-                m,
-                n,
-                a.cast(),
-                lda,
-                s.cast(),
-                u.cast(),
-                ldu,
-                vt.cast(),
-                ldvt,
-                workspace.cast(),
-                lwork,
-                rwork.cast(),
-                info,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zgesvd)(
-                self.raw,
-                jobu,
-                jobvt,
-                m,
-                n,
-                a.cast(),
-                lda,
-                s.cast(),
-                u.cast(),
-                ldu,
-                vt.cast(),
-                ldvt,
-                workspace.cast(),
-                lwork,
-                rwork.cast(),
-                info,
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*gesvd")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.sgesvd)(
+                    self.raw,
+                    jobu,
+                    jobvt,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    vt.cast(),
+                    ldvt,
+                    workspace.cast(),
+                    lwork,
+                    rwork.cast(),
+                    info,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dgesvd)(
+                    self.raw,
+                    jobu,
+                    jobvt,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    vt.cast(),
+                    ldvt,
+                    workspace.cast(),
+                    lwork,
+                    rwork.cast(),
+                    info,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cgesvd)(
+                    self.raw,
+                    jobu,
+                    jobvt,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    vt.cast(),
+                    ldvt,
+                    workspace.cast(),
+                    lwork,
+                    rwork.cast(),
+                    info,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zgesvd)(
+                    self.raw,
+                    jobu,
+                    jobvt,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    vt.cast(),
+                    ldvt,
+                    workspace.cast(),
+                    lwork,
+                    rwork.cast(),
+                    info,
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*gesvd")
+        }
     }
 
     /// Execute the Jacobi SVD routine through cuSOLVER.
@@ -2922,6 +2973,7 @@ impl CusolverDnHandle {
     ///
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments,
     /// Jacobi parameters, or reports a non-success SVD status.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn gesvdj(
         &self,
         dtype: CudaDataType,
@@ -2942,81 +2994,83 @@ impl CusolverDnHandle {
         params: &GesvdjInfo<'_>,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.sgesvdj)(
-                self.raw,
-                jobz,
-                econ,
-                m,
-                n,
-                a.cast(),
-                lda,
-                s.cast(),
-                u.cast(),
-                ldu,
-                v.cast(),
-                ldv,
-                workspace.cast(),
-                lwork,
-                info,
-                params.raw(),
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dgesvdj)(
-                self.raw,
-                jobz,
-                econ,
-                m,
-                n,
-                a.cast(),
-                lda,
-                s.cast(),
-                u.cast(),
-                ldu,
-                v.cast(),
-                ldv,
-                workspace.cast(),
-                lwork,
-                info,
-                params.raw(),
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cgesvdj)(
-                self.raw,
-                jobz,
-                econ,
-                m,
-                n,
-                a.cast(),
-                lda,
-                s.cast(),
-                u.cast(),
-                ldu,
-                v.cast(),
-                ldv,
-                workspace.cast(),
-                lwork,
-                info,
-                params.raw(),
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zgesvdj)(
-                self.raw,
-                jobz,
-                econ,
-                m,
-                n,
-                a.cast(),
-                lda,
-                s.cast(),
-                u.cast(),
-                ldu,
-                v.cast(),
-                ldv,
-                workspace.cast(),
-                lwork,
-                info,
-                params.raw(),
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*gesvdj")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.sgesvdj)(
+                    self.raw,
+                    jobz,
+                    econ,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    v.cast(),
+                    ldv,
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params.raw(),
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dgesvdj)(
+                    self.raw,
+                    jobz,
+                    econ,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    v.cast(),
+                    ldv,
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params.raw(),
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cgesvdj)(
+                    self.raw,
+                    jobz,
+                    econ,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    v.cast(),
+                    ldv,
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params.raw(),
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zgesvdj)(
+                    self.raw,
+                    jobz,
+                    econ,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    v.cast(),
+                    ldv,
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params.raw(),
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*gesvdj")
+        }
     }
 
     /// Query the workspace required by a symmetric/Hermitian eigensolver.
@@ -3026,6 +3080,7 @@ impl CusolverDnHandle {
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
     /// leading dimension, device pointers, dtype, or reports another
     /// non-success status.
+    #[allow(clippy::too_many_arguments)]
     pub fn syevd_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -3099,6 +3154,7 @@ impl CusolverDnHandle {
     ///
     /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
     /// reports a non-success eigensolver status, including non-convergence.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn syevd(
         &self,
         dtype: CudaDataType,
@@ -3113,57 +3169,59 @@ impl CusolverDnHandle {
         info: *mut i32,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.ssyevd)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dsyevd)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cheevd)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zheevd)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*syevd")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.ssyevd)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dsyevd)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cheevd)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zheevd)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*syevd")
+        }
     }
 
     /// Query the workspace required by the Jacobi symmetric/Hermitian
@@ -3271,62 +3329,64 @@ impl CusolverDnHandle {
         params: &SyevjInfo<'_>,
         op: &'static str,
     ) -> Result<()> {
-        let params = params.raw();
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.ssyevj)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-                params,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dsyevj)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-                params,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cheevj)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-                params,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zheevj)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-                params,
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*syevj")
+        unsafe {
+            let params = params.raw();
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.ssyevj)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dsyevj)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cheevj)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zheevj)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params,
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*syevj")
+        }
     }
 
     /// Query the workspace required by the batched Jacobi eigensolver.
@@ -3444,66 +3504,68 @@ impl CusolverDnHandle {
         batch_size: i32,
         op: &'static str,
     ) -> Result<()> {
-        let params = params.raw();
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.ssyevj_batched)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-                params,
-                batch_size,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dsyevj_batched)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-                params,
-                batch_size,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.cheevj_batched)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-                params,
-                batch_size,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.zheevj_batched)(
-                self.raw,
-                jobz,
-                uplo,
-                n,
-                a.cast(),
-                lda,
-                w.cast(),
-                workspace.cast(),
-                lwork,
-                info,
-                params,
-                batch_size,
-            ),
-        };
-        self.lib.check_status(status, op, "cusolverDn*syevjBatched")
+        unsafe {
+            let params = params.raw();
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.ssyevj_batched)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params,
+                    batch_size,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dsyevj_batched)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params,
+                    batch_size,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cheevj_batched)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params,
+                    batch_size,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zheevj_batched)(
+                    self.raw,
+                    jobz,
+                    uplo,
+                    n,
+                    a.cast(),
+                    lda,
+                    w.cast(),
+                    workspace.cast(),
+                    lwork,
+                    info,
+                    params,
+                    batch_size,
+                ),
+            };
+            self.lib.check_status(status, op, "cusolverDn*syevjBatched")
+        }
     }
 }
 
@@ -3602,16 +3664,18 @@ impl CublasHandle {
         ldc: i32,
         op: &'static str,
     ) -> Result<()> {
-        let function = match dtype {
-            CudaDataType::F32 => self.lib.vtable.sgemm,
-            CudaDataType::F64 => self.lib.vtable.dgemm,
-            CudaDataType::Complex32 => self.lib.vtable.cgemm,
-            CudaDataType::Complex64 => self.lib.vtable.zgemm,
-        };
-        let status = function(
-            self.raw, trans_a, trans_b, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc,
-        );
-        self.lib.check_status(status, op, "cublas*gemm_v2")
+        unsafe {
+            let function = match dtype {
+                CudaDataType::F32 => self.lib.vtable.sgemm,
+                CudaDataType::F64 => self.lib.vtable.dgemm,
+                CudaDataType::Complex32 => self.lib.vtable.cgemm,
+                CudaDataType::Complex64 => self.lib.vtable.zgemm,
+            };
+            let status = function(
+                self.raw, trans_a, trans_b, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc,
+            );
+            self.lib.check_status(status, op, "cublas*gemm_v2")
+        }
     }
 
     /// Execute a triangular solve through cuBLAS.
@@ -3625,6 +3689,7 @@ impl CublasHandle {
     ///
     /// Returns `Error::BackendFailure` when cuBLAS rejects the flags, dtype,
     /// pointers, dimensions, or reports a singular/backend status.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn trsm(
         &self,
         dtype: CudaDataType,
@@ -3641,65 +3706,67 @@ impl CublasHandle {
         ldb: i32,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.strsm)(
-                self.raw,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n,
-                alpha.cast(),
-                a.cast(),
-                lda,
-                b.cast(),
-                ldb,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dtrsm)(
-                self.raw,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n,
-                alpha.cast(),
-                a.cast(),
-                lda,
-                b.cast(),
-                ldb,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.ctrsm)(
-                self.raw,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n,
-                alpha.cast(),
-                a.cast(),
-                lda,
-                b.cast(),
-                ldb,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.ztrsm)(
-                self.raw,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n,
-                alpha.cast(),
-                a.cast(),
-                lda,
-                b.cast(),
-                ldb,
-            ),
-        };
-        self.lib.check_status(status, op, "cublas*trsm_v2")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.strsm)(
+                    self.raw,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n,
+                    alpha.cast(),
+                    a.cast(),
+                    lda,
+                    b.cast(),
+                    ldb,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dtrsm)(
+                    self.raw,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n,
+                    alpha.cast(),
+                    a.cast(),
+                    lda,
+                    b.cast(),
+                    ldb,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.ctrsm)(
+                    self.raw,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n,
+                    alpha.cast(),
+                    a.cast(),
+                    lda,
+                    b.cast(),
+                    ldb,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.ztrsm)(
+                    self.raw,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n,
+                    alpha.cast(),
+                    a.cast(),
+                    lda,
+                    b.cast(),
+                    ldb,
+                ),
+            };
+            self.lib.check_status(status, op, "cublas*trsm_v2")
+        }
     }
 
     /// Execute a batched triangular solve through cuBLAS.
@@ -3715,6 +3782,7 @@ impl CublasHandle {
     /// Returns `Error::BackendFailure` when cuBLAS rejects the flags, dtype,
     /// pointers, batch count, dimensions, or reports a singular/backend
     /// status.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn trsm_batched(
         &self,
         dtype: CudaDataType,
@@ -3732,69 +3800,71 @@ impl CublasHandle {
         batch_count: i32,
         op: &'static str,
     ) -> Result<()> {
-        let status = match dtype {
-            CudaDataType::F32 => (self.lib.vtable.strsm_batched)(
-                self.raw,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n,
-                alpha.cast(),
-                a_array.cast(),
-                lda,
-                b_array.cast(),
-                ldb,
-                batch_count,
-            ),
-            CudaDataType::F64 => (self.lib.vtable.dtrsm_batched)(
-                self.raw,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n,
-                alpha.cast(),
-                a_array.cast(),
-                lda,
-                b_array.cast(),
-                ldb,
-                batch_count,
-            ),
-            CudaDataType::Complex32 => (self.lib.vtable.ctrsm_batched)(
-                self.raw,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n,
-                alpha.cast(),
-                a_array.cast(),
-                lda,
-                b_array.cast(),
-                ldb,
-                batch_count,
-            ),
-            CudaDataType::Complex64 => (self.lib.vtable.ztrsm_batched)(
-                self.raw,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n,
-                alpha.cast(),
-                a_array.cast(),
-                lda,
-                b_array.cast(),
-                ldb,
-                batch_count,
-            ),
-        };
-        self.lib.check_status(status, op, "cublas*trsmBatched")
+        unsafe {
+            let status = match dtype {
+                CudaDataType::F32 => (self.lib.vtable.strsm_batched)(
+                    self.raw,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n,
+                    alpha.cast(),
+                    a_array.cast(),
+                    lda,
+                    b_array.cast(),
+                    ldb,
+                    batch_count,
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dtrsm_batched)(
+                    self.raw,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n,
+                    alpha.cast(),
+                    a_array.cast(),
+                    lda,
+                    b_array.cast(),
+                    ldb,
+                    batch_count,
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.ctrsm_batched)(
+                    self.raw,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n,
+                    alpha.cast(),
+                    a_array.cast(),
+                    lda,
+                    b_array.cast(),
+                    ldb,
+                    batch_count,
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.ztrsm_batched)(
+                    self.raw,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n,
+                    alpha.cast(),
+                    a_array.cast(),
+                    lda,
+                    b_array.cast(),
+                    ldb,
+                    batch_count,
+                ),
+            };
+            self.lib.check_status(status, op, "cublas*trsmBatched")
+        }
     }
 }
 

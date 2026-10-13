@@ -230,7 +230,7 @@ pub(crate) fn select_pivot<
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn swap_columns<E: CubePrimitive>(
+pub(crate) fn swap_columns<E: CubePrimitive + Scalar>(
     work: &mut Tensor<E>,
     permutation: &mut Tensor<i64>,
     pivots: &Tensor<i64>,
@@ -312,7 +312,7 @@ pub(crate) fn reflector_real<
         row = step + 1usize + UNIT_POS as usize;
         while row < m {
             let offset = matrix_base + row + step * m;
-            work[offset] = work[offset] / denominator;
+            work[offset] /= denominator;
             row += plane_width;
         }
         if UNIT_POS == 0 {
@@ -381,7 +381,7 @@ pub(crate) fn reflector_c32(
         row = step + 1usize + UNIT_POS as usize;
         while row < m {
             let offset = matrix_base + row + step * m;
-            work[offset] = work[offset] / denominator;
+            work[offset] /= denominator;
             row += plane_width;
         }
         if UNIT_POS == 0 {
@@ -440,7 +440,7 @@ pub(crate) fn reflector_c64(
         row = step + 1usize + UNIT_POS as usize;
         while row < m {
             let offset = matrix_base + row + step * m;
-            work[offset] = work[offset] / denominator;
+            work[offset] /= denominator;
             row += plane_width;
         }
         if UNIT_POS == 0 {
@@ -479,7 +479,7 @@ pub(crate) fn apply_reflector_real<
         } else {
             packed[packed_base + row + step * m]
         };
-        dot = dot + vector * target[target_base + row + column * m];
+        dot += vector * target[target_base + row + column * m];
         row += plane_width;
     }
     dot = plane_sum(dot) * coeff[step + batch * k];
@@ -491,7 +491,7 @@ pub(crate) fn apply_reflector_real<
             packed[packed_base + row + step * m]
         };
         let offset = target_base + row + column * m;
-        target[offset] = target[offset] - vector * dot;
+        target[offset] -= vector * dot;
         row += plane_width;
     }
 }
@@ -524,7 +524,7 @@ pub(crate) fn apply_reflector_c32(
         } else {
             packed[packed_base + row + step * m]
         };
-        dot = dot + vector.conj() * target[target_base + row + column * m];
+        dot += vector.conj() * target[target_base + row + column * m];
         row += plane_width;
     }
     let dot_real = plane_sum(dot.real_val());
@@ -539,7 +539,7 @@ pub(crate) fn apply_reflector_c32(
             packed[packed_base + row + step * m]
         };
         let offset = target_base + row + column * m;
-        target[offset] = target[offset] - vector * dot;
+        target[offset] -= vector * dot;
         row += plane_width;
     }
 }
@@ -572,7 +572,7 @@ pub(crate) fn apply_reflector_c64(
         } else {
             packed[packed_base + row + step * m]
         };
-        dot = dot + vector.conj() * target[target_base + row + column * m];
+        dot += vector.conj() * target[target_base + row + column * m];
         row += plane_width;
     }
     let dot_real = plane_sum(dot.real_val());
@@ -587,13 +587,13 @@ pub(crate) fn apply_reflector_c64(
             packed[packed_base + row + step * m]
         };
         let offset = target_base + row + column * m;
-        target[offset] = target[offset] - vector * dot;
+        target[offset] -= vector * dot;
         row += plane_width;
     }
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn initialize_q<E: CubePrimitive>(q: &mut Tensor<E>, m: usize, k: usize) {
+pub(crate) fn initialize_q<E: CubePrimitive + Scalar>(q: &mut Tensor<E>, m: usize, k: usize) {
     let pos = ABSOLUTE_POS as usize;
     if pos < q.len() {
         let row = pos % m;
@@ -607,7 +607,7 @@ pub(crate) fn initialize_q<E: CubePrimitive>(q: &mut Tensor<E>, m: usize, k: usi
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn extract_r<E: CubePrimitive>(
+pub(crate) fn extract_r<E: CubePrimitive + Scalar>(
     work: &Tensor<E>,
     r: &mut Tensor<E>,
     m: usize,
@@ -629,7 +629,7 @@ pub(crate) fn extract_r<E: CubePrimitive>(
 
 #[cube(launch_unchecked)]
 pub(crate) fn prefix_rank_real<
-    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>,
+    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F> + LaunchArg,
 >(
     r: &Tensor<F>,
     rank: &mut Tensor<i64>,

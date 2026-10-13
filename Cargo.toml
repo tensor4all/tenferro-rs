@@ -129,3 +129,12 @@ incremental = true
 inherits = "test"
 incremental = false
 strip = "symbols"
+
+# The CubeK 0.3.0 release the workspace pins takes its CubeCL from the registry
+# (`t4a-cubecl = { version = "=0.11.0" }`), while this workspace pins the fork's
+# git revision; without this patch both copies land in the graph and their
+# `Client`/`Handle`/`TensorBinding` types do not mix. The patch points the
+# registry name at the same revision, so one copy remains.
+[patch.crates-io]
+t4a-cubecl = { git = "https://github.com/tensor4all/cubecl", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9" }
+t4a-cubecl-common = { git = "https://github.com/tensor4all/cubecl", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9" }
