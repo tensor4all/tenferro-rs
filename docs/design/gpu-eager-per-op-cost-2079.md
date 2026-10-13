@@ -117,7 +117,10 @@ reading taken with the same harness before and after a change:
 | `alloc_output` + drop alone | 0.73 us/op | - |
 
 The retained arm is unchanged by design: holding every result defeats the pool, and
-#2079 says the pool must not be "fixed" to satisfy that number. The harness is a
+#2079 says the pool must not be "fixed" to satisfy that number. Re-read after
+merging `main` (which carries #2149's compact-layout cache, the same per-op
+neighbourhood) the streaming samples are 8.65-8.79 us, best **8.65 us/op** - the
+same reading within this harness's noise, so #2149 neither helped nor hurt it. The harness is a
 *different* harness from the benchmark suite's (one process, one session around the
 loop, f64), so the absolute values are not the recorded 9.11 / 5.36 pair - what is
 comparable is a before/after delta measured here, and the official arms remain the
