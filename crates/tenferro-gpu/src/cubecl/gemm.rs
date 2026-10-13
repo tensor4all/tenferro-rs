@@ -819,6 +819,29 @@ fn write_operand<'a, 'b, T: CutensorScalar + Scalar>(
 /// a materialized copy. The device descriptors already carry the operand
 /// strides (see [`dot_general_read_into_accum`]), so view operands are consumed
 /// in place here instead.
+/// One rule, shared with the compiler pass and the eager executor: a degenerate
+/// `dot_general` is the elementary operation it actually is, not a contraction,
+/// so a direct session call does not pay the contraction machinery either
+/// (invariant I4). Falls through to the cuTENSOR path for everything else.
+fn rewrite_degenerate_read(
+    backend: &mut CudaBackend,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+) -> Option<crate::Result<Tensor>> {
+    match tenferro_tensor::degenerate_dot_kind(config, lhs.shape(), rhs.shape()) {
+        Some(tenferro_tensor::DegenerateDotKind::Hadamard) => {
+            Some(crate::cubecl::ops::mul_read(backend, lhs, rhs))
+        }
+        Some(tenferro_tensor::DegenerateDotKind::FullContraction) => Some((|| {
+            let product = crate::cubecl::ops::mul_read(backend, lhs, rhs)?;
+            let axes: Vec<usize> = (0..product.shape().len()).collect();
+            crate::cubecl::ops::reduce_sum_read(backend, TensorRead::from_tensor(&product), &axes)
+        })()),
+        _ => None,
+    }
+}
+
 pub(super) fn dot_general_read_allocating(
     backend: &mut CudaBackend,
     lhs: TensorRead<'_>,
@@ -827,6 +850,11 @@ pub(super) fn dot_general_read_allocating(
     lhs_conj: bool,
     rhs_conj: bool,
 ) -> crate::Result<Tensor> {
+    if !lhs_conj && !rhs_conj {
+        if let Some(result) = rewrite_degenerate_read(backend, lhs.clone(), rhs.clone(), config) {
+            return result;
+        }
+    }
     if let (Some(lhs_owned), Some(rhs_owned)) = (lhs.as_tensor(), rhs.as_tensor()) {
         return dot_general_with_conj(backend, lhs_owned, rhs_owned, config, lhs_conj, rhs_conj);
     }
