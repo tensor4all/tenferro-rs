@@ -222,3 +222,122 @@ fn raw_resource_guard_is_runtime_scoped_and_type_keyed() {
             .unwrap();
     });
 }
+
+/// Entering a raw scope must not be a host barrier (tenferro-rs #2078).
+///
+/// A downstream single-scope forward interleaves fused raw kernels with eager
+/// ops. If every scope blocked until queued device work finished, that pattern
+/// could not be used at all: the host would pay the whole device time on entry.
+#[test]
+#[ignore = "requires CUDA"]
+fn raw_session_entry_is_not_a_host_barrier() {
+    use std::time::{Duration, Instant};
+
+    use crate::DotGeneralConfig;
+    use tenferro_tensor::TensorRead;
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let runtime = backend.runtime().clone();
+    let n = 4096usize;
+    let lhs = crate::cuda::upload_tensor(&runtime, &tensor_f32(vec![n, n], vec![1.0f32; n * n]))
+        .expect("upload lhs");
+    let rhs = crate::cuda::upload_tensor(&runtime, &tensor_f32(vec![n, n], vec![1.0f32; n * n]))
+        .expect("upload rhs");
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+    // Queue several tens of milliseconds of device work.
+    let mut queued = Vec::new();
+    for _ in 0..8 {
+        let out = backend
+            .with_backend_session(|session| {
+                session.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+            })
+            .unwrap()
+            .unwrap();
+        queued.push(out);
+    }
+    // Two empty scopes: the first dispatches the queue, the second is the one a
+    // fence would make wait for the queued GEMMs.
+    let mut empty = Duration::ZERO;
+    with_cuda_exec(&mut backend, |session| {
+        let start = Instant::now();
+        session
+            .with_raw("test.raw_entry_no_barrier", |_raw| Ok(()))
+            .unwrap();
+        session
+            .with_raw("test.raw_entry_no_barrier", |_raw| Ok(()))
+            .unwrap();
+        empty = start.elapsed();
+    });
+    let queued_device_time = Duration::from_millis(30);
+    assert!(
+        empty < Duration::from_millis(5),
+        "two empty raw scopes behind queued device work took {empty:?}; entering a scope must \
+         not wait for the device (queued work is well above {queued_device_time:?})"
+    );
+    // The queued work is still ordered on the same stream and still correct.
+    runtime.synchronize().expect("synchronize");
+    let back = crate::cuda::download_tensor(&runtime, &queued[0]).expect("download");
+    assert_eq!(back.as_slice::<f32>().unwrap()[0], n as f32);
+}
+
+/// A raw session reuses the runtime's cuBLAS handle instead of creating one
+/// per session, which is what tenferro-rs #2083 asks for: the documented raw
+/// vendor pattern used to cost `cublasCreate` + `cublasDestroy` (0.45 ms and
+/// 10 MiB per handle on the reporting card) on every call.
+#[test]
+#[ignore = "requires CUDA"]
+fn raw_session_reuses_the_runtime_cublas_handle() {
+    use cudarc::cublas::sys as cublas_sys;
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let mut handles = Vec::new();
+    with_cuda_exec(&mut backend, |session| {
+        for _ in 0..2 {
+            let handle = session
+                .with_raw("test.raw_cublas", |raw| {
+                    raw.with_cublas_handle(
+                        "test.raw_cublas",
+                        cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+                        |handle| Ok(handle as usize),
+                    )
+                })
+                .unwrap();
+            assert_ne!(handle, 0, "the runtime must hand out a live handle");
+            handles.push(handle);
+        }
+    });
+    assert_eq!(
+        handles[0], handles[1],
+        "two raw scopes of one runtime must use the same cached cuBLAS handle"
+    );
+
+    // The handle really is the runtime's own: a vendor enqueue that does not go
+    // through a raw session reaches the same cached handle.
+    let runtime = backend.runtime().clone();
+    let runtime_handle = runtime
+        .with_current_context("test.raw_cublas_runtime", || {
+            runtime.with_cublas_handle(
+                "test.raw_cublas_runtime",
+                cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+                Vec::new(),
+                |handle| Ok(handle as usize),
+            )
+        })
+        .expect("primary context")
+        .expect("runtime cuBLAS handle");
+    assert_eq!(
+        runtime_handle, handles[0],
+        "the raw accessor must return the runtime's cached handle"
+    );
+}

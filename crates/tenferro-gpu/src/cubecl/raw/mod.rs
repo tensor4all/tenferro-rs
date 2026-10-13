@@ -33,6 +33,8 @@ use std::rc::Rc;
 
 use tenferro_tensor::{TensorRank, TypedTensor};
 
+use cudarc::cublas::sys as cublas_sys;
+
 use super::runtime::CudaRuntime;
 use super::{CudaExtensionCache, CudaExtensionCacheGuard, CudaRuntimeIdentity};
 
@@ -251,6 +253,57 @@ impl<'s> Session<'s> {
             _scope: PhantomData,
             _not_send_sync: PhantomData,
         }
+    }
+
+    /// Run one cuBLAS enqueue with the runtime's stream-bound handle.
+    ///
+    /// The handle belongs to the runtime and is cached per CubeCL stream slot,
+    /// already bound to this session's stream, and re-bound by tenferro when the
+    /// slot changes. A raw session therefore does not have to create and destroy
+    /// its own handle: on an RTX 3060 that pattern costs about 0.45 ms and 10 MiB
+    /// per session, against the 7-10 ms of an eight-token forward that uses it
+    /// (tenferro-rs #2083). The per-stream slot lock is held across `execute`, so
+    /// concurrent sessions of one runtime cannot race the handle's mutable
+    /// state, and the handle is usable only inside the closure.
+    ///
+    /// `pointer_mode` selects how cuBLAS reads scalar arguments: pass
+    /// [`cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST`] for host scalars such as
+    /// `&alpha`, and `..._DEVICE` for device-resident scalars.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Io`] when the cuBLAS library is not loadable,
+    /// [`crate::Error::RuntimeState`] when the handle cache cannot be locked, or
+    /// [`crate::Error::BackendSource`] when cuBLAS rejects the configuration or
+    /// the enqueue.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::cudarc::cublas::sys as cublas_sys;
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible.
+    /// fn check(session: &mut CudaExecSession<'_>) -> tenferro_tensor::Result<()> {
+    ///     session.with_raw("test.raw_cublas", |raw| {
+    ///         raw.with_cublas_handle(
+    ///             "test.raw_cublas",
+    ///             cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+    ///             |_handle| Ok(()),
+    ///         )
+    ///     })?;
+    ///     Ok(())
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn with_cublas_handle<R>(
+        &self,
+        op: &'static str,
+        pointer_mode: cublas_sys::cublasPointerMode_t,
+        execute: impl FnOnce(cublas_sys::cublasHandle_t) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        self.runtime
+            .with_cublas_handle(op, pointer_mode, Vec::new(), execute)
     }
 
     /// Build a checked read-only device reference for a GPU-backed tensor.
