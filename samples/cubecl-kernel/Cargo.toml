@@ -10,18 +10,19 @@ resolver = "2"
 
 [dependencies]
 # Downstream-style package line: downstream extern kernel crates depend on the
-# published crates.io `t4a-cubecl = =0.10.2`, never a git rev. The
+# published crates.io `t4a-cubecl = =0.11.0`, never a git rev. The
 # `[patch.crates-io]` below redirects this standalone workspace to the same
 # fork revision tenferro-gpu pins, so all crates share one CubeCL runtime type.
-cubecl = { package = "t4a-cubecl", version = "=0.10.2", features = ["cuda"] }
-cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.10.2" }
+cubecl = { package = "t4a-cubecl", version = "=0.11.0", features = ["cuda"] }
+cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.11.0" }
 tenferro-gpu = { path = "../../crates/tenferro-gpu", features = ["cuda"] }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 
-# Standalone-workspace fork pin (WGPU exact-submission patch, not yet
-# upstream): redirects this sample's crates.io CubeCL line to the same fork
-# revision the tenferro workspace deps pin, keeping a single CubeCL runtime
-# type across the sample and tenferro-gpu.
+# Standalone-workspace fork pin: redirects this sample's crates.io CubeCL
+# line to the same fork revision the tenferro workspace deps pin, keeping a
+# single CubeCL runtime type across the sample and tenferro-gpu. The version
+# above must match the patched revision's version (`=0.11.0`), or cargo ignores
+# the patch and the 0.10.2 registry copy stays in the graph.
 [patch.crates-io]
 t4a-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9" }
 t4a-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9" }
