@@ -1,6 +1,8 @@
 use std::marker::PhantomData;
 
-use cubecl::prelude::{CubeDim, CubeElement, CubeKernel, CubePrimitive, KernelId, KernelLauncher};
+use cubecl::prelude::{
+    BufferIOAttr, CubeDim, CubeElement, CubeKernel, CubePrimitive, KernelId, KernelLauncher,
+};
 
 use super::classify::ClassifiedFusion;
 use super::codegen::build_kernel_definition;
@@ -47,6 +49,10 @@ where
     launcher.with_scope(|scope| scope.device_properties(runtime.client().properties()));
 
     let elem_size = std::mem::size_of::<T>();
+    // The generated launchers declare every `&Tensor` input read-only; a manual
+    // launcher starts at `ReadWrite`, which would taint these inputs as written
+    // on the fallback the runtime uses when the fused kernel never compiled.
+    launcher.declare_io(BufferIOAttr::ReadOnly);
     for arg in input_args {
         launcher.register_buffer(arg, elem_size);
     }
