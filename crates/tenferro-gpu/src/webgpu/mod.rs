@@ -8,7 +8,6 @@
 //! devices-and-gpu guide compares this subset with CUDA.
 
 use cubecl::prelude::{CubeCount, CubeDim, CubeElement, CubeType, Sequence, TensorBinding};
-use cubecl_wgpu::WgpuRuntime;
 use std::fmt;
 use std::sync::Arc;
 
@@ -114,7 +113,7 @@ impl WebGpuBuffer {
         };
         let managed = rt
             .client()
-            .get_resource(handle.clone())
+            .get_resource::<cubecl_wgpu::WgpuServer<cubecl_wgpu::AutoCompiler>>(handle.clone())
             .map_err(|error| crate::Error::backend_source(op, error))?;
         let allocation_id = AllocationId::from_backend_id(managed.resource().allocation_id());
         Ok(Self {
@@ -428,7 +427,7 @@ fn typed_tensor_binding_with_layout<T: CubeElement + TensorScalar + Clone>(
     shape: &[usize],
     strides: &[usize],
     op: &'static str,
-) -> crate::Result<TensorBinding<WgpuRuntime>> {
+) -> crate::Result<TensorBinding> {
     if shape.len() != strides.len() {
         return Err(Error::rank_mismatch(op, shape.len(), strides.len()));
     }

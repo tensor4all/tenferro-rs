@@ -10,13 +10,14 @@ use crate::cubecl::dispatch::{
 };
 use crate::cubecl::runtime::CudaRuntime;
 use crate::types::{TensorScalar, TypedTensor};
+use cubecl::frontend::Scalar;
 
 pub(crate) fn launch<T>(
     runtime: &CudaRuntime,
     classified: ClassifiedFusion<'_, T>,
 ) -> crate::Result<Vec<TypedTensor<T>>>
 where
-    T: CubeElement + TensorScalar + CubePrimitive + Clone,
+    T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar,
 {
     let mut outputs = Vec::with_capacity(classified.plan.outputs().len());
     for _ in classified.plan.outputs() {
@@ -37,15 +38,20 @@ where
         return Ok(outputs);
     }
 
-    let settings = cubecl::prelude::KernelSettings::default().address_type(classified.address_type);
+    let settings = cubecl::prelude::KernelSettings::new(
+        cube_dim_1d().into(),
+        cubecl::ir::settings::ExecutionMode::Unchecked,
+        classified.address_type,
+    );
     let mut launcher = KernelLauncher::new(settings);
-    let item = launcher.with_scope(|scope| T::as_type(scope));
+    launcher.with_scope(|scope| scope.device_properties(runtime.client().properties()));
 
+    let elem_size = std::mem::size_of::<T>();
     for arg in input_args {
-        launcher.register_array(arg, item);
+        launcher.register_buffer(arg, elem_size);
     }
     for arg in output_args {
-        launcher.register_array(arg, item);
+        launcher.register_buffer(arg, elem_size);
     }
 
     let kernel = FusedElementwiseKernel::<T> {
@@ -54,18 +60,16 @@ where
         cube_dim: cube_dim_1d(),
         _marker: PhantomData,
     };
-    unsafe {
-        // SAFETY: `ClassifiedFusion` proves all inputs share one dense output
-        // shape, and `typed_tensor_array_arg` validates every raw array length
-        // against its tensor shape. The generated kernel reads `out.len()`,
-        // launches over `classified.n_elements`, and guards the body with
-        // `ABSOLUTE_POS < out.len()`.
-        launcher.launch_unchecked(
-            cube_count_for_len(classified.n_elements)?,
-            kernel,
-            runtime.client(),
-        );
-    }
+    // SAFETY: `ClassifiedFusion` proves all inputs share one dense output
+    // shape, and `typed_tensor_array_arg` validates every raw array length
+    // against its tensor shape. The generated kernel reads `out.len()`,
+    // launches over `classified.n_elements`, and guards the body with
+    // `ABSOLUTE_POS < out.len()`.
+    launcher.launch(
+        cube_count_for_len(classified.n_elements)?,
+        kernel,
+        runtime.client(),
+    );
     Ok(outputs)
 }
 
@@ -88,11 +92,11 @@ where
     fn id(&self) -> KernelId {
         KernelId::new::<Self>()
             .info(self.plan.clone())
-            .cube_dim(self.cube_dim)
+            .cube_dim(self.cube_dim.into())
             .address_type(self.address_type)
     }
 
-    fn address_type(&self) -> cubecl::prelude::StorageType {
+    fn address_type(&self) -> cubecl::prelude::ElemType {
         self.address_type.unsigned_type()
     }
 }

@@ -49,9 +49,9 @@ struct ResolvedReduceLaunch {
     output_len: usize,
 }
 
-fn validate_launch<R: Runtime>(
-    input: &TensorBinding<R>,
-    output: &TensorBinding<R>,
+fn validate_launch(
+    input: &TensorBinding,
+    output: &TensorBinding,
     axis: usize,
 ) -> Result<ReduceProblem> {
     validate_reduce_problem(&input.shape, &output.shape, axis)
@@ -88,8 +88,8 @@ fn validate_reduce_problem(
     })
 }
 
-fn launch_with_unit_settings<R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_with_unit_settings(
+    client: &Client,
     problem: ReduceProblem,
 ) -> Result<ResolvedReduceLaunch> {
     let settings = unit_launch_settings(client, problem)?;
@@ -103,8 +103,8 @@ fn launch_with_unit_settings<R: Runtime>(
     })
 }
 
-fn launch_with_plane_settings<R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_with_plane_settings(
+    client: &Client,
     problem: ReduceProblem,
 ) -> Result<ResolvedReduceLaunch> {
     let plane_width = client.properties().hardware.plane_size_max.max(1);
@@ -152,10 +152,7 @@ fn validate_plane_strategy(
     Ok(())
 }
 
-fn auto_reduce_strategy<R: Runtime>(
-    client: &ComputeClient<R>,
-    problem: ReduceProblem,
-) -> Result<ResolvedReduceStrategy> {
+fn auto_reduce_strategy(client: &Client, problem: ReduceProblem) -> Result<ResolvedReduceStrategy> {
     let unit_axis_limit = client.properties().hardware.plane_size_max.max(1) as usize;
     auto_reduce_strategy_for_capabilities(
         problem.reduce_len,
@@ -184,8 +181,8 @@ fn auto_reduce_strategy_for_capabilities(
     }
 }
 
-fn resolve_launch_settings<R: Runtime>(
-    client: &ComputeClient<R>,
+fn resolve_launch_settings(
+    client: &Client,
     problem: ReduceProblem,
     strategy: ReduceStrategy,
 ) -> Result<ResolvedReduceLaunch> {
@@ -198,10 +195,10 @@ fn resolve_launch_settings<R: Runtime>(
 }
 
 /// Launch a floating-point sum reduction.
-pub(crate) fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_sum_float<F: Float + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -215,7 +212,7 @@ pub(crate) fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_sum_float::launch_unchecked::<F, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_sum_float::launch_unchecked::<F>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -225,7 +222,7 @@ pub(crate) fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
                 launch.output_len,
             ),
             ResolvedReduceStrategy::Plane => {
-                kernels::reduce_sum_float_plane::launch_unchecked::<F, R>(
+                kernels::reduce_sum_float_plane::launch_unchecked::<F>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,
@@ -242,10 +239,10 @@ pub(crate) fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
 }
 
 /// Launch a floating-point sum-of-squares reduction.
-pub(crate) fn launch_sum_squares_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_sum_squares_float<F: Float + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -258,7 +255,7 @@ pub(crate) fn launch_sum_squares_float<R: Runtime, F: Float + CubeElement>(
         // covers exactly `problem.reduce_count` guarded output elements.
         match launch.kind {
             ResolvedReduceStrategy::Unit => {
-                kernels::reduce_sum_squares_float::launch_unchecked::<F, R>(
+                kernels::reduce_sum_squares_float::launch_unchecked::<F>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,
@@ -269,7 +266,7 @@ pub(crate) fn launch_sum_squares_float<R: Runtime, F: Float + CubeElement>(
                 )
             }
             ResolvedReduceStrategy::Plane => {
-                kernels::reduce_sum_squares_float_plane::launch_unchecked::<F, R>(
+                kernels::reduce_sum_squares_float_plane::launch_unchecked::<F>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,
@@ -286,10 +283,10 @@ pub(crate) fn launch_sum_squares_float<R: Runtime, F: Float + CubeElement>(
 }
 
 /// Launch an integer sum reduction.
-pub(crate) fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_sum_int<I: Int + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -303,7 +300,7 @@ pub(crate) fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_sum_int::launch_unchecked::<I, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_sum_int::launch_unchecked::<I>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -312,17 +309,15 @@ pub(crate) fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
                 launch.axis,
                 launch.output_len,
             ),
-            ResolvedReduceStrategy::Plane => {
-                kernels::reduce_sum_int_plane::launch_unchecked::<I, R>(
-                    client,
-                    launch.cube_count,
-                    launch.cube_dim,
-                    input.into_tensor_arg(),
-                    output.into_tensor_arg(),
-                    launch.axis,
-                    launch.output_len,
-                )
-            }
+            ResolvedReduceStrategy::Plane => kernels::reduce_sum_int_plane::launch_unchecked::<I>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
         }
     }
 
@@ -330,10 +325,10 @@ pub(crate) fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
 }
 
 /// Launch a complex sum reduction.
-pub(crate) fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_sum_complex<C: ComplexCore + CubeElement + PlaneReduce>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -347,7 +342,7 @@ pub(crate) fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_sum_complex::launch_unchecked::<C, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_sum_complex::launch_unchecked::<C>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -357,7 +352,7 @@ pub(crate) fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
                 launch.output_len,
             ),
             ResolvedReduceStrategy::Plane => {
-                kernels::reduce_sum_complex_plane::launch_unchecked::<C, R>(
+                kernels::reduce_sum_complex_plane::launch_unchecked::<C>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,
@@ -374,10 +369,10 @@ pub(crate) fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
 }
 
 /// Launch a floating-point product reduction.
-pub(crate) fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_prod_float<F: Float + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -391,7 +386,7 @@ pub(crate) fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_prod_float::launch_unchecked::<F, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_prod_float::launch_unchecked::<F>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -401,7 +396,7 @@ pub(crate) fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
                 launch.output_len,
             ),
             ResolvedReduceStrategy::Plane => {
-                kernels::reduce_prod_float_plane::launch_unchecked::<F, R>(
+                kernels::reduce_prod_float_plane::launch_unchecked::<F>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,
@@ -418,10 +413,10 @@ pub(crate) fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
 }
 
 /// Launch an integer product reduction.
-pub(crate) fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_prod_int<I: Int + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -435,7 +430,7 @@ pub(crate) fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_prod_int::launch_unchecked::<I, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_prod_int::launch_unchecked::<I>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -444,17 +439,15 @@ pub(crate) fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
                 launch.axis,
                 launch.output_len,
             ),
-            ResolvedReduceStrategy::Plane => {
-                kernels::reduce_prod_int_plane::launch_unchecked::<I, R>(
-                    client,
-                    launch.cube_count,
-                    launch.cube_dim,
-                    input.into_tensor_arg(),
-                    output.into_tensor_arg(),
-                    launch.axis,
-                    launch.output_len,
-                )
-            }
+            ResolvedReduceStrategy::Plane => kernels::reduce_prod_int_plane::launch_unchecked::<I>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
         }
     }
 
@@ -462,10 +455,10 @@ pub(crate) fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
 }
 
 /// Launch a complex product reduction.
-pub(crate) fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_prod_complex<C: ComplexCore + CubeElement + PlaneReduce>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -479,7 +472,7 @@ pub(crate) fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_prod_complex::launch_unchecked::<C, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_prod_complex::launch_unchecked::<C>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -489,7 +482,7 @@ pub(crate) fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
                 launch.output_len,
             ),
             ResolvedReduceStrategy::Plane => {
-                kernels::reduce_prod_complex_plane::launch_unchecked::<C, R>(
+                kernels::reduce_prod_complex_plane::launch_unchecked::<C>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,
@@ -506,10 +499,10 @@ pub(crate) fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
 }
 
 /// Launch a floating-point maximum reduction.
-pub(crate) fn launch_max_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_max_float<F: Float + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -523,7 +516,7 @@ pub(crate) fn launch_max_float<R: Runtime, F: Float + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_max_float::launch_unchecked::<F, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_max_float::launch_unchecked::<F>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -533,7 +526,7 @@ pub(crate) fn launch_max_float<R: Runtime, F: Float + CubeElement>(
                 launch.output_len,
             ),
             ResolvedReduceStrategy::Plane => {
-                kernels::reduce_max_float_plane::launch_unchecked::<F, R>(
+                kernels::reduce_max_float_plane::launch_unchecked::<F>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,
@@ -550,10 +543,10 @@ pub(crate) fn launch_max_float<R: Runtime, F: Float + CubeElement>(
 }
 
 /// Launch an integer maximum reduction.
-pub(crate) fn launch_max_int<R: Runtime, I: Int + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_max_int<I: Int + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -567,7 +560,7 @@ pub(crate) fn launch_max_int<R: Runtime, I: Int + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_max_int::launch_unchecked::<I, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_max_int::launch_unchecked::<I>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -576,17 +569,15 @@ pub(crate) fn launch_max_int<R: Runtime, I: Int + CubeElement>(
                 launch.axis,
                 launch.output_len,
             ),
-            ResolvedReduceStrategy::Plane => {
-                kernels::reduce_max_int_plane::launch_unchecked::<I, R>(
-                    client,
-                    launch.cube_count,
-                    launch.cube_dim,
-                    input.into_tensor_arg(),
-                    output.into_tensor_arg(),
-                    launch.axis,
-                    launch.output_len,
-                )
-            }
+            ResolvedReduceStrategy::Plane => kernels::reduce_max_int_plane::launch_unchecked::<I>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
         }
     }
 
@@ -594,10 +585,10 @@ pub(crate) fn launch_max_int<R: Runtime, I: Int + CubeElement>(
 }
 
 /// Launch a floating-point minimum reduction.
-pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_min_float<F: Float + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -611,7 +602,7 @@ pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_min_float::launch_unchecked::<F, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_min_float::launch_unchecked::<F>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -621,7 +612,7 @@ pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
                 launch.output_len,
             ),
             ResolvedReduceStrategy::Plane => {
-                kernels::reduce_min_float_plane::launch_unchecked::<F, R>(
+                kernels::reduce_min_float_plane::launch_unchecked::<F>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,
@@ -638,10 +629,10 @@ pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
 }
 
 /// Launch an integer minimum reduction.
-pub(crate) fn launch_min_int<R: Runtime, I: Int + CubeElement>(
-    client: &ComputeClient<R>,
-    input: TensorBinding<R>,
-    output: TensorBinding<R>,
+pub(crate) fn launch_min_int<I: Int + CubeElement>(
+    client: &Client,
+    input: TensorBinding,
+    output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
 ) -> Result<()> {
@@ -655,7 +646,7 @@ pub(crate) fn launch_min_int<R: Runtime, I: Int + CubeElement>(
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
         match launch.kind {
-            ResolvedReduceStrategy::Unit => kernels::reduce_min_int::launch_unchecked::<I, R>(
+            ResolvedReduceStrategy::Unit => kernels::reduce_min_int::launch_unchecked::<I>(
                 client,
                 launch.cube_count,
                 launch.cube_dim,
@@ -664,17 +655,15 @@ pub(crate) fn launch_min_int<R: Runtime, I: Int + CubeElement>(
                 launch.axis,
                 launch.output_len,
             ),
-            ResolvedReduceStrategy::Plane => {
-                kernels::reduce_min_int_plane::launch_unchecked::<I, R>(
-                    client,
-                    launch.cube_count,
-                    launch.cube_dim,
-                    input.into_tensor_arg(),
-                    output.into_tensor_arg(),
-                    launch.axis,
-                    launch.output_len,
-                )
-            }
+            ResolvedReduceStrategy::Plane => kernels::reduce_min_int_plane::launch_unchecked::<I>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
         }
     }
 

@@ -32,9 +32,8 @@
 
 use std::ffi::c_void;
 
-use cubecl::client::ComputeClient;
-use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
-use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cubecl::client::Client;
+use cubecl::prelude::{BufferArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
 use cudarc::cublas::sys as cublas;
 use num_complex::{Complex32, Complex64};
 
@@ -59,6 +58,7 @@ use crate::{
     Error, Tensor, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
+use cubecl::frontend::Scalar;
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {
@@ -223,7 +223,7 @@ enum ReadRef<'a, 'b, T> {
     View(&'a TypedTensorView<'b, T>),
 }
 
-impl<T: TensorScalar + 'static> ReadRef<'_, '_, T> {
+impl<T: TensorScalar + 'static + Scalar> ReadRef<'_, '_, T> {
     fn n_elements(&self) -> usize {
         match self {
             Self::Owned(tensor) => tensor.n_elements(),
@@ -271,7 +271,7 @@ enum WriteRef<'a, 'b, T> {
     View(&'a mut TypedTensorViewMut<'b, T>),
 }
 
-impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
+impl<T: TensorScalar + 'static + Scalar> WriteRef<'_, '_, T> {
     fn ensure_resident(&self, rt: &CudaRuntime, op: &'static str) -> crate::Result<()> {
         match self {
             Self::Owned(tensor) => ensure_resident_on_runtime(rt, tensor, op),
@@ -308,9 +308,9 @@ impl<T: TensorScalar + 'static> WriteRef<'_, '_, T> {
     }
 }
 
-impl<T: CubeElement + TensorScalar + Clone + 'static> WriteRef<'_, '_, T> {
+impl<T: CubeElement + TensorScalar + Clone + Scalar + 'static> WriteRef<'_, '_, T> {
     /// Bind the destination's whole root allocation for a native kernel launch.
-    fn array_arg(&mut self, op: &'static str) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+    fn array_arg(&mut self, op: &'static str) -> crate::Result<BufferArg> {
         match self {
             Self::Owned(tensor) => typed_tensor_mut_array_arg(tensor, op),
             Self::View(view) => typed_view_mut_array_arg(view, op),
@@ -593,7 +593,7 @@ impl NativeStridedSourcePlan {
 
 /// Scalar-family dispatch for the cuBLAS BLAS1 bindings.
 pub(super) trait CublasScalar:
-    CubeElement + CubePrimitive + TensorScalar + Clone + Default + Send + Sync + 'static
+    CubeElement + CubePrimitive + Scalar + TensorScalar + Clone + Default + Send + Sync + 'static
 {
     /// Real accumulator scalar: `Self` for real dtypes, the underlying real
     /// float for complex dtypes.
@@ -644,12 +644,12 @@ pub(super) trait CublasScalar:
     /// exactly `len` logical elements.
     #[allow(clippy::too_many_arguments)]
     unsafe fn launch_axpby_strided_source(
-        client: &ComputeClient<CubeclCudaRuntime>,
+        client: &Client,
         count: CubeCount,
         dim: CubeDim,
-        y: ArrayArg<CubeclCudaRuntime>,
-        x: ArrayArg<CubeclCudaRuntime>,
-        coefficients: ArrayArg<CubeclCudaRuntime>,
+        y: BufferArg,
+        x: BufferArg,
+        coefficients: BufferArg,
         dims: &[usize],
         x_strides: &[i64],
         x_offset: i64,
@@ -747,12 +747,12 @@ macro_rules! impl_cublas_scalar {
             }
 
             unsafe fn launch_axpby_strided_source(
-                client: &ComputeClient<CubeclCudaRuntime>,
+                client: &Client,
                 count: CubeCount,
                 dim: CubeDim,
-                y: ArrayArg<CubeclCudaRuntime>,
-                x: ArrayArg<CubeclCudaRuntime>,
-                coefficients: ArrayArg<CubeclCudaRuntime>,
+                y: BufferArg,
+                x: BufferArg,
+                coefficients: BufferArg,
                 dims: &[usize],
                 x_strides: &[i64],
                 x_offset: i64,
@@ -846,10 +846,7 @@ impl_cublas_scalar!(
     f32,
     cublasSdot_v2,
     cublasSgeam,
-    crate::kernels::elementwise::axpby_strided_source_float::launch_unchecked::<
-        f32,
-        CubeclCudaRuntime,
-    >
+    crate::kernels::elementwise::axpby_strided_source_float::launch_unchecked::<f32>
 );
 impl_cublas_scalar!(
     f64,
@@ -859,10 +856,7 @@ impl_cublas_scalar!(
     f64,
     cublasDdot_v2,
     cublasDgeam,
-    crate::kernels::elementwise::axpby_strided_source_float::launch_unchecked::<
-        f64,
-        CubeclCudaRuntime,
-    >
+    crate::kernels::elementwise::axpby_strided_source_float::launch_unchecked::<f64>
 );
 impl_cublas_scalar!(
     Complex32,
@@ -872,10 +866,7 @@ impl_cublas_scalar!(
     cublas::cuComplex,
     cublasCdotc_v2,
     cublasCgeam,
-    crate::kernels::elementwise::axpby_strided_source_complex::launch_unchecked::<
-        Complex32,
-        CubeclCudaRuntime,
-    >
+    crate::kernels::elementwise::axpby_strided_source_complex::launch_unchecked::<Complex32>
 );
 impl_cublas_scalar!(
     Complex64,
@@ -885,10 +876,7 @@ impl_cublas_scalar!(
     cublas::cuDoubleComplex,
     cublasZdotc_v2,
     cublasZgeam,
-    crate::kernels::elementwise::axpby_strided_source_complex::launch_unchecked::<
-        Complex64,
-        CubeclCudaRuntime,
-    >
+    crate::kernels::elementwise::axpby_strided_source_complex::launch_unchecked::<Complex64>
 );
 
 impl CublasRealScalar for f32 {

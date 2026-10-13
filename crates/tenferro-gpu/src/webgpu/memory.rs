@@ -1,6 +1,5 @@
-use cubecl::client::ComputeClient;
+use cubecl::client::Client;
 use cubecl::prelude::CubeElement;
-use cubecl_wgpu::WgpuRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::DType;
 
@@ -157,7 +156,7 @@ pub(super) fn upload_typed<T: CubeElement + crate::TensorScalar + Clone + Send +
 
 pub(super) fn download_typed<T: CubeElement + crate::TensorScalar + Clone + 'static>(
     rt: &WebGpuRuntime,
-    client: &ComputeClient<WgpuRuntime>,
+    client: &Client,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
@@ -193,7 +192,7 @@ fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<T
 
 fn download_bool(
     rt: &WebGpuRuntime,
-    client: &ComputeClient<WgpuRuntime>,
+    client: &Client,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
     ensure_resident_on_runtime(rt, typed, "webgpu_download")?;

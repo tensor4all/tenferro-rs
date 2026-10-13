@@ -2,7 +2,7 @@ use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 use cubecl_wgpu::WgpuSubmission;
 use tenferro_runtime::runtime::{
     EventDomainDriver, EventDomainError, EventDomainId, EventDomainOperation, EventDomainRun,
@@ -233,9 +233,13 @@ fn submit_completion(
     runtime: &WebGpuRuntime,
     stream_id: StreamId,
 ) -> tenferro_runtime::Result<WgpuSubmission> {
+    // The WebGPU runtime's own server owns the stream, and its
+    // `submit_stream_completion` seals that stream's queue.
     runtime
         .client()
-        .with_server(move |server| server.submit_stream_completion(stream_id))
+        .with_server::<cubecl_wgpu::WgpuServer<cubecl_wgpu::AutoCompiler>, _>(move |server| {
+            server.submit_stream_completion(stream_id)
+        })
         .ok_or_else(|| {
             RuntimeError::from(crate::Error::backend_source(
                 EVENT_OP,

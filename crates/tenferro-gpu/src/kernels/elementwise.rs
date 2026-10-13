@@ -25,7 +25,7 @@ pub(crate) const MIXED_DIV: usize = 3;
 macro_rules! binary_float_kernel {
     ($name:ident, $op:tt) => {
         #[cube(launch_unchecked)]
-        pub fn $name<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+        pub fn $name<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
             if ABSOLUTE_POS < out.len() {
                 out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] $op rhs[ABSOLUTE_POS];
             }
@@ -36,7 +36,7 @@ macro_rules! binary_float_kernel {
 macro_rules! binary_float_complex_kernel {
     ($float_name:ident, $complex_name:ident, $op:tt) => {
         #[cube(launch_unchecked)]
-        pub fn $float_name<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+        pub fn $float_name<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
             if ABSOLUTE_POS < out.len() {
                 out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] $op rhs[ABSOLUTE_POS];
             }
@@ -44,9 +44,9 @@ macro_rules! binary_float_complex_kernel {
 
         #[cube(launch_unchecked)]
         pub fn $complex_name<C: ComplexCore>(
-            out: &mut Array<C>,
-            lhs: &Array<C>,
-            rhs: &Array<C>,
+            out: &mut [C],
+            lhs: &[C],
+            rhs: &[C],
         ) {
             if ABSOLUTE_POS < out.len() {
                 out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] $op rhs[ABSOLUTE_POS];
@@ -56,7 +56,7 @@ macro_rules! binary_float_complex_kernel {
 }
 
 #[cube]
-fn broadcast_source_index<E: CubePrimitive>(
+fn broadcast_source_index<E: CubePrimitive + Scalar>(
     out_flat: usize,
     out: &Tensor<E>,
     input: &Tensor<E>,
@@ -90,8 +90,10 @@ macro_rules! broadcast_multiply_kernel {
             #[comptime] output_rank: usize,
         ) {
             if ABSOLUTE_POS < out.len() {
-                let lhs_idx = broadcast_source_index(ABSOLUTE_POS, out, lhs, lhs_dims, output_rank);
-                let rhs_idx = broadcast_source_index(ABSOLUTE_POS, out, rhs, rhs_dims, output_rank);
+                let lhs_idx =
+                    broadcast_source_index(ABSOLUTE_POS, &*out, lhs, lhs_dims, output_rank);
+                let rhs_idx =
+                    broadcast_source_index(ABSOLUTE_POS, &*out, rhs, rhs_dims, output_rank);
                 out[ABSOLUTE_POS] = lhs[lhs_idx] * rhs[rhs_idx];
             }
         }
@@ -111,8 +113,8 @@ pub fn broadcast_multiply_int<I: Int>(
     #[comptime] output_rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = broadcast_source_index(ABSOLUTE_POS, out, lhs, lhs_dims, output_rank);
-        let rhs_idx = broadcast_source_index(ABSOLUTE_POS, out, rhs, rhs_dims, output_rank);
+        let lhs_idx = broadcast_source_index(ABSOLUTE_POS, &*out, lhs, lhs_dims, output_rank);
+        let rhs_idx = broadcast_source_index(ABSOLUTE_POS, &*out, rhs, rhs_dims, output_rank);
         out[ABSOLUTE_POS] = wrapping_mul::<I>(lhs[lhs_idx], rhs[rhs_idx]);
     }
 }
@@ -120,7 +122,7 @@ pub fn broadcast_multiply_int<I: Int>(
 macro_rules! unary_float_kernel {
     ($name:ident, $method:ident) => {
         #[cube(launch_unchecked)]
-        pub fn $name<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+        pub fn $name<F: Float>(out: &mut [F], input: &[F]) {
             if ABSOLUTE_POS < out.len() {
                 out[ABSOLUTE_POS] = input[ABSOLUTE_POS].$method();
             }
@@ -131,7 +133,7 @@ macro_rules! unary_float_kernel {
 macro_rules! unary_both_kernel {
     ($float_name:ident, $complex_name:ident, |$value:ident| $body:expr) => {
         #[cube(launch_unchecked)]
-        pub fn $float_name<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+        pub fn $float_name<F: Float>(out: &mut [F], input: &[F]) {
             if ABSOLUTE_POS < out.len() {
                 let $value = input[ABSOLUTE_POS];
                 out[ABSOLUTE_POS] = $body;
@@ -139,7 +141,7 @@ macro_rules! unary_both_kernel {
         }
 
         #[cube(launch_unchecked)]
-        pub fn $complex_name<C: ComplexCore>(out: &mut Array<C>, input: &Array<C>) {
+        pub fn $complex_name<C: ComplexCore>(out: &mut [C], input: &[C]) {
             if ABSOLUTE_POS < out.len() {
                 let $value = input[ABSOLUTE_POS];
                 out[ABSOLUTE_POS] = $body;
@@ -164,9 +166,9 @@ macro_rules! axpby_strided_source_kernel {
     ($name:ident, $bound:ident) => {
         #[cube(launch_unchecked)]
         pub fn $name<E: $bound>(
-            y: &mut Array<E>,
-            x: &Array<E>,
-            coefficients: &Array<E>,
+            y: &mut [E],
+            x: &[E],
+            coefficients: &[E],
             dims: Sequence<usize>,
             x_strides: Sequence<i64>,
             x_offset: i64,
@@ -203,21 +205,21 @@ binary_float_complex_kernel!(mul_float, mul_complex, *);
 binary_float_kernel!(div_float, /);
 
 #[cube(launch_unchecked)]
-pub fn add_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+pub fn add_int<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = wrapping_add::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn sub_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+pub fn sub_int<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = wrapping_sub::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn mul_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+pub fn mul_int<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = wrapping_mul::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
     }
@@ -226,15 +228,18 @@ pub fn mul_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
 macro_rules! scalar_binary_float_kernel {
     ($name:ident, |$lhs:ident, $rhs:ident| $body:expr) => {
         #[cube(launch_unchecked)]
-        pub fn $name<F: Float>(
-            out: &mut Array<F>,
-            lhs: &Array<F>,
-            rhs: &Array<F>,
-            #[comptime] lhs_scalar: bool,
-        ) {
+        pub fn $name<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F], #[comptime] lhs_scalar: bool) {
             if ABSOLUTE_POS < out.len() {
-                let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
-                let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+                let lhs_idx = if lhs_scalar {
+                    0usize.runtime()
+                } else {
+                    ABSOLUTE_POS
+                };
+                let rhs_idx = if lhs_scalar {
+                    ABSOLUTE_POS
+                } else {
+                    0usize.runtime()
+                };
                 let $lhs = lhs[lhs_idx];
                 let $rhs = rhs[rhs_idx];
                 out[ABSOLUTE_POS] = $body;
@@ -245,20 +250,19 @@ macro_rules! scalar_binary_float_kernel {
 
 scalar_binary_float_kernel!(scalar_div_float, |x, y| x / y);
 scalar_binary_float_kernel!(scalar_pow_float, |x, y| x.powf(y));
-scalar_binary_float_kernel!(scalar_rem_float, |x, y| {
-    let remainder = x - (x / y).trunc() * y;
-    if remainder == F::new(0.0f32) {
-        x * F::new(0.0f32)
-    } else {
-        remainder
-    }
-});
+// `%` on a float is CubeCL's `math.f_rem`, which lowers to `fmod` (LLVM `frem`
+// with fast math off): the IEEE remainder, so a zero result keeps the
+// dividend's sign. The textbook formula that used to be written here needed
+// `x * 0.0` to restore that sign, and 0.11's `math.f_mul` constant fold turns
+// any multiply by a literal zero into `+0.0`, losing it. See
+// docs/design/cubecl-011-ieee-constant-fold.md.
+scalar_binary_float_kernel!(scalar_rem_float, |x, y| x % y);
 
 #[cube(launch_unchecked)]
 pub fn scalar_real_complex_binary<F: Float>(
-    out: &mut Array<F>,
-    real: &Array<F>,
-    complex: &Array<F>,
+    out: &mut [F],
+    real: &[F],
+    complex: &[F],
     #[comptime] real_lhs: bool,
     #[comptime] mode: usize,
 ) {
@@ -324,15 +328,23 @@ pub fn scalar_real_complex_binary<F: Float>(
 
 #[cube(launch_unchecked)]
 pub fn scalar_div_int_checked<I: Int>(
-    out: &mut Array<I>,
-    lhs: &Array<I>,
-    rhs: &Array<I>,
-    err: &mut Array<i32>,
+    out: &mut [I],
+    lhs: &[I],
+    rhs: &[I],
+    err: &mut [i32],
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let lhs_idx = if lhs_scalar {
+            0usize.runtime()
+        } else {
+            ABSOLUTE_POS
+        };
+        let rhs_idx = if lhs_scalar {
+            ABSOLUTE_POS
+        } else {
+            0usize.runtime()
+        };
         let x = lhs[lhs_idx];
         let y = rhs[rhs_idx];
         let zero = I::new(0);
@@ -350,15 +362,23 @@ pub fn scalar_div_int_checked<I: Int>(
 
 #[cube(launch_unchecked)]
 pub fn scalar_rem_int_checked<I: Int>(
-    out: &mut Array<I>,
-    lhs: &Array<I>,
-    rhs: &Array<I>,
-    err: &mut Array<i32>,
+    out: &mut [I],
+    lhs: &[I],
+    rhs: &[I],
+    err: &mut [i32],
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let lhs_idx = if lhs_scalar {
+            0usize.runtime()
+        } else {
+            ABSOLUTE_POS
+        };
+        let rhs_idx = if lhs_scalar {
+            ABSOLUTE_POS
+        } else {
+            0usize.runtime()
+        };
         let x = lhs[lhs_idx];
         let y = rhs[rhs_idx];
         let zero = I::new(0);
@@ -376,12 +396,7 @@ pub fn scalar_rem_int_checked<I: Int>(
 }
 
 #[cube(launch_unchecked)]
-pub fn div_int_checked<I: Int>(
-    out: &mut Array<I>,
-    lhs: &Array<I>,
-    rhs: &Array<I>,
-    err: &mut Array<i32>,
-) {
+pub fn div_int_checked<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I], err: &mut [i32]) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
@@ -399,26 +414,16 @@ pub fn div_int_checked<I: Int>(
 }
 
 #[cube(launch_unchecked)]
-pub fn rem_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+pub fn rem_float<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
     if ABSOLUTE_POS < out.len() {
-        let x = lhs[ABSOLUTE_POS];
-        let y = rhs[ABSOLUTE_POS];
-        let remainder = x - (x / y).trunc() * y;
-        out[ABSOLUTE_POS] = if remainder == F::new(0.0f32) {
-            x * F::new(0.0f32)
-        } else {
-            remainder
-        };
+        // `%` is `math.f_rem` (`fmod`), so the sign of a zero result follows the
+        // dividend; see the note on `scalar_rem_float`.
+        out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] % rhs[ABSOLUTE_POS];
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn rem_int_checked<I: Int>(
-    out: &mut Array<I>,
-    lhs: &Array<I>,
-    rhs: &Array<I>,
-    err: &mut Array<i32>,
-) {
+pub fn rem_int_checked<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I], err: &mut [i32]) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
@@ -437,7 +442,7 @@ pub fn rem_int_checked<I: Int>(
 }
 unary_both_kernel!(neg_float, neg_complex, |value| -value);
 #[cube(launch_unchecked)]
-pub fn neg_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
+pub fn neg_int<I: Int>(out: &mut [I], input: &[I]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = wrapping_neg::<I>(input[ABSOLUTE_POS]);
     }
@@ -450,35 +455,35 @@ unary_float_kernel!(tanh_float, tanh);
 unary_float_kernel!(sqrt_float, sqrt);
 
 #[cube(launch_unchecked)]
-pub fn rsqrt_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+pub fn rsqrt_float<F: Float>(out: &mut [F], input: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].inverse_sqrt();
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn expm1_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+pub fn expm1_float<F: Float>(out: &mut [F], input: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].exp_m1();
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn log1p_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+pub fn log1p_float<F: Float>(out: &mut [F], input: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].log1p();
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn erf_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+pub fn erf_float<F: Float>(out: &mut [F], input: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].erf();
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn abs_float<F: Float<WithScalar<F> = F>>(out: &mut Array<F>, input: &Array<F>) {
+pub fn abs_float<F: Float<WithScalar<F> = F>>(out: &mut [F], input: &[F]) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
         out[ABSOLUTE_POS] = value.abs();
@@ -486,21 +491,21 @@ pub fn abs_float<F: Float<WithScalar<F> = F>>(out: &mut Array<F>, input: &Array<
 }
 
 #[cube(launch_unchecked)]
-pub fn abs_complex32(out: &mut Array<f32>, input: &Array<num_complex::Complex32>) {
+pub fn abs_complex32(out: &mut [f32], input: &[num_complex::Complex32]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].abs();
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn abs_complex64(out: &mut Array<f64>, input: &Array<num_complex::Complex64>) {
+pub fn abs_complex64(out: &mut [f64], input: &[num_complex::Complex64]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].abs();
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn abs_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
+pub fn abs_int<I: Int>(out: &mut [I], input: &[I]) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
         let zero = I::new(0);
@@ -513,7 +518,7 @@ pub fn abs_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn sign_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+pub fn sign_float<F: Float>(out: &mut [F], input: &[F]) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
         let zero = F::new(0.0_f32);
@@ -531,7 +536,7 @@ pub fn sign_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn sign_complex<C: cubecl::frontend::ComplexMath>(out: &mut Array<C>, input: &Array<C>) {
+pub fn sign_complex<C: cubecl::frontend::ComplexMath>(out: &mut [C], input: &[C]) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
         let zero = C::cast_from(0.0_f32);
@@ -544,7 +549,7 @@ pub fn sign_complex<C: cubecl::frontend::ComplexMath>(out: &mut Array<C>, input:
 }
 
 #[cube(launch_unchecked)]
-pub fn sign_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
+pub fn sign_int<I: Int>(out: &mut [I], input: &[I]) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
         let zero = I::new(0);
@@ -559,14 +564,14 @@ pub fn sign_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn maximum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+pub fn maximum_float<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = nan_propagating_max::<F>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn maximum_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+pub fn maximum_int<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I]) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
@@ -575,14 +580,14 @@ pub fn maximum_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn minimum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+pub fn minimum_float<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = nan_propagating_min::<F>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn minimum_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+pub fn minimum_int<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I]) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
@@ -591,19 +596,14 @@ pub fn minimum_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn pow_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+pub fn pow_float<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].powf(rhs[ABSOLUTE_POS]);
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn pow_int_checked<I: Int>(
-    out: &mut Array<I>,
-    lhs: &Array<I>,
-    rhs: &Array<I>,
-    err: &mut Array<i32>,
-) {
+pub fn pow_int_checked<I: Int>(out: &mut [I], lhs: &[I], rhs: &[I], err: &mut [i32]) {
     if ABSOLUTE_POS < out.len() {
         let zero = I::new(0);
         let one = I::new(1);
@@ -633,15 +633,23 @@ pub fn pow_int_checked<I: Int>(
 
 #[cube(launch_unchecked)]
 pub fn scalar_pow_int_checked<I: Int>(
-    out: &mut Array<I>,
-    lhs: &Array<I>,
-    rhs: &Array<I>,
-    err: &mut Array<i32>,
+    out: &mut [I],
+    lhs: &[I],
+    rhs: &[I],
+    err: &mut [i32],
     #[comptime] lhs_scalar: bool,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
-        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let lhs_idx = if lhs_scalar {
+            0usize.runtime()
+        } else {
+            ABSOLUTE_POS
+        };
+        let rhs_idx = if lhs_scalar {
+            ABSOLUTE_POS
+        } else {
+            0usize.runtime()
+        };
         let zero = I::new(0);
         let one = I::new(1);
         let two = I::new(2);
@@ -670,9 +678,9 @@ pub fn scalar_pow_int_checked<I: Int>(
 
 #[cube(launch_unchecked)]
 pub fn compare_float_bool<F: Float>(
-    out: &mut Array<bool>,
-    lhs: &Array<F>,
-    rhs: &Array<F>,
+    out: &mut [bool],
+    lhs: &[F],
+    rhs: &[F],
     #[comptime] mode: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
@@ -691,12 +699,7 @@ pub fn compare_float_bool<F: Float>(
 }
 
 #[cube(launch_unchecked)]
-pub fn compare_int_bool<I: Int>(
-    out: &mut Array<bool>,
-    lhs: &Array<I>,
-    rhs: &Array<I>,
-    #[comptime] mode: usize,
-) {
+pub fn compare_int_bool<I: Int>(out: &mut [bool], lhs: &[I], rhs: &[I], #[comptime] mode: usize) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
@@ -713,12 +716,7 @@ pub fn compare_int_bool<I: Int>(
 }
 
 #[cube(launch_unchecked)]
-pub fn select_bool_float<F: Float>(
-    out: &mut Array<F>,
-    pred: &Array<bool>,
-    on_true: &Array<F>,
-    on_false: &Array<F>,
-) {
+pub fn select_bool_float<F: Float>(out: &mut [F], pred: &[bool], on_true: &[F], on_false: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = if pred[ABSOLUTE_POS] {
             on_true[ABSOLUTE_POS]
@@ -729,12 +727,7 @@ pub fn select_bool_float<F: Float>(
 }
 
 #[cube(launch_unchecked)]
-pub fn select_bool_int<I: Int>(
-    out: &mut Array<I>,
-    pred: &Array<bool>,
-    on_true: &Array<I>,
-    on_false: &Array<I>,
-) {
+pub fn select_bool_int<I: Int>(out: &mut [I], pred: &[bool], on_true: &[I], on_false: &[I]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = if pred[ABSOLUTE_POS] {
             on_true[ABSOLUTE_POS]
@@ -745,19 +738,14 @@ pub fn select_bool_int<I: Int>(
 }
 
 #[cube(launch_unchecked)]
-pub fn clamp_float<F: Float>(
-    out: &mut Array<F>,
-    input: &Array<F>,
-    lower: &Array<F>,
-    upper: &Array<F>,
-) {
+pub fn clamp_float<F: Float>(out: &mut [F], input: &[F], lower: &[F], upper: &[F]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].clamp(lower[ABSOLUTE_POS], upper[ABSOLUTE_POS]);
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn conj_complex<C: ComplexCore>(out: &mut Array<C>, input: &Array<C>) {
+pub fn conj_complex<C: ComplexCore>(out: &mut [C], input: &[C]) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].conj();
     }
@@ -810,7 +798,7 @@ fn complex_div_term<F: Float>(a: F, b: F, c: F, d: F, r: F, t: F) -> F {
 /// `scaling_cdiv`, `scaleargs_cdiv`) and matching the host reference
 /// `strided_basic::complex_div`.
 #[cube(launch_unchecked)]
-pub fn div_complex_parts<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+pub fn div_complex_parts<F: Float>(out: &mut [F], lhs: &[F], rhs: &[F]) {
     let elements = out.len() / 2;
     if ABSOLUTE_POS < elements {
         let i = ABSOLUTE_POS * 2;
@@ -826,7 +814,7 @@ pub fn div_complex_parts<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Arr
 /// numerator and denominator terms keep an extreme divisor finite and decide the sign of a zero
 /// result; the componentwise form does neither.
 #[cube]
-fn complex_div_parts_at<F: Float>(a0: F, b0: F, c0: F, d0: F, out: &mut Array<F>, index: usize) {
+fn complex_div_parts_at<F: Float>(a0: F, b0: F, c0: F, d0: F, out: &mut [F], index: usize) {
     let mut a = a0;
     let mut b = b0;
     let mut c = c0;

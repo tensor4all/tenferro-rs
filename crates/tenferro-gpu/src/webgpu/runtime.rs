@@ -1,9 +1,9 @@
+use cubecl_runtime::device::WgpuDeviceKind;
 use std::fmt;
 
-use cubecl::client::ComputeClient;
-use cubecl::Runtime;
-use cubecl_common::future;
-use cubecl_wgpu::{WgpuDevice, WgpuRuntime};
+use cubecl::client::Client;
+use cubecl::future;
+use cubecl_wgpu::WgpuDevice;
 use tenferro_tensor::AllocationDomainId;
 
 use super::apple::AppleDomainState;
@@ -14,8 +14,8 @@ use super::apple::AppleDomainState;
 /// adapter.
 pub fn webgpu_available() -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let device = WgpuDevice::DefaultDevice;
-        let _ = WgpuRuntime::client(&device);
+        let device = WgpuDevice::new(WgpuDeviceKind::DefaultDevice);
+        let _ = cubecl::Device::Wgpu(device.clone()).client();
     }))
     .is_ok()
 }
@@ -60,7 +60,7 @@ impl Eq for WebGpuRuntimeIdentity {}
 /// ```
 #[derive(Clone)]
 pub struct WebGpuRuntime {
-    client: ComputeClient<WgpuRuntime>,
+    client: Client,
     device_ordinal: usize,
     pub(super) apple_domain: Option<std::sync::Arc<AppleDomainState>>,
     identity: WebGpuRuntimeIdentity,
@@ -91,7 +91,10 @@ impl WebGpuRuntime {
     /// Returns [`crate::Error::RuntimeState`] when the requested adapter is
     /// unavailable or CubeCL initialization panics while selecting it.
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
-        Self::from_device(WgpuDevice::DiscreteGpu(device_ordinal), device_ordinal)
+        Self::from_device(
+            WgpuDevice::new(WgpuDeviceKind::DiscreteGpu(device_ordinal)),
+            device_ordinal,
+        )
     }
 
     /// Initialize the CubeCL WebGPU runtime using CubeCL's default adapter selection.
@@ -109,12 +112,12 @@ impl WebGpuRuntime {
     /// Returns [`crate::Error::RuntimeState`] when default adapter selection is
     /// unavailable or CubeCL initialization panics.
     pub fn new_default() -> crate::Result<Self> {
-        Self::from_device(WgpuDevice::DefaultDevice, 0)
+        Self::from_device(WgpuDevice::new(WgpuDeviceKind::DefaultDevice), 0)
     }
 
     fn from_device(device: WgpuDevice, device_ordinal: usize) -> crate::Result<Self> {
         let client = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            WgpuRuntime::client(&device)
+            cubecl::Device::Wgpu(device.clone()).client()
         }))
         .map_err(|payload| {
             crate::Error::runtime_state(
@@ -132,7 +135,7 @@ impl WebGpuRuntime {
     }
 
     pub(super) fn from_apple_client(
-        client: ComputeClient<WgpuRuntime>,
+        client: Client,
         device_ordinal: usize,
         domain: std::sync::Arc<AppleDomainState>,
     ) -> Self {
@@ -166,7 +169,7 @@ impl WebGpuRuntime {
         }
     }
 
-    pub(crate) fn client(&self) -> &ComputeClient<WgpuRuntime> {
+    pub(crate) fn client(&self) -> &Client {
         &self.client
     }
 

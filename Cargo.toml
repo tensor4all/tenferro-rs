@@ -87,19 +87,27 @@ lapack-inject = "0.1.2"
 # Compile both CubeCL runtime paths with CUDA 12.8 bindings. Dynamic runtime
 # gating keeps the baseline compatible with CUDA 12.4 driver/NVRTC libraries.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
-# Pre-publish staging: Cargo uses these fork commits locally, while packaged
-# manifests retain only the crates.io version requirements.
-cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2", default-features = false }
-cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2" }
-cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2" }
-cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2" }
-cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl.git", rev = "1811309791f675125379b326bf748f2ec1e29f2a", version = "=0.10.2" }
-cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "507c91f5a70e284595755b72598f60c684d1132b", version = "=0.2.2", default-features = false }
-cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "507c91f5a70e284595755b72598f60c684d1132b", version = "=0.2.2", default-features = false }
-cubek-fft = { package = "t4a-cubek-fft", git = "https://github.com/tensor4all/cubek.git", rev = "507c91f5a70e284595755b72598f60c684d1132b", version = "=0.2.2", default-features = false }
+# Pinned to the fork's 0.11.0 / 0.3.0 releases of the ported content:
+# - https://github.com/tensor4all/cubecl branch release/t4a-cubecl-0.11.0
+# - https://github.com/tensor4all/cubek  branch release/t4a-cubek-0.3.0
+# Both carry the ported upstream content plus the migration's fixes, and the
+# declared versions match the published content, as
+# scripts/check-git-pin-content.py requires. Replace with merged upstream
+# revisions when the ports land upstream.
+cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9", version = "=0.11.0", default-features = false }
+cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4all/cubecl", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9", version = "=0.11.0", features = ["cpp"] }
+cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9", version = "=0.11.0" }
+cubecl-environment = { package = "t4a-cubecl-environment", git = "https://github.com/tensor4all/cubecl", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9", version = "=0.11.0" }
+cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9", version = "=0.11.0" }
+cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl", rev = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9", version = "=0.11.0" }
+cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek", rev = "a1a106096a09fd27e1fbe9dbd2253d244f2df677", version = "=0.3.0", default-features = false, features = ["multi-level"] }
+cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek", rev = "a1a106096a09fd27e1fbe9dbd2253d244f2df677", version = "=0.3.0", default-features = false }
+cubek-fft = { package = "t4a-cubek-fft", git = "https://github.com/tensor4all/cubek", rev = "a1a106096a09fd27e1fbe9dbd2253d244f2df677", version = "=0.3.0", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }
+
+# No `[patch]`: the CubeK release pins the fork's cubecl crates directly.
 
 [profile.dev]
 opt-level = 0

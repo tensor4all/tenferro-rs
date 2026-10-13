@@ -139,13 +139,13 @@ class BuildArtifactContracts(unittest.TestCase):
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         dependencies = manifest["workspace"]["dependencies"]
 
-        # Published as `t4a-cubecl* 0.10.2`: the CUDA complex-cast and complex
-        # plane warp-reduce shuffle fixes, the upload copy removal and the
-        # loaded-kernel-id diagnostic (#2009, #2010), plus `Client::check_errors`
-        # (tensor4all/cubecl#27), which reports producer errors without retiring
-        # staged bytes so a raw-copy publication boundary need not wait for the
-        # device.
-        revision = "1811309791f675125379b326bf748f2ec1e29f2a"
+        # Released as `t4a-cubecl* 0.11.0`: the ported upstream 0.11 content plus
+        # the migration's fixes, on the fork's `release/t4a-cubecl-0.11.0` branch.
+        # The 0.10.2 line and its `Client::check_errors` patch (#27) are retired -
+        # 0.11 reports a failed launch on the buffers it never wrote, so the raw
+        # publication boundaries use the buffer-scoped claim instead
+        # (`docs/design/cubecl-011-check-errors-disposition.md`).
+        revision = "8aeafdf50cb3db65cc727e4ab303ed5b504c5ab9"
         for name in (
             "cubecl",
             "cubecl-cuda",

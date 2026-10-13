@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use cubecl::stream_id::StreamId;
+use cubecl_environment::stream::StreamId;
 
 #[cfg(not(target_family = "wasm"))]
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
@@ -27,13 +27,13 @@ use crate::webgpu::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_availab
 fn webgpu_buffers_keep_domain_and_distinguish_allocations() {
     let domain = AllocationDomainId::fresh();
     let first = WebGpuBuffer::new(
-        cubecl::server::Handle::new(StreamId::current(), 4),
+        cubecl::server::Handle::new(bookkeeping_service(), StreamId::current(), 4),
         4,
         0,
         domain,
     );
     let second = WebGpuBuffer::new(
-        cubecl::server::Handle::new(StreamId::current(), 4),
+        cubecl::server::Handle::new(bookkeeping_service(), StreamId::current(), 4),
         4,
         0,
         domain,
@@ -462,4 +462,9 @@ fn webgpu_with_backend_session_restores_the_in_session_flag_after_panic() {
     // The flag is usable again on the same thread.
     let value = backend.with_backend_session(|_session| 7usize).unwrap();
     assert_eq!(value, 7);
+}
+
+/// A service id for handles that carry only tenferro's own bookkeeping.
+fn bookkeeping_service() -> cubecl_common::device::ServiceId {
+    cubecl_common::device::ServiceId::of::<()>(cubecl_common::device::DeviceId::new(0, 0))
 }

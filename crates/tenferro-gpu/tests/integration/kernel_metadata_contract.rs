@@ -903,15 +903,22 @@ fn integer_kernels_route_user_arithmetic_through_wrapping_helpers() {
     }
 
     let reductions = kernel_source(&["reduce", "kernels.rs"]);
-    for invocation in [
-        "reduce_wrapping_int_kernel!(reduce_sum_int, wrapping_add);",
-        "reduce_wrapping_int_kernel!(reduce_prod_int, wrapping_mul);",
-        "reduce_wrapping_int_plane_kernel!(reduce_sum_int_plane, wrapping_add, wrapping_plane_sum);",
-        "reduce_wrapping_int_plane_kernel!(reduce_prod_int_plane, wrapping_mul, wrapping_plane_prod);",
+    // 0.11 folded the four integer-specific reduction macros into one
+    // `reduce_binary_kernel!`; the contract is that the integer reductions still
+    // route their arithmetic through the wrapping helpers.
+    assert!(
+        reductions.contains("macro_rules! reduce_binary_kernel"),
+        "integer reduction must be built on the shared reduction macro"
+    );
+    for call in [
+        "wrapping_add::<I>(acc, input[input_offset])",
+        "wrapping_mul::<I>(acc, input[input_offset])",
+        "wrapping_plane_sum::<T>(acc)",
+        "wrapping_plane_prod::<T>(acc)",
     ] {
         assert!(
-            reductions.contains(invocation),
-            "integer reduction must use {invocation}"
+            reductions.contains(call),
+            "integer reduction must use {call}"
         );
     }
 }
@@ -983,27 +990,23 @@ fn fused_float_max_min_codegen_propagates_nan_before_native_extrema() {
     .expect("fusion codegen source should be readable");
 
     assert!(
-        source.contains("fn emit_nan_propagating_extrema("),
+        source.contains("macro_rules! nan_extrema"),
         "fusion codegen must centralize the NaN contract"
     );
     assert!(
-        source.contains("Comparison::IsNan"),
+        source.contains("IsNanOp::new"),
         "fusion extrema must test both operands for NaN"
     );
     assert!(
-        source.contains("Operator::Select"),
+        source.contains("SelectOp::new"),
         "fusion extrema must select a NaN operand before the native extrema result"
     );
     assert!(
-        source.contains(
-            "ElementwiseFusionOp::Maximum => {\n            emit_nan_propagating_extrema("
-        ),
+        source.contains("ElementwiseFusionOp::Maximum => nan_extrema!(FMaxOp::new)"),
         "fused maximum must use the NaN-propagating helper"
     );
     assert!(
-        source.contains(
-            "ElementwiseFusionOp::Minimum => {\n            emit_nan_propagating_extrema("
-        ),
+        source.contains("ElementwiseFusionOp::Minimum => nan_extrema!(FMinOp::new)"),
         "fused minimum must use the NaN-propagating helper"
     );
 }
