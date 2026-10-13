@@ -10,6 +10,7 @@ gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_borrowed_concat_gather_and_i
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_eager_backward_smoke
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_matmul_vjp
+gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_scale_real_and_scale_complex_match_cpu
 gpu	tenferro-ad::integration	gpu_f32_fusion::test_f32_gpu_fusion_chain_e2e
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_concrete_session_matches_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_eager_values_and_gradients_match_cpu

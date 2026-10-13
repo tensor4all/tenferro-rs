@@ -13,11 +13,17 @@ that names each capability, and the adoption gates that follow from them.
 | `tensor4all/cubek` (fork) | `release/t4a-cubek-0.3.0` at `a1a106096a09fd27e1fbe9dbd2253d244f2df677` |
 | `tensor4all/tensor4all-rs` | `main` at `11f29ff0` (tenferro pin `ff94aeded…`), with the B1 frontend surface |
 
-"Released" below means merged with its gates green, not "planned".
+"Released" below means merged with its gates green, not "planned". The fork rows name the release
+branches those revisions belong to; each is published as `t4a-cubecl*` 0.11.0 and `t4a-cubek*` 0.3.0,
+which is what the workspace now requires.
 
 ### Pin state and the cubecl 0.11 decision (2026-10-12)
 
-`scripts/check-git-pin-content.py` currently fails on `main`: `t4a-cubecl 0.10.2` was republished from a
+**Resolved by the 0.11 migration (#2132), and superseded by the dependency move that followed:** the
+fork releases `t4a-cubecl*` 0.11.0 and `t4a-cubek*` 0.3.0 are published, and the workspace now requires
+those versions from crates.io, so no git pin remains and `check-git-pin-content.py` reports nothing. The
+measurements below are the record of why the port was needed. At the time,
+`scripts/check-git-pin-content.py` failed on `main`: `t4a-cubecl 0.10.2` was republished from a
 different commit (`eb2c8894…`) whose content is upstream 0.10.2 without the fork patches, so the pinned
 `1811309…` and the registry archive no longer agree. Measured options:
 

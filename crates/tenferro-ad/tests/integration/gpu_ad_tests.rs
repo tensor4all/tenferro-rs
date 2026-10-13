@@ -7,7 +7,7 @@ use tenferro_gpu::{
     cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
 };
 use tenferro_runtime::{
-    DotGeneralConfig, GatherConfig, Tensor, TensorRead, TracedTensor, TypedTensor,
+    DType, DotGeneralConfig, GatherConfig, Tensor, TensorRead, TracedTensor, TypedTensor,
 };
 use tenferro_tensor::StorageBuffer;
 
@@ -307,4 +307,223 @@ fn test_gpu_matmul_vjp() {
 
     assert_f64_tensor_close(&gpu_grad_a, &cpu_grad_a, 1.0e-10, 1.0e-10);
     assert_f64_tensor_close(&gpu_grad_b, &cpu_grad_b, 1.0e-10, 1.0e-10);
+}
+
+/// `scale_real` / `scale_complex` on CUDA`scale_real` / `scale_complex` on CUDA, on the eager and traced surfaces, with
+/// CPU parity and traced/eager agreement (#2020).
+///
+/// Two independent defects, both backend-dependent:
+///
+/// - eager built the rank-0 factor with `constant_from`, which does not cross the
+///   host/device boundary, so the first op needing it failed with
+///   `CudaBackend::to_contiguous_read: expected CubeCL GPU tensor view, got host
+///   tensor`;
+/// - the traced surface emitted `Mul` with a rank-0 operand and no
+///   `BroadcastInDim`, which the CUDA backend rejects
+///   (`mul: incompatible shapes: lhs=[], rhs=[4, 3, 2]`) where the CPU backend
+///   accepts a rank-0 operand, so the same graph ran on one backend and not the
+///   other.
+#[test]
+#[ignore = "requires CUDA"]
+fn test_gpu_scale_real_and_scale_complex_match_cpu() {
+    use num_complex::Complex64;
+    use tenferro_gpu::cuda::{cuda_runtime_engine_registration, download_tensor};
+    use tenferro_runtime::{EngineId, GraphCompiler, Runtime};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+
+    let shape = vec![4usize, 3, 2];
+    let len: usize = shape.iter().product();
+    let real_values: Vec<f64> = (0..len).map(|i| i as f64 * 0.5 - 2.0).collect();
+    let complex_values: Vec<Complex64> = (0..len)
+        .map(|i| Complex64::new(i as f64 * 0.25, -(i as f64) * 0.5))
+        .collect();
+    let real = f64_tensor(shape.clone(), real_values.clone());
+    let complex = Tensor::from_typed::<Complex64>(
+        TypedTensor::from_vec_col_major(shape.clone(), complex_values.clone()).unwrap(),
+    );
+
+    let cuda_runtime = |backend: &CudaBackend| -> Runtime {
+        let engine_id = EngineId::new("tenferro-ad.scale.cuda.v1").unwrap();
+        let mut builder = Runtime::builder();
+        builder
+            .register_engine(cuda_runtime_engine_registration(backend, engine_id).unwrap())
+            .unwrap();
+        builder.build().unwrap()
+    };
+
+    let factor = |real_factor: Option<f64>, complex_factor: Option<Complex64>| {
+        move |x: &TracedTensor| match (real_factor, complex_factor) {
+            (Some(f), None) => x.scale_real(f),
+            (None, Some(f)) => x.scale_complex(f),
+            _ => unreachable!("exactly one factor"),
+        }
+    };
+
+    // One graph, compiled for whichever runtime is given. The CUDA executor has
+    // no ingress for a host-resident binding, so the caller uploads it first.
+    let execute =
+        |runtime: &Runtime,
+         binding: &Tensor,
+         apply: &dyn Fn(&TracedTensor) -> Result<TracedTensor, tenferro_runtime::Error>|
+         -> Tensor {
+            let placeholder =
+                TracedTensor::input_concrete_shape(binding.dtype(), binding.shape()).unwrap();
+            let scaled = apply(&placeholder).unwrap();
+            // The binding is borrowed, not duplicated: a device-backed tensor cannot
+            // be cloned through host data.
+            let specs = [(&placeholder, binding.dtype(), binding.shape())];
+            let program = GraphCompiler::new()
+                .compile_with_input_specs(&scaled, &specs)
+                .unwrap();
+            runtime
+                .run_compiled(&program, &[binding])
+                .unwrap()
+                .pop()
+                .unwrap()
+        };
+
+    // --- CPU reference on the same graph
+    let cpu = cpu_runtime();
+    let cpu_real = execute(&cpu, &real, &factor(Some(2.5), None));
+    let cpu_complex_real = execute(&cpu, &complex, &factor(Some(2.5), None));
+    let cpu_complex_complex = execute(
+        &cpu,
+        &complex,
+        &factor(None, Some(Complex64::new(0.0, 1.0))),
+    );
+
+    // The CPU values equal the obvious host arithmetic, so a wrong CPU result
+    // cannot make a wrong CUDA result look correct.
+    for (index, value) in cpu_real.as_slice::<f64>().unwrap().iter().enumerate() {
+        assert_eq!(
+            *value,
+            real_values[index] * 2.5,
+            "cpu scale_real real[{index}]"
+        );
+    }
+    for (index, value) in cpu_complex_complex
+        .as_slice::<Complex64>()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let source = complex_values[index];
+        assert_eq!(
+            *value,
+            Complex64::new(-source.im, source.re),
+            "cpu scale_complex complex[{index}]"
+        );
+    }
+
+    // --- traced on CUDA
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let traced_runtime = cuda_runtime(&backend);
+    let traced_case =
+        |input: &Tensor,
+         apply: &dyn Fn(&TracedTensor) -> Result<TracedTensor, tenferro_runtime::Error>|
+         -> Tensor {
+            let device = upload_tensor(backend.runtime(), input).unwrap();
+            let out = execute(&traced_runtime, &device, apply);
+            download_tensor(backend.runtime(), &out).unwrap()
+        };
+    assert_real_like_close(
+        &traced_case(&real, &factor(Some(2.5), None)),
+        &cpu_real,
+        "scale_real/f64/traced",
+    );
+    assert_real_like_close(
+        &traced_case(&complex, &factor(Some(2.5), None)),
+        &cpu_complex_real,
+        "scale_real/c64/traced",
+    );
+    assert_real_like_close(
+        &traced_case(&complex, &factor(None, Some(Complex64::new(0.0, 1.0)))),
+        &cpu_complex_complex,
+        "scale_complex/c64/traced",
+    );
+
+    // --- eager on CUDA
+    let eager_scale = |input: &Tensor,
+                       apply: &dyn Fn(
+        &mut tenferro_ad::EagerSession<'_>,
+        &EagerTensor,
+    ) -> tenferro_ad::Result<EagerTensor>|
+     -> Tensor {
+        let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+        let uploaded = upload_tensor(upload_backend.runtime(), input).unwrap();
+        let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
+        let x = EagerTensor::from_tensor_in(uploaded, ctx.clone()).unwrap();
+        let scaled = ctx
+            .with_eager_session(|session| apply(session, &x))
+            .unwrap();
+        // Materialize outside the execution session: `to_tensor` needs the
+        // runtime's own session entry, so calling it inside `with_execution_session`
+        // re-enters it.
+        let value = scaled.to_tensor().unwrap();
+        ctx.with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&value))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    assert_real_like_close(
+        &eager_scale(&real, &|session, x| session.scale_real(x, 2.5)),
+        &cpu_real,
+        "scale_real/f64/eager",
+    );
+    assert_real_like_close(
+        &eager_scale(&complex, &|session, x| session.scale_real(x, 2.5)),
+        &cpu_complex_real,
+        "scale_real/c64/eager",
+    );
+    assert_real_like_close(
+        &eager_scale(&complex, &|session, x| {
+            session.scale_complex(x, Complex64::new(0.0, 1.0))
+        }),
+        &cpu_complex_complex,
+        "scale_complex/c64/eager",
+    );
+
+    // `scale_complex` still rejects a real input, on the device as on the host.
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let uploaded = upload_tensor(backend.runtime(), &real).unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
+    let x = EagerTensor::from_tensor_in(uploaded, ctx.clone()).unwrap();
+    assert!(ctx
+        .with_eager_session(|session| session.scale_complex(&x, Complex64::new(0.0, 1.0)))
+        .is_err());
+}
+
+/// Compare two host tensors of the same dtype (f64 or c64).
+fn assert_real_like_close(actual: &Tensor, expected: &Tensor, what: &str) {
+    use num_complex::Complex64;
+
+    assert_eq!(actual.shape(), expected.shape(), "{what}: shape");
+    assert_eq!(actual.dtype(), expected.dtype(), "{what}: dtype");
+    match expected.dtype() {
+        DType::F64 => {
+            let actual = actual.as_slice::<f64>().unwrap();
+            let expected = expected.as_slice::<f64>().unwrap();
+            for (index, (&a, &e)) in actual.iter().zip(expected).enumerate() {
+                assert!(
+                    (a - e).abs() <= 1e-12 * e.abs().max(1.0),
+                    "{what}[{index}]: actual {a}, expected {e}"
+                );
+            }
+        }
+        DType::C64 => {
+            let actual = actual.as_slice::<Complex64>().unwrap();
+            let expected = expected.as_slice::<Complex64>().unwrap();
+            for (index, (&a, &e)) in actual.iter().zip(expected).enumerate() {
+                let error = ((a.re - e.re).powi(2) + (a.im - e.im).powi(2)).sqrt();
+                let scale = (e.re.abs() + e.im.abs()).max(1.0);
+                assert!(
+                    error <= 1e-12 * scale,
+                    "{what}[{index}]: actual {a:?}, expected {e:?}"
+                );
+            }
+        }
+        other => panic!("{what}: unexpected dtype {other:?}"),
+    }
 }
