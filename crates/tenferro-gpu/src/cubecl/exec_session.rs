@@ -1045,6 +1045,14 @@ impl CudaHeldSession<'_> {
         self.device_ordinal
     }
 
+    /// The runtime instance this held session was opened from.
+    ///
+    /// Crate-private: it exists so the device-side consumer copy (`U4-2a`) can check that a
+    /// publication belongs to the same runtime instance *before* it enters the captured stream.
+    pub(crate) fn runtime(&self) -> &CudaRuntime {
+        self.backend.runtime()
+    }
+
     /// Run one operation on the held binding, through the existing CUDA session authority.
     ///
     /// The callback receives the same `&mut dyn BackendSession` view the scoped entry hands out,

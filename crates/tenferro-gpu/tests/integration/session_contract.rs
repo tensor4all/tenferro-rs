@@ -85,5 +85,6 @@ fn execution_session_capability_cannot_project_or_escape_owner_borrow() {
         tests.compile_fail("tests/ui/cuda_pending_download_moves_the_source.rs");
         tests.compile_fail("tests/ui/cuda_source_publication_requires_unsafe.rs");
         tests.compile_fail("tests/ui/cuda_source_publication_moves_the_value.rs");
+        tests.compile_fail("tests/ui/cuda_publication_copy_consumes_the_publication.rs");
     }
 }
