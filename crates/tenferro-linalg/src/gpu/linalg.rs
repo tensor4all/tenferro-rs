@@ -4114,6 +4114,8 @@ fn as_i32(value: usize, op: &'static str, label: &'static str) -> Result<i32> {
 /// same allocation. The caller is responsible for ensuring any later FFI call
 /// observes CUDA aliasing and mutability requirements.
 unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
+    // SAFETY: the caller guarantees `base` covers `offset` further `T`
+    // elements inside one device allocation (see `# Safety` above).
     unsafe { base.cast::<T>().add(offset).cast() }
 }
 
@@ -4125,6 +4127,8 @@ unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
 /// additional `T` elements, and the resulting pointer must remain within the
 /// same allocation for the lifetime required by the receiving CUDA library.
 unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_void {
+    // SAFETY: the caller guarantees `base` covers `offset` further `T`
+    // elements inside one device allocation (see `# Safety` above).
     unsafe { base.cast::<T>().add(offset).cast() }
 }
 
