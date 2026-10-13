@@ -47,6 +47,7 @@ gpu	tenferro-gpu	cubecl::tests::blas1_tests::cuda_axpby_reads_an_offset_strided_
 gpu	tenferro-gpu	cubecl::tests::capability_tests::cuda_descriptor_supported_entries_match_cpu_smoke_cases
 gpu	tenferro-gpu	cubecl::tests::copy_fault_tests::a_completion_record_failure_is_unproven_and_retains_the_package
 gpu	tenferro-gpu	cubecl::tests::copy_fault_tests::a_recoverable_preparation_failure_refuses_with_the_publication
+gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_refused_allocation_is_reported_on_the_buffer
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_allocates_and_binds_output
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_allocates_zero_filled_output
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_exposes_client_and_launch_helpers
@@ -156,6 +157,7 @@ gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_restores_context_
 gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_reuses_the_runtime_cublas_handle
 gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_tensor_ref_carries_validated_span
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_bool_reductions_are_unsupported
+gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_complex_full_reduction_compiles_and_matches_cpu
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_complex_sum_and_prod_match_cpu
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_complex_sum_and_prod_match_cpu_on_plane_path
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_float_max_min_reductions_propagate_nan_for_unit_and_plane

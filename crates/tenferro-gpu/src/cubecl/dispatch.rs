@@ -655,6 +655,19 @@ pub(crate) fn typed_from_cubecl<T: TensorScalar + Send + Sync + 'static>(
     )
 }
 
+/// Allocate an output tensor of `shape` on `rt`.
+///
+/// **`Ok` means the request was accepted, not that the allocation happened.**
+/// `Client::empty` queues the reservation on CubeCL's device thread, so a refusal
+/// is recorded on the buffer itself (`cubecl-cuda/src/compute/server.rs`
+/// `fail_unallocated`) and is reported at that buffer's next use: `check`, a read,
+/// `sync_buffers`, or a download. Callers must surface the failure through the
+/// tensor this returns rather than by checking here: a per-allocation check costs
+/// a device-thread round trip (8.19 us on the A100, against the 1-2 us
+/// per-operation budget of #2079), which is why the contract is deferred rather
+/// than synchronous. The residual is a write-only output nobody reads inside a
+/// session nobody synchronizes - that failure stays unseen until the buffer is
+/// read. Recorded in `docs/design/gpu-correctness-invariants-2137.md` (I2).
 pub(crate) fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     shape: &[usize],
