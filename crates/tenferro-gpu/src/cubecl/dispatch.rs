@@ -395,7 +395,7 @@ impl_read_scalar!(num_complex::Complex32, C32);
 impl_read_scalar!(num_complex::Complex64, C64);
 
 /// Ensure a read's storage lives on this runtime, without materializing it.
-pub(crate) fn ensure_read_resident<T: ReadScalar>(
+pub(super) fn ensure_read_resident<T: ReadScalar>(
     rt: &CudaRuntime,
     read: &TensorRead<'_>,
     op: &'static str,
@@ -419,7 +419,7 @@ pub(crate) fn ensure_read_resident<T: ReadScalar>(
 /// Bind one operand of a read-based kernel, or `None` when this backend cannot
 /// bind that read without materializing it (an unsupported scalar or a view
 /// that is not compact), in which case the caller falls back to the owned path.
-pub(crate) fn typed_read_binding<T: ReadScalar>(
+pub(super) fn typed_read_binding<T: ReadScalar>(
     read: &TensorRead<'_>,
     op: &'static str,
 ) -> crate::Result<Option<TensorBinding<CubeclCudaRuntime>>> {
