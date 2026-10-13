@@ -450,7 +450,25 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
         }
         StdTensorOp::DotGeneral { config, .. } => {
             let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-            vec![exec.dot_general_read(a.tensor_read(), b.tensor_read(), config)?]
+            // One rule, shared with the compiler pass: a degenerate form is the
+            // elementary op it actually is, not a contraction (invariant I4), so
+            // the eager path does not pay the backend's contraction machinery
+            // for it either.
+            match tenferro_tensor::degenerate_dot_kind(
+                config,
+                a.tensor_read().shape(),
+                b.tensor_read().shape(),
+            ) {
+                Some(tenferro_tensor::DegenerateDotKind::Hadamard) => {
+                    vec![exec.mul_read(a.tensor_read(), b.tensor_read())?]
+                }
+                Some(tenferro_tensor::DegenerateDotKind::FullContraction) => {
+                    let product = exec.mul_read(a.tensor_read(), b.tensor_read())?;
+                    let axes: Vec<usize> = (0..product.shape().len()).collect();
+                    vec![exec.reduce_sum_read(TensorRead::from_tensor(&product), &axes)?]
+                }
+                _ => vec![exec.dot_general_read(a.tensor_read(), b.tensor_read(), config)?],
+            }
         }
         StdTensorOp::Reshape { to_shape, .. } => {
             let shape = resolve_tensor_read_shape_exprs(inputs, to_shape)?;

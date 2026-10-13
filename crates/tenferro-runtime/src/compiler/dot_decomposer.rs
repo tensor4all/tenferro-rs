@@ -1,6 +1,6 @@
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ShapeExtent;
-use tenferro_tensor::{DType, DotGeneralConfig};
+use tenferro_tensor::{degenerate_dot_kind, DType, DegenerateDotKind, DotGeneralConfig};
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::Result;
@@ -168,10 +168,10 @@ fn run_dot_passes(
                 if rewrite_degenerate_dot(degenerate_input, &mut builder)? {
                     continue;
                 }
-            } else if lhs_shape.len() == rhs_shape.len()
+            } else if degenerate_dot_kind(config, lhs_shape, rhs_shape)
+                == Some(DegenerateDotKind::FullContraction)
                 && lhs_shape == rhs_shape
                 && lhs_extents == rhs_extents
-                && all_dims_contract(config, lhs_shape.len(), rhs_shape.len())
             {
                 let mut builder = InstructionBuilder {
                     n_slots: &mut n_slots,
@@ -338,24 +338,6 @@ fn product_of_input_dims(input_idx: usize, start: usize, end: usize) -> DimExpr 
     result
 }
 
-/// Whether every dimension of both operands contracts.
-fn all_dims_contract(config: &DotGeneralConfig, lhs_rank: usize, rhs_rank: usize) -> bool {
-    config.lhs_batch_dims.is_empty()
-        && config.rhs_batch_dims.is_empty()
-        && config.lhs_contracting_dims.len() == lhs_rank
-        && config.rhs_contracting_dims.len() == rhs_rank
-        && config
-            .lhs_contracting_dims
-            .iter()
-            .enumerate()
-            .all(|(position, &axis)| axis == position)
-        && config
-            .rhs_contracting_dims
-            .iter()
-            .enumerate()
-            .all(|(position, &axis)| axis == position)
-}
-
 /// Rewrite a `DotGeneral` whose algebra is not a contraction into the
 /// elementary operation it actually is (invariant I4: once, in the semantic
 /// layer, so every backend inherits it instead of running its general
@@ -371,33 +353,15 @@ fn rewrite_degenerate_dot(
     let config = input.config;
     let lhs = input.lhs;
     let rhs = input.rhs;
-    let no_batch = config.lhs_batch_dims.is_empty() && config.rhs_batch_dims.is_empty();
-    // This helper owns the no-contraction forms only; a contracting
-    // dot_general keeps the decomposition path.
-    if !no_batch
-        || !config.lhs_contracting_dims.is_empty()
-        || !config.rhs_contracting_dims.is_empty()
-    {
+    // One rule, shared with the eager executor: what this algebra actually is
+    // (invariant I4). A contraction keeps the decomposition path.
+    let Some(kind) = degenerate_dot_kind(config, lhs.shape, rhs.shape) else {
         return Ok(false);
-    }
-    // No batch dims means every operand dimension is free.
-    let lhs_free = free_axes_of(
-        lhs.shape.len(),
-        &config.lhs_contracting_dims,
-        &config.lhs_batch_dims,
-    );
-    let rhs_free = free_axes_of(
-        rhs.shape.len(),
-        &config.rhs_contracting_dims,
-        &config.rhs_batch_dims,
-    );
-    if lhs_free.len() != lhs.shape.len() || rhs_free.len() != rhs.shape.len() {
-        return Ok(false);
-    }
+    };
 
     // (1) Pure Hadamard: both operands carry the same free dimensions, so the
     //     algebra is an elementwise product.
-    if !lhs.shape.is_empty() && lhs.shape == rhs.shape && lhs.extents == rhs.extents {
+    if kind == DegenerateDotKind::Hadamard && lhs.extents == rhs.extents {
         let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
         let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
         builder.push(ExecInstruction {
@@ -415,7 +379,7 @@ fn rewrite_degenerate_dot(
 
     // (2) Outer product: both sides contribute free dimensions and none
     //     contract, so the result is their product over the concatenated axes.
-    if !lhs.shape.is_empty() && !rhs.shape.is_empty() {
+    if kind == DegenerateDotKind::OuterProduct {
         let expected: Vec<DimExpr> = lhs
             .shape
             .iter()
