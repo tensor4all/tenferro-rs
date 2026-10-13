@@ -829,3 +829,88 @@ fn test_cubecl_complex_full_reduction_compiles_and_matches_cpu() {
         }
     }
 }
+
+/// A long-axis full reduction is split across cubes (#2134): pass 1 writes
+/// per-chunk partials and pass 2 combines them, instead of one warp walking the
+/// whole axis.
+///
+/// The lengths straddle the split threshold (`2 * MIN_CHUNK = 512`) and the
+/// remainder case (513, where the last chunk runs to `axis_len` rather than to
+/// `start + chunk_len`), then cover the sizes the acceptance measures. The first
+/// launch of each kernel compiles it with NVRTC, so the warm time is printed for
+/// the record and only correctness is asserted.
+#[test]
+#[ignore = "requires CUDA GPU"]
+fn test_cubecl_split_reduction_large_axis_matches_cpu() {
+    if !crate::cubecl::gpu_available() {
+        eprintln!("skipping split reduction test - no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let runtime = gpu.runtime().clone();
+    for len in [511usize, 512, 513, 600, 1_000_000, 10_000_000] {
+        let values: Vec<f64> = (0..len).map(|i| ((i % 17) as f64) * 0.25 - 2.0).collect();
+        let expected: f64 = values.iter().sum();
+        let input = tensor_f64(vec![len], values);
+        let gpu_input = upload(&gpu, &input);
+
+        // The expected value also comes from the CPU backend, so a wrong host
+        // sum cannot make a wrong device result look right.
+        let reference = cpu
+            .with_backend_session(|session| {
+                session.reduce_sum_read(TensorRead::from_tensor(&input), &[0])
+            })
+            .unwrap()
+            .unwrap();
+        assert!(
+            (reference.as_slice::<f64>().unwrap()[0] - expected).abs()
+                <= 1e-9 * expected.abs().max(1.0),
+            "len={len}: the CPU reference must agree with the host sum"
+        );
+
+        let mut warm = std::time::Duration::ZERO;
+        let mut actual = None;
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            actual = Some(
+                gpu.with_backend_session(|session| {
+                    session.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0])
+                })
+                .unwrap()
+                .unwrap(),
+            );
+            runtime.synchronize().unwrap();
+            warm = started.elapsed();
+        }
+        eprintln!("len={len}: warm device time {warm:?}");
+
+        let actual = download(&gpu, &actual.unwrap());
+        let got = actual.as_slice::<f64>().unwrap()[0];
+        assert!((got - expected).abs() <= 1e-9 * expected.abs().max(1.0), "len={len}: got {got}, expected {expected}");
+
+        // The reported exactness case survives the split: every chunk sums to
+        // exactly zero, so the combine pass does too.
+        let difference = gpu
+            .with_backend_session(|session| {
+                session.sub_read(
+                    TensorRead::from_tensor(&gpu_input),
+                    TensorRead::from_tensor(&gpu_input),
+                )
+            })
+            .unwrap()
+            .unwrap();
+        let reduced = gpu
+            .with_backend_session(|session| {
+                session.reduce_sum_read(TensorRead::from_tensor(&difference), &[0])
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            download(&gpu, &reduced).as_slice::<f64>().unwrap()[0],
+            0.0,
+            "len={len}: reduce_sum(sub(x, x)) must stay exactly zero"
+        );
+    }
+}

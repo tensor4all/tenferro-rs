@@ -214,6 +214,71 @@ pub(crate) fn reduce_sum_float_plane<T: Float + PlaneReduce>(
     }
 }
 
+// Pass 1 of a split float sum. Each cube owns one `(output_index, split)` pair
+// and writes one chunk partial; pass 2 reuses the existing
+// `reduce_sum_float_plane` over the partials as its input. The decomposition
+// walks the partials' dims and skips the reduce axis: in the keepdims shape
+// that axis has length 1, so its input coordinate is always zero and only the
+// `split` contribution is added there.
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_sum_float_chunked<T: Float + PlaneReduce>(
+    input: &Tensor<T>,
+    partials: &mut Tensor<T>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        // The floor split leaves `reduce_len % splits` extra elements on the
+        // last chunk, so that slice runs to the axis end rather than
+        // `start + chunk_len`.
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            acc = acc + input[input_offset];
+            reduce_index += plane_width;
+        }
+
+        let reduced = plane_sum(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
 #[cube(launch_unchecked)]
 pub(crate) fn reduce_sum_complex_plane<T: ComplexCore + PlaneReduce>(
     input: &Tensor<T>,

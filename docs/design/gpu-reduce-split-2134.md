@@ -56,9 +56,13 @@ Per op, a kernel with the same body scaffolding as the existing plane kernel but
   output that axis has length 1, so its coordinate is always zero and it
   contributes nothing to the base offset. `partials_offset` accumulates
   `split * partials.stride(axis)` in that step.
-- the reduction walks `reduce_index in [split * chunk_len, min((split+1)*chunk_len, axis_len))`
-  with the same `plane_width` stride, and writes
-  `partials[partials_offset]` at `UNIT_POS == 0`.
+- the reduction walks `reduce_index` from `split * chunk_len` to
+  `start + chunk_len`, except for the **last** chunk, which runs to `axis_len`: the
+  floor rule above leaves `reduce_len % splits` extra elements there, so clipping
+  every chunk at `start + chunk_len` would drop them (a first implementation did,
+  and a 513-element reduction returned one element's worth too little). The
+  stride is the same `plane_width`, and the write is `partials[partials_offset]`
+  at `UNIT_POS == 0`.
 
 Pass 1 therefore needs no output-tensor binding and no keepdims metadata: the
 partials' own shape and strides carry the layout.
@@ -74,11 +78,15 @@ with `axis = rank`:
 - the kernel's decomposition loop walks `output.rank()` dims, which is the
   keepdims rank, and reads `input.shape(dim)` / `input.stride(dim)` from the
   partials - aligned for every dim below `rank`;
-- `axis = rank` then has `input.shape(rank) == splits` and
-  `input.stride(rank) == 1`;
+- the partials keep the keepdims **rank** - the reduce axis is set to `splits`
+  rather than a dim being added - so pass 2 uses the *same* `axis`, not a new one.
+  An earlier version of this record said `axis = rank`; that was written for a
+  partials layout with an extra trailing dim, which the implementation does not
+  use.
 - the strategy for this pass is the *existing* unit/plane selection on
   `reduce_len = splits`, so a small `splits` uses the unit kernel and no plane
-  shuffle.
+  shuffle. It must not go through `plan` again: `splits` can exceed the split
+  threshold, and the partials axis must not be split a second time.
 
 No combine kernel has to be written, and no existing kernel changes.
 
@@ -210,6 +218,27 @@ pieces can be shared between them.
   unit/plane boundary cases.
 - **A new device test** asserts a large-axis full reduction matches the CPU, so
   the split path is covered beyond the acceptance measurement.
+
+## Acceptance measured (A100 80GB PCIe, driver 580.126.09, `--release`)
+
+Full `reduce_sum` over a rank-1 f64 tensor, warm (the first launch of each kernel
+compiles it with NVRTC and is excluded), `cargo test --release -p tenferro-gpu
+--features cuda --lib -- --ignored --test-threads=1`:
+
+| len | before (reporter's nsys) | after |
+| --- | --- | --- |
+| 1e6 | ~1.8 ms | **44.6 us** |
+| 1e7 | ~38 ms | **105.0 us** |
+
+The 1e7 row is at the acceptance target - the elementwise pass over the same data
+is ~0.1 ms - and the split path also covers the boundary lengths 511 (unsplit),
+512 (first split), 513 (the remainder case) and 600. Every length agrees with a
+host sum and with the CPU backend, and `reduce_sum(sub(x, x))` is still exactly
+zero through both passes.
+
+The whole device suite passes unchanged: 218 ignored/device tests, 0 failed, of
+which `test_cubecl_split_reduction_large_axis_matches_cpu` is the new one
+(classified `gpu` in `scripts/ci/cuda_test_partition.tsv`).
 
 ## Out of scope
 
