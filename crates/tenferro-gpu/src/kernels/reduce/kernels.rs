@@ -280,6 +280,585 @@ pub(crate) fn reduce_sum_float_chunked<T: Float + PlaneReduce>(
 }
 
 #[cube(launch_unchecked)]
+pub(crate) fn reduce_sum_complex_chunked<T: ComplexCore + PlaneReduce>(
+    input: &Tensor<T>,
+    partials: &mut Tensor<T>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            acc = acc + input[input_offset];
+            reduce_index += plane_width;
+        }
+
+        let reduced = plane_sum(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_prod_float_chunked<T: Float + PlaneReduce>(
+    input: &Tensor<T>,
+    partials: &mut Tensor<T>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            acc = acc * input[input_offset];
+            reduce_index += plane_width;
+        }
+
+        let reduced = plane_prod(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_prod_complex_chunked<T: ComplexCore + PlaneReduce>(
+    input: &Tensor<T>,
+    partials: &mut Tensor<T>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            acc = acc * input[input_offset];
+            reduce_index += plane_width;
+        }
+
+        let reduced = plane_prod(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_sum_squares_float_chunked<F: Float>(
+    input: &Tensor<F>,
+    partials: &mut Tensor<F>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let first = input[input_base_offset + reduce_index * axis_stride];
+        // `fma(x, x, 0)` matches the unsplit plane kernel: it rounds the
+        // square before the later addition and stops NVRTC contracting it.
+        let mut acc = fma(first, first, F::new(0.0_f32));
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            let value = input[input_offset];
+            let square = fma(value, value, F::new(0.0_f32));
+            acc += square;
+            reduce_index += plane_width;
+        }
+
+        let reduced = plane_sum(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_sum_int_chunked<T: Int>(
+    input: &Tensor<T>,
+    partials: &mut Tensor<T>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            acc = wrapping_add::<T>(acc, input[input_offset]);
+            reduce_index += plane_width;
+        }
+
+        let reduced = wrapping_plane_sum::<T>(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_prod_int_chunked<T: Int>(
+    input: &Tensor<T>,
+    partials: &mut Tensor<T>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            acc = wrapping_mul::<T>(acc, input[input_offset]);
+            reduce_index += plane_width;
+        }
+
+        let reduced = wrapping_plane_prod::<T>(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_max_float_chunked<F: Float>(
+    input: &Tensor<F>,
+    partials: &mut Tensor<F>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            acc = nan_propagating_max::<F>(acc, input[input_offset]);
+            reduce_index += plane_width;
+        }
+
+        let contains_nan = plane_contains_nan::<F>(acc);
+        let propagated_nan = plane_propagate_nan::<F>(acc);
+        let reduced = plane_max(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = if contains_nan {
+                propagated_nan
+            } else {
+                reduced
+            };
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_min_float_chunked<F: Float>(
+    input: &Tensor<F>,
+    partials: &mut Tensor<F>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            acc = nan_propagating_min::<F>(acc, input[input_offset]);
+            reduce_index += plane_width;
+        }
+
+        let contains_nan = plane_contains_nan::<F>(acc);
+        let propagated_nan = plane_propagate_nan::<F>(acc);
+        let reduced = plane_min(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = if contains_nan {
+                propagated_nan
+            } else {
+                reduced
+            };
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_max_int_chunked<I: Int>(
+    input: &Tensor<I>,
+    partials: &mut Tensor<I>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            let value = input[input_offset];
+            acc = if acc >= value { acc } else { value };
+            reduce_index += plane_width;
+        }
+
+        let reduced = plane_max(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn reduce_min_int_chunked<I: Int>(
+    input: &Tensor<I>,
+    partials: &mut Tensor<I>,
+    axis: usize,
+    output_len: usize,
+    splits: usize,
+    chunk_len: usize,
+) {
+    let cube = CUBE_POS_X as usize;
+    let output_index = cube / splits;
+    let split = cube % splits;
+    if output_index < output_len {
+        let rank = partials.rank();
+        let mut remaining = output_index;
+        let mut input_base_offset = 0usize;
+        let mut partials_offset = 0usize;
+
+        for dim in 0..rank {
+            if dim == axis {
+                partials_offset += split * partials.stride(dim);
+            } else {
+                let dim_len = partials.shape(dim);
+                let coord = remaining % dim_len;
+                remaining /= dim_len;
+                input_base_offset += coord * input.stride(dim);
+                partials_offset += coord * partials.stride(dim);
+            }
+        }
+
+        let axis_stride = input.stride(axis);
+        let axis_len = input.shape(axis);
+        let plane_width = PLANE_DIM as usize;
+        let start = split * chunk_len;
+        let end = if split + 1 == splits {
+            axis_len
+        } else {
+            start + chunk_len
+        };
+        let mut reduce_index = start + UNIT_POS as usize;
+        let mut acc = input[input_base_offset + reduce_index * axis_stride];
+
+        reduce_index += plane_width;
+        while reduce_index < end {
+            let input_offset = input_base_offset + reduce_index * axis_stride;
+            let value = input[input_offset];
+            acc = if acc <= value { acc } else { value };
+            reduce_index += plane_width;
+        }
+
+        let reduced = plane_min(acc);
+        if UNIT_POS == 0 {
+            partials[partials_offset] = reduced;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
 pub(crate) fn reduce_sum_complex_plane<T: ComplexCore + PlaneReduce>(
     input: &Tensor<T>,
     output: &mut Tensor<T>,

@@ -888,7 +888,10 @@ fn test_cubecl_split_reduction_large_axis_matches_cpu() {
 
         let actual = download(&gpu, &actual.unwrap());
         let got = actual.as_slice::<f64>().unwrap()[0];
-        assert!((got - expected).abs() <= 1e-9 * expected.abs().max(1.0), "len={len}: got {got}, expected {expected}");
+        assert!(
+            (got - expected).abs() <= 1e-9 * expected.abs().max(1.0),
+            "len={len}: got {got}, expected {expected}"
+        );
 
         // The reported exactness case survives the split: every chunk sums to
         // exactly zero, so the combine pass does too.
@@ -913,4 +916,108 @@ fn test_cubecl_split_reduction_large_axis_matches_cpu() {
             "len={len}: reduce_sum(sub(x, x)) must stay exactly zero"
         );
     }
+
+    // The other reduction families take the split path too. Every input below
+    // is integral and small enough that the exact result still fits the
+    // f32/f64 mantissa, so the split's different accumulation order has to
+    // reproduce it bit-for-bit: a wrong partial cannot hide in a tolerance.
+    let split_len = 1_000_000usize;
+    macro_rules! split_matches_cpu {
+        ($cpu:expr, $gpu:expr, $label:expr, $input:expr, $op:ident) => {{
+            let gpu_input = upload(&$gpu, &$input);
+            let expected = $cpu
+                .with_backend_session(|session| session.$op(TensorRead::from_tensor(&$input), &[0]))
+                .unwrap()
+                .unwrap();
+            let actual = $gpu
+                .with_backend_session(|session| {
+                    session.$op(TensorRead::from_tensor(&gpu_input), &[0])
+                })
+                .unwrap()
+                .unwrap();
+            assert_tensor_close(&download(&$gpu, &actual), &expected, 0.0);
+            eprintln!("{}: split path matches the CPU backend", $label);
+        }};
+    }
+
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 sum",
+        tensor_f32(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 7) as f32).collect()
+        ),
+        reduce_sum_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "c64 sum",
+        tensor_c64(
+            vec![split_len],
+            (0..split_len)
+                .map(|i| num_complex::Complex64::new((i % 7) as f64, (i % 5) as f64))
+                .collect()
+        ),
+        reduce_sum_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "i64 sum",
+        tensor_i64(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 11) as i64 - 5).collect()
+        ),
+        reduce_sum_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 sum_squares",
+        tensor_f32(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 7) as f32).collect()
+        ),
+        reduce_sum_squares_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 prod",
+        tensor_f32(
+            vec![split_len],
+            // Period-3 {1, 2, 0.5}: the product is exactly 1, and no
+            // same-parity lane run overflows the CPU backend's SIMD product.
+            (0..split_len)
+                .map(|i| match i % 3 {
+                    0 => 1.0,
+                    1 => 2.0,
+                    _ => 0.5,
+                })
+                .collect()
+        ),
+        reduce_prod_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 max",
+        tensor_f32(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 13) as f32 - 6.0).collect()
+        ),
+        reduce_max_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 min",
+        tensor_f32(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 13) as f32 - 6.0).collect()
+        ),
+        reduce_min_read
+    );
 }

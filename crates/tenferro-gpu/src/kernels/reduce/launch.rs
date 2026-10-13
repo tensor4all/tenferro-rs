@@ -20,7 +20,7 @@ use cubecl::{features::Plane, prelude::*};
 use super::{
     definition::validate_keepdims_output_shape,
     kernels,
-    routines::{plan, unit_launch_settings, ReduceProblem},
+    routines::{plan, unit_launch_settings, ReduceLaunchPlan, ReduceProblem},
 };
 use crate::kernels::{CubeclKernelError, Result};
 
@@ -184,6 +184,43 @@ fn auto_reduce_strategy_for_capabilities(
     }
 }
 
+/// The static pass-1 grid a split needs: one cube per (output, chunk) pair.
+fn split_grid_cubes(output_len: usize, splits: usize) -> Result<u32> {
+    let grid =
+        output_len
+            .checked_mul(splits)
+            .ok_or_else(|| CubeclKernelError::InvalidStrategy {
+                reason: format!(
+                    "split reduction grid {} exceeds static CubeCL launch limit",
+                    output_len
+                ),
+            })?;
+    u32::try_from(grid).map_err(|_| CubeclKernelError::InvalidStrategy {
+        reason: format!(
+            "split reduction grid {} exceeds static CubeCL launch limit",
+            output_len
+        ),
+    })
+}
+
+/// Resolve pass 2 of a split: reduce the `splits`-long partials axis with the
+/// kernel the existing unit/plane selection gives for `reduce_len = splits`.
+fn combine_launch(
+    client: &Client,
+    plan: &ReduceLaunchPlan,
+    splits: usize,
+) -> Result<ResolvedReduceLaunch> {
+    let problem = ReduceProblem {
+        reduce_len: splits,
+        reduce_count: plan.output_len,
+        axis: plan.axis,
+    };
+    match auto_reduce_strategy(client, problem)? {
+        ResolvedReduceStrategy::Unit => launch_with_unit_settings(client, problem),
+        ResolvedReduceStrategy::Plane => launch_with_plane_settings(client, problem),
+    }
+}
+
 /// Launch a floating-point sum reduction.
 pub(crate) fn launch_sum_float<F: Float + CubeElement>(
     client: &Client,
@@ -312,9 +349,63 @@ pub(crate) fn launch_sum_squares_float<F: Float + CubeElement>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_sum_squares_float_chunked::launch_unchecked::<F>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => {
+                    // Pass 1 already squared and summed, so the combine is a
+                    // plain sum of the partials, not `reduce_sum_squares`.
+                    kernels::reduce_sum_float::launch_unchecked::<F>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_sum_float_plane::launch_unchecked::<F>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` proves the input and keepdims output
@@ -356,9 +447,59 @@ pub(crate) fn launch_sum_int<I: Int + CubeElement>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_sum_int_chunked::launch_unchecked::<I>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => kernels::reduce_sum_int::launch_unchecked::<I>(
+                    client,
+                    combine.cube_count,
+                    combine.cube_dim,
+                    partials.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                ),
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_sum_int_plane::launch_unchecked::<I>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
@@ -398,9 +539,59 @@ pub(crate) fn launch_sum_complex<C: ComplexCore + CubeElement + PlaneReduce>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_sum_complex_chunked::launch_unchecked::<C>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => kernels::reduce_sum_complex::launch_unchecked::<C>(
+                    client,
+                    combine.cube_count,
+                    combine.cube_dim,
+                    partials.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                ),
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_sum_complex_plane::launch_unchecked::<C>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
@@ -442,9 +633,59 @@ pub(crate) fn launch_prod_float<F: Float + CubeElement>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_prod_float_chunked::launch_unchecked::<F>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => kernels::reduce_prod_float::launch_unchecked::<F>(
+                    client,
+                    combine.cube_count,
+                    combine.cube_dim,
+                    partials.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                ),
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_prod_float_plane::launch_unchecked::<F>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
@@ -486,9 +727,59 @@ pub(crate) fn launch_prod_int<I: Int + CubeElement>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_prod_int_chunked::launch_unchecked::<I>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => kernels::reduce_prod_int::launch_unchecked::<I>(
+                    client,
+                    combine.cube_count,
+                    combine.cube_dim,
+                    partials.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                ),
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_prod_int_plane::launch_unchecked::<I>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
@@ -528,9 +819,61 @@ pub(crate) fn launch_prod_complex<C: ComplexCore + CubeElement + PlaneReduce>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_prod_complex_chunked::launch_unchecked::<C>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => {
+                    kernels::reduce_prod_complex::launch_unchecked::<C>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_prod_complex_plane::launch_unchecked::<C>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
@@ -572,9 +915,59 @@ pub(crate) fn launch_max_float<F: Float + CubeElement>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_max_float_chunked::launch_unchecked::<F>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => kernels::reduce_max_float::launch_unchecked::<F>(
+                    client,
+                    combine.cube_count,
+                    combine.cube_dim,
+                    partials.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                ),
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_max_float_plane::launch_unchecked::<F>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
@@ -616,9 +1009,59 @@ pub(crate) fn launch_max_int<I: Int + CubeElement>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_max_int_chunked::launch_unchecked::<I>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => kernels::reduce_max_int::launch_unchecked::<I>(
+                    client,
+                    combine.cube_count,
+                    combine.cube_dim,
+                    partials.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                ),
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_max_int_plane::launch_unchecked::<I>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
@@ -658,9 +1101,59 @@ pub(crate) fn launch_min_float<F: Float + CubeElement>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_min_float_chunked::launch_unchecked::<F>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => kernels::reduce_min_float::launch_unchecked::<F>(
+                    client,
+                    combine.cube_count,
+                    combine.cube_dim,
+                    partials.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                ),
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_min_float_plane::launch_unchecked::<F>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
@@ -702,9 +1195,59 @@ pub(crate) fn launch_min_int<I: Int + CubeElement>(
     output: TensorBinding,
     axis: usize,
     strategy: ReduceStrategy,
-    _partials: Option<TensorBinding>,
+    partials: Option<TensorBinding>,
 ) -> Result<()> {
     let launch = plan(client, &input, &output, axis, strategy)?;
+
+    if let Some(split) = launch.split {
+        let partials = partials.ok_or_else(|| CubeclKernelError::InvalidStrategy {
+            reason: "split reduction requires a partials buffer".to_owned(),
+        })?;
+        let pass1_cubes = split_grid_cubes(launch.output_len, split.splits)?;
+        let combine = combine_launch(client, &launch, split.splits)?;
+        unsafe {
+            // SAFETY: `plan` validated the input/keepdims-output contract and
+            // the non-empty reduce axis. Pass 1 covers exactly
+            // `output_len * splits` guarded cubes over the axis slices and
+            // writes each partial once; `combine` was validated for the
+            // `splits`-long partials axis. Both launches enqueue in program
+            // order on the client stream, so pass 2 reads pass 1's partials.
+            kernels::reduce_min_int_chunked::launch_unchecked::<I>(
+                client,
+                CubeCount::Static(pass1_cubes, 1, 1),
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                partials.clone().into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+                split.splits,
+                split.chunk_len,
+            );
+            match combine.kind {
+                ResolvedReduceStrategy::Unit => kernels::reduce_min_int::launch_unchecked::<I>(
+                    client,
+                    combine.cube_count,
+                    combine.cube_dim,
+                    partials.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                ),
+                ResolvedReduceStrategy::Plane => {
+                    kernels::reduce_min_int_plane::launch_unchecked::<I>(
+                        client,
+                        combine.cube_count,
+                        combine.cube_dim,
+                        partials.into_tensor_arg(),
+                        output.into_tensor_arg(),
+                        launch.axis,
+                        launch.output_len,
+                    )
+                }
+            }
+        }
+        return Ok(());
+    }
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input

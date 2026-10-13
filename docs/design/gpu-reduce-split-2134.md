@@ -1,7 +1,8 @@
 # A full reduction uses one warp (#2134): split the plane reduction over the axis
 
-Status: design accepted, implementation pending. This is the record #2112 item 9
-asks for: the root fix and its acceptance, written before the code.
+Status: implemented for all eleven reduction families on the `develop` branch,
+awaiting the batched `develop` -> `main` pull request. This is the record #2112
+item 9 asks for: the root fix and its acceptance, written before the code.
 
 ## The defect
 
@@ -87,6 +88,11 @@ with `axis = rank`:
   `reduce_len = splits`, so a small `splits` uses the unit kernel and no plane
   shuffle. It must not go through `plan` again: `splits` can exceed the split
   threshold, and the partials axis must not be split a second time.
+- **`sum_squares` is the one op whose pass 2 is not its own kernel**: pass 1
+  writes per-chunk `Σx²`, so combining the partials is a plain **sum**, not
+  another sum of squares. Wiring its own kernels for pass 2 returned `4.33e10`
+  where the CPU says `1.3e7`; the `f32 sum_squares` case in the device test is
+  what guards it. Every other op's pass 2 is its own op.
 
 No combine kernel has to be written, and no existing kernel changes.
 
