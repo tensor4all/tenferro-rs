@@ -136,6 +136,44 @@ authority.
   `tensor4all/tenferro-benchmark`; the in-repo measurement reproduces the same
   shape and is what this design is accepted against.
 
+## Why the trimming stops here: the floor is the wall
+
+The numbers say more than "there is a little left". For the shape this issue
+measures (8x1024 f32 `add`), the kernel runs in **1.2 us** and the raw-launch floor
+is **5.36 us**, so the host pays at least 4.5x the kernel time for one op even
+after every bookkeeping item in the inventory above is removed. Step 1 got the
+streaming arm from 10.15 to 8.96 us; the floor is the wall it approaches, and the
+wall is above the kernel.
+
+That is the real finding: **an isolated decode-sized op has no GPU advantage to
+win.** At the floor the GPU is idle for roughly four fifths of the op's wall time,
+so shaving another 0.3 us of host bookkeeping moves a percentage that the launch
+overhead already decided. The measurable local levers are exhausted:
+
+- what remains in tenferro is spread across many small allocations and `Arc`
+  clones (see the inventory), and the one candidate that removes six of them
+  measured 8% *worse*;
+- the larger part of the floor is CubeCL's own `launch_unchecked` argument
+  marshalling and the launch itself, which this repository cannot change;
+- one device-thread round trip (8.19 us, #2137 I2) is larger than the whole target,
+  so nothing on the path may add a synchronisation point.
+
+The remedy for the decode case therefore belongs to a different level, not to this
+one:
+
+1. **Amortise the launch** - capture/replay, batched submission, or fusion across
+   ops, so one launch covers many decode steps. Sequence-level execution is owned
+   by #1938 section 5 (and #1945); this issue's T1 scope explicitly excludes it.
+2. **Do not dispatch such ops to the GPU at all** - a dispatch-policy decision for
+   a tensor small enough that the CPU wins (a 1024x8 `add` is 8192 elements). That
+   is a new question with its own trade-offs (placement of the operands, transfers,
+   the user's expectation of where their data lives) and is not implied by this
+   record.
+
+Until one of those is decided, `#2079`'s acceptance ("per-op within 1-2 us of the
+launch floor") is the wrong target: it asks for 0.x us of work whose ceiling is set
+by a floor 4.5x the kernel time. #2112 item 7 records the replacement.
+
 ## What this record does not claim
 
 - The split of the ~3.7 us between tenferro's host bookkeeping and CubeCL's own
