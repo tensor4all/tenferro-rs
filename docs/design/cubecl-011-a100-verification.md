@@ -215,4 +215,3 @@ Measured on the A100 (CUDA 12.6, driver 580.126.09, `-j 4 --test-threads=4`):
 
 The Metal-side behavioural evidence is the Mac's (`apple_context` 4, `apple_cpu` 2,
 `webgpu_metal_fft` 1, storage-provider WebGPU 3 + 2, recorded in #2114).
-

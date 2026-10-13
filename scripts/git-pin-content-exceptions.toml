@@ -39,4 +39,3 @@ issue = "https://github.com/tensor4all/elem-simd-math-rs/issues/2"
 # The strided exceptions for the #292 permutation and axis-reduction kernels are
 # gone: the workspace now pins the published strided-rs v0.4.7 revision, which
 # this check verifies against the crates.io archive.
-

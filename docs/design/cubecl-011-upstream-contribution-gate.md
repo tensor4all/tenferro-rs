@@ -144,4 +144,3 @@ reading the two call paths:
 - Still owed: that call site, its unit test, and a positive runtime test for a
   `&[bool]` kernel on the backends that can store it (CUDA/CPU), guarded by the
   same usage check the existing tests use.
-
