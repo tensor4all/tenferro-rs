@@ -11,7 +11,7 @@ use super::{
     tensor_f64, upload, CpuBackend, CudaBackend,
 };
 use tenferro_tensor::BackendSessionHost;
-use tenferro_tensor::TensorRead;
+use tenferro_tensor::{TensorRead, TensorView};
 
 /// Run one `rows x 64` by `64 x 63` f64 matmul on both backends.
 fn compare_rows_matmul(
@@ -458,4 +458,65 @@ fn test_dot_general_complex_matmul_c64() {
         matmul_config(),
         1e-9,
     );
+}
+
+/// The plan path depends on the effective `(pointer, strides, alignment)`, not
+/// on the operand's representation: an owned operand and a view over the same
+/// region share one cuTENSOR plan (#2110).
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_cutensor_plan_is_shared_by_an_owned_and_an_equivalent_view_operand() {
+    let mut gpu = gpu_backend();
+    let lhs = tensor_f64(
+        vec![8, 64],
+        (0..8 * 64).map(|i| (i % 11) as f64 * 0.1 - 0.4).collect(),
+    );
+    let rhs = tensor_f64(
+        vec![64, 63],
+        (0..64 * 63).map(|i| (i % 7) as f64 * 0.2 - 0.3).collect(),
+    );
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_rhs = upload(&gpu, &rhs);
+
+    let owned = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &matmul_config(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let after_owned = gpu.cutensor_plan_cache_stats().unwrap();
+    assert_eq!(after_owned.entries, 1);
+
+    // The view covers the whole region with the same effective strides the
+    // owned operand is described with (the layout's compact column-major
+    // strides), so only the representation differs.
+    let typed = gpu_lhs.as_typed::<f64>().expect("f64 lhs");
+    let region = typed
+        .backend_region_view(vec![8, 64], vec![1, 8], 0)
+        .unwrap();
+    let viewed = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_view(TensorView::F64(region)),
+                TensorRead::from_tensor(&gpu_rhs),
+                &matmul_config(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+
+    let after_view = gpu.cutensor_plan_cache_stats().unwrap();
+    assert_eq!(
+        after_view.entries, 1,
+        "an equivalent view must share the owned operand's plan"
+    );
+    assert!(
+        after_view.hits > after_owned.hits,
+        "the view must hit the owned plan"
+    );
+    assert_tensor_close(&download(&gpu, &viewed), &download(&gpu, &owned), 1e-9);
 }

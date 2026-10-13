@@ -733,6 +733,23 @@ impl BackendSession for CudaExecSession<'_> {
         ops::axpby_read_into_accum(self.backend, alpha, x, beta, y)
     }
 
+    fn gather_read(
+        &mut self,
+        operand: TensorRead<'_>,
+        start_indices: TensorRead<'_>,
+        config: &GatherConfig,
+    ) -> crate::Result<Tensor> {
+        // The operand is the large one: bind it where it is when the device can
+        // read it through its own strides, instead of materializing the table
+        // on every call.
+        if let Some(output) = ops::gather_read(self.backend, &operand, &start_indices, config)? {
+            return Ok(output);
+        }
+        let operand = self.to_contiguous_read(operand)?;
+        let start_indices = self.to_contiguous_read(start_indices)?;
+        self.gather(&operand, &start_indices, config)
+    }
+
     fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
         // SAFETY: `CudaExecSessionMarker` is private to this crate, and this is the only
         // place a token carrying it is created; it always points to a

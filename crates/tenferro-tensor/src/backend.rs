@@ -4110,6 +4110,33 @@ fn validate_compatible_placement(
 /// }
 /// ```
 pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
+    /// Gather with both operands taken as reads.
+    ///
+    /// The default materializes both reads and delegates to
+    /// [`TensorIndexing::gather`]; a backend whose gather kernel consumes the
+    /// operand's strides overrides this so a borrowed operand needs no copy
+    /// (invariant I1: the runtime must not materialize by default).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError`
+    /// source for invalid shapes, ranks, axes, dtypes or output metadata, and
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    /// The default implementation materializes both reads first, so it also
+    /// returns whatever [`Self::to_contiguous_read`] reports for a read the
+    /// backend cannot materialize.
+    fn gather_read(
+        &mut self,
+        operand: TensorRead<'_>,
+        start_indices: TensorRead<'_>,
+        config: &GatherConfig,
+    ) -> crate::Result<Tensor> {
+        let operand = self.to_contiguous_read(operand)?;
+        let start_indices = self.to_contiguous_read(start_indices)?;
+        self.gather(&operand, &start_indices, config)
+    }
+
     /// Compute the all-axis conjugating dot product without transferring either input.
     ///
     /// The result is a rank-0 tensor with the input dtype and has the value

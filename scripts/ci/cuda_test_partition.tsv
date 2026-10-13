@@ -1349,3 +1349,6 @@ gpu	tenferro-gpu::chunked_staging	a_payload_exactly_one_chunk_long_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_one_element_under_the_chunk_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_one_element_over_the_chunk_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_several_chunks_long_round_trips
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_plan_is_shared_by_an_owned_and_an_equivalent_view_operand
+gpu	tenferro-gpu	cubecl::tests::indexing_tests::cuda_gather_reads_a_borrowed_table_in_place
+host	tenferro-gpu	cubecl::gemm::alignment_tests::the_effective_address_decides_the_descriptor_alignment

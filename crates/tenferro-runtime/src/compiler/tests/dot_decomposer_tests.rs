@@ -371,3 +371,174 @@ fn test_dot_decomposer_noncanonical_dot_then_dot_downstream() {
         .any(|i| i.output_slots.contains(&4));
     assert!(produces_slot_4, "final output slot 4 must be produced");
 }
+
+#[test]
+fn test_dot_decomposer_pure_hadamard_becomes_multiply() {
+    // No contracting dims and no batch dims: the algebra is an elementwise
+    // product, so no backend should see a degenerate contraction.
+    let instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[4, 6]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(&mut program, &[dim_shape(&[4, 6]), dim_shape(&[4, 6])]).unwrap();
+
+    assert_eq!(program.instructions.len(), 1);
+    assert!(matches!(program.instructions[0].op, ExecOp::Multiply));
+    assert_eq!(program.instructions[0].input_slots, vec![0, 1]);
+    assert_eq!(program.instructions[0].output_slots, vec![2]);
+}
+
+#[test]
+fn test_dot_decomposer_full_contraction_becomes_a_reduction() {
+    // Every dimension contracts, so the output is rank 0: a product reduced
+    // over all axes, not a GEMM.
+    let instr = dot_general_exec_instr(
+        vec![0, 1],
+        vec![0, 1],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        vec![],
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(&mut program, &[dim_shape(&[4, 6]), dim_shape(&[4, 6])]).unwrap();
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(program.instructions[0].op, ExecOp::Multiply));
+    match &program.instructions[1].op {
+        ExecOp::ReduceSum { axes } => assert_eq!(axes.as_slice(), &[0, 1]),
+        other => panic!("expected ReduceSum, got {other:?}"),
+    }
+    assert_eq!(program.instructions[1].output_slots, vec![2]);
+}
+
+#[test]
+fn test_dot_decomposer_hadamard_preserves_conjugation() {
+    let mut instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[4, 6]),
+    );
+    instr.op = ExecOp::DotGeneralWithConj {
+        config: match instr.op {
+            ExecOp::DotGeneral(config) => config,
+            _ => unreachable!(),
+        },
+        lhs_conj: true,
+        rhs_conj: false,
+    };
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(&mut program, &[dim_shape(&[4, 6]), dim_shape(&[4, 6])]).unwrap();
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(program.instructions[0].op, ExecOp::Conj));
+    assert!(matches!(program.instructions[1].op, ExecOp::Multiply));
+    assert_eq!(program.instructions[1].input_slots, vec![3, 1]);
+}
+
+#[test]
+fn test_dot_decomposer_degenerate_forms_never_reach_a_lowering() {
+    // The rewrite set is enumerated, so the assertion is on the lowered op
+    // kinds: no DotGeneral survives for the degenerate shapes.
+    for (contracting_l, contracting_r, shape, output) in [
+        (vec![], vec![], dim_shape(&[4, 6]), dim_shape(&[4, 6])),
+        (vec![0, 1], vec![0, 1], dim_shape(&[4, 6]), vec![]),
+    ] {
+        let instr = dot_general_exec_instr(
+            contracting_l,
+            contracting_r,
+            vec![],
+            vec![],
+            vec![0, 1],
+            2,
+            output,
+        );
+        let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+        rewrite_degenerate_dots(&mut program, &[shape.clone(), shape]).unwrap();
+        assert!(
+            program.instructions.iter().all(|instr| !matches!(
+                instr.op,
+                ExecOp::DotGeneral(_) | ExecOp::DotGeneralWithConj { .. }
+            )),
+            "a degenerate dot_general reached the backend"
+        );
+    }
+}
+
+#[test]
+fn test_dot_decomposer_outer_product_becomes_a_broadcast_product() {
+    // No contracting dims, no batch dims, free dims on both sides: the result
+    // is the concatenated product, broadcast, not a contraction.
+    let instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[4, 6, 3]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(&mut program, &[dim_shape(&[4, 6]), dim_shape(&[3])]).unwrap();
+
+    assert_eq!(program.instructions.len(), 3);
+    assert!(matches!(
+        program.instructions[0].op,
+        ExecOp::BroadcastInDim { .. }
+    ));
+    assert!(matches!(
+        program.instructions[1].op,
+        ExecOp::BroadcastInDim { .. }
+    ));
+    assert!(matches!(program.instructions[2].op, ExecOp::Multiply));
+    assert_eq!(program.instructions[2].output_slots, vec![2]);
+    assert!(program
+        .instructions
+        .iter()
+        .all(|instr| !matches!(instr.op, ExecOp::DotGeneral(_))));
+}
+
+#[test]
+fn test_dot_decomposer_scalar_operand_becomes_a_transpose_and_scale() {
+    // One side is a scalar and the other carries the free dims, so the result
+    // is that operand permuted into the output's order, scaled by the scalar.
+    let instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[6, 4]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(&mut program, &[dim_shape(&[4, 6]), vec![]]).unwrap();
+
+    assert_eq!(program.instructions.len(), 3);
+    match &program.instructions[0].op {
+        ExecOp::Transpose { perm } => assert_eq!(perm.as_slice(), &[1, 0]),
+        other => panic!("expected Transpose, got {other:?}"),
+    }
+    assert!(matches!(
+        program.instructions[1].op,
+        ExecOp::BroadcastInDim { .. }
+    ));
+    assert!(matches!(program.instructions[2].op, ExecOp::Multiply));
+    assert_eq!(program.instructions[2].output_slots, vec![2]);
+}

@@ -12,7 +12,7 @@ use super::{
     simple_gather_config, tensor_bool, tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64,
     upload,
 };
-use tenferro_tensor::{ValidationError, ValidationKind};
+use tenferro_tensor::{GatherConfig, TensorRead, TensorView, ValidationError, ValidationKind};
 
 fn with_cuda_ordinal<T>(mut tensor: TypedTensor<T>, ordinal: usize) -> TypedTensor<T> {
     tensor.set_placement(Placement {
@@ -1306,4 +1306,58 @@ fn test_cubecl_complex_scatter_accumulates_overlapping_updates_like_cpu() {
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
+}
+
+/// A borrowed table is gathered where it is: the read-based entry agrees with
+/// the owned path, so a pooled or view operand needs no materialization (#2080).
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_gather_reads_a_borrowed_table_in_place() {
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let (vocab, hidden, tokens) = (64usize, 8usize, 4usize);
+    let table = tensor_f32(
+        vec![vocab, hidden],
+        (0..vocab * hidden)
+            .map(|i| (i % 13) as f32 * 0.25)
+            .collect(),
+    );
+    let ids = tensor_i64(vec![tokens], vec![3, 17, 0, 63]);
+    let config = GatherConfig {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, hidden],
+    };
+
+    let expected = cpu
+        .with_backend_session(|__s| __s.gather(&table, &ids, &config))
+        .unwrap()
+        .unwrap();
+    let gpu_table = upload(&gpu, &table);
+    let gpu_ids = upload(&gpu, &ids);
+
+    let owned = gpu
+        .with_backend_session(|__s| __s.gather(&gpu_table, &gpu_ids, &config))
+        .unwrap()
+        .unwrap();
+    assert_tensor_close(&download(&gpu, &owned), &expected, 0.0);
+
+    // The same table as a borrowed, zero-offset compact view.
+    let typed = gpu_table.as_typed::<f32>().expect("f32 table");
+    let region = typed
+        .backend_region_view(vec![vocab, hidden], vec![1isize, vocab as isize], 0)
+        .unwrap();
+    let borrowed = gpu
+        .with_backend_session(|__s| {
+            __s.gather_read(
+                TensorRead::from_view(TensorView::F32(region)),
+                TensorRead::from_tensor(&gpu_ids),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_tensor_close(&download(&gpu, &borrowed), &expected, 0.0);
 }

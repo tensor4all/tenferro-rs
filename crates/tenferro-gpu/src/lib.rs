@@ -160,6 +160,77 @@ pub(crate) struct CubeclBuffer {
 #[cfg(feature = "cuda")]
 static NEXT_CUDA_ALLOCATION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Size-keyed free list of device allocations, one per device ordinal.
+///
+/// An eager op's output does not have to ask the device thread for a buffer on
+/// every call: when a buffer's owning tensor is dropped its handle comes back
+/// here, and [`take_output_handle`] hands it to the next allocation of the same
+/// byte length. Reuse is write-after-write on one stream, which CUDA orders —
+/// the same argument the eager retention pool relies on — and the list is
+/// bounded, so a length that stops recurring does not retain memory.
+#[cfg(feature = "cuda")]
+static OUTPUT_POOLS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<usize, OutputPool>>,
+> = std::sync::OnceLock::new();
+
+/// Retained bytes per device. Beyond this the returned handle is simply dropped.
+#[cfg(feature = "cuda")]
+const OUTPUT_POOL_MAX_RETAINED_BYTES: usize = 64 << 20;
+
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+struct OutputPool {
+    free: std::collections::HashMap<usize, Vec<cubecl_runtime::server::Handle>>,
+    retained_bytes: usize,
+}
+
+#[cfg(feature = "cuda")]
+fn output_pools() -> &'static std::sync::Mutex<std::collections::HashMap<usize, OutputPool>> {
+    OUTPUT_POOLS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Take a retained handle of exactly `byte_len` for this device, if one is free.
+#[cfg(feature = "cuda")]
+pub(crate) fn take_output_handle(
+    device_ordinal: usize,
+    byte_len: usize,
+) -> Option<cubecl_runtime::server::Handle> {
+    let mut pools = output_pools().lock().ok()?;
+    let pool = pools.get_mut(&device_ordinal)?;
+    let handle = pool.free.get_mut(&byte_len)?.pop()?;
+    pool.retained_bytes = pool.retained_bytes.saturating_sub(byte_len);
+    Some(handle)
+}
+
+/// Retain a dropped handle for the next allocation of the same length.
+#[cfg(feature = "cuda")]
+pub(crate) fn return_output_handle(
+    device_ordinal: usize,
+    byte_len: usize,
+    handle: cubecl_runtime::server::Handle,
+) {
+    if byte_len == 0 {
+        return;
+    }
+    let Ok(mut pools) = output_pools().lock() else {
+        return;
+    };
+    let pool = pools.entry(device_ordinal).or_default();
+    if pool.retained_bytes + byte_len > OUTPUT_POOL_MAX_RETAINED_BYTES {
+        return;
+    }
+    pool.retained_bytes += byte_len;
+    pool.free.entry(byte_len).or_default().push(handle);
+}
+
+/// Return a dropped buffer's allocation to the pool of its device.
+#[cfg(feature = "cuda")]
+impl Drop for CubeclBuffer {
+    fn drop(&mut self) {
+        return_output_handle(self.device_ordinal, self.byte_len, self.handle.clone());
+    }
+}
+
 #[cfg(feature = "cuda")]
 impl std::fmt::Debug for CubeclBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

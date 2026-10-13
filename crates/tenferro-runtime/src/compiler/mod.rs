@@ -1502,7 +1502,7 @@ fn fold_transpose_into_dot(
 
 mod dot_decomposer;
 
-pub(crate) use dot_decomposer::dot_decomposer;
+pub(crate) use dot_decomposer::{dot_decomposer, rewrite_degenerate_dots};
 
 // ============================================================================
 // Pass 4: DotConjFolding

@@ -57,6 +57,32 @@ use super::{exact_extents_from_shape, invalid_compiled_graph, missing_slot_meta}
 /// `ShapeMismatch`, `RankMismatch`, or `InvalidArgument` when a dot shape or
 /// dimension expression cannot be validated.
 pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) -> Result<()> {
+    run_dot_passes(program, input_shapes, true)
+}
+
+/// Rewrite degenerate `DotGeneral` forms (no contraction semantics) into the
+/// elementary operation they are, unconditionally: unlike the canonicalization
+/// below, this materializes no layout, it only keeps a degenerate contraction
+/// from reaching a backend (invariant I4).
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Internal`] when an input or output slot is outside
+/// its slot table or a slot's metadata is missing, and [`crate::Error::Validation`]
+/// with a typed `ShapeMismatch`, `RankMismatch` or `InvalidArgument` source when
+/// a dot shape or dimension expression cannot be validated.
+pub fn rewrite_degenerate_dots(
+    program: &mut ExecProgram,
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<()> {
+    run_dot_passes(program, input_shapes, false)
+}
+
+fn run_dot_passes(
+    program: &mut ExecProgram,
+    input_shapes: &[Vec<DimExpr>],
+    decompose_contractions: bool,
+) -> Result<()> {
     if program.input_slots.len() != input_shapes.len() {
         return Err(invalid_compiled_graph(format!(
             "dot_decomposer input shape count {} must match input slot count {}",
@@ -111,7 +137,6 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
 
         if let Some((config, lhs_conj, rhs_conj)) = dot_config_and_conj
             && instr.input_slots.len() == 2
-            && !config.lhs_contracting_dims.is_empty()
         {
             let lhs_slot = instr.input_slots[0];
             let rhs_slot = instr.input_slots[1];
@@ -119,30 +144,51 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
             let rhs_shape = require_slot_shape(&slot_shapes, rhs_slot)?;
             let lhs_extents = require_slot_extents(&slot_extents, lhs_slot)?;
             let rhs_extents = require_slot_extents(&slot_extents, rhs_slot)?;
-            if !is_dot_canonical(config, lhs_shape.len(), rhs_shape.len()) {
+            let degenerate_input = DotDecomposeInput {
+                instr,
+                config,
+                lhs: OperandMeta {
+                    slot: lhs_slot,
+                    shape: lhs_shape,
+                    extents: lhs_extents,
+                },
+                rhs: OperandMeta {
+                    slot: rhs_slot,
+                    shape: rhs_shape,
+                    extents: rhs_extents,
+                },
+                lhs_conj,
+                rhs_conj,
+            };
+            if config.lhs_contracting_dims.is_empty() {
                 let mut builder = InstructionBuilder {
                     n_slots: &mut n_slots,
                     instructions: &mut new_instructions,
                 };
-                decompose_dot(
-                    DotDecomposeInput {
-                        instr,
-                        config,
-                        lhs: OperandMeta {
-                            slot: lhs_slot,
-                            shape: lhs_shape,
-                            extents: lhs_extents,
-                        },
-                        rhs: OperandMeta {
-                            slot: rhs_slot,
-                            shape: rhs_shape,
-                            extents: rhs_extents,
-                        },
-                        lhs_conj,
-                        rhs_conj,
-                    },
-                    &mut builder,
-                )?;
+                if rewrite_degenerate_dot(degenerate_input, &mut builder)? {
+                    continue;
+                }
+            } else if lhs_shape.len() == rhs_shape.len()
+                && lhs_shape == rhs_shape
+                && lhs_extents == rhs_extents
+                && all_dims_contract(config, lhs_shape.len(), rhs_shape.len())
+            {
+                let mut builder = InstructionBuilder {
+                    n_slots: &mut n_slots,
+                    instructions: &mut new_instructions,
+                };
+                rewrite_full_contraction(degenerate_input, &mut builder);
+                continue;
+            }
+            if decompose_contractions
+                && !config.lhs_contracting_dims.is_empty()
+                && !is_dot_canonical(config, lhs_shape.len(), rhs_shape.len())
+            {
+                let mut builder = InstructionBuilder {
+                    n_slots: &mut n_slots,
+                    instructions: &mut new_instructions,
+                };
+                decompose_dot(degenerate_input, &mut builder)?;
                 continue;
             }
         }
@@ -167,6 +213,7 @@ struct EmittedOperand {
     extents: Vec<ShapeExtent<DimExpr>>,
 }
 
+#[derive(Clone, Copy)]
 struct DotDecomposeInput<'a> {
     instr: &'a ExecInstruction,
     config: &'a DotGeneralConfig,
@@ -289,6 +336,287 @@ fn product_of_input_dims(input_idx: usize, start: usize, end: usize) -> DimExpr 
         result = DimExpr::mul(result, DimExpr::InputDim { input_idx, axis });
     }
     result
+}
+
+/// Whether every dimension of both operands contracts.
+fn all_dims_contract(config: &DotGeneralConfig, lhs_rank: usize, rhs_rank: usize) -> bool {
+    config.lhs_batch_dims.is_empty()
+        && config.rhs_batch_dims.is_empty()
+        && config.lhs_contracting_dims.len() == lhs_rank
+        && config.rhs_contracting_dims.len() == rhs_rank
+        && config
+            .lhs_contracting_dims
+            .iter()
+            .enumerate()
+            .all(|(position, &axis)| axis == position)
+        && config
+            .rhs_contracting_dims
+            .iter()
+            .enumerate()
+            .all(|(position, &axis)| axis == position)
+}
+
+/// Rewrite a `DotGeneral` whose algebra is not a contraction into the
+/// elementary operation it actually is (invariant I4: once, in the semantic
+/// layer, so every backend inherits it instead of running its general
+/// contraction machinery over a degenerate shape).
+///
+/// Returns `true` when the instruction was rewritten; a shape this rewrite
+/// does not model falls through to the backend unchanged.
+fn rewrite_degenerate_dot(
+    input: DotDecomposeInput<'_>,
+    builder: &mut InstructionBuilder<'_>,
+) -> Result<bool> {
+    let instr = input.instr;
+    let config = input.config;
+    let lhs = input.lhs;
+    let rhs = input.rhs;
+    let no_batch = config.lhs_batch_dims.is_empty() && config.rhs_batch_dims.is_empty();
+    // This helper owns the no-contraction forms only; a contracting
+    // dot_general keeps the decomposition path.
+    if !no_batch
+        || !config.lhs_contracting_dims.is_empty()
+        || !config.rhs_contracting_dims.is_empty()
+    {
+        return Ok(false);
+    }
+    // No batch dims means every operand dimension is free.
+    let lhs_free = free_axes_of(
+        lhs.shape.len(),
+        &config.lhs_contracting_dims,
+        &config.lhs_batch_dims,
+    );
+    let rhs_free = free_axes_of(
+        rhs.shape.len(),
+        &config.rhs_contracting_dims,
+        &config.rhs_batch_dims,
+    );
+    if lhs_free.len() != lhs.shape.len() || rhs_free.len() != rhs.shape.len() {
+        return Ok(false);
+    }
+
+    // (1) Pure Hadamard: both operands carry the same free dimensions, so the
+    //     algebra is an elementwise product.
+    if !lhs.shape.is_empty() && lhs.shape == rhs.shape && lhs.extents == rhs.extents {
+        let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
+        let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
+        builder.push(ExecInstruction {
+            op: ExecOp::Multiply,
+            semantic_operation_index: instr.semantic_operation_index,
+            input_slots: vec![lhs_operand.slot, rhs_operand.slot],
+            output_slots: vec![instr.output_slots[0]],
+            dtype: instr.dtype,
+            output_shapes: vec![instr.output_shapes[0].clone()].into(),
+            output_extents: vec![instr.output_extents[0].clone()].into(),
+            last_use: Vec::new(),
+        });
+        return Ok(true);
+    }
+
+    // (2) Outer product: both sides contribute free dimensions and none
+    //     contract, so the result is their product over the concatenated axes.
+    if !lhs.shape.is_empty() && !rhs.shape.is_empty() {
+        let expected: Vec<DimExpr> = lhs
+            .shape
+            .iter()
+            .cloned()
+            .chain(rhs.shape.iter().cloned())
+            .collect();
+        if instr.output_shapes[0].as_slice() != expected.as_slice() {
+            return Ok(false);
+        }
+        let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
+        let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
+        let lhs_broadcast = emit_broadcast(
+            lhs_operand,
+            (0..lhs.shape.len()).collect(),
+            &instr.output_shapes[0],
+            instr,
+            builder,
+        );
+        let rhs_broadcast = emit_broadcast(
+            rhs_operand,
+            (lhs.shape.len()..lhs.shape.len() + rhs.shape.len()).collect(),
+            &instr.output_shapes[0],
+            instr,
+            builder,
+        );
+        builder.push(ExecInstruction {
+            op: ExecOp::Multiply,
+            semantic_operation_index: instr.semantic_operation_index,
+            input_slots: vec![lhs_broadcast.slot, rhs_broadcast.slot],
+            output_slots: vec![instr.output_slots[0]],
+            dtype: instr.dtype,
+            output_shapes: vec![instr.output_shapes[0].clone()].into(),
+            output_extents: vec![instr.output_extents[0].clone()].into(),
+            last_use: Vec::new(),
+        });
+        return Ok(true);
+    }
+
+    // (3) Transpose-only: one side is a scalar, so the other side is permuted
+    //     into the output's order and scaled by that scalar.
+    let (operand, scalar, scalar_conj, operand_conj) = if lhs.shape.is_empty() {
+        (rhs, lhs, input.lhs_conj, input.rhs_conj)
+    } else {
+        (lhs, rhs, input.rhs_conj, input.lhs_conj)
+    };
+    let Some(perm) = permutation_into(operand.shape, &instr.output_shapes[0]) else {
+        return Ok(false);
+    };
+    let operand = emit_conj_if_needed(operand, operand_conj, instr, builder);
+    let transposed_shape: Vec<DimExpr> = perm
+        .iter()
+        .map(|&axis| operand.shape[axis].clone())
+        .collect();
+    let transposed_extents: Vec<ShapeExtent<DimExpr>> = perm
+        .iter()
+        .map(|&axis| operand.extents[axis].clone())
+        .collect();
+    let transposed_slot = builder.next_slot();
+    builder.push(ExecInstruction {
+        op: ExecOp::Transpose { perm: perm.clone() },
+        semantic_operation_index: instr.semantic_operation_index,
+        input_slots: vec![operand.slot],
+        output_slots: vec![transposed_slot],
+        dtype: instr.dtype,
+        output_shapes: vec![transposed_shape.clone()].into(),
+        output_extents: vec![transposed_extents.clone()].into(),
+        last_use: Vec::new(),
+    });
+    let transposed = EmittedOperand {
+        slot: transposed_slot,
+        shape: transposed_shape,
+        extents: transposed_extents,
+    };
+    let scalar = emit_conj_if_needed(scalar, scalar_conj, instr, builder);
+    let scalar = emit_broadcast(scalar, Vec::new(), &instr.output_shapes[0], instr, builder);
+    builder.push(ExecInstruction {
+        op: ExecOp::Multiply,
+        semantic_operation_index: instr.semantic_operation_index,
+        input_slots: vec![transposed.slot, scalar.slot],
+        output_slots: vec![instr.output_slots[0]],
+        dtype: instr.dtype,
+        output_shapes: vec![instr.output_shapes[0].clone()].into(),
+        output_extents: vec![instr.output_extents[0].clone()].into(),
+        last_use: Vec::new(),
+    });
+    Ok(true)
+}
+
+/// The permutation that reads `operand_shape` in `output_shape`'s order, or
+/// `None` when the shapes are not a permutation of each other.
+fn permutation_into(operand_shape: &[DimExpr], output_shape: &[DimExpr]) -> Option<Vec<usize>> {
+    if operand_shape.len() != output_shape.len() {
+        return None;
+    }
+    let mut used = vec![false; operand_shape.len()];
+    let mut perm = Vec::with_capacity(output_shape.len());
+    for output_dim in output_shape {
+        let axis = operand_shape
+            .iter()
+            .enumerate()
+            .find(|(axis, dim)| !used[*axis] && *dim == output_dim)
+            .map(|(axis, _)| axis)?;
+        used[axis] = true;
+        perm.push(axis);
+    }
+    Some(perm)
+}
+
+/// Broadcast one operand's axes into the output shape (`dims` maps each of the
+/// operand's axes to the output axis it lands on).
+fn emit_broadcast(
+    operand: EmittedOperand,
+    dims: Vec<usize>,
+    output_shape: &[DimExpr],
+    instr: &ExecInstruction,
+    builder: &mut InstructionBuilder<'_>,
+) -> EmittedOperand {
+    let out_slot = builder.next_slot();
+    let shape = output_shape.to_vec();
+    builder.push(ExecInstruction {
+        op: ExecOp::BroadcastInDim {
+            shape: shape.clone(),
+            dims,
+        },
+        semantic_operation_index: instr.semantic_operation_index,
+        input_slots: vec![operand.slot],
+        output_slots: vec![out_slot],
+        dtype: instr.dtype,
+        output_extents: vec![exact_extents_from_shape(&shape)].into(),
+        output_shapes: vec![shape.clone()].into(),
+        last_use: Vec::new(),
+    });
+    EmittedOperand {
+        slot: out_slot,
+        shape,
+        extents: exact_extents_from_shape(output_shape),
+    }
+}
+
+/// Rewrite a fully contracting `DotGeneral` (rank-0 output) into an elementwise
+/// product followed by a reduction over every axis.
+fn rewrite_full_contraction(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<'_>) {
+    let instr = input.instr;
+    let lhs_operand = emit_conj_if_needed(input.lhs, input.lhs_conj, instr, builder);
+    let rhs_operand = emit_conj_if_needed(input.rhs, input.rhs_conj, instr, builder);
+    let product_slot = builder.next_slot();
+    builder.push(ExecInstruction {
+        op: ExecOp::Multiply,
+        semantic_operation_index: instr.semantic_operation_index,
+        input_slots: vec![lhs_operand.slot, rhs_operand.slot],
+        output_slots: vec![product_slot],
+        dtype: instr.dtype,
+        output_shapes: vec![lhs_operand.shape.clone()].into(),
+        output_extents: vec![lhs_operand.extents.clone()].into(),
+        last_use: Vec::new(),
+    });
+    builder.push(ExecInstruction {
+        op: ExecOp::ReduceSum {
+            axes: (0..lhs_operand.shape.len()).collect(),
+        },
+        semantic_operation_index: instr.semantic_operation_index,
+        input_slots: vec![product_slot],
+        output_slots: vec![instr.output_slots[0]],
+        dtype: instr.dtype,
+        output_shapes: vec![instr.output_shapes[0].clone()].into(),
+        output_extents: vec![instr.output_extents[0].clone()].into(),
+        last_use: Vec::new(),
+    });
+}
+
+/// The operand's conjugation as its own instruction when the `DotGeneral`
+/// carried it, so the rewrite keeps the algebra.
+fn emit_conj_if_needed(
+    operand: OperandMeta<'_>,
+    conjugated: bool,
+    instr: &ExecInstruction,
+    builder: &mut InstructionBuilder<'_>,
+) -> EmittedOperand {
+    if !conjugated {
+        return EmittedOperand {
+            slot: operand.slot,
+            shape: operand.shape.to_vec(),
+            extents: operand.extents.to_vec(),
+        };
+    }
+    let out_slot = builder.next_slot();
+    builder.push(ExecInstruction {
+        op: ExecOp::Conj,
+        semantic_operation_index: instr.semantic_operation_index,
+        input_slots: vec![operand.slot],
+        output_slots: vec![out_slot],
+        dtype: instr.dtype,
+        output_shapes: vec![operand.shape.to_vec()].into(),
+        output_extents: vec![operand.extents.to_vec()].into(),
+        last_use: Vec::new(),
+    });
+    EmittedOperand {
+        slot: out_slot,
+        shape: operand.shape.to_vec(),
+        extents: operand.extents.to_vec(),
+    }
 }
 
 /// Emit decomposed instructions for a single non-canonical DotGeneral.
