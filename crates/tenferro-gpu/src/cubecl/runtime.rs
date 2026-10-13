@@ -931,6 +931,44 @@ impl CudaRuntime {
     pub fn synchronize(&self) -> crate::Result<()> {
         self.inner.synchronize()
     }
+
+    /// Ask the allocator to release device memory it can release.
+    ///
+    /// A dropped tenferro tensor returns its block to CubeCL's process-global
+    /// pool for the device, not to the driver, and that pool's reservations do
+    /// not shrink on their own. This is the explicit trim the caller uses when
+    /// it wants the memory back: between two workloads in one process, or
+    /// before an allocation the pool cannot serve (tenferro-rs #2081). The
+    /// issue names this entry point in its expected behaviour.
+    ///
+    /// The release is submitted to the allocator's server thread, so a caller
+    /// that wants to observe the memory back follows it with a
+    /// [`synchronize`](Self::synchronize) (the CUDA test in this crate does
+    /// exactly that). The call is infallible and best-effort: CubeCL's contract
+    /// is that results "vary on what the memory allocator deems beneficial", so
+    /// nothing is guaranteed to be freed, and the pinned revision reports no
+    /// error either. A caller that needs a hard bound reads the driver's free
+    /// memory itself, as the `gpu/perf_issues` state cases do.
+    ///
+    /// Trim does not replace the ownership rule: a resource is released by its
+    /// owner, and this only asks for the release of blocks whose owners are
+    /// already gone. Queued work is not affected - the trim touches pool
+    /// bookkeeping and the driver, not the stream. Two limits of this pin are
+    /// worth knowing: there is no non-pooled allocation mode here (only `Auto`
+    /// and `Persistent`), so memory cannot be made to return on drop without an
+    /// explicit trim, and a pool that cannot serve a request panics on the
+    /// allocator's device thread rather than reporting an error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaRuntime;
+    ///
+    /// let _trim: fn(&CudaRuntime) = CudaRuntime::trim_memory;
+    /// ```
+    pub fn trim_memory(&self) {
+        self.client().memory_cleanup();
+    }
 }
 
 impl CudaRuntimeState {
