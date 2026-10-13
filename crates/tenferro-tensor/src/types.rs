@@ -1212,6 +1212,9 @@ impl<T, R: TensorRank> std::fmt::Debug for DynamicStorage<T, R> {
 pub struct TypedTensor<T, R: TensorRank = DynRank, D: Representation = Dynamic> {
     shape: R::Shape,
     placement: Placement,
+    /// Column-major element strides, cached at construction so a strided view of
+    /// this tensor borrows its layout instead of recomputing it per operation.
+    layout: StrideVec,
     storage: D::Storage<T, R>,
 }
 
@@ -1224,12 +1227,13 @@ fn typed_host_tensor_from_vec_col_major<T, R: TensorRank>(
     let shape = shape
         .into_rank_shape()
         .map_err(|err| tensor_layout_error(op, err))?;
-    tenferro_tensor_core::col_major_strides(shape.as_ref())
+    let layout = tenferro_tensor_core::col_major_strides(shape.as_ref())
         .map_err(|err| tensor_layout_error(op, err))?;
     try_checked_shape_len(shape.as_ref(), data.len(), op)?;
     Ok(TypedTensor {
         shape,
         placement: default_placement(),
+        layout,
         storage: HostStorage {
             data: HostData::new(data),
         },
@@ -1484,6 +1488,7 @@ impl<T, R: TensorRank> TypedTensor<T, R, Host> {
         TypedTensor {
             shape: self.shape,
             placement: self.placement,
+            layout: self.layout,
             storage: DynamicStorage::Host(self.storage),
         }
     }
@@ -1658,12 +1663,14 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R, Host> {
         let TypedTensor {
             shape,
             placement,
+            layout,
             storage,
         } = self;
         let group = promote_host_group(shape.clone(), storage.data)?;
         Ok(TypedTensor {
             shape,
             placement,
+            layout,
             storage: GroupStorage {
                 group: Box::new(group),
             },
@@ -1776,6 +1783,7 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
                 Ok(TypedTensor {
                     shape: group_shape,
                     placement,
+                    layout: stride_vec(layout.strides()),
                     storage: GroupStorage {
                         group: Box::new(group),
                     },
@@ -1799,6 +1807,7 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
         TypedTensor {
             shape: self.shape,
             placement: self.placement,
+            layout: self.layout,
             storage: DynamicStorage::Group(self.storage),
         }
     }
@@ -1915,18 +1924,21 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
         let TypedTensor {
             shape,
             placement,
+            layout,
             storage,
         } = self;
         match storage {
             DynamicStorage::Host(host) => Ok(TypedTensor {
                 shape,
                 placement,
+                layout,
                 storage: host,
             }),
             DynamicStorage::Group(group) => Err(ReinterpretError::new(
                 TypedTensor {
                     shape,
                     placement,
+                    layout,
                     storage: DynamicStorage::Group(group),
                 },
                 crate::Error::runtime_state(
@@ -1962,18 +1974,21 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
         let TypedTensor {
             shape,
             placement,
+            layout,
             storage,
         } = self;
         match storage {
             DynamicStorage::Group(group) => Ok(TypedTensor {
                 shape,
                 placement,
+                layout,
                 storage: group,
             }),
             DynamicStorage::Host(host) => Err(ReinterpretError::new(
                 TypedTensor {
                     shape,
                     placement,
+                    layout,
                     storage: DynamicStorage::Host(host),
                 },
                 crate::Error::runtime_state(
@@ -2028,6 +2043,23 @@ impl<T, R: TensorRank, D: Representation> TypedTensor<T, R, D> {
     /// ```
     pub fn shape(&self) -> &[usize] {
         self.shape.as_ref()
+    }
+
+    /// Column-major element strides of this compact tensor.
+    ///
+    /// The layout is cached at construction, so views of a tensor borrow it
+    /// rather than computing (and allocating) it once per operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    /// assert_eq!(t.strides(), &[1, 2]);
+    /// ```
+    pub fn strides(&self) -> &[isize] {
+        &self.layout
     }
 
     /// Tensor rank.
@@ -6873,6 +6905,7 @@ pub(crate) fn tensor_from_group(
         TypedTensor {
             shape: shape_vec(layout.shape()),
             placement,
+            layout: stride_vec(layout.strides()),
             storage: DynamicStorage::Group(GroupStorage {
                 group: Box::new(OwnedTensorGroup {
                     group,
@@ -8950,12 +8983,13 @@ fn try_typed_tensor_from_vec_col_major<T, R: TensorRank>(
     let shape = shape
         .into_rank_shape()
         .map_err(|err| tensor_layout_error(op, err))?;
-    tenferro_tensor_core::col_major_strides(shape.as_ref())
+    let layout = tenferro_tensor_core::col_major_strides(shape.as_ref())
         .map_err(|err| tensor_layout_error(op, err))?;
     try_checked_shape_len(shape.as_ref(), data.len(), op)?;
     Ok(TypedTensor {
         shape,
         placement: default_placement(),
+        layout,
         storage: DynamicStorage::Host(HostStorage {
             data: HostData::new(data),
         }),
@@ -9031,6 +9065,7 @@ fn typed_tensor_from_backend_allocation<T: TensorScalar + Send + Sync + 'static,
     Ok(TypedTensor {
         shape,
         placement,
+        layout: stride_vec(layout.strides()),
         storage: DynamicStorage::Group(GroupStorage {
             group: Box::new(OwnedTensorGroup {
                 group,
@@ -9061,6 +9096,7 @@ fn try_typed_tensor_from_buffer_col_major<
         StorageBuffer::Host(data) => Ok(TypedTensor {
             shape: group_shape,
             placement,
+            layout: stride_vec(layout.strides()),
             storage: DynamicStorage::Host(HostStorage {
                 data: HostData::new(data),
             }),
@@ -9074,6 +9110,7 @@ fn try_typed_tensor_from_buffer_col_major<
             Ok(TypedTensor {
                 shape: group_shape,
                 placement,
+                layout: stride_vec(layout.strides()),
                 storage: DynamicStorage::Group(GroupStorage {
                     group: Box::new(group),
                 }),
@@ -9202,6 +9239,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         let TypedTensor {
             shape,
             placement,
+            layout,
             storage,
         } = self;
         match storage {
@@ -9212,6 +9250,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                     TypedTensor {
                         shape,
                         placement,
+                        layout,
                         storage: DynamicStorage::Group(GroupStorage {
                             group: Box::new(group),
                         }),
@@ -9475,11 +9514,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                 ))
             }
         };
-        if let Err(error) =
-            TensorLayout::<Rank<N>>::compact(shape).map_err(|err| tensor_layout_error(op, err))
-        {
-            return Err(ReinterpretError::new(self, error));
-        }
+        let layout = match TensorLayout::<Rank<N>>::compact(shape) {
+            Ok(layout) => layout,
+            Err(error) => return Err(ReinterpretError::new(self, tensor_layout_error(op, error))),
+        };
         let TypedTensor {
             placement, storage, ..
         } = self;
@@ -9499,6 +9537,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         Ok(TypedTensor {
             shape,
             placement,
+            layout: stride_vec(layout.strides()),
             storage,
         })
     }
@@ -9958,6 +9997,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         let TypedTensor {
             shape,
             placement,
+            layout: cached_layout,
             storage,
         } = self;
         let layout = TensorLayout::compact(shape.clone())
@@ -9972,6 +10012,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                     TypedTensor {
                         shape,
                         placement,
+                        layout: cached_layout,
                         storage: DynamicStorage::Group(GroupStorage {
                             group: Box::new(group),
                         }),
@@ -9988,6 +10029,7 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         let TypedTensor {
             shape,
             placement,
+            layout,
             storage,
         } = self;
         match storage {
@@ -9997,6 +10039,7 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
                 Self {
                     shape,
                     placement,
+                    layout,
                     storage: DynamicStorage::Group(GroupStorage {
                         group: Box::new(group),
                     }),
@@ -10005,6 +10048,7 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
             DynamicStorage::Group(core) => Self {
                 shape,
                 placement,
+                layout,
                 storage: DynamicStorage::Group(core),
             },
         }
@@ -10132,6 +10176,7 @@ fn reinterpret_owned<S: TensorScalar, U: TensorScalar, R: TensorRank>(
     let TypedTensor {
         shape,
         placement,
+        layout,
         storage,
     } = owner.into_managed();
     let DynamicStorage::Group(GroupStorage { group }) = storage else {
@@ -10145,6 +10190,7 @@ fn reinterpret_owned<S: TensorScalar, U: TensorScalar, R: TensorRank>(
         Ok(group) => Ok(TypedTensor {
             shape: shape_vec(target_layout.shape()),
             placement,
+            layout: stride_vec(target_layout.strides()),
             storage: DynamicStorage::Group(GroupStorage {
                 group: Box::new(group),
             }),
@@ -10153,6 +10199,7 @@ fn reinterpret_owned<S: TensorScalar, U: TensorScalar, R: TensorRank>(
             TypedTensor {
                 shape,
                 placement,
+                layout,
                 storage: DynamicStorage::Group(GroupStorage {
                     group: Box::new(group),
                 }),
