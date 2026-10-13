@@ -283,3 +283,81 @@ fn cuda_with_backend_session_restores_the_in_session_flag_after_panic() {
     let value = backend.with_backend_session(|_session| 7usize).unwrap();
     assert_eq!(value, 7);
 }
+
+/// An allocation the device refuses must reach the caller as a typed error on
+/// the buffer: never a panic on CubeCL's device thread, and never an `Ok` that
+/// hands back bytes nothing wrote (#2081).
+///
+/// On the 0.11 pins tenferro's contract is CubeCL's. `Client::do_empty` queues
+/// the reservation and `cubecl-cuda/src/compute/server.rs` records a failure on
+/// the buffer (`fail_unallocated`), so `alloc_output` returns `Ok` meaning "the
+/// request was accepted", and the failure is reported at that buffer's next use:
+/// `check`, a read, or `download`. The older behaviour - the device thread
+/// panicking while the caller is told the allocation succeeded - is what this
+/// test forbids, and it is also why a per-allocation `check` is not the fix: it
+/// costs a device-thread round trip (measured at 8.19 us on the A100, against a
+/// 1-2 us per-operation budget in #2079).
+///
+/// A 200 GiB request is refused by the device itself, so nothing is allocated.
+#[test]
+#[ignore = "requires CUDA"]
+fn cubecl_refused_allocation_is_reported_on_the_buffer() {
+    use cubecl_runtime::server::Handle;
+    use tenferro_tensor::{backend::BackendSessionHost, TensorRead};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let bytes = 200usize << 30;
+
+    // The raw boundary: the refusal is readable, and it does not poison the device.
+    with_cuda_exec(&mut backend, |session| {
+        session
+            .with_cubecl("test.refused_alloc", |cubecl| {
+                let refused: Handle = cubecl.client().empty(bytes);
+                assert!(
+                    cubecl.client().check([&refused]).is_err(),
+                    "a refused allocation must be reported on its buffer"
+                );
+
+                let later: Handle = cubecl.client().empty(4096);
+                assert!(
+                    cubecl.client().check([&later]).is_ok(),
+                    "a later allocation must still succeed after a refused one"
+                );
+                Ok(())
+            })
+            .unwrap();
+    });
+
+    // The tenferro boundary: `alloc_output` reports acceptance, and reading that
+    // output reports the failure instead of returning unwritten bytes.
+    with_cuda_exec(&mut backend, |session| {
+        let output = session
+            .with_cubecl("test.refused_alloc_output", |cubecl| {
+                cubecl.alloc_output::<f32>(&[bytes / 4])
+            })
+            .expect("the request is accepted; the failure belongs to the buffer");
+        let read = session.with_raw("test.refused_alloc_read", |raw| {
+            raw.download_tensor::<f32>(&output, "test.refused_alloc_read")
+        });
+        assert!(
+            read.is_err(),
+            "reading an output whose allocation was refused must fail"
+        );
+    });
+
+    // The session still works afterwards.
+    let input = tensor_f32(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+    let uploaded = upload(&backend, &input);
+    let difference = backend
+        .with_backend_session(|session| {
+            session.sub_read(
+                TensorRead::from_tensor(&uploaded),
+                TensorRead::from_tensor(&uploaded),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let values = download(&backend, &difference);
+    assert_eq!(values.as_slice::<f32>().unwrap(), &[0.0, 0.0, 0.0, 0.0]);
+}

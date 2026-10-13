@@ -720,3 +720,112 @@ fn test_cubecl_reductions_column_major_3d_axes_match_cpu() {
         assert_tensor_close(&actual, &expected, 1e-12);
     }
 }
+
+/// A full `reduce_sum` over a complex tensor must compile and reduce
+/// componentwise (#2133).
+///
+/// The CUDA backend shuffles each component separately on the plane path. The
+/// 0.10 pins emitted `__shfl_xor_sync` on `cuFloatComplex` itself, which NVRTC
+/// refuses (`no instance of overloaded function "__shfl_xor_sync" matches the
+/// argument list`); the fork's `feat(plane): lower complex plane reductions for
+/// CUDA` fixed it, and this pins the behaviour so a future pin cannot drop it
+/// silently.
+///
+/// `len` is the interesting parameter: 1 takes the unit path, 1e3 and 1e6 the
+/// plane path with one output element, which is also the single-warp case #2134
+/// measures.
+#[test]
+#[ignore = "requires CUDA GPU"]
+fn test_cubecl_complex_full_reduction_compiles_and_matches_cpu() {
+    if !crate::cubecl::gpu_available() {
+        eprintln!("skipping complex full reduction test - no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    for len in [1usize, 1_000, 1_000_000] {
+        let c64: Vec<_> = (0..len)
+            .map(|i| num_complex::Complex64::new((i % 7) as f64 - 3.0, (i % 5) as f64 - 2.0))
+            .collect();
+        let c32: Vec<_> = (0..len)
+            .map(|i| num_complex::Complex32::new((i % 7) as f32 - 3.0, (i % 5) as f32 - 2.0))
+            .collect();
+
+        for (label, input) in [
+            ("c64", tensor_c64(vec![len], c64)),
+            ("c32", tensor_c32(vec![len], c32)),
+        ] {
+            let gpu_input = upload(&gpu, &input);
+
+            let expected = cpu
+                .with_backend_session(|session| {
+                    session.reduce_sum_read(TensorRead::from_tensor(&input), &[0])
+                })
+                .unwrap()
+                .unwrap();
+            let actual = gpu
+                .with_backend_session(|session| {
+                    session.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0])
+                })
+                .unwrap()
+                .unwrap();
+            let actual = download(&gpu, &actual);
+            assert!(
+                actual.shape().is_empty(),
+                "{label} len={len}: reducing the only axis of a rank-1 input must give a rank-0 result, got {:?}",
+                actual.shape()
+            );
+            assert_tensor_close(&actual, &expected, 1e-4);
+
+            // The reported sequence: `reduce_sum(sub(x, x))` is exactly zero.
+            let difference = gpu
+                .with_backend_session(|session| {
+                    session.sub_read(
+                        TensorRead::from_tensor(&gpu_input),
+                        TensorRead::from_tensor(&gpu_input),
+                    )
+                })
+                .unwrap()
+                .unwrap();
+            let reduced = gpu
+                .with_backend_session(|session| {
+                    session.reduce_sum_read(TensorRead::from_tensor(&difference), &[0])
+                })
+                .unwrap()
+                .unwrap();
+            let reduced = download(&gpu, &reduced);
+            match reduced.dtype() {
+                DType::C64 => {
+                    for (index, value) in reduced
+                        .as_slice::<num_complex::Complex64>()
+                        .unwrap()
+                        .iter()
+                        .enumerate()
+                    {
+                        assert_eq!(
+                            (value.re, value.im),
+                            (0.0, 0.0),
+                            "{label} len={len} [{index}]: reduce_sum(sub(x, x)) must be zero"
+                        );
+                    }
+                }
+                DType::C32 => {
+                    for (index, value) in reduced
+                        .as_slice::<num_complex::Complex32>()
+                        .unwrap()
+                        .iter()
+                        .enumerate()
+                    {
+                        assert_eq!(
+                            (value.re, value.im),
+                            (0.0, 0.0),
+                            "{label} len={len} [{index}]: reduce_sum(sub(x, x)) must be zero"
+                        );
+                    }
+                }
+                other => panic!("{label} len={len}: unexpected dtype {other:?}"),
+            }
+        }
+    }
+}
