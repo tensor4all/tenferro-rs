@@ -84,13 +84,35 @@ No combine kernel has to be written, and no existing kernel changes.
 
 ### Choosing `splits`
 
-`splits = clamp(ceil(reduce_len / (plane_width * target_chunks_per_unit)), 1, cap)`
-with one rule: `splits > 1` only when the axis is long enough that one warp is
-the bottleneck (i.e. `reduce_len` above the plane width, the same condition that
-selects the plane strategy today). The cap keeps `cube_count` inside the static
-launch limit and keeps the partials small relative to the input. The exact
-target is chosen when measuring; the acceptance below is what it is tuned
-against, not a number picked in advance.
+The split must not introduce a per-thread identity element. The existing plane
+kernel has none - it starts from each thread's own first element and relies on
+the plane strategy only being chosen when `reduce_len > plane_width`, so every
+thread of a cube is guaranteed at least one element. A split that leaves some
+thread with an empty slice would need `0`/`1`/`-inf`/`+inf` per op, and would
+have to get the NaN policy right for the max/min helpers as well.
+
+Two rules keep the existing shape instead, and they are what the code uses:
+
+```text
+MIN_CHUNK = plane_width * 8          // 256 elements of real work per cube
+splits    = (reduce_len / MIN_CHUNK).clamp(1, MAX_SPLITS)
+chunk_len = reduce_len / splits      // integer division, floor
+```
+
+- `splits > 1` only when the axis is worth splitting (`reduce_len >= 2 * MIN_CHUNK`),
+  so short axes keep the unsplit kernel and nothing changes for them;
+- `splits <= reduce_len / MIN_CHUNK` makes `chunk_len = floor(reduce_len / splits)`
+  at least `MIN_CHUNK`, and the *last* chunk is `reduce_len - (splits - 1) * chunk_len`,
+  which for a floor split is at least `chunk_len`. Every chunk therefore holds at
+  least `MIN_CHUNK >= plane_width` elements, and each thread reads its own first
+  element exactly as the existing kernel does.
+- `MAX_SPLITS` bounds the grid and the partials; the acceptance measurement is
+  what tunes it, not a number chosen in advance.
+
+Example: `reduce_len = 1e7`, `plane_width = 32`, `MAX_SPLITS = 4096` gives
+`splits = 4096`, `chunk_len = 2441` (about 76 plane passes per thread), a 4096-element
+partials buffer, and a combine pass that one warp finishes in about 128
+iterations.
 
 ### Where the partials buffer comes from
 
