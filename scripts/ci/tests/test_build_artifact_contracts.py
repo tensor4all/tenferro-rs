@@ -112,25 +112,55 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
 
-        # Published strided v0.4.8: the content the CPU contraction/linalg stack is
-        # developed and tested against, and the same registry source the provider
-        # crates (cpueinsum, tlinalg) are built from, so the `RawStridedRef` types
-        # can meet at a crate boundary.
-        for name in (
+        # The registry strided release the CPU contraction/linalg stack is
+        # developed and tested against. The requirement is asserted by shape, not
+        # by number: a release bump is a pin change, and hard-coding the version
+        # here would make every bump edit this test as well.
+        strided = (
             "strided-view",
             "strided-traits",
             "strided-perm",
             "strided-basic",
             "strided-fused",
             "strided-kernel",
-        ):
+        )
+        required: set[str] = set()
+        for name in strided:
             with self.subTest(dependency=name):
                 spec = dependency_spec(dependencies[name])
                 self.assertNotIn("git", spec)
-                # Exact, so a newer registry release cannot replace the tested content.
-                self.assertEqual(spec["version"], "=0.4.8")
+                version = spec["version"]
+                self.assertTrue(
+                    isinstance(version, str) and version.startswith("="),
+                    f"{name} must pin an exact registry release, got {version!r}",
+                )
+                required.add(version)
+        # One release for all of them, so the provider crates (cpueinsum,
+        # tlinalg) can meet this crate's `StridedView` at a crate boundary.
+        self.assertEqual(len(required), 1, f"strided requirements differ: {required}")
 
         self.assertNotIn("strided-einsum2", dependencies)
+
+        # The provider crates that take this crate's views are pinned the same way,
+        # from the registry and exactly: that is what keeps one strided source in
+        # the resolved graph. (The lock is not committed here, so the graph itself
+        # is checked by the build, not by this test.)
+        providers = (
+            ("Cargo.toml", ("cpueinsum", "cpueinsum-blas")),
+            ("crates/tenferro-linalg/Cargo.toml", ("tlinalg", "tlinalg-blas")),
+        )
+        for relative, names in providers:
+            manifest = tomllib.loads((ROOT / relative).read_text())
+            section = manifest.get("workspace", manifest).get("dependencies", {})
+            for name in names:
+                with self.subTest(provider=name):
+                    spec = dependency_spec(section[name])
+                    self.assertNotIn("git", spec)
+                    self.assertTrue(
+                        isinstance(spec["version"], str)
+                        and spec["version"].startswith("="),
+                        f"{name} must pin an exact registry release",
+                    )
 
     def test_linalg_provider_dependencies_are_isolated(self) -> None:
         manifest = tomllib.loads(

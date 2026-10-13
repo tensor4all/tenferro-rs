@@ -64,18 +64,24 @@ lru = "0.18.5"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# Published strided v0.4.8, shared with the CPU contraction/linalg stack (#2004).
-# Keep the exact requirements aligned across this stack, and keep the providers
-# (cpueinsum, tlinalg, strided) on one registry source: a split strided source
-# gives two `RawStridedRef` types that cannot meet at a crate boundary.
-strided-view = "=0.4.8"
-strided-traits = "=0.4.8"
-strided-perm = { version = "=0.4.8", features = ["parallel"] }
-cpueinsum = "=0.1.0"
-cpueinsum-blas = "=0.1.0"
-strided-basic = { version = "=0.4.8", default-features = false }
-strided-fused = { version = "=0.4.8", default-features = false, features = ["parallel"] }
-strided-kernel = { version = "=0.4.8", features = ["parallel"] }
+# Published strided v0.5.0 and the matching providers, shared with the CPU
+# contraction/linalg stack (#2004). Keep the exact requirements aligned across
+# this stack, and keep the providers (cpueinsum, tlinalg, strided) on one
+# registry source: a split strided source gives two `StridedView` types that
+# cannot meet at a crate boundary.
+#
+# These requirements name the releases that carry the borrowed-or-owned view
+# metadata (tensor4all/strided-rs#297, cpueinsum-rs#18, tlinalg-rs#52). They
+# resolve only once those versions are on crates.io, so this PR follows the
+# publication of strided-* 0.5.0, tcontract-* 0.2.0 and cpueinsum/tlinalg 0.2.0.
+strided-view = "=0.5.0"
+strided-traits = "=0.5.0"
+strided-perm = { version = "=0.5.0", features = ["parallel"] }
+cpueinsum = "=0.2.0"
+cpueinsum-blas = "=0.2.0"
+strided-basic = { version = "=0.5.0", default-features = false }
+strided-fused = { version = "=0.5.0", default-features = false, features = ["parallel"] }
+strided-kernel = { version = "=0.5.0", features = ["parallel"] }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"

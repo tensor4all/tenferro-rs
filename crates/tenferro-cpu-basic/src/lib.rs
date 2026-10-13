@@ -139,16 +139,18 @@ pub fn typed_view<'a, T: Copy + TensorScalar>(
         return Err(cpu_backend_buffer_error(op));
     }
     let data = tensor.host_data()?;
+    // The tensor stores no strides, so the compact column-major layout is
+    // computed here and the view owns it.
     let strides = kernel_col_major_strides(tensor.shape());
-    StridedView::new(data, tensor.shape(), &strides, 0)
+    StridedView::new_owned(data, tensor.shape().to_vec(), strides, 0)
         .map_err(|err| Error::backend_source(op, err))
 }
 
 #[doc(hidden)]
-pub fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
+pub fn typed_view_from_view<'v, 'a, T: Copy + 'static, R: TensorRank>(
     op: &'static str,
-    view: &TypedTensorView<'a, T, R>,
-) -> Result<StridedView<'a, T>> {
+    view: &'v TypedTensorView<'a, T, R>,
+) -> Result<StridedView<'v, T>> {
     if view.backend_buffer().is_some() {
         return Err(cpu_backend_buffer_error(op));
     }
