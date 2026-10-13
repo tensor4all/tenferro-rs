@@ -367,11 +367,13 @@ fn rewrite_degenerate_dot(
     let no_batch = config.lhs_batch_dims.is_empty() && config.rhs_batch_dims.is_empty();
     // This helper owns the no-contraction forms only; a contracting
     // dot_general keeps the decomposition path.
-    if !no_batch || !config.lhs_contracting_dims.is_empty() {
+    if !no_batch
+        || !config.lhs_contracting_dims.is_empty()
+        || !config.rhs_contracting_dims.is_empty()
+    {
         return Ok(false);
     }
-    // Both operands keep only free dimensions, and a pure Hadamard needs them
-    // to coincide elementwise.
+    // No batch dims means every operand dimension is free.
     let lhs_free = free_axes_of(
         lhs.shape.len(),
         &config.lhs_contracting_dims,
@@ -382,19 +384,110 @@ fn rewrite_degenerate_dot(
         &config.rhs_contracting_dims,
         &config.rhs_batch_dims,
     );
-    if lhs_free.len() != lhs.shape.len()
-        || rhs_free.len() != rhs.shape.len()
-        || lhs.shape != rhs.shape
-        || lhs.extents != rhs.extents
-    {
+    if lhs_free.len() != lhs.shape.len() || rhs_free.len() != rhs.shape.len() {
         return Ok(false);
     }
-    let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
-    let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
+
+    // (1) Pure Hadamard: both operands carry the same free dimensions, so the
+    //     algebra is an elementwise product.
+    if !lhs.shape.is_empty() && lhs.shape == rhs.shape && lhs.extents == rhs.extents {
+        let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
+        let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
+        builder.push(ExecInstruction {
+            op: ExecOp::Multiply,
+            semantic_operation_index: instr.semantic_operation_index,
+            input_slots: vec![lhs_operand.slot, rhs_operand.slot],
+            output_slots: vec![instr.output_slots[0]],
+            dtype: instr.dtype,
+            output_shapes: vec![instr.output_shapes[0].clone()].into(),
+            output_extents: vec![instr.output_extents[0].clone()].into(),
+            last_use: Vec::new(),
+        });
+        return Ok(true);
+    }
+
+    // (2) Outer product: both sides contribute free dimensions and none
+    //     contract, so the result is their product over the concatenated axes.
+    if !lhs.shape.is_empty() && !rhs.shape.is_empty() {
+        let expected: Vec<DimExpr> = lhs
+            .shape
+            .iter()
+            .cloned()
+            .chain(rhs.shape.iter().cloned())
+            .collect();
+        if instr.output_shapes[0].as_slice() != expected.as_slice() {
+            return Ok(false);
+        }
+        let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
+        let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
+        let lhs_broadcast = emit_broadcast(
+            lhs_operand,
+            (0..lhs.shape.len()).collect(),
+            &instr.output_shapes[0],
+            instr,
+            builder,
+        );
+        let rhs_broadcast = emit_broadcast(
+            rhs_operand,
+            (lhs.shape.len()..lhs.shape.len() + rhs.shape.len()).collect(),
+            &instr.output_shapes[0],
+            instr,
+            builder,
+        );
+        builder.push(ExecInstruction {
+            op: ExecOp::Multiply,
+            semantic_operation_index: instr.semantic_operation_index,
+            input_slots: vec![lhs_broadcast.slot, rhs_broadcast.slot],
+            output_slots: vec![instr.output_slots[0]],
+            dtype: instr.dtype,
+            output_shapes: vec![instr.output_shapes[0].clone()].into(),
+            output_extents: vec![instr.output_extents[0].clone()].into(),
+            last_use: Vec::new(),
+        });
+        return Ok(true);
+    }
+
+    // (3) Transpose-only: one side is a scalar, so the other side is permuted
+    //     into the output's order and scaled by that scalar.
+    let (operand, scalar, scalar_conj, operand_conj) = if lhs.shape.is_empty() {
+        (rhs, lhs, input.lhs_conj, input.rhs_conj)
+    } else {
+        (lhs, rhs, input.rhs_conj, input.lhs_conj)
+    };
+    let Some(perm) = permutation_into(operand.shape, &instr.output_shapes[0]) else {
+        return Ok(false);
+    };
+    let operand = emit_conj_if_needed(operand, operand_conj, instr, builder);
+    let transposed_shape: Vec<DimExpr> = perm
+        .iter()
+        .map(|&axis| operand.shape[axis].clone())
+        .collect();
+    let transposed_extents: Vec<ShapeExtent<DimExpr>> = perm
+        .iter()
+        .map(|&axis| operand.extents[axis].clone())
+        .collect();
+    let transposed_slot = builder.next_slot();
+    builder.push(ExecInstruction {
+        op: ExecOp::Transpose { perm: perm.clone() },
+        semantic_operation_index: instr.semantic_operation_index,
+        input_slots: vec![operand.slot],
+        output_slots: vec![transposed_slot],
+        dtype: instr.dtype,
+        output_shapes: vec![transposed_shape.clone()].into(),
+        output_extents: vec![transposed_extents.clone()].into(),
+        last_use: Vec::new(),
+    });
+    let transposed = EmittedOperand {
+        slot: transposed_slot,
+        shape: transposed_shape,
+        extents: transposed_extents,
+    };
+    let scalar = emit_conj_if_needed(scalar, scalar_conj, instr, builder);
+    let scalar = emit_broadcast(scalar, Vec::new(), &instr.output_shapes[0], instr, builder);
     builder.push(ExecInstruction {
         op: ExecOp::Multiply,
         semantic_operation_index: instr.semantic_operation_index,
-        input_slots: vec![lhs_operand.slot, rhs_operand.slot],
+        input_slots: vec![transposed.slot, scalar.slot],
         output_slots: vec![instr.output_slots[0]],
         dtype: instr.dtype,
         output_shapes: vec![instr.output_shapes[0].clone()].into(),
@@ -402,6 +495,57 @@ fn rewrite_degenerate_dot(
         last_use: Vec::new(),
     });
     Ok(true)
+}
+
+/// The permutation that reads `operand_shape` in `output_shape`'s order, or
+/// `None` when the shapes are not a permutation of each other.
+fn permutation_into(operand_shape: &[DimExpr], output_shape: &[DimExpr]) -> Option<Vec<usize>> {
+    if operand_shape.len() != output_shape.len() {
+        return None;
+    }
+    let mut used = vec![false; operand_shape.len()];
+    let mut perm = Vec::with_capacity(output_shape.len());
+    for output_dim in output_shape {
+        let axis = operand_shape
+            .iter()
+            .enumerate()
+            .find(|(axis, dim)| !used[*axis] && *dim == output_dim)
+            .map(|(axis, _)| axis)?;
+        used[axis] = true;
+        perm.push(axis);
+    }
+    Some(perm)
+}
+
+/// Broadcast one operand's axes into the output shape (`dims` maps each of the
+/// operand's axes to the output axis it lands on).
+fn emit_broadcast(
+    operand: EmittedOperand,
+    dims: Vec<usize>,
+    output_shape: &[DimExpr],
+    instr: &ExecInstruction,
+    builder: &mut InstructionBuilder<'_>,
+) -> EmittedOperand {
+    let out_slot = builder.next_slot();
+    let shape = output_shape.to_vec();
+    builder.push(ExecInstruction {
+        op: ExecOp::BroadcastInDim {
+            shape: shape.clone(),
+            dims,
+        },
+        semantic_operation_index: instr.semantic_operation_index,
+        input_slots: vec![operand.slot],
+        output_slots: vec![out_slot],
+        dtype: instr.dtype,
+        output_extents: vec![exact_extents_from_shape(&shape)].into(),
+        output_shapes: vec![shape.clone()].into(),
+        last_use: Vec::new(),
+    });
+    EmittedOperand {
+        slot: out_slot,
+        shape,
+        extents: exact_extents_from_shape(output_shape),
+    }
 }
 
 /// Rewrite a fully contracting `DotGeneral` (rank-0 output) into an elementwise
