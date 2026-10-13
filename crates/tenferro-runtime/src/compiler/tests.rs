@@ -2,7 +2,7 @@ use super::{
     algebraic_layout_simplifier, compile_std_to_exec, compile_std_to_exec_with_options,
     conj_sinking, dot_conj_folding, dot_decomposer, dot_dimension_sorter, eliminate_dead_code,
     populate_last_use, producer_index_by_slot, record_producer, resolve_slot_redirect,
-    slot_use_counts, transpose_folding, CompilerOptions, OptimizerConfig,
+    rewrite_degenerate_dots, slot_use_counts, transpose_folding, CompilerOptions, OptimizerConfig,
 };
 use crate::exec::{self, ExecInstruction, ExecOp, ExecProgram};
 use crate::{Error, ErrorPhase};

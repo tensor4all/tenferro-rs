@@ -29,6 +29,9 @@ pub fn optimize_exec_program(
     }
     super::transpose_folding(program);
     super::dot_conj_folding(program)?;
+    // Degenerate forms never reach a backend, whether or not the
+    // canonicalization below is enabled.
+    super::rewrite_degenerate_dots(program, input_shapes)?;
     if config.dot_decomposer {
         super::dot_decomposer(program, input_shapes)?;
         if config.algebraic_layout_simplifier {

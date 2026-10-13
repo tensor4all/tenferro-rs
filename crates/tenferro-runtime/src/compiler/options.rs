@@ -13,7 +13,7 @@ pub struct OptimizerConfig {
 }
 
 impl OptimizerConfig {
-    pub const VERSION: u64 = 2;
+    pub const VERSION: u64 = 3;
 
     pub fn fingerprint(self) -> u64 {
         let mut hasher = DefaultHasher::new();
@@ -27,6 +27,8 @@ impl Default for OptimizerConfig {
     fn default() -> Self {
         Self {
             algebraic_layout_simplifier: true,
+            // Canonicalization only; the degenerate rewrite (#2111) is not
+            // gated by this flag because it does not materialize a layout.
             dot_decomposer: false,
         }
     }
