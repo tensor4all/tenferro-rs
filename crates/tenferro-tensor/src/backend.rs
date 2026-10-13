@@ -4119,7 +4119,13 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     ///
     /// # Errors
     ///
-    /// As [`TensorIndexing::gather`].
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError`
+    /// source for invalid shapes, ranks, axes, dtypes or output metadata, and
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    /// The default implementation materializes both reads first, so it also
+    /// returns whatever [`Self::to_contiguous_read`] reports for a read the
+    /// backend cannot materialize.
     fn gather_read(
         &mut self,
         operand: TensorRead<'_>,

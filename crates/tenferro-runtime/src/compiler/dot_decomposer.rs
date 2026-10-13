@@ -64,6 +64,13 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
 /// elementary operation they are, unconditionally: unlike the canonicalization
 /// below, this materializes no layout, it only keeps a degenerate contraction
 /// from reaching a backend (invariant I4).
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Internal`] when an input or output slot is outside
+/// its slot table or a slot's metadata is missing, and [`crate::Error::Validation`]
+/// with a typed `ShapeMismatch`, `RankMismatch` or `InvalidArgument` source when
+/// a dot shape or dimension expression cannot be validated.
 pub fn rewrite_degenerate_dots(
     program: &mut ExecProgram,
     input_shapes: &[Vec<DimExpr>],
