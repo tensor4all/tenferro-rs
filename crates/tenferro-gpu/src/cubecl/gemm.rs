@@ -713,13 +713,6 @@ impl<T: 'static> ReadOperand<'_, '_, T> {
     }
 }
 
-fn read_operand_alignment_requirement<T: CutensorScalar>(operand: &ReadOperand<'_, '_, T>) -> u32 {
-    match operand {
-        ReadOperand::Owned(_) => CUDA_ALLOCATION_ALIGNMENT,
-        ReadOperand::View(_) => view_descriptor_alignment_requirement::<T>(),
-    }
-}
-
 /// Write-slot operand for the accumulate path.
 enum WriteOperand<'a, 'b, T> {
     Owned(&'a mut TypedTensor<T>),
@@ -760,17 +753,24 @@ fn cross_stream_handles<'a>(
         .collect()
 }
 
-fn write_operand_alignment_requirement<T: CutensorScalar>(
-    operand: &WriteOperand<'_, '_, T>,
-) -> u32 {
-    match operand {
-        WriteOperand::Owned(_) => CUDA_ALLOCATION_ALIGNMENT,
-        WriteOperand::View(_) => view_descriptor_alignment_requirement::<T>(),
-    }
-}
-
 fn view_descriptor_alignment_requirement<T: CutensorScalar>() -> u32 {
     u32::try_from(std::mem::size_of::<T>()).unwrap_or(CUDA_ALLOCATION_ALIGNMENT)
+}
+
+/// The alignment the effective byte address actually guarantees, bounded by
+/// what a CubeCL allocation promises and floored at the scalar size.
+///
+/// This is what the plan key and the cuTENSOR descriptor use, so the plan path
+/// depends on the effective `(pointer, strides, alignment)` and never on
+/// whether the operand is owned or a borrowed view: a view that starts at its
+/// allocation's base is as aligned as an owned operand and shares its plan.
+fn effective_descriptor_alignment<T: CutensorScalar>(addr: u64) -> u32 {
+    let floor = view_descriptor_alignment_requirement::<T>();
+    if addr == 0 {
+        return floor;
+    }
+    let bytes = 1u64 << addr.trailing_zeros();
+    (bytes.min(u64::from(CUDA_ALLOCATION_ALIGNMENT)) as u32).max(floor)
 }
 
 /// Device pointer plus cuTENSOR descriptor metadata for one operand.
@@ -969,16 +969,17 @@ where
         lhs_strides: &lhs_res.strides,
         rhs_strides: &rhs_res.strides,
         output_strides: &out_res.strides,
-        lhs_alignment_requirement: read_operand_alignment_requirement(&lhs),
-        rhs_alignment_requirement: read_operand_alignment_requirement(&rhs),
-        output_alignment_requirement: write_operand_alignment_requirement(&out),
+        // The requirement is the alignment the effective address guarantees,
+        // not a value derived from the operand's representation: an owned
+        // operand and a view over the same effective region then produce the
+        // same plan key (and the same alignment told to cuTENSOR).
+        lhs_alignment_requirement: lhs_res.alignment,
+        rhs_alignment_requirement: rhs_res.alignment,
+        output_alignment_requirement: out_res.alignment,
         lhs_conj,
         rhs_conj,
         workspace_preference: CutensorWorksizePreference::Default,
     };
-    validate_descriptor_alignment(lhs_res.alignment, spec.lhs_alignment_requirement, "lhs")?;
-    validate_descriptor_alignment(rhs_res.alignment, spec.rhs_alignment_requirement, "rhs")?;
-    validate_descriptor_alignment(out_res.alignment, spec.output_alignment_requirement, "out")?;
     // C = D = out: cuTENSOR reads the destination as the accumulator (skipped
     // by cuTENSOR itself when beta == 0) and writes the result in place.
     // Overlap between the out region and the lhs/rhs regions is the caller's
@@ -1091,13 +1092,14 @@ fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
         .checked_add(offset_bytes as u64)
         .ok_or_else(|| Error::invalid_argument(OP, "layout", "view device address overflows"))?;
     // INVARIANT: CubeCL root allocations are at least 256-byte aligned, and
-    // the checked element offset preserves alignment to the scalar size. A
-    // strided view therefore guarantees the scalar-sized cuTENSOR requirement,
-    // even when the view starts inside the root allocation.
+    // the checked element offset preserves alignment to the scalar size. The
+    // effective address therefore guarantees at least the scalar-sized
+    // cuTENSOR requirement, and exactly the allocation alignment when the view
+    // starts at its base.
     Ok(ResolvedOperand {
         ptr: cuda_device_ptr_from_addr(addr, OP)?,
         strides: std::borrow::Cow::Owned(strides_i64),
-        alignment: view_descriptor_alignment_requirement::<T>(),
+        alignment: effective_descriptor_alignment::<T>(addr),
     })
 }
 
@@ -1468,24 +1470,6 @@ pub(super) fn shared_workspace_capacity(requested: u64) -> Option<u64> {
         return Some(0);
     }
     requested.max(MIN_CAPACITY).checked_next_power_of_two()
-}
-
-fn validate_descriptor_alignment(
-    actual_alignment: u32,
-    alignment_requirement: u32,
-    slot: &'static str,
-) -> crate::Result<()> {
-    if actual_alignment >= alignment_requirement {
-        return Ok(());
-    }
-    Err(Error::invalid_argument(
-        OP,
-        "alignment",
-        format!(
-            "{slot} device pointer alignment {actual_alignment} is smaller than the cuTENSOR \
-             descriptor requirement {alignment_requirement}"
-        ),
-    ))
 }
 
 fn raw_stream(rt: &CudaRuntime) -> crate::Result<CutensorCudaStream> {
@@ -1863,4 +1847,29 @@ fn validate_dot_general(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::*;
+
+    #[test]
+    fn the_effective_address_decides_the_descriptor_alignment() {
+        // A view at its allocation's base is as aligned as an owned operand,
+        // so the two share a plan key.
+        assert_eq!(
+            effective_descriptor_alignment::<f64>(1u64 << 20),
+            CUDA_ALLOCATION_ALIGNMENT
+        );
+        // A mid-allocation element offset keeps the scalar-size floor ...
+        assert_eq!(effective_descriptor_alignment::<f64>((1u64 << 20) + 8), 8);
+        // ... and a wider offset is reported as what it is.
+        assert_eq!(effective_descriptor_alignment::<f64>((1u64 << 20) + 32), 32);
+        // Never above what a CubeCL allocation promises, and never zero.
+        assert_eq!(
+            effective_descriptor_alignment::<f32>(1u64 << 30),
+            CUDA_ALLOCATION_ALIGNMENT
+        );
+        assert_eq!(effective_descriptor_alignment::<f32>(0), 4);
+    }
 }
