@@ -1,6 +1,7 @@
 # Audited CUDA-feature inventory: lane	binary-id	test-name
 # Audit additions and helper chains; never classify by test-name substrings.
 benchmark	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark
+benchmark	tenferro-ad::integration	gpu_ad_tests::eager_op_f64_decode_add_host_cost_benchmark
 compile-only	tenferro-ad::integration	eager_backend_capability_contract::eager_backend_capability_boundary
 compile-only	tenferro-gpu::integration	session_contract::execution_session_capability_cannot_project_or_escape_owner_borrow
 gpu	tenferro-ad	extension::tests::eager_extension_cuda_host_input_is_rejected_before_factory

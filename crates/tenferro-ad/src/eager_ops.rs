@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use computegraph::GraphOperation;
@@ -31,18 +32,25 @@ pub(crate) fn untracked_fast_path_allowed(tensors: &[&EagerTensor]) -> bool {
         || (!eager_capture_active() && !tensors.iter().any(|tensor| tensor.requires_grad))
 }
 
-pub(crate) fn broadcast_binary_in_session(
+pub(crate) fn broadcast_binary_in_session<'a>(
     op: &'static str,
-    lhs: &EagerTensor,
-    rhs: &EagerTensor,
+    lhs: &'a EagerTensor,
+    rhs: &'a EagerTensor,
     session: &mut EagerSession<'_>,
-) -> Result<(EagerTensor, EagerTensor)> {
+) -> Result<(Cow<'a, EagerTensor>, Cow<'a, EagerTensor>)> {
     ensure_same_context(lhs, rhs)?;
+    // The equal-shape case is what a decode loop hits, and it needs neither a
+    // broadcast plan nor a clone of either operand: the caller only reads them.
+    // Returning borrows keeps two `EagerTensor` clones (each bumping several
+    // `Arc`s) and one shape `Vec` out of every decode-sized op (#2079).
+    if lhs.shape() == rhs.shape() {
+        return Ok((Cow::Borrowed(lhs), Cow::Borrowed(rhs)));
+    }
     let shape =
         broadcast_shape(lhs.shape(), rhs.shape()).map_err(|err| broadcast_error(op, err))?;
     Ok((
-        broadcast_to_in_session(op, lhs, &shape, session)?,
-        broadcast_to_in_session(op, rhs, &shape, session)?,
+        Cow::Owned(broadcast_to_in_session(op, lhs, &shape, session)?),
+        Cow::Owned(broadcast_to_in_session(op, rhs, &shape, session)?),
     ))
 }
 

@@ -527,3 +527,57 @@ fn assert_real_like_close(actual: &Tensor, expected: &Tensor, what: &str) {
         other => panic!("{what}: unexpected dtype {other:?}"),
     }
 }
+
+/// Host cost per eager op on a decode-sized tensor (#2079, #2112 item 7).
+///
+/// Prints the streaming arm (each result dropped, which is what a decode loop
+/// does), the retained arm (every result held, so no allocation can be reused -
+/// #2079's note is that the pool must not be "fixed" to satisfy that number) and
+/// the raw-launch floor for the same shape. It asserts nothing: the acceptance is
+/// a reading, taken with the same harness before and after a change. The official
+/// arms (`eager_op_f32_add_decode_*` in `gpu/perf_issues`) live in
+/// `tensor4all/tenferro-benchmark`; this reproduces the shape in-repo.
+#[test]
+#[ignore = "requires CUDA"]
+fn eager_op_f64_decode_add_host_cost_benchmark() {
+    use std::time::Instant;
+    use tenferro_ad::EagerRuntime;
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let shape = vec![1024usize, 8];
+    let n: usize = shape.iter().product();
+    let host_a = f64_tensor(shape.clone(), vec![1.0_f64; n]);
+    let host_b = f64_tensor(shape.clone(), vec![2.0_f64; n]);
+
+    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let runtime = upload_backend.runtime().clone();
+    let ga = upload_tensor(upload_backend.runtime(), &host_a).unwrap();
+    let gb = upload_tensor(upload_backend.runtime(), &host_b).unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
+    let x = EagerTensor::from_tensor_in(ga, ctx.clone()).unwrap();
+    let y = EagerTensor::from_tensor_in(gb, ctx.clone()).unwrap();
+    let iters = 2000usize;
+
+    let warm = |iters: usize, keep: bool| -> f64 {
+        let started = Instant::now();
+        ctx.with_eager_session(|s| -> tenferro_ad::Result<()> {
+            let mut held = Vec::new();
+            for _ in 0..iters {
+                let out = s.add(&x, &y)?;
+                if keep {
+                    held.push(out);
+                }
+            }
+            drop(held);
+            Ok(())
+        })
+        .unwrap();
+        runtime.synchronize().unwrap();
+        started.elapsed().as_secs_f64() * 1e6 / iters as f64
+    };
+
+    let _ = warm(200, false);
+    let streaming = warm(iters, false);
+    let retained = warm(iters, true);
+    eprintln!("[2079] eager add 1024x8 f64: streaming {streaming:.2} us/op, retained {retained:.2} us/op");
+}
