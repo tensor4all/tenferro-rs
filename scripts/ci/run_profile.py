@@ -117,6 +117,10 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         # denominators without adding covered lines. `--workspace` runs
         # `cargo clean --package` for every workspace member, so the measured
         # objects are rebuilt while the restored dependency artifacts stay.
+        # This covers the *current* workspace members only: a former member, a
+        # standalone workspace, or an obsolete dependency's artifacts are not
+        # cleaned, so a restored cache can still contribute those. What is pinned
+        # below is the command, not restored-cache behaviour.
         "cargo llvm-cov clean --workspace",
         f"cargo llvm-cov nextest --workspace --exclude tenferro-tutorial-code "
         f"{_NEXTEST_PROFILE} --no-clean --json --output-path coverage.json",
