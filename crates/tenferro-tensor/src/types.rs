@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::SliceConfig;
 use crate::error::ReinterpretError;
-pub use tenferro_tensor_core::{DType, DynRank, Rank, TensorLayout, TensorRank};
 use smallvec::SmallVec;
+pub use tenferro_tensor_core::{DType, DynRank, Rank, TensorLayout, TensorRank};
 use tenferro_tensor_core::{ShapeVec, StrideVec};
 use tenferro_tensor_core::{SliceSpec as CoreSliceSpec, ValidationError};
 
@@ -7933,11 +7933,7 @@ impl<'a> TensorRead<'a> {
     /// which has no borrowed view, or a validation error when `dims` does not
     /// map this read's layout into `shape`.
     #[doc(hidden)]
-    pub fn broadcast_in_dim_view(
-        self,
-        shape: &[usize],
-        dims: &[usize],
-    ) -> crate::Result<Self> {
+    pub fn broadcast_in_dim_view(self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
         let dtype = self.dtype();
         // INVARIANT: `tensor_view()` has no arm for a caller-owned payload, so
         // the refusal must happen before the read is converted into a view.

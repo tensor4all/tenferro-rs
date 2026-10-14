@@ -22,7 +22,7 @@ shared boundary instead of restating that item.
 | 3 | #2040 | Remove the removable per-call allocation in `slice_view` and pin the metadata-allocation count with a test. | implemented and asserted |
 | 4 | #1838 | Relax the shared destination contract from compact to write-injective, and add a strided-destination path on CPU and CUDA over the pinned `strided-rs` update primitive. | code and CPU tests done, CUDA verification pending |
 | 5 | #2039 | Keep the cached plan, remove the per-call lane allocation and one full pass, and record the engine difference as the reviewed reason for the residual. | implemented, timing evidence pending |
-| 6 | #2145 | Keep the compact layout with the tensor so the per-op view helper borrows it and allocates nothing. | implemented and asserted |
+| 6 | #2145 | The tensor keeps its cached compact layout so the per-op view helper borrows it and allocates nothing. Upstream landed the same fix as #2149; this branch keeps the follow-up it did not cover. | implemented and asserted |
 
 ## 1. The eager implicit broadcast is a view (#2021)
 
@@ -165,24 +165,31 @@ With the strided 0.5.0 pin, `StridedView::new` borrows the caller's layout, but
 the per-op view helper computed the strides locally, so it had to hand them to
 `StridedView::new_owned` — metadata allocations on every eager operation.
 
-Decision: the owner keeps the layout.
+Upstream landed this fix as **#2149** (`4a528b3a9`, "tensor: cache the compact
+layout so views borrow it") on top of the branch's original base: `TypedTensor`
+caches `layout: StrideVec` and `strides()` serves it, `tenferro-cpu`'s
+`host_view` and `tenferro-cpu-basic`'s `typed_view` both call the borrowing
+`StridedView::new`. This branch was rebased onto that state, so its own
+`strides: R::Strides` field was dropped rather than kept as a second copy of the
+same metadata.
 
-- `TypedTensor` stores its canonical column-major strides as
-  `strides: R::Strides` (`[isize; N]` for `Rank<N>`, the inline `StrideVec` for
-  `DynRank`), derived once at construction. No shape mutator exists and layout
-  changes produce a new tensor or a view, so the stored strides cannot go stale;
-  a test asserts they are the canonical strides across the constructors,
-  the rank/host/dynamic conversions and the derived view layout.
-- The per-op helper then calls the borrowing
-  `StridedView::new(data, shape, strides, 0)` and allocates nothing. The
-  duplicated `host_view` in `tenferro-cpu/src/structural.rs` was deleted and its
-  call sites use the single `tenferro_cpu_basic::typed_view`, so there is one
-  tested helper rather than two independent ones.
+What this branch adds on top, because #2149 did not cover it:
 
-Size impact, measured: `TypedTensor<f64, Rank<2>>` 136 → 152 B,
-`TypedTensor<f64, DynRank>` 192 → 264 B, erased `Tensor` 296 B unchanged. This is
-the cost of the zero-allocation target; the #2139 item 6 small-view work is the
-separate place where the view-side size target is tracked.
+- the duplicated `host_view` in `tenferro-cpu/src/structural.rs` is deleted and
+  its three call sites use the single `tenferro_cpu_basic::typed_view`, so there
+  is one helper instead of two independent ones. #2149's
+  `structural/tests/mod.rs` layout-borrowing check was retargeted to that helper,
+  including its `strides()` pointer-identity assertion;
+- `crates/tenferro-cpu-basic/tests/view_allocation.rs` asserts with a counting
+  global allocator that `typed_view` allocates **zero** bytes at rank 2, rank 9
+  and for a statically ranked host owner, and that the stored strides are the
+  canonical column-major layout across the constructors, the rank/host/dynamic
+  conversions and the derived view layout.
+
+Size, measured on the rebased branch (the increase comes from #2149's cached
+layout, not from this branch): `TypedTensor<f64, Rank<2>>` 136 → 208 B,
+`TypedTensor<f64, DynRank>` 192 → 264 B, erased `Tensor` 296 B unchanged. The
+cached `StrideVec` is inline up to rank 8 and spills above it.
 
 ## Measurement and evidence
 
