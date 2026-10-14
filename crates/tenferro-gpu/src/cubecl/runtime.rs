@@ -944,11 +944,26 @@ impl CudaRuntime {
     /// Trim does not replace the ownership rule: a resource is released by its
     /// owner, and this only asks for the release of blocks whose owners are
     /// already gone. Queued work is not affected - the trim touches pool
-    /// bookkeeping and the driver, not the stream. Two limits of this pin are
-    /// worth knowing: there is no non-pooled allocation mode here (only `Auto`
-    /// and `Persistent`), so memory cannot be made to return on drop without an
-    /// explicit trim, and a pool that cannot serve a request panics on the
-    /// allocator's device thread rather than reporting an error.
+    /// bookkeeping and the driver, not the stream.
+    ///
+    /// Measured on this pin (A100): dropping a 1 GiB tensor leaves the driver's
+    /// free memory 1 GiB lower, and one `trim_memory` restores it exactly - the
+    /// test in this crate asserts both halves. `MemoryAllocationMode::Dedicated`
+    /// exists here and is reachable through [`Session::client`]
+    /// (`Client::memory_dedicated_allocation`), but it is **not** a substitute for
+    /// the trim: with an allocation made inside that window, dropping it still
+    /// leaves the driver's free memory unchanged, and only the trim returns it.
+    /// What the mode changes is where the buffer lives - its own device
+    /// allocation rather than a pooled one - so a caller with a hard bound calls
+    /// this, not the mode.
+    ///
+    /// The cleanup result is discarded because this method returns `()`; the
+    /// pinned CubeCL reports one case, a refusal while a stream records a graph,
+    /// and a caller that has to see it can call `Client::memory_cleanup` through
+    /// [`Session::client`]. An allocation the pool cannot serve is *not* a panic
+    /// on the device thread: CubeCL records the failure on the buffer and reports
+    /// it at that buffer's next use
+    /// (`docs/design/gpu-correctness-invariants-2137.md`, I2 and I5).
     ///
     /// # Examples
     ///
@@ -958,8 +973,8 @@ impl CudaRuntime {
     /// let _trim: fn(&CudaRuntime) = CudaRuntime::trim_memory;
     /// ```
     pub fn trim_memory(&self) {
-        // 0.11 reports the cleanup result; the trim has no error channel of its
-        // own (a pool that cannot serve a request panics on the device thread).
+        // The cleanup result is discarded: see the note above for the one case
+        // CubeCL reports (a refusal while a stream records a graph).
         let _ = self.client().memory_cleanup();
     }
 }

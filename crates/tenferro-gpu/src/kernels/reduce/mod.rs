@@ -19,3 +19,4 @@ pub(crate) use launch::{
     launch_prod_float, launch_prod_int, launch_sum_complex, launch_sum_float, launch_sum_int,
     launch_sum_squares_float, ReduceStrategy,
 };
+pub(crate) use routines::{partials_shape, plan};

@@ -2637,7 +2637,12 @@ impl CudaBackend {
         input: &TypedTensor<T>,
         axis: usize,
         op: &'static str,
-        launch: impl FnOnce(&Client, TensorBinding, TensorBinding) -> crate::kernels::Result<()>,
+        launch: impl FnOnce(
+            &Client,
+            TensorBinding,
+            TensorBinding,
+            Option<TensorBinding>,
+        ) -> crate::kernels::Result<()>,
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + TensorScalar + Scalar + Clone + Scalar,
@@ -2650,8 +2655,28 @@ impl CudaBackend {
         }
 
         let output_binding = typed_tensor_binding(&output, op)?;
-        launch(self.runtime().client(), input_binding, output_binding)
-            .map_err(|err| crate::Error::backend_source(op, err))?;
+        let plan = cubecl_reduce::plan(
+            self.runtime().client(),
+            &input_binding,
+            &output_binding,
+            axis,
+            ReduceStrategy::Auto,
+        )
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+        let partials_binding = match cubecl_reduce::partials_shape(&plan, &output_shape, axis) {
+            Some(shape) => {
+                let partials = alloc_output::<T>(self.runtime(), &shape)?;
+                Some(typed_tensor_binding(&partials, op)?)
+            }
+            None => None,
+        };
+        launch(
+            self.runtime().client(),
+            input_binding,
+            output_binding,
+            partials_binding,
+        )
+        .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(output)
     }
 
@@ -2713,15 +2738,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_float::<F>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_sum_float::<F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -2751,27 +2782,37 @@ impl CudaBackend {
             .split_first()
             .ok_or_else(|| crate::Error::invalid_argument(op, "axes", "axes must not be empty"))?;
 
-        let mut current =
-            self.launch_reduce_axis_typed(input, first_axis, op, |client, input, output| {
+        let mut current = self.launch_reduce_axis_typed(
+            input,
+            first_axis,
+            op,
+            |client, input, output, partials| {
                 cubecl_reduce::launch_sum_squares_float::<F>(
                     client,
                     input,
                     output,
                     first_axis,
                     ReduceStrategy::Auto,
+                    partials,
                 )
-            })?;
+            },
+        )?;
         for &axis in remaining_axes {
-            current =
-                self.launch_reduce_axis_typed(&current, axis, op, |client, input, output| {
+            current = self.launch_reduce_axis_typed(
+                &current,
+                axis,
+                op,
+                |client, input, output, partials| {
                     cubecl_reduce::launch_sum_float::<F>(
                         client,
                         input,
                         output,
                         axis,
                         ReduceStrategy::Auto,
+                        partials,
                     )
-                })?;
+                },
+            )?;
         }
 
         cubecl_reshape_metadata(current, final_shape, op)
@@ -2797,15 +2838,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_complex::<C>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_sum_complex::<C>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -2828,15 +2875,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_sum_int::<I>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_sum_int::<I>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -2859,15 +2912,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_float::<F>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_prod_float::<F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -2891,15 +2950,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_complex::<C>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_prod_complex::<C>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -2922,15 +2987,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_prod_int::<I>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_prod_int::<I>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -2953,15 +3024,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_max_float::<F>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_max_float::<F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -2984,15 +3061,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_max_int::<I>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_max_int::<I>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -3015,15 +3098,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_min_float::<F>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_min_float::<F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 
@@ -3046,15 +3135,21 @@ impl CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
-            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
-                cubecl_reduce::launch_min_int::<I>(
-                    client,
-                    input,
-                    output,
-                    axis,
-                    ReduceStrategy::Auto,
-                )
-            })
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                op,
+                |client, input, output, partials| {
+                    cubecl_reduce::launch_min_int::<I>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                        partials,
+                    )
+                },
+            )
         })
     }
 

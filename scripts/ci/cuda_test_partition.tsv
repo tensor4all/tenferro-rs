@@ -11,6 +11,7 @@ gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_borrowed_reduce_sum_preserve
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_eager_backward_smoke
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_matmul_vjp
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_scale_real_and_scale_complex_match_cpu
+gpu	tenferro-ad::integration	gpu_ad_tests::eager_op_f64_decode_add_host_cost_benchmark
 gpu	tenferro-ad::integration	gpu_f32_fusion::test_f32_gpu_fusion_chain_e2e
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_concrete_session_matches_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_eager_values_and_gradients_match_cpu
@@ -169,6 +170,7 @@ gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_integer_reductions_
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_reductions_column_major_3d_axes_match_cpu
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_sum_squares_does_not_contract_multiply_and_add
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes
+gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_split_reduction_large_axis_matches_cpu
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_backend_add_matches_cpu_reference
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_cached_scalar_read_observes_queued_writes
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_complex_sign_is_scale_safe

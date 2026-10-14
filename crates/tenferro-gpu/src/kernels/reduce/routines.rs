@@ -23,6 +23,10 @@
 
 use cubecl::prelude::*;
 
+use super::launch::{
+    auto_reduce_strategy, launch_with_plane_settings, launch_with_unit_settings, validate_launch,
+    ReduceStrategy, ResolvedReduceStrategy,
+};
 use crate::kernels::{CubeclKernelError, Result};
 
 /// Validated single-axis reduction dimensions.
@@ -34,6 +38,93 @@ pub struct ReduceProblem {
     pub reduce_count: usize,
     /// Axis being reduced.
     pub axis: usize,
+}
+
+/// Starting cap on the number of axis chunks. It exists only to bound the
+/// launch grid and the partials buffer; this value is a starting point and is
+/// tuned by the acceptance measurement, not by the geometry rule itself.
+pub(crate) const MAX_SPLITS: usize = 4096;
+
+/// A split of the reduce axis into equal-length chunk slices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ReduceSplit {
+    /// Number of chunk slices the axis is cut into.
+    pub splits: usize,
+    /// Elements in each chunk; the last chunk may hold the division remainder.
+    pub chunk_len: usize,
+}
+
+/// Decide whether the reduce axis is long enough to split across cubes.
+///
+/// The floor rule keeps every chunk at least `MIN_CHUNK = plane_width * 8`
+/// elements, so each thread of a cube always has its own first element and
+/// the kernels need no per-thread identity value.
+pub(crate) fn split_plane(problem: ReduceProblem, plane_width: u32) -> Option<ReduceSplit> {
+    let min_chunk = plane_width as usize * 8;
+    let splits = (problem.reduce_len / min_chunk).clamp(1, MAX_SPLITS);
+    if splits <= 1 {
+        return None;
+    }
+    Some(ReduceSplit {
+        splits,
+        chunk_len: problem.reduce_len / splits,
+    })
+}
+
+/// A resolved reduction launch, including the optional axis split.
+#[derive(Clone, Debug)]
+pub(crate) struct ReduceLaunchPlan {
+    /// Kernel family selected for the (unsplit) reduction.
+    pub kind: ResolvedReduceStrategy,
+    /// Cubes to dispatch for the unsplit reduction.
+    pub cube_count: CubeCount,
+    /// Units per cube for the unsplit reduction.
+    pub cube_dim: CubeDim,
+    /// Axis being reduced.
+    pub axis: usize,
+    /// Number of keepdims output elements.
+    pub output_len: usize,
+    /// Axis split for pass 1, or `None` to run the existing single pass.
+    pub split: Option<ReduceSplit>,
+}
+
+/// Validate, resolve the strategy and decide the split, without launching.
+pub(crate) fn plan(
+    client: &Client,
+    input: &TensorBinding,
+    output: &TensorBinding,
+    axis: usize,
+    strategy: ReduceStrategy,
+) -> Result<ReduceLaunchPlan> {
+    let problem = validate_launch(input, output, axis)?;
+    let resolved = match strategy {
+        ReduceStrategy::Auto => match auto_reduce_strategy(client, problem)? {
+            ResolvedReduceStrategy::Unit => launch_with_unit_settings(client, problem)?,
+            ResolvedReduceStrategy::Plane => launch_with_plane_settings(client, problem)?,
+        },
+    };
+    let plane_width = client.properties().hardware.plane_size_max.max(1);
+    Ok(ReduceLaunchPlan {
+        kind: resolved.kind,
+        cube_count: resolved.cube_count,
+        cube_dim: resolved.cube_dim,
+        axis: resolved.axis,
+        output_len: resolved.output_len,
+        split: split_plane(problem, plane_width),
+    })
+}
+
+/// The partials tensor a split plan needs: the keepdims shape with the reduce
+/// axis set to `splits`. `None` when the plan runs unsplit.
+pub(crate) fn partials_shape(
+    plan: &ReduceLaunchPlan,
+    output_shape: &[usize],
+    axis: usize,
+) -> Option<Vec<usize>> {
+    let split = plan.split?;
+    let mut shape = output_shape.to_vec();
+    shape[axis] = split.splits;
+    Some(shape)
 }
 
 /// Unit-kernel launch blueprint.

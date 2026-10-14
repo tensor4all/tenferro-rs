@@ -214,6 +214,29 @@ under `[workspace.dependencies]`, reference with `dep.workspace = true`.
 `git fetch origin && git checkout -b <branch-name> origin/main`. Never branch
 from stale local state or another feature branch unless explicitly intended.
 
+### Working Branches For Multi-Commit Work
+
+Work that is expected to produce more than one commit - an umbrella item, a
+migration, or a coordinated dependency move - accumulates on **one dedicated
+working branch** and reaches `main` in a single pull request once the batch is
+finished:
+
+- create the branch from the latest `main` and commit freely on it;
+- do not open a pull request per commit or per correction. Hosted CI is the
+  scarce resource: every push to an open PR starts the full matrix again,
+  including the paid GPU gate, and per-iteration pushes are what that cost buys;
+- open the pull request when the batch is complete and locally verified, with
+  the commits ordered so the series reads as the intended history;
+- the GPU umbrella work uses a long-lived `develop` branch
+  ([#2137](https://github.com/tensor4all/tenferro-rs/issues/2137) correctness,
+  [#2112](https://github.com/tensor4all/tenferro-rs/issues/2112) performance) as
+  its accumulation point, so parallel branches merge there instead of racing on
+  `main`. `develop` reaches `main` by pull request when the batch is done, on the
+  maintainer's instruction.
+
+A correctness fix that must not wait for the batch is the exception: it branches
+from `main` as usual, which is what the rest of this section describes.
+
 ## Pre-Push / PR Checklist
 
 Before pushing or creating a PR with code changes, run focused non-release
@@ -280,6 +303,8 @@ with `CARGO_PROFILE_DEV_DEBUG=1` or `CARGO_PROFILE_TEST_DEBUG=1`.
 ### PR Creation Rules
 
 - Create PRs to `main` with `gh pr create`
+- Batched work follows `### Working Branches For Multi-Commit Work`: the PR is
+  opened once the batch is finished, not per commit
 - No AI-generated analysis reports as standalone files in PRs
 - Batched remediation PRs follow
   `ai/contribution-workflows/repository-remediation.md`: one PR after all local

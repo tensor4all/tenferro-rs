@@ -931,20 +931,11 @@ impl AdValueRecord {
 
     fn tensor_read(&self, op: &'static str) -> Result<TensorRead<'_>> {
         match self.container.as_ref() {
-            RetentionContainer::Pooled { group, slot } => {
-                let mut reads = group
-                    .read_views(std::slice::from_ref(slot))
-                    .map_err(|error| {
-                        Error::runtime_state_source(op, ErrorPhase::Execution, error)
-                    })?;
-                reads.pop().ok_or_else(|| {
-                    Error::runtime_state(
-                        op,
-                        ErrorPhase::Execution,
-                        "empty allocation-group binding",
-                    )
-                })
-            }
+            RetentionContainer::Pooled { group, slot } => group.read_view(*slot).map_err(|error| {
+                // One slot, so no `Vec` and no empty-result case: the single-slot
+                // accessor is the whole request (#2079).
+                Error::runtime_state_source(op, ErrorPhase::Execution, error)
+            }),
             RetentionContainer::CallerOwned { tensor } => Ok(TensorRead::from_tensor(tensor)),
             RetentionContainer::Owned { tensor } => Ok(TensorRead::from_tensor(tensor)),
         }
@@ -2731,7 +2722,7 @@ impl EagerSession<'_> {
         self.ensure_runtime(lhs)?;
         self.ensure_runtime(rhs)?;
         let (lhs, rhs) = crate::eager_ops::broadcast_binary_in_session(name, lhs, rhs, self)?;
-        EagerTensor::nary_op_in_session(&[&lhs, &rhs], op, self.backend)
+        EagerTensor::nary_op_in_session(&[lhs.as_ref(), rhs.as_ref()], op, self.backend)
     }
 
     fn run_ternary(

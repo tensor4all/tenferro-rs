@@ -829,3 +829,195 @@ fn test_cubecl_complex_full_reduction_compiles_and_matches_cpu() {
         }
     }
 }
+
+/// A long-axis full reduction is split across cubes (#2134): pass 1 writes
+/// per-chunk partials and pass 2 combines them, instead of one warp walking the
+/// whole axis.
+///
+/// The lengths straddle the split threshold (`2 * MIN_CHUNK = 512`) and the
+/// remainder case (513, where the last chunk runs to `axis_len` rather than to
+/// `start + chunk_len`), then cover the sizes the acceptance measures. The first
+/// launch of each kernel compiles it with NVRTC, so the warm time is printed for
+/// the record and only correctness is asserted.
+#[test]
+#[ignore = "requires CUDA GPU"]
+fn test_cubecl_split_reduction_large_axis_matches_cpu() {
+    if !crate::cubecl::gpu_available() {
+        eprintln!("skipping split reduction test - no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let runtime = gpu.runtime().clone();
+    for len in [511usize, 512, 513, 600, 1_000_000, 10_000_000] {
+        let values: Vec<f64> = (0..len).map(|i| ((i % 17) as f64) * 0.25 - 2.0).collect();
+        let expected: f64 = values.iter().sum();
+        let input = tensor_f64(vec![len], values);
+        let gpu_input = upload(&gpu, &input);
+
+        // The expected value also comes from the CPU backend, so a wrong host
+        // sum cannot make a wrong device result look right.
+        let reference = cpu
+            .with_backend_session(|session| {
+                session.reduce_sum_read(TensorRead::from_tensor(&input), &[0])
+            })
+            .unwrap()
+            .unwrap();
+        assert!(
+            (reference.as_slice::<f64>().unwrap()[0] - expected).abs()
+                <= 1e-9 * expected.abs().max(1.0),
+            "len={len}: the CPU reference must agree with the host sum"
+        );
+
+        let mut warm = std::time::Duration::ZERO;
+        let mut actual = None;
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            actual = Some(
+                gpu.with_backend_session(|session| {
+                    session.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0])
+                })
+                .unwrap()
+                .unwrap(),
+            );
+            runtime.synchronize().unwrap();
+            warm = started.elapsed();
+        }
+        eprintln!("len={len}: warm device time {warm:?}");
+
+        let actual = download(&gpu, &actual.unwrap());
+        let got = actual.as_slice::<f64>().unwrap()[0];
+        assert!(
+            (got - expected).abs() <= 1e-9 * expected.abs().max(1.0),
+            "len={len}: got {got}, expected {expected}"
+        );
+
+        // The reported exactness case survives the split: every chunk sums to
+        // exactly zero, so the combine pass does too.
+        let difference = gpu
+            .with_backend_session(|session| {
+                session.sub_read(
+                    TensorRead::from_tensor(&gpu_input),
+                    TensorRead::from_tensor(&gpu_input),
+                )
+            })
+            .unwrap()
+            .unwrap();
+        let reduced = gpu
+            .with_backend_session(|session| {
+                session.reduce_sum_read(TensorRead::from_tensor(&difference), &[0])
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            download(&gpu, &reduced).as_slice::<f64>().unwrap()[0],
+            0.0,
+            "len={len}: reduce_sum(sub(x, x)) must stay exactly zero"
+        );
+    }
+
+    // The other reduction families take the split path too. Every input below
+    // is integral and small enough that the exact result still fits the
+    // f32/f64 mantissa, so the split's different accumulation order has to
+    // reproduce it bit-for-bit: a wrong partial cannot hide in a tolerance.
+    let split_len = 1_000_000usize;
+    macro_rules! split_matches_cpu {
+        ($cpu:expr, $gpu:expr, $label:expr, $input:expr, $op:ident) => {{
+            let gpu_input = upload(&$gpu, &$input);
+            let expected = $cpu
+                .with_backend_session(|session| session.$op(TensorRead::from_tensor(&$input), &[0]))
+                .unwrap()
+                .unwrap();
+            let actual = $gpu
+                .with_backend_session(|session| {
+                    session.$op(TensorRead::from_tensor(&gpu_input), &[0])
+                })
+                .unwrap()
+                .unwrap();
+            assert_tensor_close(&download(&$gpu, &actual), &expected, 0.0);
+            eprintln!("{}: split path matches the CPU backend", $label);
+        }};
+    }
+
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 sum",
+        tensor_f32(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 7) as f32).collect()
+        ),
+        reduce_sum_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "c64 sum",
+        tensor_c64(
+            vec![split_len],
+            (0..split_len)
+                .map(|i| num_complex::Complex64::new((i % 7) as f64, (i % 5) as f64))
+                .collect()
+        ),
+        reduce_sum_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "i64 sum",
+        tensor_i64(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 11) as i64 - 5).collect()
+        ),
+        reduce_sum_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 sum_squares",
+        tensor_f32(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 7) as f32).collect()
+        ),
+        reduce_sum_squares_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 prod",
+        tensor_f32(
+            vec![split_len],
+            // Period-3 {1, 2, 0.5}: the product is exactly 1, and no
+            // same-parity lane run overflows the CPU backend's SIMD product.
+            (0..split_len)
+                .map(|i| match i % 3 {
+                    0 => 1.0,
+                    1 => 2.0,
+                    _ => 0.5,
+                })
+                .collect()
+        ),
+        reduce_prod_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 max",
+        tensor_f32(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 13) as f32 - 6.0).collect()
+        ),
+        reduce_max_read
+    );
+    split_matches_cpu!(
+        cpu,
+        gpu,
+        "f32 min",
+        tensor_f32(
+            vec![split_len],
+            (0..split_len).map(|i| (i % 13) as f32 - 6.0).collect()
+        ),
+        reduce_min_read
+    );
+}
