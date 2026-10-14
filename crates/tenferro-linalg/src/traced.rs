@@ -1487,6 +1487,14 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
 
     let v = vt.conj()?.transpose(&matrix_transpose_perm(vt.rank))?;
     let uh = u.conj()?.transpose(&matrix_transpose_perm(u.rank))?;
+    // See the concrete builder: a complex input has real singular values, so
+    // `s_inv` is real while `v` is complex, and the multiply requires one dtype
+    // (#2049).
+    let s_inv = if s_inv.dtype == v.dtype {
+        s_inv
+    } else {
+        s_inv.convert(v.dtype)?
+    };
     let vs = scale_matrix_columns(&v, &s_inv)?;
     matmul_preserve_trailing_batch(&vs, &uh)
 }

@@ -662,3 +662,56 @@ fn concrete_norm_covers_orders_axis_permutation_and_validation() {
     })
     .unwrap();
 }
+
+#[test]
+fn complex_pinv_matches_the_moore_penrose_inverse() {
+    // #2049: for a complex input the singular values are real, so the inverted
+    // values that scale `v` are real too, while `v` is complex; the multiply
+    // requires one dtype.
+    let input = Tensor::from_typed::<Complex64>(
+        TypedTensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex64::new(2.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(4.0, 1.0),
+            ],
+        )
+        .unwrap(),
+    );
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        let pinv = input.pinv(session).unwrap();
+        assert_eq!(pinv.dtype(), tenferro_tensor::DType::C64);
+        let values = pinv.as_slice::<Complex64>().unwrap().to_vec();
+        // diag(2, 4+i) has the pseudoinverse diag(1/2, 1/(4+i)) = diag(1/2, (4-i)/17).
+        let expected = [
+            Complex64::new(0.5, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(4.0 / 17.0, -1.0 / 17.0),
+        ];
+        for (index, (actual, expected)) in values.iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).norm() < 1.0e-12,
+                "pinv[{index}]: {actual:?} against {expected:?}"
+            );
+        }
+
+        let with_rtol = input.pinv_with_rtol(1.0e-12, session).unwrap();
+        for (index, (actual, expected)) in with_rtol
+            .as_slice::<Complex64>()
+            .unwrap()
+            .iter()
+            .zip(values.iter())
+            .enumerate()
+        {
+            assert!(
+                (actual - expected).norm() < 1.0e-12,
+                "pinv_with_rtol[{index}]: {actual:?} against {expected:?}"
+            );
+        }
+    })
+    .unwrap();
+}

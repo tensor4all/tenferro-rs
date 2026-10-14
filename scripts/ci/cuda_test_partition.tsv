@@ -338,6 +338,7 @@ gpu	tenferro-linalg::integration	gpu_linalg::test_gpu_eig_returns_unsupported_er
 gpu	tenferro-linalg::integration	gpu_linalg::xgesvdp::test_cubecl_svd_xgesvdp_large_spectrum_agrees_with_gesvd
 gpu	tenferro-linalg::integration	gpu_linalg::xgesvdp::test_cubecl_svd_xgesvdp_rectangular_batched_and_values
 gpu	tenferro-linalg::integration	gpu_linalg::xgesvdp::test_cubecl_svd_xgesvdp_traced_and_pruned
+gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_direct_inv_and_pinv_with_rtol_accept_internal_scalars
 host	tenferro-ad	eager::tests::deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata
 host	tenferro-ad	eager::tests::dropped_values_do_not_accumulate_in_the_runtime_registries
 host	tenferro-ad	eager::tests::eager_backend_session_dispatches_broadcast_multiply_fusion_to_cpu

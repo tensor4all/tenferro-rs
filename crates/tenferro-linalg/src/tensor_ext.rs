@@ -2739,6 +2739,15 @@ fn pinv_from_svd<B: LinalgBackend + ?Sized>(
     )?;
     let v = conjugate_transpose(&vt, backend)?;
     let uh = conjugate_transpose(&u, backend)?;
+    // A complex input has real singular values, so `s_inv` is real while `v` is
+    // complex, and `scale_matrix_columns` multiplies them through `binary_mul`,
+    // which requires one dtype. Casting the real factor into the complex type is
+    // exact (#2049).
+    let s_inv = if s_inv.dtype() == v.dtype() {
+        s_inv
+    } else {
+        backend.convert(&s_inv, v.dtype())?
+    };
     let vs = scale_matrix_columns(&v, &s_inv, backend)?;
     matmul_preserve_trailing_batch(&vs, &uh, backend)
 }
