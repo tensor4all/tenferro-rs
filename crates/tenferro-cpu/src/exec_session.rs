@@ -1111,12 +1111,40 @@ impl TensorBuffer for CpuExecSession<'_> {
     }
 }
 
+/// Whether this backend executes a planned elementwise region as one fused command.
+///
+/// It does not, at any element count. `strided-fused 0.5.0` replays a region with
+/// `interpret_inner_loop_uninit`: one scalar iteration per element, with every
+/// operand and every intermediate addressed through runtime strides. That costs
+/// 9-35 ns per element per instruction, against 0.1-3 ns for the same instruction
+/// dispatched on its own through the vector kernels this crate reaches. Measured
+/// on a `1024x64` `f32` chain of ten instructions, one worker thread, release,
+/// 300 warm iterations after the prepared program's first five runs:
+///
+/// | chain | fused region | declined (per-instruction dispatch) |
+/// |---|---:|---:|
+/// | ten `tanh` (the #1990 fixture) | 23.4 ms | 1.68 ms |
+/// | ten `mul` | 6.0 ms | 0.11 ms |
+///
+/// A region's own upside is one intermediate's traffic, about 17 us at this size,
+/// which cannot close a 13x to 70x gap; and no element count changes that,
+/// because a DRAM-bound op is 0.8 ns per element against 9 ns for the same op
+/// replayed. `tenferro_cpu_fused` keeps the executor, implemented and covered by
+/// its own tests, so #2140 item 3 re-enables it by flipping this constant once the
+/// replay is vectorized.
+const SELECTS_FUSED_ELEMENTWISE_REGION: bool = false;
+
 impl TensorFusion for CpuExecSession<'_> {
     fn execute_elementwise_fusion(
         &mut self,
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
+        if !SELECTS_FUSED_ELEMENTWISE_REGION {
+            // `Ok(None)` is the runtime's documented decline: it dispatches the
+            // region's instructions one by one, which is the faster path.
+            return Ok(None);
+        }
         self.run_native_fresh_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             tenferro_cpu_fused::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)

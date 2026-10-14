@@ -572,7 +572,8 @@ fn test_broadcast_multiply_fusion_computes_outer_product_without_materialized_in
 
 #[test]
 fn test_cpu_elementwise_fusion_executes_add_mul_plan() {
-    let mut backend = CpuBackend::new();
+    // The session declines every region while `strided-fused`'s replay is a scalar
+    // interpreter (#2140 item 3), so this drives the executor directly.
     let n = 65_536usize;
     let lhs_data = (0..n).map(|i| i as f64 + 1.0).collect::<Vec<_>>();
     let rhs_data = (0..n).map(|i| (i as f64 + 1.0) * 10.0).collect::<Vec<_>>();
@@ -596,11 +597,15 @@ fn test_cpu_elementwise_fusion_executes_add_mul_plan() {
         ],
     );
 
-    let outputs = backend
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan))
-        .unwrap()
-        .unwrap()
-        .expect("CPU backend should execute supported elementwise fusion plans");
+    let mut buffers = crate::buffer_pool::BufferPool::default();
+    let outputs = tenferro_cpu_fused::elementwise_fusion_with_pool(
+        &mut buffers,
+        &strided_kernel::ExecContext::serial(),
+        &[&lhs, &rhs],
+        &fusion_plan,
+    )
+    .unwrap()
+    .expect("the CPU fused executor should execute supported plans");
 
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].shape(), &[n]);
@@ -612,7 +617,6 @@ fn test_cpu_elementwise_fusion_executes_add_mul_plan() {
 
 #[test]
 fn test_cpu_elementwise_fusion_executes_broadcast_chain_plan() {
-    let mut backend = CpuBackend::new();
     let n = 8_192usize;
     let lhs_data = (0..n).map(|i| i as f64 + 1.0).collect::<Vec<_>>();
     let lhs =
@@ -646,11 +650,15 @@ fn test_cpu_elementwise_fusion_executes_broadcast_chain_plan() {
         ],
     );
 
-    let outputs = backend
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan))
-        .unwrap()
-        .unwrap()
-        .expect("CPU backend should execute broadcast input views in fusion plans");
+    let mut buffers = crate::buffer_pool::BufferPool::default();
+    let outputs = tenferro_cpu_fused::elementwise_fusion_with_pool(
+        &mut buffers,
+        &strided_kernel::ExecContext::serial(),
+        &[&lhs, &rhs],
+        &fusion_plan,
+    )
+    .unwrap()
+    .expect("the CPU fused executor should execute broadcast input views");
 
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].shape(), &[n, 2]);
@@ -663,7 +671,6 @@ fn test_cpu_elementwise_fusion_executes_broadcast_chain_plan() {
 
 #[test]
 fn test_cpu_elementwise_fusion_broadcasts_mapped_unit_axes() {
-    let mut backend = CpuBackend::new();
     let n = 16_384usize;
     let lhs =
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1], vec![3.0]).unwrap());
@@ -692,11 +699,15 @@ fn test_cpu_elementwise_fusion_broadcasts_mapped_unit_axes() {
         ],
     );
 
-    let outputs = backend
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan))
-        .unwrap()
-        .unwrap()
-        .expect("CPU backend should broadcast mapped unit axes in fusion plans");
+    let mut buffers = crate::buffer_pool::BufferPool::default();
+    let outputs = tenferro_cpu_fused::elementwise_fusion_with_pool(
+        &mut buffers,
+        &strided_kernel::ExecContext::serial(),
+        &[&lhs, &rhs],
+        &fusion_plan,
+    )
+    .unwrap()
+    .expect("the CPU fused executor should broadcast mapped unit axes");
 
     assert_eq!(outputs[0].shape(), &[n]);
     let actual = outputs[0].as_slice::<f64>().unwrap();

@@ -757,15 +757,16 @@ fn prepared_elementwise_regions_are_planned_at_prepare_time() {
     );
 }
 
-/// Stage 1 evidence: the planned region executes as one fused command (the
-/// runtime counter records it), the results match the unprepared path, and a
-/// run containing a reduction plans and executes no region.
+/// Stage 1 evidence: a region the CPU engine declines runs its instructions one
+/// by one and still matches the unprepared path, and a run containing a
+/// reduction plans and executes no region at all.
+///
+/// The CPU engine declines every region while `strided-fused`'s replay is a
+/// scalar interpreter; `tenferro-cpu`'s `SELECTS_FUSED_ELEMENTWISE_REGION` owns
+/// that policy and carries the measurement behind it (#2140 item 3).
 #[test]
-fn prepared_elementwise_region_executes_as_one_fused_command() {
+fn prepared_elementwise_region_is_declined_by_the_cpu_engine() {
     let runtime = cpu_runtime();
-    // The CPU fused kernel only engages above its element-count floor, so use a
-    // size that can actually fuse; the small-size fallback is covered by
-    // prepared_elementwise_region_falls_back_when_fusion_is_declined.
     let n = 16 * 1024usize;
 
     let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
@@ -792,8 +793,8 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
     let mut fused = runtime.run_prepared(&prepared, &[&input]).unwrap();
     assert_eq!(
         prepared.elementwise_region_execution_counts(),
-        (1, 0),
-        "the chain region should execute fused, with no fallback"
+        (0, 1),
+        "the CPU engine declines the chain region"
     );
 
     let compiled = compiled.pop().unwrap();
@@ -948,7 +949,11 @@ fn prepared_elementwise_region_publishes_multiple_live_outs() {
 
     let mut prepared_out = runtime.run_prepared(&prepared, &[]).unwrap();
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
-    assert_eq!((fused, fallbacks), (1, 0), "the region should fuse once");
+    assert_eq!(
+        (fused, fallbacks),
+        (0, 1),
+        "the planned region runs unfused"
+    );
 
     let reference_runtime = cpu_runtime();
     let mut compiled = reference_runtime.run_compiled(&program, &[]).unwrap();
@@ -1056,7 +1061,11 @@ fn prepared_elementwise_region_stays_separate_from_ffi_op() {
 
     let mut prepared_out = runtime.run_prepared(&prepared, &[]).unwrap();
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
-    assert_eq!((fused, fallbacks), (1, 0), "the chain region should fuse");
+    assert_eq!(
+        (fused, fallbacks),
+        (0, 1),
+        "the CPU engine runs the chain region unfused"
+    );
 
     let reference_runtime = cpu_runtime();
     let mut compiled = reference_runtime.run_compiled(&program, &[]).unwrap();
@@ -1116,7 +1125,11 @@ fn prepared_elementwise_region_is_stable_across_repeated_runs() {
             }
         }
         let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
-        assert_eq!((fused, fallbacks), (run, 0), "run {run} should fuse once");
+        assert_eq!(
+            (fused, fallbacks),
+            (0, run),
+            "run {run} should decline once"
+        );
     }
 }
 
@@ -1168,10 +1181,10 @@ fn prepared_regions_interleave_with_ffi_work() {
 
     let mut prepared_out = runtime.run_prepared(&prepared, &[]).unwrap();
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
-    assert!(fused >= 1, "the large chain should fuse: {fused} fused");
+    assert_eq!(fused, 0, "the CPU engine declines every planned region");
     assert!(
         fallbacks >= 1,
-        "the chain below the element floor should fall back: {fallbacks} fallbacks"
+        "each planned region should fall back once: {fallbacks} fallbacks"
     );
 
     let reference_runtime = cpu_runtime();

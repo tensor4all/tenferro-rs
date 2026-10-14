@@ -114,6 +114,35 @@ allocation ownership or evidence of NUMA page placement, worker pinning, or
 memory residency. Storage-sharing views and metadata-only reshapes preserve the
 source metadata; caller-owned `_into` outputs preserve the caller's metadata.
 
+## A Fused Elementwise Region Is Planned But Declined
+
+The runtime plans a fused elementwise region for a prepared program and asks the
+session to execute it as one command. **The CPU session declines every such
+region** (`SELECTS_FUSED_ELEMENTWISE_REGION`), and the runtime dispatches the
+region's instructions one by one.
+
+It declines because the CPU replay is a scalar interpreter. `strided-fused`
+walks the region's register machine with `interpret_inner_loop_uninit`: one
+iteration per element, every operand and every intermediate addressed through
+runtime strides. That costs 9-35 ns per element per instruction, against 0.1-3
+ns for the same instruction dispatched on its own through the vector kernels
+`tenferro-cpu` reaches. On a `1024x64` `f32` chain of ten instructions, one
+worker thread, release, a fused region costs 23.4 ms against 1.68 ms for the
+declined path when the chain is ten `tanh`, and 6.0 ms against 0.11 ms when it is
+ten multiplies.
+
+A region's whole upside is the traffic of one intermediate, about 17 us at that
+size. No element count closes a 13x to 70x gap, so the decline is not a
+threshold. `tenferro-cpu-fused` keeps the executor, implemented and covered by
+its own tests, so re-enabling CPU fusion is one constant once the replay is
+vectorized ([#2140](https://github.com/tensor4all/tenferro-rs/issues/2140) item
+3 owns that work). The GPU backend reaches the same runtime machinery with its
+own `#[cube]` code generator and is unaffected.
+
+This is why `CpuBackend::max_fused_region_inputs` still reports the executor's
+four-input limit even though no region is ever selected: the limit describes the
+executor, and the selection policy is the session's.
+
 ## Diagnostics
 
 `CpuBackend::placement()`, `num_threads()`, `topology()`, and
