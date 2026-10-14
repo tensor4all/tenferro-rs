@@ -531,12 +531,16 @@ fn assert_real_like_close(actual: &Tensor, expected: &Tensor, what: &str) {
 /// Host cost per eager op on a decode-sized tensor (#2079, #2112 item 7).
 ///
 /// Prints the streaming arm (each result dropped, which is what a decode loop
-/// does), the retained arm (every result held, so no allocation can be reused -
-/// #2079's note is that the pool must not be "fixed" to satisfy that number) and
-/// the raw-launch floor for the same shape. It asserts nothing: the acceptance is
-/// a reading, taken with the same harness before and after a change. The official
-/// arms (`eager_op_f32_add_decode_*` in `gpu/perf_issues`) live in
-/// `tensor4all/tenferro-benchmark`; this reproduces the shape in-repo.
+/// does) and the retained arm (every result held, so no allocation can be
+/// reused - #2079's note is that the pool must not be "fixed" to satisfy that
+/// number). It asserts nothing: the host cost is a reading, taken with the same
+/// harness before and after a change, and the launch floor measured on this pin
+/// (5.36 us) is 4.5x the kernel time, so the reading has a ceiling this harness
+/// cannot move. The official arms (`eager_op_f32_add_decode_*` in
+/// `gpu/perf_issues`) live in `tensor4all/tenferro-benchmark`; this reproduces the
+/// shape in-repo, which is why it is classified `gpu` (a device test the pod runs)
+/// rather than `benchmark` - the partition reserves that lane for a single
+/// reviewed exclusion.
 #[test]
 #[ignore = "requires CUDA"]
 fn eager_op_f64_decode_add_host_cost_benchmark() {

@@ -105,8 +105,9 @@ Explicitly **not** in this design:
 ## Measurement harness
 
 `eager_op_f64_decode_add_host_cost_benchmark`
-(`crates/tenferro-ad/tests/integration/gpu_ad_tests.rs`, lane `benchmark` in
-`scripts/ci/cuda_test_partition.tsv`) prints three arms for the decode shape
+(`crates/tenferro-ad/tests/integration/gpu_ad_tests.rs`, lane `gpu` in
+`scripts/ci/cuda_test_partition.tsv`: the partition reserves its single
+`benchmark` entry for a reviewed exclusion) prints three arms for the decode shape
 (1024x8, one session around the loop) and asserts nothing - the acceptance is a
 reading taken with the same harness before and after a change:
 
