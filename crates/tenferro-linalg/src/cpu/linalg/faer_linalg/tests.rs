@@ -211,4 +211,25 @@ fn normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns() {
     <f64 as FaerEig>::normalize_eig_vectors(&mut large64, 2, 1).unwrap();
     assert!((large64[0].re - 0.6).abs() < 1.0e-12, "{:?}", large64[0]);
     assert!((large64[1].im - 0.8).abs() < 1.0e-12, "{:?}", large64[1]);
+
+    // And the underflow side in f64: `1e-200` squared is exactly zero in the
+    // operand dtype, so this column used to look all-zero and be rejected.
+    let mut tiny64 = vec![
+        Complex64::new(1.0e-200, 0.0),
+        Complex64::new(0.0, 2.0e-200),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 1.0),
+    ];
+    <f64 as FaerEig>::normalize_eig_vectors(&mut tiny64, 2, 1).unwrap();
+    let root_five64 = 5.0_f64.sqrt();
+    assert!(
+        (tiny64[0].re - 1.0 / root_five64).abs() < 1.0e-12,
+        "{:?}",
+        tiny64[0]
+    );
+    assert!(
+        (tiny64[1].im - 2.0 / root_five64).abs() < 1.0e-12,
+        "{:?}",
+        tiny64[1]
+    );
 }
