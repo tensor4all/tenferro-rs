@@ -1241,6 +1241,18 @@ fn test_extract_diagonal() {
     assert_eq!(get_f64(&diag, &[0, 0]), 1.0);
     assert_eq!(get_f64(&diag, &[1, 1]), 10.0);
     assert_eq!(get_f64(&diag, &[1, 2]), 18.0);
+
+    // `axis_a > axis_b`: the diagonal axis is removed from the cotangent at
+    // `axis_b` and the diagonal lands at `axis_a - 1` (shape_infer/CUDA
+    // contract), not at the strided primitive's larger axis.
+    let reversed = extract_diagonal(&cube, 2, 0).unwrap();
+    assert_eq!(reversed.shape(), &[3, 2]);
+    assert_eq!(
+        (0..6)
+            .map(|i| get_f64(&reversed, &[i % 3, i / 3]))
+            .collect::<Vec<_>>(),
+        vec![1.0, 3.0, 5.0, 8.0, 10.0, 12.0]
+    );
 }
 
 #[test]

@@ -454,22 +454,15 @@ fn transpose_broadcast_restores_non_monotonic_dimension_order() {
 }
 
 #[test]
-fn transpose_embed_diag_accepts_upper_bound_input_metadata_for_rank_only_perm() {
+fn transpose_embed_diag_shifted_axis_lowers_to_single_extract_diag() {
+    // The adjoint of `EmbedDiag { axis_a: 1, axis_b: 0 }` is the single
+    // `ExtractDiag { axis_a: 2, axis_b: 0 }` (shape_infer/CUDA convention): no
+    // trailing `Transpose` is required, so no input metadata is read.
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cotangent = builder.add_input(tensor_input(55));
     let data_key = input_key(56);
-    let inputs = vec![ValueRef::External(data_key.clone())];
-    ctx.insert_metadata(
-        data_key,
-        TensorMeta::with_extents(
-            DType::F64,
-            vec![
-                ShapeExtent::upper_bound(SymDim::from(4usize)),
-                ShapeExtent::upper_bound(SymDim::from(5usize)),
-            ],
-        ),
-    );
+    let inputs = vec![ValueRef::External(data_key)];
 
     let result = StdTensorOp::EmbedDiag {
         axis_a: 1,
@@ -485,14 +478,22 @@ fn transpose_embed_diag_accepts_upper_bound_input_metadata_for_rank_only_perm() 
     .unwrap();
 
     assert_eq!(result.len(), 1);
-    assert!(result[0].is_some());
+    let cotangent_in = result[0].expect("embed-diag cotangent must be active");
 
     let graph = builder.build();
-    assert_eq!(graph.operations().len(), 2);
+    assert_eq!(graph.operations().len(), 1);
     assert_eq!(
-        graph.operations()[1].operation,
-        StdTensorOp::Transpose { perm: vec![1, 0] }
+        graph.operations()[0].operation,
+        StdTensorOp::ExtractDiag {
+            axis_a: 2,
+            axis_b: 0,
+        }
     );
+    assert_eq!(
+        graph.operations()[0].inputs,
+        vec![ValueRef::Local(cotangent)]
+    );
+    assert!(graph.operations()[0].outputs.contains(&cotangent_in));
 }
 
 #[test]

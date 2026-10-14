@@ -108,3 +108,36 @@ fn grad_with_concrete_shape_placeholder() {
 
     assert_eq!(f64_data(&out), &[2.0, 4.0, 6.0]);
 }
+
+#[test]
+fn grad_embed_diag_shifted_axis_restores_input_layout() {
+    // Regression for #2107: the adjoint of `EmbedDiag { axis_a: 1, axis_b: 0 }`
+    // must land back in the `[2, 3]` input layout, not a transposed `[3, 2]`.
+    // The spurious trailing `Transpose` made the VJP metadata `[3, 2]`.
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    let embedded = x.embed_diag(1, 0).unwrap();
+    let loss = embedded.reduce_sum(Some(&[0, 1, 2])).unwrap();
+    let grad = loss.grad(&x).unwrap();
+    assert_eq!(grad.try_concrete_shape(), Some(vec![2, 3]));
+
+    // Higher rank: the reported failure mode permuted the trailing axes.
+    let cube = TracedTensor::input_concrete_shape(DType::F64, &[2, 3, 4]).unwrap();
+    let cube_loss = cube
+        .embed_diag(1, 0)
+        .unwrap()
+        .reduce_sum(Some(&[0, 1, 2, 3]))
+        .unwrap();
+    let cube_grad = cube_loss.grad(&cube).unwrap();
+    assert_eq!(cube_grad.try_concrete_shape(), Some(vec![2, 3, 4]));
+
+    // The other branches (`axis_b >= axis_a`, including `axis_b == axis_a`)
+    // never emitted a transpose and must keep restoring the input layout.
+    for (axis_a, axis_b, loss_rank) in [(0, 1, 3usize), (1, 1, 3)] {
+        let y = x.embed_diag(axis_a, axis_b).unwrap();
+        let loss = y
+            .reduce_sum(Some(&(0..loss_rank).collect::<Vec<_>>()))
+            .unwrap();
+        let grad = loss.grad(&x).unwrap();
+        assert_eq!(grad.try_concrete_shape(), Some(vec![2, 3]));
+    }
+}

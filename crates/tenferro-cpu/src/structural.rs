@@ -223,6 +223,34 @@ fn host_view<'a, T: Copy + TensorScalar>(
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
+/// Diagonal view of `tensor` along `(axis_a, axis_b)` following the
+/// `ExtractDiag` contract: `axis_b` is removed and the diagonal lands at
+/// `axis_a` (`axis_a - 1` when `axis_a > axis_b`), matching
+/// `shape_infer::extract_diag_shape` and the CUDA kernel.
+///
+/// `StridedView::diagonal_view` instead removes the larger of the two axes, so
+/// for `axis_a > axis_b` the `axis_b` axis is moved to the trailing position
+/// before extracting; the strided primitive then removes it.
+fn extract_diagonal_view<'a, T: Copy + TensorScalar>(
+    tensor: &'a TypedTensor<T>,
+    axis_a: usize,
+    axis_b: usize,
+) -> crate::Result<StridedView<'a, T, Identity>> {
+    let view = host_view("extract_diagonal", tensor)?;
+    if axis_a < axis_b {
+        return view
+            .diagonal_view(&[(axis_a, axis_b)])
+            .map_err(|err| crate::Error::backend_source("extract_diagonal", err));
+    }
+    let rank = tensor.shape().len();
+    let mut perm: Vec<usize> = (0..rank).filter(|&axis| axis != axis_b).collect();
+    perm.push(axis_b);
+    view.permute(&perm)
+        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?
+        .diagonal_view(&[(axis_a - 1, rank - 1)])
+        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))
+}
+
 #[cfg(test)]
 fn copy_view_to_array<T: Copy + Clone + Send + Sync + TensorScalar + 'static>(
     op: &'static str,
@@ -1089,9 +1117,7 @@ pub(crate) fn typed_extract_diagonal<T: Copy + Clone + Send + Sync + TensorScala
     validate_axis("extract_diagonal", axis_b, tensor.shape().len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
-    let diag = host_view("extract_diagonal", tensor)?
-        .diagonal_view(&[(axis_a, axis_b)])
-        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
+    let diag = extract_diagonal_view(tensor, axis_a, axis_b)?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit(diag.dims()) };
     copy_into(&mut out.view_mut(), &diag)
@@ -1112,9 +1138,7 @@ where
     validate_axis("extract_diagonal", axis_b, tensor.shape().len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
-    let diag = host_view("extract_diagonal", tensor)?
-        .diagonal_view(&[(axis_a, axis_b)])
-        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
+    let diag = extract_diagonal_view(tensor, axis_a, axis_b)?;
     let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims().to_vec())?;
     // INVARIANT: `copy_into_uninit` fully overwrites the destination and routes a
     // native-float strided copy to the permutation engine, serial or parallel.
