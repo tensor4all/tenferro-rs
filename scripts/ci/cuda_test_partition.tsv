@@ -69,6 +69,7 @@ gpu	tenferro-gpu	cubecl::tests::elementwise_tests::test_cubecl_complex_abs_match
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::test_cubecl_float_compare_select_and_clamp_match_cpu
+gpu	tenferro-gpu	cubecl::tests::elementwise_tests::cuda_bool_output_reuses_a_retained_pool_handle
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::test_cubecl_float_div_rem_preserve_ieee_special_values
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::test_cubecl_float_to_complex_convert_preserves_resident_device
 gpu	tenferro-gpu	cubecl::tests::elementwise_tests::test_cubecl_integer_add_mul_compare_select_match_cpu

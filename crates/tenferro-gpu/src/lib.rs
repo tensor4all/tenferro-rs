@@ -178,10 +178,29 @@ static OUTPUT_POOLS: std::sync::OnceLock<
 const OUTPUT_POOL_MAX_RETAINED_BYTES: usize = 64 << 20;
 
 #[cfg(feature = "cuda")]
-#[derive(Default)]
 struct OutputPool {
     free: std::collections::HashMap<usize, Vec<cubecl_runtime::server::Handle>>,
     retained_bytes: usize,
+    max_retained_bytes: usize,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+    clears: u64,
+}
+
+#[cfg(feature = "cuda")]
+impl Default for OutputPool {
+    fn default() -> Self {
+        Self {
+            free: std::collections::HashMap::new(),
+            retained_bytes: 0,
+            max_retained_bytes: OUTPUT_POOL_MAX_RETAINED_BYTES,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
+        }
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -199,6 +218,7 @@ pub(crate) fn take_output_handle(
     let pool = pools.get_mut(&device_ordinal)?;
     let handle = pool.free.get_mut(&byte_len)?.pop()?;
     pool.retained_bytes = pool.retained_bytes.saturating_sub(byte_len);
+    pool.hits += 1;
     Some(handle)
 }
 
@@ -216,11 +236,105 @@ pub(crate) fn return_output_handle(
         return;
     };
     let pool = pools.entry(device_ordinal).or_default();
-    if pool.retained_bytes + byte_len > OUTPUT_POOL_MAX_RETAINED_BYTES {
+    if pool.retained_bytes + byte_len > pool.max_retained_bytes {
+        // INVARIANT: a dropped handle is released rather than retained once the
+        // device's retained-byte bound is reached, so a length that stops
+        // recurring does not pin memory.
+        pool.evictions += 1;
         return;
     }
     pool.retained_bytes += byte_len;
     pool.free.entry(byte_len).or_default().push(handle);
+}
+
+/// Record that no retained handle of this length was available, so the caller
+/// asked the device thread for a fresh allocation.
+#[cfg(feature = "cuda")]
+pub(crate) fn record_output_pool_miss(device_ordinal: usize) {
+    let Ok(mut pools) = output_pools().lock() else {
+        return;
+    };
+    pools.entry(device_ordinal).or_default().misses += 1;
+}
+
+/// Snapshot the retained entries, retained bytes and lookup counters of a device.
+#[cfg(feature = "cuda")]
+pub(crate) fn output_pool_stats(device_ordinal: usize) -> tenferro_tensor::CacheStats {
+    let Ok(pools) = output_pools().lock() else {
+        return empty_output_pool_stats();
+    };
+    match pools.get(&device_ordinal) {
+        Some(pool) => tenferro_tensor::CacheStats {
+            entries: pool.free.values().map(Vec::len).sum(),
+            retained_bytes: pool.retained_bytes,
+            hits: pool.hits,
+            misses: pool.misses,
+            evictions: pool.evictions,
+            clears: pool.clears,
+        },
+        None => empty_output_pool_stats(),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn empty_output_pool_stats() -> tenferro_tensor::CacheStats {
+    tenferro_tensor::CacheStats {
+        entries: 0,
+        retained_bytes: 0,
+        hits: 0,
+        misses: 0,
+        evictions: 0,
+        clears: 0,
+    }
+}
+
+/// Return the retained-byte bound of a device.
+#[cfg(feature = "cuda")]
+pub(crate) fn output_pool_max_retained_bytes(device_ordinal: usize) -> usize {
+    let Ok(mut pools) = output_pools().lock() else {
+        return OUTPUT_POOL_MAX_RETAINED_BYTES;
+    };
+    pools.entry(device_ordinal).or_default().max_retained_bytes
+}
+
+/// Configure the retained-byte bound of a device and evict the excess.
+#[cfg(feature = "cuda")]
+pub(crate) fn set_output_pool_max_retained_bytes(device_ordinal: usize, max_retained_bytes: usize) {
+    let Ok(mut pools) = output_pools().lock() else {
+        return;
+    };
+    let pool = pools.entry(device_ordinal).or_default();
+    pool.max_retained_bytes = max_retained_bytes;
+    while pool.retained_bytes > max_retained_bytes {
+        let Some(byte_len) = pool
+            .free
+            .iter()
+            .filter(|(_, handles)| !handles.is_empty())
+            .map(|(&byte_len, _)| byte_len)
+            .max()
+        else {
+            break;
+        };
+        if let Some(handles) = pool.free.get_mut(&byte_len) {
+            handles.pop();
+        }
+        pool.retained_bytes = pool.retained_bytes.saturating_sub(byte_len);
+        pool.evictions += 1;
+    }
+    pool.free.retain(|_, handles| !handles.is_empty());
+}
+
+/// Release every handle retained for a device.
+#[cfg(feature = "cuda")]
+pub(crate) fn clear_output_pool(device_ordinal: usize) {
+    let Ok(mut pools) = output_pools().lock() else {
+        return;
+    };
+    if let Some(pool) = pools.get_mut(&device_ordinal) {
+        pool.free.clear();
+        pool.retained_bytes = 0;
+        pool.clears += 1;
+    }
 }
 
 /// Return a dropped buffer's allocation to the pool of its device.

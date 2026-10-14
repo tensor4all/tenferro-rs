@@ -944,6 +944,38 @@ impl CudaBackend {
             .set_max_retained_bytes(max_retained_bytes)
     }
 
+    /// Return the device-output pool stats of this backend's device.
+    ///
+    /// The pool is a size-keyed free list of device allocations that a dropped
+    /// output returns to, so `entries` and `retained_bytes` describe what is
+    /// currently cached, `hits` counts allocations that reused a retained
+    /// handle, `misses` counts the ones that had to ask the device thread,
+    /// `evictions` counts handles released by the retained-byte bound, and
+    /// `clears` counts [`Self::clear_cuda_output_pool`] calls.
+    pub fn cuda_output_pool_stats(&self) -> tenferro_tensor::CacheStats {
+        crate::output_pool_stats(self.runtime().device_ordinal())
+    }
+
+    /// Return this device's device-output pool retained-byte bound.
+    pub fn cuda_output_pool_max_retained_bytes(&self) -> usize {
+        crate::output_pool_max_retained_bytes(self.runtime().device_ordinal())
+    }
+
+    /// Configure this device's device-output pool retained-byte bound.
+    ///
+    /// Retained handles are evicted until the pool fits the new bound.
+    pub fn set_cuda_output_pool_max_retained_bytes(&self, max_retained_bytes: usize) {
+        crate::set_output_pool_max_retained_bytes(
+            self.runtime().device_ordinal(),
+            max_retained_bytes,
+        );
+    }
+
+    /// Release every handle the device-output pool retains for this device.
+    pub fn clear_cuda_output_pool(&self) {
+        crate::clear_output_pool(self.runtime().device_ordinal());
+    }
+
     /// Return cuTENSOR contraction plan cache stats.
     ///
     /// The returned entry count is the number of retained cuTENSOR contraction
