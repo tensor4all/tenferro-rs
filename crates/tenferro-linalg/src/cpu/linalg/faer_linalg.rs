@@ -293,11 +293,24 @@ pub(crate) trait FaerEig: FaerLinalg {
         par: Parallel<'_>,
     ) -> tlinalg::Result<()>;
 
+    /// Put the provider's eigenvectors into the public contract's gauge.
+    ///
+    /// `eig` documents **unit 2-norm columns** - the vendored oracle records the
+    /// same for PyTorch and tenferro - which the providers do not all guarantee,
+    /// so the seam normalizes them here. A column the provider left non-finite (a
+    /// defective, Jordan-like input can overflow inside its back-substitution) is
+    /// reported as a numerical failure rather than returned as NaN (#2148).
+    fn normalize_eig_vectors(
+        vectors: &mut [Self::ComplexScalar],
+        n: usize,
+        batch_count: usize,
+    ) -> tenferro_tensor::Result<()>;
+
     fn wrap(tensor: TypedTensor<Self::ComplexScalar>) -> Tensor;
 }
 
 macro_rules! impl_faer_eig {
-    ($scalar:ty, $complex:ty) => {
+    ($scalar:ty, $complex:ty, $real:ty) => {
         impl FaerEig for $scalar {
             type ComplexScalar = $complex;
 
@@ -316,14 +329,46 @@ macro_rules! impl_faer_eig {
             fn wrap(tensor: TypedTensor<$complex>) -> Tensor {
                 Tensor::from_typed::<$complex>(tensor)
             }
+
+            fn normalize_eig_vectors(
+                vectors: &mut [$complex],
+                n: usize,
+                batch_count: usize,
+            ) -> tenferro_tensor::Result<()> {
+                // INVARIANT: `n >= 1` for a non-empty square input, so each chunk
+                // below is a whole column of the column-major [n, n] block.
+                for block in vectors.chunks_exact_mut(n * n).take(batch_count) {
+                    for column in block.chunks_exact_mut(n) {
+                        let norm = column
+                            .iter()
+                            .map(|value| f64::from(value.norm_sqr()))
+                            .sum::<f64>()
+                            .sqrt();
+                        if !norm.is_finite() || norm == 0.0 {
+                            return Err(crate::error::into_tensor_error(
+                                "eig",
+                                crate::Error::NonFinite {
+                                    op: "eig",
+                                    role: "eigenvector column",
+                                },
+                            ));
+                        }
+                        let scale = norm as $real;
+                        for value in column.iter_mut() {
+                            *value /= scale;
+                        }
+                    }
+                }
+                Ok(())
+            }
         }
     };
 }
 
-impl_faer_eig!(f32, Complex32);
-impl_faer_eig!(f64, Complex64);
-impl_faer_eig!(Complex32, Complex32);
-impl_faer_eig!(Complex64, Complex64);
+impl_faer_eig!(f32, Complex32, f32);
+impl_faer_eig!(f64, Complex64, f64);
+impl_faer_eig!(Complex32, Complex32, f32);
+impl_faer_eig!(Complex64, Complex64, f64);
 
 // ---------------------------------------------------------------------------------------------
 // Shape and allocation helpers
@@ -1477,6 +1522,12 @@ fn eig_impl<T: FaerEig>(
         par,
     )
     .map_err(provider(provider_op))?;
+    if vectors {
+        // The public contract's gauge, applied at the seam so every provider
+        // agrees (#2148); see `FaerEig::normalize_eig_vectors`.
+        let batch_count = batch_shape.iter().product();
+        T::normalize_eig_vectors(&mut vector_data, n, batch_count)?;
+    }
     let placement = view.placement();
     let mut outputs = vec![T::wrap(tensor_from_vec_with_template(
         values_shape,

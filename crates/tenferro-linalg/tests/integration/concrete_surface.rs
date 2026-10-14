@@ -715,3 +715,47 @@ fn complex_pinv_matches_the_moore_penrose_inverse() {
     })
     .unwrap();
 }
+
+#[test]
+fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
+    // #2148: the vendored oracle records unit 2-norm eigenvector columns for
+    // tenferro and PyTorch, so the seam is where that becomes true for every
+    // provider, and a column a provider left non-finite is a typed numerical
+    // failure rather than NaN.
+    let diagonalizable =
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 2.0]).unwrap();
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        let (values, vectors) = diagonalizable.eig(session).unwrap();
+        assert_eq!(values.shape(), &[2]);
+        assert_eq!(vectors.shape(), &[2, 2]);
+        let columns = vectors.as_slice::<Complex64>().unwrap();
+        for column in 0..2 {
+            let norm = (0..2)
+                .map(|row| columns[column * 2 + row].norm_sqr())
+                .sum::<f64>()
+                .sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1.0e-12,
+                "column {column} must have unit 2-norm, got {norm}"
+            );
+        }
+    })
+    .unwrap();
+
+    // A finite defective (Jordan) input: finite unit-norm columns or a typed
+    // numerical failure - never NaN.
+    let defective = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 1.0]).unwrap();
+    host.with_backend_session(|session| match defective.eig(session) {
+        Ok((_, vectors)) => {
+            for value in vectors.as_slice::<Complex64>().unwrap() {
+                assert!(
+                    value.re.is_finite() && value.im.is_finite(),
+                    "eig returned a non-finite eigenvector entry {value:?}"
+                );
+            }
+        }
+        Err(error) => assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure),
+    })
+    .unwrap();
+}

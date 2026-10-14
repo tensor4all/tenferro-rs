@@ -472,6 +472,9 @@ pub trait TensorLinalgExt {
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// Eigenvectors come back with unit 2-norm columns, whichever provider computed them;
+    /// a column the provider left non-finite is reported as a numerical failure instead
+    /// of being returned as `NaN` (#2148).
     fn eig(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1542,6 +1545,9 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// Eigenvectors come back with unit 2-norm columns, whichever provider computed them;
+    /// a column the provider left non-finite is reported as a numerical failure instead
+    /// of being returned as `NaN` (#2148).
     fn eig(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedEig<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.

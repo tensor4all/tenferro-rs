@@ -1031,6 +1031,9 @@ pub trait LinalgBackend: BackendSession {
     }
 
     /// Compute public general eigendecomposition outputs `(values, vectors)`.
+    /// Eigenvectors come back with unit 2-norm columns, whichever provider computed them;
+    /// a column the provider left non-finite is reported as a numerical failure instead
+    /// of being returned as `NaN` (#2148).
     ///
     /// # Errors
     ///
