@@ -4014,13 +4014,10 @@ pub fn validate_axpby_read_into_accum(
         ));
     }
     validate_shape_product(op, x.shape())?;
-    if !y.as_read().is_col_major_contiguous()? {
-        return Err(Error::invalid_argument(
-            op,
-            "y",
-            "destination must be compact column-major and injective",
-        ));
-    }
+    // INVARIANT: write-injectivity is already proved when a destination view is
+    // constructed (`validate_mutable_no_overlap`), and an owned destination is
+    // compact by construction, so no element-wise re-check is needed here. Only
+    // the `x`/`y` alias rejection below remains.
     validate_compatible_placement(op, x, &y.as_read())?;
     validate_read_into_destination(op, std::slice::from_ref(x), y)
 }
@@ -4239,8 +4236,10 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     ///
     /// Scalars must have the exact tensor dtype; real coefficients for complex
     /// vectors are represented as complex values with zero imaginary part. The
-    /// destination must be compact and injective, and any x/y storage overlap
-    /// is rejected before mutation.
+    /// destination must be write-injective and disjoint from `x`; any x/y
+    /// storage overlap is rejected before mutation. A strided or offset
+    /// destination view is accepted, so a caller can accumulate into a region
+    /// of a larger allocation.
     ///
     /// # Examples
     ///
@@ -4261,7 +4260,7 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// Returns [`Error::Unsupported`] when the backend does not override this
     /// capability or the dtype is unsupported; [`Error::Validation`] with
     /// `DTypeMismatch`, `ShapeMismatch`, or `InvalidArgument` for scalar/dtype,
-    /// shape, placement, compactness, injectivity, or overlap failures; or
+    /// shape, placement, injectivity, or overlap failures; or
     /// [`Error::RuntimeState`] for inaccessible backend storage. Invalid
     /// requests leave the destination unchanged.
     fn axpby_read_into_accum(

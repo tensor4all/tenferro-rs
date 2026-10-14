@@ -242,9 +242,14 @@ fn fft_cpu_output_buffers_avoid_zero_fill_but_keep_lane_padding() {
     let lanes = include_str!("../src/cpu/lanes.rs");
     assert!(source.contains("PooledUninitOutput::<O>::new"));
     assert!(
-        lanes.contains("lane[copy_len..].fill(Complex::zero())")
+        lanes.contains("lane.resize(fft_len, Complex::zero())")
             && lanes.contains("// INVARIANT: only missing input positions are padding"),
         "FFT padding must explicitly initialize only missing input positions"
+    );
+    assert!(
+        lanes.contains("buffers.acquire_with_capacity::<Complex<T>>(fft_len)")
+            && lanes.contains("Complex::<T>::pool_release(buffers, lane)"),
+        "the FFT lane must come from the session buffer pool instead of a zero-filled allocation"
     );
 }
 
@@ -267,7 +272,7 @@ fn fft_cpu_execution_reuses_cached_rustfft_plans() {
 fn fft_cpu_execution_uses_explicit_plan_provider() {
     let source = include_str!("../src/cpu/lanes.rs");
     assert!(source.contains("cached_fft_plan::<T, _>(plans"));
-    assert!(source.contains("plan.process_with_scratch(&mut lane, &mut scratch)"));
+    assert!(source.contains("plan.process_with_scratch(lane.as_mut_slice(), &mut scratch)"));
     assert!(
         source.find("let mut scratch =").unwrap() < source.find("for _ in start..end").unwrap(),
         "scratch must be reused across each job's lanes"
@@ -487,6 +492,55 @@ fn irfft_c32_reconstructs_real_signal() {
 
     assert_eq!(out.shape(), &[4]);
     assert_f32_close(out.as_slice::<f32>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn folded_normalization_matches_the_reference_for_ifft_irfft_and_ortho() {
+    // The normalization is folded into the scatter instead of a separate lane
+    // pass. A length-4 transform uses exactly representable factors (1/4 for
+    // Backward, 1/2 for Ortho), so a missing, doubled, or reordered scale
+    // changes the result instead of hiding inside a tolerance.
+    let spectrum = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+            Complex64::new(-2.0, -2.0),
+        ],
+    )
+    .unwrap();
+    for (norm, expected) in [
+        (FftNorm::Backward, [1.0, 2.0, 3.0, 4.0]),
+        (FftNorm::Ortho, [2.0, 4.0, 6.0, 8.0]),
+    ] {
+        let out = run(&spectrum.ifft(None, -1, norm).unwrap());
+        let actual = out.as_slice::<Complex64>().unwrap();
+        for (value, expected) in actual.iter().zip(expected) {
+            assert_eq!(value.re, expected, "ifft norm={norm:?}");
+            assert_eq!(value.im, 0.0, "ifft norm={norm:?}");
+        }
+    }
+
+    let onesided = TracedTensor::from_vec_col_major(
+        vec![3],
+        vec![
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+        ],
+    )
+    .unwrap();
+    for (norm, expected) in [
+        (FftNorm::Backward, [1.0, 2.0, 3.0, 4.0]),
+        (FftNorm::Ortho, [2.0, 4.0, 6.0, 8.0]),
+    ] {
+        let out = run(&onesided.irfft(Some(4), -1, norm).unwrap());
+        let actual = out.as_slice::<f64>().unwrap();
+        for (value, expected) in actual.iter().zip(expected) {
+            assert_eq!(*value, expected, "irfft norm={norm:?}");
+        }
+    }
 }
 
 #[test]

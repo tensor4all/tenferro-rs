@@ -304,7 +304,7 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
         .with_backend_session(|session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F64(2.0),
-                TensorRead::from_view(TensorView::F64(lhs_view)),
+                TensorRead::from_view(TensorView::F64(lhs_view.clone())),
                 ContractionScalar::F64(0.5),
                 TensorWrite::from_tensor(&mut out),
             )
@@ -315,7 +315,102 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
         out.as_slice::<f64>().unwrap(),
         &[7.0, 11.0, 15.0, 9.0, 13.0, 17.0]
     );
+    // The compact destination keeps the dense `strided_kernel::axpby_accum`
+    // path, whose compact source slice forces one staging pass for a strided
+    // `x`. A strided destination instead runs the pinned update primitive,
+    // which consumes the strided source directly, so it stages nothing.
     assert_eq!(crate::blas1::materializations_for_test(), 1);
+
+    let mut strided_storage = vec![10.0_f64; 7];
+    let strided_destination =
+        TypedTensorViewMut::from_slice(vec![3, 2], vec![1, 4], 0, &mut strided_storage).unwrap();
+    crate::blas1::reset_materializations_for_test();
+    backend
+        .with_backend_session(|session| {
+            session.axpby_read_into_accum(
+                ContractionScalar::F64(2.0),
+                TensorRead::from_view(TensorView::F64(lhs_view)),
+                ContractionScalar::F64(0.5),
+                TensorWrite::from_view(TensorViewMut::F64(strided_destination)),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(crate::blas1::materializations_for_test(), 0);
+}
+
+/// A strided/offset destination region inside a larger allocation accumulates
+/// in place without touching the surrounding bytes.
+///
+/// The 2x2 region starts at offset 5 of a `[4, 3]` column-major allocation with
+/// strides `(1, 4)`, so it is neither compact nor a contiguous span. The
+/// reference is the same stride formula the region view encodes, and the whole
+/// allocation is compared byte-for-byte afterwards.
+#[test]
+fn blas1_strided_destination_region_preserves_surrounding_bytes() {
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    // Column-major `[4, 3]` strides; region rows 0..2, columns 1..3.
+    let region = [5_usize, 6, 9, 10];
+    let alpha = 2.0_f64;
+    let beta = 0.5_f64;
+
+    let reference = |storage: &mut [f64], x: &[f64]| {
+        for (position, &index) in region.iter().enumerate() {
+            storage[index] = alpha * x[position] + beta * storage[index];
+        }
+    };
+
+    // Case 1: compact x, non-compact destination.
+    let mut storage: Vec<f64> = (0..12).map(|index| 10.0 + f64::from(index)).collect();
+    let mut expected = storage.clone();
+    let compact_x = [1.0_f64, 2.0, 3.0, 4.0];
+    reference(&mut expected, &compact_x);
+
+    let x = Tensor::from_vec_col_major(vec![2, 2], compact_x.to_vec()).unwrap();
+    let destination =
+        TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
+    crate::blas1::reset_materializations_for_test();
+    backend
+        .with_backend_session(|session| {
+            session.axpby_read_into_accum(
+                ContractionScalar::F64(alpha),
+                TensorRead::from_tensor(&x),
+                ContractionScalar::F64(beta),
+                TensorWrite::from_view(TensorViewMut::F64(destination)),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(storage, expected);
+    assert_eq!(crate::blas1::materializations_for_test(), 0);
+
+    // Case 2: strided x, non-compact destination. The strided path consumes the
+    // source in place, so neither operand is staged.
+    let mut storage: Vec<f64> = (0..12).map(|index| 20.0 + f64::from(index)).collect();
+    let mut expected = storage.clone();
+    let source: Vec<f64> = (0..12).map(|index| f64::from(index) - 6.0).collect();
+    let source_before = source.clone();
+    let source_region: Vec<f64> = [1_usize, 2, 5, 6].iter().map(|&i| source[i]).collect();
+    reference(&mut expected, &source_region);
+
+    let source_view = TypedTensorView::from_slice(vec![2, 2], vec![1, 4], 1, &source).unwrap();
+    let destination =
+        TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
+    crate::blas1::reset_materializations_for_test();
+    backend
+        .with_backend_session(|session| {
+            session.axpby_read_into_accum(
+                ContractionScalar::F64(alpha),
+                TensorRead::from_view(TensorView::F64(source_view)),
+                ContractionScalar::F64(beta),
+                TensorWrite::from_view(TensorViewMut::F64(destination)),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(storage, expected);
+    assert_eq!(source, source_before);
+    assert_eq!(crate::blas1::materializations_for_test(), 0);
 }
 
 fn assert_axpby_rejects_without_mutating(
@@ -420,15 +515,35 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
 
     let mut noncompact_storage = vec![10.0_f64, 20.0, 30.0, 40.0];
     let before = noncompact_storage.clone();
-    let noncompact_y =
-        TypedTensorViewMut::from_slice([2], [2], 0, &mut noncompact_storage).unwrap();
+    // The shape and dtype rejections below keep a strided/offset view
+    // destination: relaxing compactness must not weaken the checks that still
+    // apply, and an invalid request must leave the whole allocation untouched.
+    let wrong_shape_x = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+    let wrong_shape_y =
+        TypedTensorViewMut::from_slice(vec![2], vec![2], 0, &mut noncompact_storage).unwrap();
     assert!(backend
         .with_backend_session(|session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F64(1.0),
-                TensorRead::from_tensor(&x),
+                TensorRead::from_tensor(&wrong_shape_x),
                 ContractionScalar::F64(1.0),
-                TensorWrite::from_view(TensorViewMut::F64(noncompact_y)),
+                TensorWrite::from_view(TensorViewMut::F64(wrong_shape_y)),
+            )
+        })
+        .unwrap()
+        .is_err());
+    assert_eq!(noncompact_storage, before);
+
+    let wrong_dtype_x = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
+    let wrong_dtype_y =
+        TypedTensorViewMut::from_slice(vec![2], vec![2], 0, &mut noncompact_storage).unwrap();
+    assert!(backend
+        .with_backend_session(|session| {
+            session.axpby_read_into_accum(
+                ContractionScalar::F32(1.0),
+                TensorRead::from_tensor(&wrong_dtype_x),
+                ContractionScalar::F32(1.0),
+                TensorWrite::from_view(TensorViewMut::F64(wrong_dtype_y)),
             )
         })
         .unwrap()

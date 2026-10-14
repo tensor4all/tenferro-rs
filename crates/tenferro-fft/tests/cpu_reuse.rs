@@ -57,6 +57,10 @@ fn explicit_reclaim_to_another_backend_does_not_also_return_to_origin() {
         .unwrap()
         .unwrap();
     let pointer = output.as_slice::<Complex64>().unwrap().as_ptr();
+    // The origin session retains the lane scratch the FFT acquired from its
+    // pool. Clear that working buffer so the reclamation accounting below
+    // measures only the output buffer.
+    origin.reset_buffer_pool().unwrap();
     destination
         .with_backend_session(|s| s.reclaim_buffer(output))
         .unwrap();
@@ -67,6 +71,8 @@ fn explicit_reclaim_to_another_backend_does_not_also_return_to_origin() {
         .unwrap()
         .unwrap();
     assert_eq!(reused.as_slice::<Complex64>().unwrap().as_ptr(), pointer);
+    // The second execution retains its own lane scratch in the destination.
+    destination.reset_buffer_pool().unwrap();
     assert_eq!(destination.buffer_pool_stats().unwrap().buffers, 0);
     drop(reused);
     assert_eq!(origin.buffer_pool_stats().unwrap().buffers, 0);

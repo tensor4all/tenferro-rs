@@ -8,6 +8,7 @@ use num_complex::Complex;
 use num_traits::Zero;
 use rayon::prelude::*;
 use std::{marker::PhantomData, mem::MaybeUninit};
+use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 
 pub(super) enum Input<'a, T> {
     Complex(&'a [Complex<T>]),
@@ -59,6 +60,7 @@ pub(super) unsafe fn execute<T, O>(
     operation: FftOperation,
     norm: FftNorm,
     plans: &mut (impl FftPlanProvider + ?Sized),
+    buffers: &mut BufferPool,
     output: &mut [MaybeUninit<O>],
     threads: usize,
     project: impl Fn(Complex<T>) -> O + Sync,
@@ -66,6 +68,7 @@ pub(super) unsafe fn execute<T, O>(
 where
     T: CachedFftPlanScalar,
     O: Send,
+    Complex<T>: PoolScalar,
 {
     let LaneLayout {
         stride,
@@ -103,13 +106,22 @@ where
         pointer: output.as_mut_ptr(),
         _borrow: PhantomData,
     };
-    let run = |job: usize| {
+    // INVARIANT: each job writes every element of its own lane before
+    // `plan.process_with_scratch` reads it -- the gather fills `copy_len` slots
+    // and the padding or conjugate-mirror fill covers the rest -- so a lane
+    // buffer may be taken from the pool with uninitialized capacity. Taking
+    // capacity instead of a zero-filled full-length vector removes the
+    // per-call lane allocation and its zero fill.
+    let mut lane_buffers: Vec<Vec<Complex<T>>> = Vec::with_capacity(jobs);
+    for _ in 0..jobs {
+        lane_buffers.push(buffers.acquire_with_capacity::<Complex<T>>(fft_len));
+    }
+    let run = |job: usize, lane: &mut Vec<Complex<T>>| {
         let start = job * per_job;
         let end = start.saturating_add(per_job).min(lanes);
         if start >= end {
             return;
         }
-        let mut lane = vec![Complex::<T>::zero(); fft_len];
         let mut scratch = vec![Complex::<T>::zero(); plan.get_inplace_scratch_len()];
         // INVARIANT: nonzero lanes proves stride > 0. Advance within each
         // checked block rather than divide every lane index by runtime stride.
@@ -119,64 +131,57 @@ where
         let mut output_base = outer_index * out_block + inner;
         let copy_len = in_len.min(fft_len);
         for _ in start..end {
+            lane.clear();
             match &input {
                 None => {
-                    for (slot, offset) in lane
-                        .iter_mut()
-                        .take(copy_len)
-                        .zip((input_base..).step_by(stride))
-                    {
+                    for offset in (input_base..).step_by(stride).take(copy_len) {
                         // SAFETY: the in-place caller proves O=Complex<T> and
                         // initialized input. Jobs read/write only their own lane;
                         // gather completes before that lane is overwritten.
-                        *slot = unsafe { out.read_complex::<T>(offset) };
+                        lane.push(unsafe { out.read_complex::<T>(offset) });
                     }
                 }
                 Some(Input::Complex(values)) => {
-                    for (slot, offset) in lane
-                        .iter_mut()
-                        .take(copy_len)
-                        .zip((input_base..).step_by(stride))
-                    {
-                        *slot = values[offset];
+                    for offset in (input_base..).step_by(stride).take(copy_len) {
+                        lane.push(values[offset]);
                     }
                 }
                 Some(Input::Real(values)) => {
-                    for (slot, offset) in lane
-                        .iter_mut()
-                        .take(copy_len)
-                        .zip((input_base..).step_by(stride))
-                    {
-                        *slot = Complex::new(values[offset], T::zero());
+                    for offset in (input_base..).step_by(stride).take(copy_len) {
+                        lane.push(Complex::new(values[offset], T::zero()));
                     }
                 }
             }
             if operation == FftOperation::C2r {
                 for k in copy_len..fft_len {
-                    lane[k] = lane[fft_len - k].conj();
+                    let mirrored = lane[fft_len - k].conj();
+                    lane.push(mirrored);
                 }
             } else {
-                // INVARIANT: only missing input positions are padding; all other
-                // slots were overwritten above, including real-input imaginary parts.
-                lane[copy_len..].fill(Complex::zero());
+                // INVARIANT: only missing input positions are padding; the
+                // gathered slots were written above, including real-input
+                // imaginary parts.
+                lane.resize(fft_len, Complex::zero());
             }
-            plan.process_with_scratch(&mut lane, &mut scratch);
-            // Preserve the existing identity-normalization fast path. Scaling
-            // contiguous scratch also avoids arithmetic in the strided scatter.
-            if scale != T::one() {
-                for value in &mut lane {
-                    *value = *value * scale;
-                }
-            }
+            plan.process_with_scratch(lane.as_mut_slice(), &mut scratch);
+            // Fold the normalization into the scatter. This is the same single
+            // multiply per emitted value as the removed separate full-lane pass,
+            // so the numerical result is unchanged; `scale == 1` keeps the
+            // identity fast path free of arithmetic in the strided scatter.
             for (value, offset) in lane
                 .iter()
                 .take(out_axis_len)
                 .zip((output_base..).step_by(stride))
             {
+                let value = if scale == T::one() {
+                    *value
+                } else {
+                    *value * scale
+                };
                 // SAFETY: each lane owns indices base + k*stride, k<out_axis_len.
                 // Unique (outer_index,inner) pairs exactly tile checked output_len.
                 unsafe {
-                    out.write(offset, project(*value));
+                    out.write(offset, project(value));
                 }
             }
             inner += 1;
@@ -194,9 +199,15 @@ where
         }
     };
     if jobs == 1 {
-        run(0);
+        run(0, &mut lane_buffers[0]);
     } else {
-        (0..jobs).into_par_iter().for_each(run);
+        (0..jobs)
+            .into_par_iter()
+            .zip(lane_buffers.par_iter_mut())
+            .for_each(|(job, lane)| run(job, lane));
+    }
+    for lane in lane_buffers {
+        Complex::<T>::pool_release(buffers, lane);
     }
     Ok(())
 }

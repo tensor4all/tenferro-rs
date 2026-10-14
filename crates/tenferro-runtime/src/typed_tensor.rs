@@ -4,13 +4,12 @@
 //! in their extension crates.
 
 use num_complex::Complex64;
-use tenferro_ops::broadcast::{
-    broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
-};
+use smallvec::SmallVec;
+use tenferro_ops::broadcast::{broadcast_shape, broadcast_shapes, BroadcastError};
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    ActivationOp, BackendSession, CompareDir, DotGeneralConfig, Error, Result, Tensor, TensorRead,
-    TensorScalar, ValidationError,
+    ActivationOp, BackendSession, CompareDir, DType, DotGeneralConfig, Error, Result, Tensor,
+    TensorRead, TensorScalar, TensorValue, ValidationError,
 };
 
 use crate::composite;
@@ -499,12 +498,14 @@ impl TypedTensorMaskSessionOpsExt for TypedTensor<bool> {
     }
 }
 
-// INVARIANT: this private adapter keeps borrowed reads borrowed and owns only
-// the explicit fallback tensor; it is never exposed or cloned.
+// INVARIANT: this private adapter keeps borrowed reads borrowed, owns the
+// explicit fallback tensor, and owns an intermediate whose layout is a
+// metadata-only view of that tensor; it is never exposed or cloned.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ReadInput<'a> {
     Borrowed(TensorRead<'a>),
     Owned(Tensor),
+    Value(TensorValue),
 }
 
 impl ReadInput<'_> {
@@ -512,6 +513,7 @@ impl ReadInput<'_> {
         match self {
             Self::Borrowed(read) => read.clone(),
             Self::Owned(tensor) => TensorRead::from_tensor(tensor),
+            Self::Value(value) => value.tensor_read(),
         }
     }
 }
@@ -525,15 +527,48 @@ pub(crate) fn broadcast_to_in_read<'a>(
         return Ok(ReadInput::Borrowed(input));
     }
 
-    let plan = broadcast_input_plan(input.shape(), target_shape).map_err(broadcast_error)?;
-    let source = if plan.source_shape == input.shape() {
-        ReadInput::Borrowed(input)
-    } else {
-        let reshaped = session.reshape_read(input, &plan.source_shape)?;
-        ReadInput::Owned(reshaped)
-    };
-    let out = session.broadcast_in_dim_read(source.tensor_read(), target_shape, &plan.dims)?;
-    Ok(ReadInput::Owned(out))
+    // The eager surface aligns the operand's axes with the trailing output axes
+    // and reads expanding axes through zero strides, so an implicit broadcast is
+    // metadata. The traced/AD lowering instead removes expanding singleton axes
+    // before broadcasting; that plan needs a materializing reshape and is not
+    // used here (#2143 item 1).
+    let dims = broadcast_aligned_dims(input.shape(), target_shape).map_err(broadcast_error)?;
+
+    // A caller-owned payload has no borrowed view, so it keeps the session's
+    // typed refusal path rather than a view.
+    if let DType::External(_) = input.dtype() {
+        let out = session.broadcast_in_dim_read(input, target_shape, &dims)?;
+        return Ok(ReadInput::Owned(out));
+    }
+
+    Ok(ReadInput::Borrowed(
+        input.broadcast_in_dim_view(target_shape, &dims)?,
+    ))
+}
+
+/// The trailing-axis mapping of `input` onto `output`, or the same broadcast
+/// failure the traced/AD plan reports.
+fn broadcast_aligned_dims(
+    input: &[usize],
+    output: &[usize],
+) -> std::result::Result<SmallVec<[usize; 8]>, BroadcastError> {
+    if input.len() > output.len() {
+        return Err(BroadcastError::RankTooLarge {
+            input: input.to_vec(),
+            output: output.to_vec(),
+        });
+    }
+    let rank_diff = output.len() - input.len();
+    for (src_axis, &src_dim) in input.iter().enumerate() {
+        let dst_dim = output[src_axis + rank_diff];
+        if src_dim != dst_dim && src_dim != 1 {
+            return Err(BroadcastError::IncompatibleInput {
+                input: input.to_vec(),
+                output: output.to_vec(),
+            });
+        }
+    }
+    Ok((0..input.len()).map(|axis| axis + rank_diff).collect())
 }
 
 fn broadcast_binary_in_read<'a, T: TensorScalar>(

@@ -678,6 +678,124 @@ fn cuda_axpby_accepts_compact_views_with_offsets() {
     );
 }
 
+/// A strided/offset destination region inside a larger device allocation
+/// accumulates in place, leaving the surrounding elements byte-for-byte
+/// unchanged and matching the CPU result for the same region layout.
+///
+/// The 2x2 region starts at offset 5 of a `[4, 3]` column-major allocation with
+/// strides `(1, 4)`, so it is neither compact nor a contiguous span: only the
+/// native strided-update kernel can address it. Both the compact-read and the
+/// strided-read case are covered, so the kernel's destination addressing is
+/// exercised on both entries.
+#[test]
+#[ignore = "requires CUDA"]
+fn cuda_axpby_accepts_strided_destination_regions() {
+    let Some((mut cuda, _)) = backends() else {
+        return;
+    };
+
+    let alpha = c64(0.75, -1.25);
+    let beta = c64(-0.5, 2.0);
+    // Destination region [5, 6, 9, 10] of the [4, 3] column-major allocation.
+    let region = [5_usize, 6, 9, 10];
+
+    let host_destination = Tensor::from_vec_col_major(
+        vec![4, 3],
+        (0..12)
+            .map(|i| c64(10.0 + i as f64, -1.0 + 0.25 * i as f64))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let destination_before = host_destination.as_slice::<Complex64>().unwrap().to_vec();
+
+    // Case 1: compact x, strided destination.
+    let host_x = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![c64(1.0, 0.5), c64(2.0, -0.5), c64(3.0, 1.5), c64(4.0, -1.5)],
+    )
+    .unwrap();
+    let x = upload_tensor(cuda.runtime(), &host_x).unwrap();
+    let mut y = upload_tensor(cuda.runtime(), &host_destination).unwrap();
+    {
+        let Some(y_typed) = y.as_typed_mut::<Complex64>() else {
+            unreachable!("test output is C64")
+        };
+        let y_region = y_typed
+            .backend_region_view_mut(vec![2, 2], vec![1, 4], 5)
+            .unwrap();
+        cuda.with_backend_session(|__s| {
+            __s.axpby_read_into_accum(
+                ContractionScalar::C64(alpha),
+                TensorRead::from_tensor(&x),
+                ContractionScalar::C64(beta),
+                TensorWrite::from_view(TensorViewMut::C64(y_region)),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    }
+
+    let mut expected = destination_before.clone();
+    for (position, &index) in region.iter().enumerate() {
+        expected[index] = alpha * host_x.as_slice::<Complex64>().unwrap()[position]
+            + beta * destination_before[index];
+    }
+    let got = download_tensor(cuda.runtime(), &y).unwrap();
+    assert_close_c64(
+        &got,
+        &Tensor::from_vec_col_major(vec![4, 3], expected.clone()).unwrap(),
+        "axpby compact read into a strided destination region",
+    );
+
+    // Case 2: strided x, strided destination.
+    let host_source = Tensor::from_vec_col_major(
+        vec![4, 3],
+        (0..12)
+            .map(|i| c64(-1.0 - 0.5 * i as f64, 0.75 + 0.125 * i as f64))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let source = upload_tensor(cuda.runtime(), &host_source).unwrap();
+    let mut y = upload_tensor(cuda.runtime(), &host_destination).unwrap();
+    {
+        let Some(source_typed) = source.as_typed::<Complex64>() else {
+            unreachable!("test input is C64")
+        };
+        let source_region = source_typed
+            .backend_region_view(vec![2, 2], vec![1, 4], 1)
+            .unwrap();
+        let Some(y_typed) = y.as_typed_mut::<Complex64>() else {
+            unreachable!("test output is C64")
+        };
+        let y_region = y_typed
+            .backend_region_view_mut(vec![2, 2], vec![1, 4], 5)
+            .unwrap();
+        cuda.with_backend_session(|__s| {
+            __s.axpby_read_into_accum(
+                ContractionScalar::C64(alpha),
+                TensorRead::from_view(TensorView::C64(source_region)),
+                ContractionScalar::C64(beta),
+                TensorWrite::from_view(TensorViewMut::C64(y_region)),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    }
+
+    let source_values = host_source.as_slice::<Complex64>().unwrap();
+    let source_region_indices = [1_usize, 2, 5, 6];
+    for (position, &index) in region.iter().enumerate() {
+        expected[index] = alpha * source_values[source_region_indices[position]]
+            + beta * destination_before[index];
+    }
+    let got = download_tensor(cuda.runtime(), &y).unwrap();
+    assert_close_c64(
+        &got,
+        &Tensor::from_vec_col_major(vec![4, 3], expected).unwrap(),
+        "axpby strided read into a strided destination region",
+    );
+}
+
 #[test]
 #[ignore = "requires CUDA"]
 fn cuda_blas1_cross_thread_operands_observe_vendor_writes() {
