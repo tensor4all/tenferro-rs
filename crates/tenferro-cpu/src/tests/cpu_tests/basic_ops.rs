@@ -946,7 +946,7 @@ fn test_reduce_prod_matches_a_sequential_product_within_range() {
 /// the contract and is expected to fail until that pin carries the fix; remove the
 /// `ignore` with that bump.
 #[test]
-#[ignore = "#2150: reassociating product kernel is upstream in strided-rs"]
+#[ignore = "#2150: the reassociating product kernel is upstream in strided-rs; fixed there on\n            the `fix/product-order-2150` branch (`ReduceKernel::reassociable` and one ordered\n            accumulator through every run). Lift this with the pin bump once a release carries it"]
 fn test_reduce_prod_survives_lane_reassociation() {
     for len in [1000usize, 1_000_000] {
         let values: Vec<f32> = (0..len)
