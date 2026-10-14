@@ -233,6 +233,84 @@ The CUDA tests `raw_ptx_load_launch_roundtrip` and
 the non-GPU CUDA lane and execute them on CUDA hardware. CUBIN execution must
 use a CI runner whose compute capability matches `CUDA_ARCH`.
 
+## Downstream `#[cube]` kernels
+
+The same session seam also hosts kernels written with CubeCL's `#[cube]` macro
+instead of PTX/CUBIN/NVRTC source. A downstream crate declares the framework
+`t4a-cubecl` package (`samples/cubecl-kernel` is a working fixture), gets the
+tenferro client from `CudaExecSession::with_cubecl`, and launches the kernel
+through the generated `launch_unchecked` entry point:
+
+```text
+CudaBackend::with_backend_session
+  -> with_cuda_exec_session
+  -> CudaExecSession::with_cubecl
+  -> cuda::cubecl::Session::client
+  -> #[cube(launch_unchecked)] kernel launch
+```
+
+### Index expressions must be `usize`
+
+The sharp edge that costs downstream time is the index type. Buffer indexing is
+defined only for `usize` and `usize` ranges: the pinned `t4a-cubecl 0.11.0`
+implements `IndexExpand` for `NativeExpand<usize>` (and the `usize` range
+forms), but not for any other integer type. `ABSOLUTE_POS` and an index literal
+are already `usize`, so `input[i]` and `input[0]` work as written. An index
+that has another integer type first — an `i32`/`u32` kernel parameter, or an
+element of an `Array<i32>`/`Array<u32>` — must be converted explicitly:
+
+<!-- snippet-source: samples/cubecl-kernel/src/kernel.rs#downstream-cube-index -->
+```rust
+/// Gather `input[usize::cast_from(indices[i])]` for each `i`.
+///
+/// `indices` is a `u32` buffer, so its elements are not `usize`; the explicit
+/// `usize::cast_from` is what makes them usable as indices. `ABSOLUTE_POS` is
+/// already `usize`, and an index literal is inferred as `usize`.
+///
+/// Bounds contract: the launcher sizes the domain to `indices.len()` and every
+/// stored index must be in bounds for `input`.
+#[cube(launch_unchecked)]
+pub fn gather(input: &[f32], indices: &[u32], output: &mut [f32]) {
+    let i = ABSOLUTE_POS;
+    let src = usize::cast_from(indices[i]);
+    output[i] = input[src];
+}
+```
+<!-- end-snippet-source -->
+
+`usize::cast_from(value)` accepts any `CubePrimitive` source, signed or
+unsigned; `usize::cast_from(<i32>)` and `usize::cast_from(<u32>)` both compile
+on the pinned `t4a-cubecl 0.11.0`. The failure mode is a typed non-`usize`
+index used directly, as in `input[offset]` where `offset: i32`: rustc reports
+`[f32] cannot be indexed by i32` and a second
+`IndexExpand<NativeExpand<i32>>` error whose span is the whole `#[cube]`
+attribute, not the offending expression. When a kernel fails that way, scan
+every index expression rather than the line the attribute points at.
+
+These rules were checked against `t4a-cubecl 0.11.0`; the older report that
+`cast_from` is `From`-based and that integer literals are always inferred as
+`i32` does not apply to this pin.
+
+## CUDA toolkit minimum by path
+
+tenferro compiles against the CUDA 12.8 `cudarc` bindings and resolves driver
+and NVRTC entry points at runtime, so the floor depends on the path:
+
+| Path | Supported minimum | Full-capability tier |
+| --- | --- | --- |
+| Custom `#[cube]` kernels (CubeCL JIT through NVRTC) | CUDA 12.6.2 | CUDA 12.8+ enables the complete CubeCL feature set |
+| `raw` `load_ptx` / `load_cubin` | CUDA 12.6.2 | — |
+| `raw` `compile_nvrtc` | CUDA 12.6.2 (NVRTC) | CUDA 12.8 NVRTC on a 12.8+ driver |
+| cuTENSOR-backed operations | CUDA 12 cuTENSOR 2.x (2.1.x on compute capability 7.0) | — |
+
+The CUDA backend's hard floor is 12.6.2, set by `cusolverDnXsyevBatched` in
+cuSOLVER >= 11.7.1; CUDA 12.x supports the same GPU architectures throughout,
+so it is a library floor, not a GPU one. On CUDA 12.4 through 12.7 the runtime
+omits the 12.8-only compiler and tensor-map capabilities while preserving the
+baseline backend. See the
+[Devices and GPU](devices-and-gpu.md#cuda-and-nvidia-library-compatibility)
+compatibility matrix for the exact loader ABI and CI-tested packages.
+
 ## Device-side libraries
 
 A downstream kernel may call device-side libraries such as cuSOLVERDx or

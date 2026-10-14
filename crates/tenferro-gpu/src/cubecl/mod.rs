@@ -2,7 +2,18 @@
 //!
 //! This module provides GPU acceleration via [CubeCL](https://github.com/tracel-ai/cubecl)
 //! running on NVIDIA CUDA devices. It is gated behind the `cuda` feature flag and
-//! requires **CUDA 12.8+** with a compatible NVIDIA GPU.
+//! requires a compatible NVIDIA GPU.
+//!
+//! # CUDA minimum by path
+//!
+//! tenferro compiles against the CUDA 12.8 `cudarc` bindings but resolves driver
+//! and NVRTC entry points at runtime, so the floor depends on the path. Custom
+//! `#[cube]` kernels and raw NVRTC compilation share the CUDA 12.6.2 baseline;
+//! CUDA 12.8-or-newer enables the complete CubeCL feature set (the 12.8-only
+//! compiler and tensor-map capabilities, which the runtime omits on CUDA 12.4
+//! through 12.7). cuTENSOR-backed operations additionally require a CUDA 12
+//! cuTENSOR 2.x library. See `docs/guides/custom-cuda-kernels.md` and the
+//! compatibility matrix in `docs/guides/devices-and-gpu.md` for the full table.
 //!
 //! # Enabling the feature
 //!
@@ -18,7 +29,8 @@
 //! # Prerequisites
 //!
 //! - NVIDIA GPU with CUDA compute capability ≥ 7.0
-//! - CUDA Toolkit 12.8 or newer installed (provides NVRTC for JIT kernel compilation)
+//! - CUDA Toolkit 12.6.2 or newer installed (12.8 or newer enables the complete
+//!   CubeCL feature set; provides NVRTC for JIT kernel compilation)
 //! - cuTENSOR shared library available on `LD_LIBRARY_PATH`
 //!
 //! ## Environment variables
