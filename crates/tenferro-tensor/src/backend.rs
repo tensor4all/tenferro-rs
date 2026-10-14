@@ -3051,6 +3051,17 @@ pub trait TensorReduction {
 
     /// Multiply elements across axes from an owned tensor or borrowed view.
     ///
+    /// # Overflow policy
+    ///
+    /// The product is reassociated across reduction lanes by the pinned
+    /// `strided-kernel` product kernel, so a partial product that leaves the
+    /// dtype's range makes the result `inf` or `NaN` even when the mathematical
+    /// product is representable (#2150). A `NaN` result therefore does not mean an
+    /// input was `NaN`: for `f32` an alternating `2.0, 0.5` axis of length 1000
+    /// returns `NaN` where the sequential product is exactly `1.0`. The faithful
+    /// sequential product is being fixed in the `strided-rs` kernel that this
+    /// crate pins.
+    ///
     /// # Examples
     ///
     /// ```rust

@@ -904,6 +904,70 @@ fn test_reduce_prod() {
 }
 
 #[test]
+fn test_reduce_prod_matches_a_sequential_product_within_range() {
+    // #2150: the CPU product kernel reassociates across lanes, so what holds today
+    // is the shape where each lane's partial product stays inside the dtype range.
+    // `{1.0, 2.0, 0.5}` repeating is product 1.0 with no lane running away.
+    let values: Vec<f32> = (0..1_000_000usize)
+        .map(|i| match i % 3 {
+            0 => 1.0,
+            1 => 2.0,
+            _ => 0.5,
+        })
+        .collect();
+    let t = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![values.len()], values).unwrap(),
+    );
+    let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+    assert_eq!(r.as_slice::<f32>().unwrap(), &[1.0]);
+
+    // A short alternating axis stays under the lane-overflow threshold too.
+    let short: Vec<f32> = (0..64)
+        .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
+        .collect();
+    let t = Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![64], short).unwrap());
+    let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+    assert_eq!(r.as_slice::<f32>().unwrap(), &[1.0]);
+
+    // And a product that genuinely leaves the f32 range still reports it.
+    let over: Vec<f32> = vec![2.0f32; 200];
+    let t = Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![200], over).unwrap());
+    let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+    assert!(r.as_slice::<f32>().unwrap()[0].is_infinite());
+}
+
+/// #2150: `reduce_prod` must not turn a representable product into `NaN`.
+///
+/// The pinned `strided-kernel` folds a product run into lane-vectors and multiplies
+/// those partials at the end, so an alternating `2.0, 0.5` axis gives one lane
+/// `inf` and another `0`, and the combine is `inf * 0 = NaN` while the sequential
+/// product is exactly `1.0`. The fix belongs in the `strided-rs` product kernel
+/// (tenferro-rs pins the published `strided-kernel 0.5.0`), so this test records
+/// the contract and is expected to fail until that pin carries the fix; remove the
+/// `ignore` with that bump.
+#[test]
+#[ignore = "#2150: reassociating product kernel is upstream in strided-rs"]
+fn test_reduce_prod_survives_lane_reassociation() {
+    for len in [1000usize, 1_000_000] {
+        let values: Vec<f32> = (0..len)
+            .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
+            .collect();
+        let t =
+            Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![len], values).unwrap());
+        let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+        assert_eq!(r.as_slice::<f32>().unwrap(), &[1.0], "f32 len {len}");
+    }
+
+    let len = 1_000_000usize;
+    let values: Vec<f64> = (0..len)
+        .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
+        .collect();
+    let t = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![len], values).unwrap());
+    let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+    assert_eq!(r.as_slice::<f64>().unwrap(), &[1.0], "f64 len {len}");
+}
+
+#[test]
 fn test_integer_reduce_sum_prod_wrap_on_overflow() {
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![i32::MAX, 1, i32::MAX, 2]).unwrap();
     let sum = reduce_sum(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
