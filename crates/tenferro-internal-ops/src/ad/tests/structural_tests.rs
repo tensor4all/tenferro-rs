@@ -669,3 +669,161 @@ fn transpose_concatenate_returns_none_for_symbolic_concat_axis() {
     assert_eq!(result, vec![None]);
     assert!(builder.build().operations().is_empty());
 }
+
+#[test]
+fn transpose_embed_diag_keeps_the_source_axis_when_axis_b_is_larger() {
+    // `axis_b > axis_a` inserts the diagonal behind `axis_a`, so the adjoint
+    // reduces axis `axis_a` itself; only `axis_b < axis_a` shifts it by one. The
+    // CPU kernel was the reason the shift looked unconditional (see the
+    // ExtractDiag axis-alignment fix in `tenferro-cpu/src/structural.rs`).
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(58));
+    let inputs = vec![ValueRef::External(input_key(59))];
+
+    let result = StdTensorOp::EmbedDiag {
+        axis_a: 0,
+        axis_b: 2,
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true]),
+        &mut ctx,
+    )
+    .unwrap();
+
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 1);
+    assert_eq!(
+        graph.operations()[0].operation,
+        StdTensorOp::ExtractDiag {
+            axis_a: 0,
+            axis_b: 2,
+        }
+    );
+    assert_eq!(result, vec![Some(graph.operations()[0].outputs[0])]);
+}
+
+#[test]
+fn transpose_embed_diag_without_a_cotangent_adds_no_operation() {
+    // No cotangent means there is nothing to push back, so the rule must return
+    // `None` and emit no operation rather than a dangling ExtractDiag.
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let inputs = vec![ValueRef::External(input_key(60))];
+
+    let result = StdTensorOp::EmbedDiag {
+        axis_a: 1,
+        axis_b: 0,
+    }
+    .transpose_rule(
+        &mut builder,
+        &[None],
+        &inputs,
+        &linear_mode(&[true]),
+        &mut ctx,
+    )
+    .unwrap();
+
+    assert_eq!(result, vec![None]);
+    assert!(builder.build().operations().is_empty());
+}
+
+#[test]
+fn transpose_embed_diag_ignores_an_inactive_input() {
+    // An input outside the active mask contributes no cotangent, whatever the
+    // cotangent at the output is.
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(61));
+    let inputs = vec![ValueRef::External(input_key(62))];
+
+    let result = StdTensorOp::EmbedDiag {
+        axis_a: 1,
+        axis_b: 0,
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[false]),
+        &mut ctx,
+    )
+    .unwrap();
+
+    assert_eq!(result, vec![None]);
+    assert!(builder.build().operations().is_empty());
+}
+
+#[test]
+fn jvp_extract_diag_applies_the_same_diagonal_to_the_tangent() {
+    // Forward mode of `ExtractDiag` is the same extraction on the tangent; the
+    // axis contract is the one the transpose rule's shift has to mirror.
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let data_key = input_key(63);
+    let tangent = builder.add_input(tensor_input(64));
+    let op = StdTensorOp::ExtractDiag {
+        axis_a: 2,
+        axis_b: 0,
+    };
+
+    let result = op
+        .jvp_rule(&mut builder, &[data_key], &[], &[Some(tangent)], &mut ctx)
+        .unwrap();
+
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 1);
+    assert_eq!(graph.operations()[0].operation, op);
+    assert_eq!(graph.operations()[0].inputs, vec![ValueRef::Local(tangent)]);
+    assert_eq!(result, vec![Some(graph.operations()[0].outputs[0])]);
+}
+
+#[test]
+fn jvp_embed_diag_applies_the_same_embedding_to_the_tangent() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let data_key = input_key(65);
+    let tangent = builder.add_input(tensor_input(66));
+    let op = StdTensorOp::EmbedDiag {
+        axis_a: 1,
+        axis_b: 0,
+    };
+
+    let result = op
+        .jvp_rule(&mut builder, &[data_key], &[], &[Some(tangent)], &mut ctx)
+        .unwrap();
+
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 1);
+    assert_eq!(graph.operations()[0].operation, op);
+    assert_eq!(graph.operations()[0].inputs, vec![ValueRef::Local(tangent)]);
+    assert_eq!(result, vec![Some(graph.operations()[0].outputs[0])]);
+}
+
+#[test]
+fn jvp_diagonal_rules_without_a_tangent_emit_nothing() {
+    // An inactive tangent contributes no tangent output and no operation, for both
+    // diagonal directions.
+    for op in [
+        StdTensorOp::ExtractDiag {
+            axis_a: 2,
+            axis_b: 0,
+        },
+        StdTensorOp::EmbedDiag {
+            axis_a: 1,
+            axis_b: 0,
+        },
+    ] {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let mut ctx = ShapeGuardContext::default();
+        let result = op
+            .jvp_rule(&mut builder, &[input_key(67)], &[], &[None], &mut ctx)
+            .unwrap();
+
+        assert_eq!(result, vec![None]);
+        assert!(builder.build().operations().is_empty());
+    }
+}
