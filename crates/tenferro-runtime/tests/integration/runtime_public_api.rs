@@ -4,7 +4,7 @@ use tenferro_runtime::{
     CompiledGraph, DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler,
     PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorSessionOpsExt, TracedTensor,
 };
-use tenferro_tensor::{BackendSessionHost, Error as TensorError, ValidationError};
+use tenferro_tensor::{BackendSessionHost, Error as TensorError, ShapeMismatch, ValidationError};
 
 fn cpu_runtime() -> Runtime {
     let backend = CpuBackend::new();
@@ -487,6 +487,56 @@ fn runtime_ordered_input_errors_are_covered() {
     let shape_input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let shape = runtime.run_compiled(&program, &[&shape_input]).unwrap_err();
     assert!(matches!(shape, Error::PlaceholderShapeMismatch { .. }));
+}
+
+/// Negative companion to
+/// `traced::tests::concatenate_of_distinct_inputs_compiles_without_input_specs`:
+/// distinct rank-2 symbolic inputs still compile without concrete input specs,
+/// and a concrete non-axis mismatch is rejected on the public compiled path.
+#[test]
+fn runtime_concatenate_rejects_incompatible_concrete_shapes_without_input_specs() {
+    // Data-attached but shape-symbolic inputs: the compiled program keeps their
+    // extents free, so `run_compiled` reaches the concatenate kernel.
+    let a = TracedTensor::from_tensor_symbolic_shape(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
+    )
+    .unwrap();
+    let b = TracedTensor::from_tensor_symbolic_shape(
+        Tensor::from_vec_col_major(vec![2, 4], vec![2.0_f64; 8]).unwrap(),
+    )
+    .unwrap();
+
+    let joined = TracedTensor::concatenate(&[&a, &b], 1).unwrap();
+    let program = GraphCompiler::new().compile(&joined).unwrap();
+    assert_eq!(program.input_count(), 2);
+
+    // Incompatible concrete non-axis extents ([2, 3] axis 0 versus [4, 4] axis 0),
+    // supplied in compiled input-key order.
+    let a_value = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let b_value = Tensor::from_vec_col_major(vec![4, 4], vec![2.0_f64; 16]).unwrap();
+    let mut ordered: [Option<&Tensor>; 2] = [None, None];
+    ordered[program.input_key_index(&a.input_key().unwrap()).unwrap()] = Some(&a_value);
+    ordered[program.input_key_index(&b.input_key().unwrap()).unwrap()] = Some(&b_value);
+
+    let err = cpu_runtime()
+        .run_compiled(&program, &ordered.map(Option::unwrap))
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            &err,
+            Error::TensorRuntime(TensorError::Validation {
+                op: "concatenate",
+                source: ValidationError::ShapeMismatch(source),
+                ..
+            }) if matches!(
+                source.as_ref(),
+                ShapeMismatch::IncompatibleShapes { lhs, rhs }
+                    if lhs.as_slice() == [2, 3] && rhs.as_slice() == [4, 4]
+            )
+        ),
+        "expected a concrete concatenate shape mismatch, got: {err}"
+    );
 }
 
 /// Execution-path parity (Stage 0): the prepared and unprepared paths must agree
