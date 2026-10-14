@@ -2638,6 +2638,22 @@ fn scalar_real(dtype: DType, value: f64) -> tenferro_tensor::Result<Tensor> {
     }
 }
 
+/// Make a freshly built host tensor resident on `backend`.
+///
+/// The composite helpers below build their internal constants on the host - a
+/// ones scalar, a pseudoinverse threshold, a norm order - and a device backend
+/// rejects a host tensor at the first operation that reads it; the caller has no
+/// way to supply a replacement (#2147). This is the concrete-session counterpart
+/// of the eager composites' `constant_from_host`: on a CPU backend it is a host
+/// copy, and every constant here is rank-0 or a broadcast of one, so the copy is
+/// a scalar.
+fn resident<B: LinalgBackend + ?Sized>(
+    tensor: Tensor,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
+    backend.upload_host_tensor(TensorRead::from_tensor(&tensor))
+}
+
 fn broadcast<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     shape: &[usize],
@@ -2660,7 +2676,7 @@ fn eye_like<B: LinalgBackend + ?Sized>(
     }
     let mut diagonal_shape = vec![shape[0]];
     diagonal_shape.extend_from_slice(&shape[2..]);
-    let scalar = scalar_real(dtype, 1.0)?;
+    let scalar = resident(scalar_real(dtype, 1.0)?, backend)?;
     let diagonal = broadcast(&scalar, &diagonal_shape, &[], backend)?;
     backend.embed_diagonal(&diagonal, 0, 1)
 }
@@ -2702,7 +2718,7 @@ fn pinv_from_svd<B: LinalgBackend + ?Sized>(
 ) -> tenferro_tensor::Result<Tensor> {
     let abs_s = backend.abs_read(TensorRead::from_tensor(&s))?;
     let s_max = reduce_max(&abs_s, &[0], backend)?;
-    let threshold_scalar = scalar_real(abs_s.dtype(), rtol.max(0.0))?;
+    let threshold_scalar = resident(scalar_real(abs_s.dtype(), rtol.max(0.0))?, backend)?;
     let threshold = binary_mul(&s_max, &threshold_scalar, backend)?;
     let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, s.shape(), backend)?;
     let mask = {
@@ -2731,7 +2747,7 @@ fn ones_like<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let one = scalar_real(input.dtype(), 1.0)?;
+    let one = resident(scalar_real(input.dtype(), 1.0)?, backend)?;
     broadcast(&one, input.shape(), &[], backend)
 }
 
@@ -2894,13 +2910,13 @@ fn p_norm<B: LinalgBackend + ?Sized>(
     if p == 2.0 {
         return frobenius_norm(abs, axes, backend);
     }
-    let power = scalar_real(abs.dtype(), p)?;
+    let power = resident(scalar_real(abs.dtype(), p)?, backend)?;
     let powered = backend.pow_read(
         TensorRead::from_tensor(abs),
         TensorRead::from_tensor(&power),
     )?;
     let sum = reduce_sum(&powered, axes, backend)?;
-    let inverse = scalar_real(abs.dtype(), 1.0 / p)?;
+    let inverse = resident(scalar_real(abs.dtype(), 1.0 / p)?, backend)?;
     backend.pow_read(
         TensorRead::from_tensor(&sum),
         TensorRead::from_tensor(&inverse),
@@ -2912,7 +2928,7 @@ fn count_nonzero<B: LinalgBackend + ?Sized>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let zero = scalar_real(abs.dtype(), 0.0)?;
+    let zero = resident(scalar_real(abs.dtype(), 0.0)?, backend)?;
     let zero = broadcast(&zero, abs.shape(), &[], backend)?;
     let mask = backend.compare_read(
         TensorRead::from_tensor(abs),
