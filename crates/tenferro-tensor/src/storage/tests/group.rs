@@ -712,10 +712,10 @@ fn descriptor_plan_allocation_count_separates_contiguous_and_strided() {
     );
 }
 
-/// Extraction must not change values: a view-shaped descriptor is refused and
-/// the group keeps reading the view (#1938 PR review).
+/// Extraction must not change values: a strided view-shaped descriptor is
+/// refused and the group keeps reading the view (#1938 PR review).
 #[test]
-fn view_descriptors_are_refused_by_extraction_and_keep_their_values() {
+fn non_compact_view_descriptors_are_refused_by_extraction_and_keep_their_values() {
     let base = || crate::Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let cases: Vec<(&str, crate::TensorValue, Vec<f64>)> = vec![
         (
@@ -724,19 +724,6 @@ fn view_descriptors_are_refused_by_extraction_and_keep_their_values() {
                 .transpose_view([1, 0])
                 .unwrap(),
             vec![1.0, 3.0, 2.0, 4.0],
-        ),
-        (
-            "offset slice",
-            crate::TensorValue::from_tensor(
-                crate::Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-            )
-            .slice_view(&crate::SliceConfig {
-                starts: vec![1],
-                limits: vec![3],
-                strides: vec![1],
-            })
-            .unwrap(),
-            vec![2.0, 3.0],
         ),
         (
             "broadcast",
@@ -786,4 +773,33 @@ fn view_descriptors_are_refused_by_extraction_and_keep_their_values() {
     let (group, slots) = AllocationGroup::from_tensors(vec![base().unwrap()]).unwrap();
     let tensor = group.into_tensor(slots[0]).unwrap();
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}
+
+/// A compact offset slice extracts by preserving its descriptor layout over the
+/// whole root allocation: logical reads stay slice-bounded while the root is
+/// retained so an in-place consumer can write only the slice (#2023).
+#[test]
+fn compact_slice_extraction_preserves_offset_extent_and_root() {
+    let value = crate::TensorValue::from_tensor(
+        crate::Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+    )
+    .slice_view(&crate::SliceConfig {
+        starts: vec![1],
+        limits: vec![3],
+        strides: vec![1],
+    })
+    .unwrap();
+    // The logical layout keeps the slice offset and extent before extraction.
+    assert_eq!(value.shape(), &[2]);
+    assert_eq!(value.offset(), 1);
+    assert_eq!(value.tensor_read().as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+    let (group, slot, _, _) = value
+        .try_into_group_parts()
+        .expect("a pooled value enters a group");
+    let tensor = group
+        .into_tensor(slot)
+        .expect("a compact root-spanning slice extracts");
+    // The extracted owner still exposes the whole root allocation.
+    let typed = <f64 as crate::TensorScalar>::into_typed(tensor).unwrap_or_else(|_| unreachable!());
+    assert_eq!(typed.host_data().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 }

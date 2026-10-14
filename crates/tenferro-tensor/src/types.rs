@@ -2001,6 +2001,39 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     }
 }
 
+impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
+    /// Layout that reflects the owned storage rather than the compact shape.
+    ///
+    /// [`Self::layout`] reports the compact construction layout. A
+    /// root-preserving extraction may instead carry a nonzero descriptor offset
+    /// and fewer logical elements than the backing root, so callers that
+    /// canonicalize an owned tensor must use this accessor.
+    pub(crate) fn physical_layout(&self) -> TensorLayout<R> {
+        match &self.storage {
+            DynamicStorage::Host(_) => TensorLayout::<R>::compact(self.shape.clone())
+                .unwrap_or_else(|err| unreachable!("validated owned shape: {err}")),
+            DynamicStorage::Group(core) => {
+                let descriptor = core
+                    .group
+                    .group
+                    .descriptor_layout(core.group.slot)
+                    .unwrap_or_else(|| unreachable!("a live group carries its descriptor layout"));
+                let shape = R::shape_from_vec(descriptor.shape().to_vec().into())
+                    .unwrap_or_else(|err| unreachable!("validated descriptor shape: {err:?}"));
+                let strides = R::strides_from_vec(descriptor.strides().to_vec().into())
+                    .unwrap_or_else(|err| unreachable!("validated descriptor strides: {err:?}"));
+                let buffer_len = core
+                    .group
+                    .group
+                    .descriptor_backing_len(core.group.slot)
+                    .unwrap_or_else(|| unreachable!("a live group carries its root length"));
+                TensorLayout::<R>::from_parts(shape, strides, descriptor.offset(), buffer_len)
+                    .unwrap_or_else(|err| unreachable!("validated descriptor layout: {err:?}"))
+            }
+        }
+    }
+}
+
 impl<T, R: TensorRank, D: Representation> std::fmt::Debug for TypedTensor<T, R, D> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -6719,7 +6752,7 @@ fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
             // payload it was created from and this construction cannot fail.
             unreachable!("a validated payload yields a layout inside its own storage")
         }),
-        TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.layout()),
+        TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.physical_layout()),
     }
 }
 

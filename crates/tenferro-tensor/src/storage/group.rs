@@ -1280,10 +1280,31 @@ impl AllocationGroup {
             .map(|owner| owner.root_span().root_resource())
     }
 
+    pub(crate) fn descriptor_layout(&self, slot: DescriptorSlot) -> Option<TensorLayout<DynRank>> {
+        self.resolve_descriptor(slot)
+            .ok()
+            .map(|(_, descriptor)| descriptor.layout().clone())
+    }
+
     pub(crate) fn descriptor_len(&self, slot: DescriptorSlot) -> Option<usize> {
         self.resolve_descriptor(slot)
             .ok()
             .map(|(_, descriptor)| descriptor.element_count)
+    }
+
+    /// Element count of the descriptor's backing allocation.
+    ///
+    /// For a root-preserving descriptor the span is the whole root, so this is
+    /// the physical buffer length rather than the logical view extent.
+    pub(crate) fn descriptor_backing_len(&self, slot: DescriptorSlot) -> Option<usize> {
+        self.resolve_descriptor(slot)
+            .ok()
+            .and_then(|(_, descriptor)| {
+                descriptor
+                    .span()
+                    .byte_len()
+                    .checked_div(descriptor.element_size())
+            })
     }
 
     pub(crate) fn backend_identity(
@@ -1517,7 +1538,7 @@ impl AllocationGroup {
     /// # Errors
     ///
     /// Returns [`GroupError::AliasedAllocation`] for an aliased allocation,
-    /// [`GroupError::NonCompactDescriptor`] for a strided, offset or partial
+    /// [`GroupError::NonCompactDescriptor`] for a strided or non-root-spanning
     /// descriptor, or [`GroupError::InvalidDescriptor`] for an invalid slot;
     /// every extraction failure leaves the group unchanged.
     #[allow(clippy::result_large_err)]
@@ -1574,7 +1595,7 @@ impl AllocationGroup {
     ///
     /// Returns [`GroupError::AliasedAllocation`] when another descriptor
     /// references the allocation, [`GroupError::NonCompactDescriptor`] for a
-    /// strided, offset or partial descriptor, or
+    /// strided or non-root-spanning descriptor, or
     /// [`GroupError::InvalidDescriptor`] for an invalid slot. Each extraction
     /// failure returns the unchanged group.
     #[allow(clippy::result_large_err)]
@@ -1720,10 +1741,12 @@ impl AllocationGroup {
         }
     }
 
-    /// Reject a descriptor an owned tensor cannot represent: an owned tensor is
-    /// its whole allocation in compact column-major order at offset zero, so a
-    /// strided, offset or partial descriptor would otherwise change value on
-    /// extraction.
+    /// Accept a descriptor an owned tensor can represent without changing
+    /// values: a compact column-major layout over the allocation's whole root
+    /// span. The layout may start at a nonzero offset and cover fewer elements
+    /// than the root; extraction keeps that layout, so reads and writes stay
+    /// descriptor-bounded while the root allocation is preserved. A strided or
+    /// non-root-spanning descriptor is refused.
     fn ensure_whole_compact(
         &self,
         slot: DescriptorSlot,
@@ -1745,13 +1768,9 @@ impl AllocationGroup {
                 .map_err(|error| GroupError::InvalidDescriptor {
                     message: error.to_string(),
                 })?;
-        let whole = span.byte_offset() == root.byte_offset()
-            && span.byte_len() == root.byte_len()
-            && descriptor
-                .element_count()
-                .checked_mul(descriptor.element_size())
-                == Some(span.byte_len());
-        if compact && layout.offset() == 0 && whole {
+        let root_spanning =
+            span.byte_offset() == root.byte_offset() && span.byte_len() == root.byte_len();
+        if compact && root_spanning {
             Ok(())
         } else {
             Err(GroupError::NonCompactDescriptor { slot: slot.index() })
