@@ -25,6 +25,46 @@ use super::{
 /// other crate can create a token that claims to be a CPU session.
 pub(super) struct CpuExecSessionMarker;
 
+/// Route an eager `dot_general` request to a slot of the session's plan cache.
+///
+/// A prepared program keys a contraction plan by its instruction index, because
+/// a compiled program has exactly one such index per operation. An eager call
+/// has none, so this derives one from the request's geometry: the dtype, the two
+/// operand shapes, the four axis lists and the conjugation flags, all of which
+/// the plan key already names.
+///
+/// The slot only *routes*. [`crate::contraction::BinaryCache`] still compares the
+/// full key - including both operand layouts, which this fingerprint deliberately
+/// leaves out because reading them here would cost the very allocation the cache
+/// is meant to avoid - before reusing a plan, so two requests that collide
+/// rebuild instead of sharing a plan that does not apply. A collision therefore
+/// costs a miss, never a wrong answer.
+fn eager_dot_cache_slot(
+    capacity: usize,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> Option<usize> {
+    use std::hash::{Hash, Hasher};
+
+    if capacity == 0 {
+        return None;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    lhs.dtype().hash(&mut hasher);
+    lhs.shape().hash(&mut hasher);
+    rhs.shape().hash(&mut hasher);
+    config.lhs_contracting_dims.hash(&mut hasher);
+    config.rhs_contracting_dims.hash(&mut hasher);
+    config.lhs_batch_dims.hash(&mut hasher);
+    config.rhs_batch_dims.hash(&mut hasher);
+    lhs_conj.hash(&mut hasher);
+    rhs_conj.hash(&mut hasher);
+    Some(hasher.finish() as usize % capacity)
+}
+
 /// Borrowed CPU execution session used by scheduler-owned extension regions.
 #[doc(hidden)]
 pub struct CpuExecSession<'a> {
@@ -155,11 +195,12 @@ impl<'a> CpuExecSession<'a> {
 
 fn pooled_zero_tensor<T>(
     buffers: &mut BufferPool,
-    shape: Vec<usize>,
+    shape: impl tenferro_tensor::IntoShapeVec,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: PoolScalar + Clone + 'static,
 {
+    let shape = shape.into_shape_vec();
     let element_count =
         tenferro_tensor::validate::checked_shape_product("dot_general", "output", &shape)?;
     TypedTensor::from_vec_col_major(shape, T::pool_acquire_zeroed(buffers, element_count))
@@ -168,17 +209,16 @@ where
 fn allocate_dot_output(
     buffers: &mut BufferPool,
     dtype: DType,
-    shape: Vec<usize>,
+    shape: impl tenferro_tensor::IntoShapeVec,
 ) -> crate::Result<Tensor> {
+    let shape = shape.into_shape_vec();
     match dtype {
-        DType::F32 => pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<f32>),
-        DType::F64 => pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<f64>),
-        DType::C32 => {
-            pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<tenferro_tensor::Complex32>)
-        }
-        DType::C64 => {
-            pooled_zero_tensor(buffers, shape).map(Tensor::from_typed::<tenferro_tensor::Complex64>)
-        }
+        DType::F32 => pooled_zero_tensor(buffers, &shape).map(Tensor::from_typed::<f32>),
+        DType::F64 => pooled_zero_tensor(buffers, &shape).map(Tensor::from_typed::<f64>),
+        DType::C32 => pooled_zero_tensor(buffers, &shape)
+            .map(Tensor::from_typed::<tenferro_tensor::Complex32>),
+        DType::C64 => pooled_zero_tensor(buffers, &shape)
+            .map(Tensor::from_typed::<tenferro_tensor::Complex64>),
         dtype => Err(crate::Error::unsupported_dtype(
             "dot_general",
             dtype,
@@ -757,7 +797,15 @@ impl TensorDot for CpuExecSession<'_> {
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        self.execute_dot_allocated(None, lhs, rhs, config, false, false)
+        let slot = eager_dot_cache_slot(
+            self.gemm_analysis_cache.capacity(),
+            &lhs,
+            &rhs,
+            config,
+            false,
+            false,
+        );
+        self.execute_dot_allocated(slot, lhs, rhs, config, false, false)
     }
 
     fn dot_general_read_into(
@@ -779,7 +827,15 @@ impl TensorDot for CpuExecSession<'_> {
         accumulation: DotGeneralAccumulation,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        self.dot_general_read_into_accum_cached(None, lhs, rhs, config, accumulation, out)
+        let slot = eager_dot_cache_slot(
+            self.gemm_analysis_cache.capacity(),
+            &lhs,
+            &rhs,
+            config,
+            accumulation.lhs_conj,
+            accumulation.rhs_conj,
+        );
+        self.dot_general_read_into_accum_cached(slot, lhs, rhs, config, accumulation, out)
     }
 
     fn dot_general_with_conj(
@@ -790,14 +846,17 @@ impl TensorDot for CpuExecSession<'_> {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        self.execute_dot_allocated(
-            None,
-            TensorRead::from_tensor(lhs),
-            TensorRead::from_tensor(rhs),
+        let lhs = TensorRead::from_tensor(lhs);
+        let rhs = TensorRead::from_tensor(rhs);
+        let slot = eager_dot_cache_slot(
+            self.gemm_analysis_cache.capacity(),
+            &lhs,
+            &rhs,
             config,
             lhs_conj,
             rhs_conj,
-        )
+        );
+        self.execute_dot_allocated(slot, lhs, rhs, config, lhs_conj, rhs_conj)
     }
 }
 

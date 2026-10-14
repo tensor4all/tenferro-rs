@@ -8,7 +8,7 @@ use crate::types::{
 use crate::validate::validate_convert_dtype;
 use crate::{
     AllocationDomainId, AllocationId, DType, Error, RuntimeCacheControl, SessionEntryError,
-    ShapeMismatch, Tensor, TensorRead, TensorValue, TensorWrite, ValidationError,
+    ShapeMismatch, ShapeVec, Tensor, TensorRead, TensorValue, TensorWrite, ValidationError,
 };
 use num_complex::{Complex32, Complex64};
 
@@ -129,7 +129,7 @@ pub fn dot_general_output_shape(
     rhs_shape: &[usize],
     config: &DotGeneralConfig,
     op: &'static str,
-) -> crate::Result<Vec<usize>> {
+) -> crate::Result<ShapeVec> {
     if config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len() {
         return Err(invalid_argument(
             op,
@@ -221,6 +221,7 @@ pub fn dot_general_output_shape(
         .map(|axis| rhs_shape[axis]);
     let batch = config.lhs_batch_dims.iter().map(|&axis| lhs_shape[axis]);
 
+    // Inline for common ranks: the eager dot entry builds this on every call.
     Ok(lhs_free.chain(rhs_free).chain(batch).collect())
 }
 
@@ -232,7 +233,7 @@ pub fn validate_dot_general_read_into(
     config: &DotGeneralConfig,
     out: &TensorWrite<'_>,
     op: &'static str,
-) -> crate::Result<Vec<usize>> {
+) -> crate::Result<ShapeVec> {
     if lhs.dtype() != rhs.dtype() {
         return Err(validation(
             op,
@@ -256,7 +257,7 @@ pub fn validate_dot_general_read_into(
         return Err(validation(
             op,
             ShapeMismatch::ExpectedActual {
-                expected: expected.clone().into(),
+                expected: expected.clone(),
                 actual: out.shape().to_vec().into(),
             }
             .into(),
@@ -615,7 +616,7 @@ pub fn validate_dot_general_accumulation(
     accumulation: DotGeneralAccumulation,
     out: &TensorWrite<'_>,
     op: &'static str,
-) -> crate::Result<Vec<usize>> {
+) -> crate::Result<ShapeVec> {
     let shape = validate_dot_general_read_into(lhs, rhs, config, out, op)?;
     accumulation.validate_for_dtype(lhs.dtype())?;
     Ok(shape)

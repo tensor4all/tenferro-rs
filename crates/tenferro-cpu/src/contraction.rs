@@ -427,7 +427,7 @@ fn fresh<T: Scalar>(
     slot: Option<usize>,
     lhs: TypedTensorView<'_, T>,
     rhs: TypedTensorView<'_, T>,
-    shape: Vec<usize>,
+    shape: tenferro_tensor::ShapeVec,
     config: &DotGeneralConfig,
     accumulation: DotGeneralAccumulation,
     alpha: T,
@@ -478,7 +478,7 @@ pub(crate) fn dot_fresh(
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
     accumulation: DotGeneralAccumulation,
-    shape: Vec<usize>,
+    shape: tenferro_tensor::ShapeVec,
 ) -> crate::Result<Tensor> {
     crate::dot_runtime::validate_dot_operands(&lhs, &rhs, config, accumulation)?;
     macro_rules! dispatch {
@@ -539,10 +539,10 @@ pub(crate) fn dot_into(
         config,
         "dot_general",
     )?;
-    if shape != out.shape() {
+    if shape.as_slice() != out.shape() {
         return Err(crate::Error::shape_mismatch(
             "dot_general",
-            shape,
+            shape.to_vec(),
             out.shape().to_vec(),
         ));
     }
@@ -627,7 +627,7 @@ pub(crate) fn dot_fresh(
     _rhs: TensorRead<'_>,
     _config: &DotGeneralConfig,
     _accumulation: DotGeneralAccumulation,
-    _shape: Vec<usize>,
+    _shape: tenferro_tensor::ShapeVec,
 ) -> crate::Result<Tensor> {
     Err(no_backend("dot_general"))
 }

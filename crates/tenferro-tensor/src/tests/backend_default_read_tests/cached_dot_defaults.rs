@@ -45,7 +45,7 @@ fn dot_general_output_shape_orders_free_then_batch_axes() {
         "test_dot",
     )
     .unwrap();
-    assert_eq!(shape, vec![2, 5, 4]);
+    assert_eq!(shape.as_slice(), &[2, 5, 4]);
 }
 
 #[test]

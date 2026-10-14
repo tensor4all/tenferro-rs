@@ -119,9 +119,8 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             // #2139 item 1: the eager `dot_general` path's own shape and axis
             // validation. Only tenferro's allocations are counted here, so the
             // budget does not move with the compiled provider or the pinned
-            // `tcontract` plan builder: dropping the four rank-sized `Vec<bool>`
-            // duplicate-axis scratches leaves exactly the output `Vec` the caller
-            // receives.
+            // `tcontract` plan builder: neither the four rank-sized `Vec<bool>`
+            // duplicate-axis scratches nor the output shape itself reach the heap.
             let config = DotGeneralConfig {
                 lhs_contracting_dims: smallvec![1],
                 rhs_contracting_dims: smallvec![0],
@@ -133,9 +132,8 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             eprintln!("dot_general_output_shape: {allocations} allocations, {bytes} bytes");
             assert_eq!(shape.as_slice(), &[2, 2]);
             assert_eq!(
-                allocations, 1,
-                "shape/axis validation must allocate only its own output shape, not a \
-                 per-call rank-sized scratch"
+                allocations, 0,
+                "shape/axis validation must not allocate on the common small rank"
             );
         })
         .unwrap();
