@@ -57,13 +57,13 @@ class ChangePolicyTests(unittest.TestCase):
         policy = classify_paths([".github/workflows/docs.yml"])
         self.assertFalse(policy.run_macos)
 
-    def test_runpod_control_plane_requires_gpu(self) -> None:
+    def test_gpu_device_control_plane_requires_gpu(self) -> None:
+        """A diff that can change what the pod executes is proven on a pod."""
         for path in (
             "scripts/ci/runpod_client.py",
             "scripts/ci/runpod_config.json",
             ".github/workflows/runpod-gpu-test.yml",
             ".github/workflows/runpod-gpu-execute.yml",
-            ".github/workflows/CI_gpu.yml",
             ".github/workflows/ci-cache-publish.yml",
             "scripts/ci/find_archive_artifact.py",
             "scripts/ci/gpu_test_partition.py",
@@ -76,21 +76,39 @@ class ChangePolicyTests(unittest.TestCase):
             "scripts/ci/prepare_gpu_execution_payload.sh",
             "scripts/ci/check_cuda_headers.py",
             "scripts/ci/install_cutensor.sh",
-            "scripts/ci/runpod_pricing.py",
             "scripts/ci/runpod_provision.py",
             "scripts/ci/runpod_setup_watchdog.py",
             "scripts/ci/runpod_lifecycle.py",
-            "scripts/ci/runpod_reap.py",
-            ".github/workflows/runpod-reap.yml",
             "scripts/ci/cuda_smoke_test.py",
-            "scripts/ci/gpu_gate_reuse.py",
-            "scripts/ci/runpod_cost.py",
+            "scripts/ci/change_policy.py",
         ):
             with self.subTest(path=path):
                 policy = classify_paths([path])
                 self.assertIs(policy.change_class, ChangeClass.CI_ONLY)
                 self.assertTrue(policy.run_ci_config)
                 self.assertTrue(policy.run_gpu)
+
+    def test_gpu_host_side_control_plane_does_not_require_gpu(self) -> None:
+        """The host half of the paid lane is never observed by the device run.
+
+        A pod runs the device suite; it cannot exercise the required-gate
+        contract, the reuse lookup, the price table, or the orphaned-pod
+        reaper. Those paths have their own unit tests, and spending a pod on
+        them is what this list exists to prevent (#2163).
+        """
+        for path in (
+            ".github/workflows/CI_gpu.yml",
+            ".github/workflows/runpod-reap.yml",
+            "scripts/ci/gpu_gate_reuse.py",
+            "scripts/ci/runpod_pricing.py",
+            "scripts/ci/runpod_cost.py",
+            "scripts/ci/runpod_reap.py",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertIs(policy.change_class, ChangeClass.CI_ONLY)
+                self.assertTrue(policy.run_ci_config)
+                self.assertFalse(policy.run_gpu)
 
     def test_runner_pin_check_is_hosted_only(self) -> None:
         # The scheduled pin check never touches a pod, so it needs no paid gate.

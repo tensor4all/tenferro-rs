@@ -15,10 +15,20 @@ Pull requests have one primary class and independent lane flags:
 - **docs-only** contains only rendered documentation or repository prose. It
   runs documentation validation and skips compiled-code lanes.
 - **CI-only** contains only known workflow and CI-helper paths. It runs helper
-  tests and actionlint. RunPod workflow, request, recovery, runtime preparation,
-  CUDA-header validation, or classification changes additionally require the
-  GPU gate. Hosted preparation still determines the payload consumed on the
-  paid GPU, even when the helper itself runs without a GPU.
+  tests and actionlint. A CI-only diff requires the GPU gate only when it can
+  change what the pod executes or whether it can execute: the archive and its
+  payload, the test partitions, the pod request/provision/staging path, and the
+  cache the pod consumes (`_GPU_DEVICE_CONTROL_FILES`). The paid lane's
+  host-side half - the required-gate contract in `.github/workflows/CI_gpu.yml`,
+  the gate-reuse lookup, the price table and cost report, and the orphaned-pod
+  reaper - is in `_GPU_HOSTED_ONLY_FILES` and does not, because running the
+  device suite can never observe any of it; its own helper tests are what can.
+  A CI-only diff touching only those skips every paid step, and the gate
+  publishes a successful "not required" check rather than provisioning a pod
+  (#2163). That split does not relax the fail-safe direction: `change_policy.py`
+  itself stays in the device set, because a diff there can turn the paid lane
+  off. Hosted preparation still determines the payload consumed on the paid GPU,
+  even when the helper itself runs without a GPU.
 
 Mixed docs and CI changes are CI-only with both lightweight flags enabled.
 Unknown paths always fall back to code. `docs/tutorial-code/` is executable

@@ -77,11 +77,17 @@ _MACOS_CONTROL_FILES = frozenset(
         "scripts/ci/run_profile.py",
     }
 )
-_GPU_CONTROL_FILES = frozenset(
+# Paid-lane control plane, split by what a diff can actually change.
+#
+# `_GPU_DEVICE_CONTROL_FILES` changes what the pod executes or whether it can
+# execute at all: the archive and its payload, the test partitions, the pod
+# request/provision/staging path, and the cache the pod consumes. A diff
+# touching one of them is proven on a pod.
+_GPU_DEVICE_CONTROL_FILES = frozenset(
     {
-        ".github/workflows/CI_gpu.yml",
         ".github/workflows/runpod-gpu-test.yml",
         ".github/workflows/runpod-gpu-execute.yml",
+        ".github/workflows/runpod-gpu-runtime.yml",
         ".github/workflows/ci-cache-publish.yml",
         "scripts/ci/change_policy.py",
         "scripts/ci/runpod_client.py",
@@ -95,19 +101,33 @@ _GPU_CONTROL_FILES = frozenset(
         "scripts/ci/pjrt_test_partition.tsv",
         "scripts/ci/install_cuda_toolkit_hosted.sh",
         "scripts/ci/install_cuda_runtime_tree.sh",
-        ".github/workflows/runpod-gpu-runtime.yml",
         "scripts/ci/prepare_gpu_execution_payload.sh",
         "scripts/ci/check_cuda_headers.py",
         "scripts/ci/install_cutensor.sh",
-        "scripts/ci/runpod_pricing.py",
         "scripts/ci/runpod_provision.py",
         "scripts/ci/runpod_setup_watchdog.py",
         "scripts/ci/runpod_lifecycle.py",
-        "scripts/ci/runpod_reap.py",
-        ".github/workflows/runpod-reap.yml",
         "scripts/ci/cuda_smoke_test.py",
+    }
+)
+
+# The paid lane's host-side half: how the gate is waited on, reused, priced, and
+# reclaimed. None of it changes what the pod executes, and running the device
+# suite cannot observe any of it - `test_gpu_gate_poller.py` and
+# `test_gpu_gate_reuse.py` are the checks that can. A CI-only diff that touches
+# only these therefore skips the paid path, and the gate publishes "not
+# required" instead of provisioning a pod (REPOSITORY_RULES.md, CI Cost
+# Discipline). `.github/workflows/CI_gpu.yml` is the required-gate contract plus
+# the fork lane, which runs on GitHub-hosted and `ubuntu-gpu` runners, never on
+# a RunPod pod; #2163 spent a pod on a wait-loop fix before this split existed.
+_GPU_HOSTED_ONLY_FILES = frozenset(
+    {
+        ".github/workflows/CI_gpu.yml",
+        ".github/workflows/runpod-reap.yml",
         "scripts/ci/gpu_gate_reuse.py",
+        "scripts/ci/runpod_pricing.py",
         "scripts/ci/runpod_cost.py",
+        "scripts/ci/runpod_reap.py",
     }
 )
 
@@ -124,8 +144,8 @@ def _is_ci_path(path: str) -> bool:
     return path in _CI_FILES or path.startswith(_CI_PREFIXES)
 
 
-def _is_gpu_control_plane_path(path: str) -> bool:
-    return path in _GPU_CONTROL_FILES
+def _is_gpu_device_control_plane_path(path: str) -> bool:
+    return path in _GPU_DEVICE_CONTROL_FILES
 
 
 def _is_macos_control_plane_path(path: str) -> bool:
@@ -188,7 +208,7 @@ def classify_paths(
         run_extensions=False,
         run_docs=bool(docs),
         run_ci_config=has_ci,
-        run_gpu=any(_is_gpu_control_plane_path(path) for path in ci),
+        run_gpu=any(_is_gpu_device_control_plane_path(path) for path in ci),
         run_macos=any(_is_macos_control_plane_path(path) for path in ci),
         reasons=reasons,
     )
