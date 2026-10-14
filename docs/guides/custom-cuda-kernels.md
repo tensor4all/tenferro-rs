@@ -305,9 +305,12 @@ and NVRTC entry points at runtime, so the floor depends on the path:
 
 The CUDA backend's hard floor is 12.6.2, set by `cusolverDnXsyevBatched` in
 cuSOLVER >= 11.7.1; CUDA 12.x supports the same GPU architectures throughout,
-so it is a library floor, not a GPU one. On CUDA 12.4 through 12.7 the runtime
-omits the 12.8-only compiler and tensor-map capabilities while preserving the
-baseline backend. See the
+so it is a library floor, not a GPU one. On CUDA 12.4 through 12.7 the
+baseline backend works: the emitted PTX version is chosen from the driver, and a
+12.8-only tensor-map format fails with an explicit CUDA-version reason when it is
+reached (`t4a-cubecl-cuda 0.11.0`, `compute/server.rs`: "CUDA version 12.8 required
+for tensor map format Im2ColWide"), rather than being hidden behind a runtime
+capability probe. See the
 [Devices and GPU](devices-and-gpu.md#cuda-and-nvidia-library-compatibility)
 compatibility matrix for the exact loader ABI and CI-tested packages.
 
