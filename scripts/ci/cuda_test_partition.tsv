@@ -629,6 +629,7 @@ host	tenferro-ad::integration	eager_tensor::eager_detach_cuts_one_gradient_path
 host	tenferro-ad::integration	eager_tensor::eager_diagonal_primal_ops_extract_diag_and_tril
 host	tenferro-ad::integration	eager_tensor::eager_dot_general_with_conj_uses_untracked_fast_path
 host	tenferro-ad::integration	eager_tensor::eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatch
+host	tenferro-ad::integration	eager_tensor::eager_dynamic_slice_and_gather_clamp_out_of_range_starts_and_indices
 host	tenferro-ad::integration	eager_tensor::eager_dynamic_slice_primal
 host	tenferro-ad::integration	eager_tensor::eager_elementwise_primal_ops_div_abs_and_sin
 host	tenferro-ad::integration	eager_tensor::eager_embed_diag_and_triu_primal
@@ -849,6 +850,7 @@ host	tenferro-ad::integration	sym_dim::sym_dim_sub_and_div_operators
 host	tenferro-ad::integration	sym_dim::sym_dim_sub_operator
 host	tenferro-ad::integration	sym_dim::sym_dim_usize_lhs_operators
 host	tenferro-ad::integration	sym_dim::sym_dim_usize_sub_and_div_lhs
+host	tenferro-ad::integration	symbolic_grad::grad_embed_diag_shifted_axis_restores_input_layout
 host	tenferro-ad::integration	symbolic_grad::grad_evaluates_with_different_shapes_from_same_symbolic_graph
 host	tenferro-ad::integration	symbolic_grad::grad_of_dot_product_against_two_symbolic_inputs
 host	tenferro-ad::integration	symbolic_grad::grad_of_sum_of_squares_against_symbolic_input
@@ -1060,6 +1062,9 @@ host	tenferro-linalg	cpu::backend::tests::write_view_operand_unwinds_for_a_dtype
 host	tenferro-linalg	cpu::linalg::faer_linalg::tests::checked_matrix_element_count_reports_typed_overflow
 host	tenferro-linalg	cpu::linalg::faer_linalg::tests::compact_factor_and_append_reconstructs_f64
 host	tenferro-linalg	cpu::linalg::faer_linalg::tests::compact_from_factors_reconstructs_f64
+host	tenferro-linalg	cpu::linalg::faer_linalg::tests::normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns
+host	tenferro-linalg	cpu::linalg::faer_linalg::tests::normalize_eig_vectors_puts_columns_in_the_unit_gauge
+host	tenferro-linalg	cpu::linalg::faer_linalg::tests::normalize_eig_vectors_rejects_non_normalizable_columns_typed
 host	tenferro-linalg	cpu::tests::backend::test_eig_returns_complex_outputs_for_real_input
 host	tenferro-linalg	cpu::tests::backend::test_faer_eig_decomposition_failure_returns_error
 host	tenferro-linalg	cpu::tests::backend::test_faer_eig_zero_extent_returns_empty_complex_outputs_per_input_width
@@ -1198,12 +1203,14 @@ host	tenferro-linalg::integration	borrowed_linalg_parity::borrowed_rank_revealin
 host	tenferro-linalg::integration	borrowed_linalg_parity::borrowed_triangular_solve_matches_the_owned_call_on_both_sides
 host	tenferro-linalg::integration	borrowed_linalg_parity::borrowed_triangular_solve_rejects_a_vector_right_hand_side_like_the_owned_call
 host	tenferro-linalg::integration	borrowed_linalg_parity::faer_eig_view_path_does_not_pool_an_input_copy
+host	tenferro-linalg::integration	concrete_surface::complex_pinv_matches_the_moore_penrose_inverse
 host	tenferro-linalg::integration	concrete_surface::concrete_norm_covers_orders_axis_permutation_and_validation
 host	tenferro-linalg::integration	concrete_surface::concrete_norm_distinguishes_empty_axes_and_rejects_invalid_axes
 host	tenferro-linalg::integration	concrete_surface::concrete_spectral_norm_preserves_signed_and_complex_input_across_surfaces
 host	tenferro-linalg::integration	concrete_surface::cpu_execution_session_implements_linalg_backend
 host	tenferro-linalg::integration	concrete_surface::dynamic_and_read_surfaces_return_fixed_tuples
 host	tenferro-linalg::integration	concrete_surface::dynamic_composites_cover_inverse_pseudoinverse_eigenvalues_and_norm
+host	tenferro-linalg::integration	concrete_surface::eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones
 host	tenferro-linalg::integration	concrete_surface::rank_revealing_qr_handles_empty_dimensions_and_empty_batches
 host	tenferro-linalg::integration	concrete_surface::rank_revealing_qr_handles_interspersed_dependence
 host	tenferro-linalg::integration	concrete_surface::rank_revealing_qr_mixes_zero_and_nonzero_items_in_one_batch
