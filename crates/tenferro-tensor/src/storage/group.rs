@@ -1286,12 +1286,6 @@ impl AllocationGroup {
             .map(|(_, descriptor)| descriptor.layout().clone())
     }
 
-    pub(crate) fn descriptor_len(&self, slot: DescriptorSlot) -> Option<usize> {
-        self.resolve_descriptor(slot)
-            .ok()
-            .map(|(_, descriptor)| descriptor.element_count)
-    }
-
     /// Element count of the descriptor's backing allocation.
     ///
     /// For a root-preserving descriptor the span is the whole root, so this is
@@ -1305,6 +1299,25 @@ impl AllocationGroup {
                     .byte_len()
                     .checked_div(descriptor.element_size())
             })
+    }
+
+    /// Contiguous element range of the descriptor's logical values inside its
+    /// backing root.
+    ///
+    /// Returns `None` for a strided descriptor, which has no contiguous
+    /// logical range, so callers expose values only for the compact case.
+    pub(crate) fn descriptor_logical_range(
+        &self,
+        slot: DescriptorSlot,
+    ) -> Option<std::ops::Range<usize>> {
+        let (_, descriptor) = self.resolve_descriptor(slot).ok()?;
+        if !descriptor.layout().is_compact_col_major().ok()? {
+            return None;
+        }
+        let start = usize::try_from(descriptor.layout().offset()).ok()?;
+        start
+            .checked_add(descriptor.element_count())
+            .map(|end| start..end)
     }
 
     pub(crate) fn backend_identity(

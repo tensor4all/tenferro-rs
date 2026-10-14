@@ -122,8 +122,10 @@ fn consuming_fft_respects_compact_slice_extent_and_offset() {
         let mut expected: Vec<_> = (1..=4).map(|x| Complex64::new(x as f64, 0.)).collect();
         expected[start] = Complex64::new((2 * start + 3) as f64, 0.);
         expected[start + 1] = Complex64::new(-1., 0.);
+        // The typed view retains the whole root, so outside-the-slice bytes stay
+        // observable even though logical accessors export only the slice.
         assert_eq!(
-            root.host_data().unwrap(),
+            root.as_view().host_storage().unwrap(),
             expected,
             "outside the slice must remain unchanged"
         );
