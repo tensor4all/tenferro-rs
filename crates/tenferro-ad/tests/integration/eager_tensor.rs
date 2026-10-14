@@ -1961,3 +1961,50 @@ fn eager_embed_diag_and_triu_primal() {
         TOL,
     );
 }
+
+#[test]
+fn eager_dynamic_slice_and_gather_clamp_out_of_range_starts_and_indices() {
+    // StableHLO `DynamicSlice`/gather clamp semantics are the authoritative
+    // contract (see issue #2068): an out-of-range start or index is clamped,
+    // not rejected with a typed execution error. Pin the observable data so
+    // the rustdoc and the backends cannot drift apart again.
+    let ctx = test_ctx();
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let starts = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![10_i64]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let sliced = ctx
+        .with_eager_session(|s| s.dynamic_slice(&x, &starts, &[2]))
+        .unwrap();
+    // max_start = dim - window = 2, so the clamped window is [2, 4).
+    assert_close_slice(f64_data(&sliced.to_tensor().unwrap()), &[30.0, 40.0], TOL);
+
+    let index = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![10_i64]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let gathered = ctx
+        .with_eager_session(|s| {
+            s.gather(
+                &x,
+                &index,
+                GatherConfig {
+                    offset_dims: vec![],
+                    collapsed_slice_dims: vec![0],
+                    start_index_map: vec![0],
+                    index_vector_dim: 1,
+                    slice_sizes: vec![1],
+                },
+            )
+        })
+        .unwrap();
+    // max_start = dim - window = 3, so the clamped index reads the last element.
+    assert_close_slice(f64_data(&gathered.to_tensor().unwrap()), &[40.0], TOL);
+}

@@ -317,3 +317,38 @@ fn semantic_program_module_stays_opaque_and_dependency_neutral() {
         );
     }
 }
+
+fn trailing_doc_block(source: &str, signature: &str) -> String {
+    let signature_idx = source
+        .find(signature)
+        .unwrap_or_else(|| panic!("signature `{signature}` should exist"));
+    let prefix = source[..signature_idx].trim_end();
+    let mut doc_lines = Vec::new();
+    for line in prefix.lines().rev() {
+        match line.trim_start().strip_prefix("///") {
+            Some(doc) => doc_lines.push(doc),
+            None => break,
+        }
+    }
+    doc_lines.reverse();
+    doc_lines.join("\n")
+}
+
+#[test]
+fn traced_index_op_docs_match_clamping_execution_semantics() {
+    let source = repo_file("crates/tenferro-runtime/src/traced.rs");
+    for signature in [
+        "pub fn gather(&self, indices: &TracedTensor",
+        "pub fn dynamic_slice(&self, starts: &TracedTensor",
+    ] {
+        let doc = trailing_doc_block(&source, signature);
+        assert!(
+            doc.contains("clamp") && doc.contains("rather than rejected"),
+            "{signature} rustdoc must describe the StableHLO clamping the backends implement"
+        );
+        assert!(
+            !doc.contains("Deferred errors") && !doc.contains("Error::TensorRuntime"),
+            "{signature} rustdoc must not promise a deferred typed rejection that no execution path performs"
+        );
+    }
+}

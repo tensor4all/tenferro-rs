@@ -937,6 +937,17 @@ fn slice_shape(input_shape: &[DimExpr], config: &SliceConfig) -> Result<Vec<DimE
     }
     (0..rank)
         .map(|axis| {
+            if let DimExpr::Const(dim_size) = &input_shape[axis]
+                && config.limits[axis] > *dim_size
+            {
+                return Err(shape_infer_validation(
+                    ValidationError::InvalidSliceBounds {
+                        start: config.starts[axis] as isize,
+                        end: config.limits[axis] as isize,
+                        axis_len: *dim_size,
+                    },
+                ));
+            }
             let span = config.limits[axis]
                 .checked_sub(config.starts[axis])
                 .ok_or_else(|| {

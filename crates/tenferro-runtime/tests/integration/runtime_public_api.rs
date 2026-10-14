@@ -1188,3 +1188,31 @@ fn prepared_elementwise_fallback_is_stable_across_repeated_runs() {
         );
     }
 }
+
+#[test]
+fn traced_slice_rejects_out_of_range_limit_at_graph_build() {
+    // The sibling `slice_axis` builder, the CPU backend, and the CUDA backend
+    // all reject a limit that exceeds a concrete input extent; raw
+    // `TracedTensor::slice` used to build successfully and register a phantom
+    // output shape. See issue #2042.
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let err = x
+        .slice(SliceConfig {
+            starts: vec![0],
+            limits: vec![100],
+            strides: vec![1],
+        })
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Validation {
+            op: "TracedTensor::slice",
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::InvalidSliceBounds {
+                start: 0,
+                end: 100,
+                axis_len: 4,
+            },
+        }
+    ));
+}
