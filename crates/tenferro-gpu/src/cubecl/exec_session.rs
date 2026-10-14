@@ -329,9 +329,13 @@ impl CudaExecSession<'_> {
     /// Borrow the public tenferro-wide CubeCL session for one operation.
     ///
     /// The session exposes the exact tenferro CubeCL client bound to this
-    /// runtime. Pending CubeCL work is flushed before entering and again on
-    /// exit (including `Err` and unwind) so a later raw-session or host read
-    /// observes the enqueued work. The success path does not synchronize.
+    /// runtime. Pending CubeCL work is flushed on exit (including `Err` and
+    /// unwind) so a later raw-session or host read observes the enqueued work.
+    /// Entry does not flush: same-stream CubeCL work is already ordered by the
+    /// backend queue, and an operation that needs the queued launches drained
+    /// before a raw enqueue (the compact zero fill) drains them itself, so the
+    /// entry flush was a redundant blocking device-thread round trip (#1887).
+    /// The success path does not synchronize.
     ///
     /// # Examples
     ///
@@ -347,14 +351,13 @@ impl CudaExecSession<'_> {
     /// # Errors
     ///
     /// Returns the callback's error, or [`crate::Error::BackendSource`] when
-    /// pending CubeCL work cannot be flushed on entry or exit.
+    /// pending CubeCL work cannot be flushed on exit.
     pub fn with_cubecl<R>(
         &mut self,
         op: &'static str,
         f: impl for<'s> FnOnce(&session_cubecl::Session<'s>) -> crate::Result<R>,
     ) -> crate::Result<R> {
         let runtime = self.backend.runtime().clone();
-        runtime.flush_cubecl(op)?;
         let session = unsafe { session_cubecl::Session::new(runtime) };
         // Best-effort exit flush on every path via Drop.
         let mut _flush_guard = CubeclExitFlush::new(op, session.client());

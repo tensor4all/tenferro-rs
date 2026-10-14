@@ -361,3 +361,91 @@ fn cubecl_refused_allocation_is_reported_on_the_buffer() {
     let values = download(&backend, &difference);
     assert_eq!(values.as_slice::<f32>().unwrap(), &[0.0, 0.0, 0.0, 0.0]);
 }
+
+/// #1887: a `with_cubecl` callback must not pay a blocking entry flush.
+///
+/// The compact zero fill drains the CubeCL host queue itself (one
+/// `resolve_and_flush` hand-off) before its raw memset, so the wrapper's entry
+/// `client.flush()` is a second device-thread round trip for no ordering gain.
+/// This reads the counter at the top of the callback, before the fill runs, so
+/// it fails if the entry flush comes back independently of machine timing, and
+/// prints the host cost of an empty session, `alloc_output`, and
+/// `alloc_zero_output` for the record.
+#[test]
+#[ignore = "requires CUDA"]
+fn alloc_zero_output_avoids_the_with_cubecl_entry_flush() {
+    use crate::cubecl::runtime::{blocking_flush_handoffs, reset_blocking_flush_handoffs};
+    use std::time::Instant;
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    with_cuda_exec(&mut backend, |session| {
+        // Warm the raw-stream memo and the output-handle pool.
+        for _ in 0..3 {
+            let _ = session
+                .with_cubecl("test.alloc_zero_warm", |c| {
+                    c.alloc_zero_output::<f32>(&[16])
+                })
+                .unwrap();
+        }
+
+        // An entry flush, if the wrapper has one, runs before the callback body.
+        // Read the counter at the top of the callback, before the fill runs, so a
+        // cross-stream synchronize that `alloc_zero_output` takes inside the fill
+        // cannot be mistaken for a wrapper entry flush.
+        reset_blocking_flush_handoffs();
+        let entry_flush_before_callback = std::cell::Cell::new(usize::MAX);
+        let _ = session
+            .with_cubecl("test.alloc_zero", |c| {
+                entry_flush_before_callback.set(blocking_flush_handoffs());
+                c.alloc_zero_output::<f32>(&[16])
+            })
+            .unwrap();
+
+        let iters = 2000usize;
+        let per_iter = |t: Instant| t.elapsed().as_secs_f64() * 1e6 / iters as f64;
+
+        let started = Instant::now();
+        for _ in 0..iters {
+            session
+                .with_cubecl("test.empty_session", |_c| -> tenferro_tensor::Result<()> {
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let empty_us = per_iter(started);
+
+        let started = Instant::now();
+        for _ in 0..iters {
+            let _ = session
+                .with_cubecl("test.alloc_only", |c| c.alloc_output::<f32>(&[16]))
+                .unwrap();
+        }
+        let alloc_us = per_iter(started);
+
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            for _ in 0..iters {
+                let _ = session
+                    .with_cubecl("test.alloc_zero", |c| c.alloc_zero_output::<f32>(&[16]))
+                    .unwrap();
+            }
+            samples.push(per_iter(started));
+        }
+        let best = samples.iter().cloned().fold(f64::INFINITY, f64::min);
+        eprintln!(
+            "[1887] empty {empty_us:.2} us/op; alloc {alloc_us:.2} us/op; zero {samples:?} best {best:.2} us/op (entry flushes before callback: {})",
+            entry_flush_before_callback.get()
+        );
+
+        // Assert last so the host-cost reading is printed before a regression
+        // failure surfaces the count.
+        assert_eq!(
+            entry_flush_before_callback.get(),
+            0,
+            "alloc_zero_output already drains the CubeCL queue; the with_cubecl \
+             wrapper must not add a blocking entry flush (#1887)"
+        );
+    });
+}
