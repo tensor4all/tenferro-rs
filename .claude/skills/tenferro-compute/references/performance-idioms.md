@@ -34,16 +34,19 @@ assert_eq!(ordinary.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 
 // Strings are fine for one-time preparation. The plan does not retain inputs.
 let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
-for (data, expected) in [
-    (vec![1.0_f64, 2.0, 3.0, 4.0], [2.0, 4.0, 7.0, 10.0]),
-    (vec![2.0_f64, 4.0, 6.0, 8.0], [4.0, 8.0, 14.0, 20.0]),
-] {
-    let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
-    let result = backend.with_backend_session(|session| {
-        plan.execute([&next_lhs, &rhs], session)
-    })??;
-    assert_eq!(result.as_slice::<f64>()?, &expected);
-}
+// One session for the whole batch: each external entry into a multi-worker
+// backend pays a Rayon handoff, so do not reopen the backend per iteration.
+backend.with_backend_session(|session| -> Result<(), Box<dyn std::error::Error>> {
+    for (data, expected) in [
+        (vec![1.0_f64, 2.0, 3.0, 4.0], [2.0, 4.0, 7.0, 10.0]),
+        (vec![2.0_f64, 4.0, 6.0, 8.0], [4.0, 8.0, 14.0, 20.0]),
+    ] {
+        let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
+        let result = plan.execute([&next_lhs, &rhs], session)?;
+        assert_eq!(result.as_slice::<f64>()?, &expected);
+    }
+    Ok(())
+})??;
 
 // Integer labels describe the equation; this ordinary call still plans.
 let equation = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
