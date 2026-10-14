@@ -382,6 +382,14 @@ fn cubecl_output_allocations_use_checked_shape_products() {
         "the single allocation path must consult the retained-handle pool, which is what \
          a Bool output previously bypassed"
     );
+    // The per-dtype pins above are satisfied by a file that still *contains* them:
+    // a second path could call `client().empty` directly and keep the strings. The
+    // invariant is that no other site allocates a device buffer, so count them.
+    assert_eq!(
+        dispatch.matches("client().empty(").count(),
+        1,
+        "`alloc_output_bytes` must be the only site that creates a device buffer"
+    );
     assert!(
         dispatch.contains("\"cubecl_alloc_output\"")
             && dispatch.contains("\"cubecl_alloc_bool_output\""),
