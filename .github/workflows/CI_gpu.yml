@@ -588,11 +588,24 @@ jobs:
       github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
+      # The classification that decides whether a pod is needed must not come
+      # from the pull request: a diff that could patch the policy into saying
+      # "not required" would waive its own gate. This checks out the *base*
+      # revision's copy by path, so the rule that applies is the one already on
+      # `main` (docs/design/change-aware-ci.md, trusted recovery).
+      - name: Checkout the base revision's change policy
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: scripts/ci/change_policy.py
+          sparse-checkout-cone-mode: false
+
       - name: Require fork CUDA GPU tests or same-repo RunPod gate
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           CURRENT_RUN_MARKER: /actions/runs/${{ github.run_id }}
           ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
           PRE_GPU_RESULT: ${{ needs.pre-gpu-gate.result }}
@@ -616,24 +629,84 @@ jobs:
             exit 1
           fi
 
+          # A CI-only diff that touches only the paid lane's host-side half needs
+          # no pod: the RunPod workflow publishes "not required" for it. Deciding
+          # that here as well makes the required check conclude on the host
+          # instead of waiting out a dispatch that may itself be queued, and it
+          # uses the base revision's policy, never the pull request's own.
+          changed_paths="$(mktemp)"
+          checks_file="$(mktemp)"
+          trap 'rm -f "${checks_file}" "${changed_paths}"' EXIT
+          # Fails closed: a classification this step cannot make keeps the paid
+          # gate required, so an API hiccup can never waive GPU validation.
+          run_gpu="true"
+          if gh api --paginate \
+               "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+               --jq '.[].filename' > "${changed_paths}" 2>/dev/null; then
+            policy_args=()
+            while IFS= read -r changed_path; do
+              if [ -n "${changed_path}" ]; then
+                policy_args+=(--path "${changed_path}")
+              fi
+            done < "${changed_paths}"
+            run_gpu="$(python3 scripts/ci/change_policy.py "${policy_args[@]}" | jq -r '.run_gpu')" \
+              || run_gpu="true"
+          else
+            echo "The changed-file list is unavailable; requiring the paid gate."
+          fi
+          if [ "${run_gpu}" != "true" ]; then
+            echo "GPU validation not required for this change (run_gpu=${run_gpu})."
+            exit 0
+          fi
+
           deadline=$((SECONDS + 90 * 60))
           while [ "${SECONDS}" -lt "${deadline}" ]; do
-            checks_file="$(mktemp)"
-            gh api \
-              --method GET \
-              "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
-              -f check_name="CI GPU gate" \
-              --jq . > "${checks_file}"
+            # This loop polls for up to 90 minutes, so it is the most exposed
+            # `gh api` call in the repository. A single empty body or 5xx used to
+            # make `jq` fail and, under `set -euo pipefail`, concluded a required
+            # gate as red while the RunPod run it was waiting for was still
+            # starting. Retry within the tick and keep waiting instead.
+            fetched=0
+            attempt=1
+            while [ "${attempt}" -le 5 ]; do
+              if gh api \
+                   --method GET \
+                   "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
+                   -f check_name="CI GPU gate" \
+                   --jq . > "${checks_file}" 2>/dev/null \
+                 && jq -e 'has("check_runs")' "${checks_file}" >/dev/null 2>&1; then
+                fetched=1
+                break
+              fi
+              echo "checks API attempt ${attempt} returned no usable body; retrying."
+              sleep $((attempt * 5))
+              attempt=$((attempt + 1))
+            done
+            if [ "${fetched}" -ne 1 ]; then
+              echo "Waiting for RunPod CI GPU gate on ${HEAD_SHA}: the checks API is unavailable."
+              sleep 30
+              continue
+            fi
 
+            # Every run of *this* workflow publishes a "CI GPU gate" check too,
+            # so an earlier attempt's job is a candidate unless it is
+            # distinguished. Only the RunPod workflow's publication is a verdict
+            # on the paid lane: it names the run rather than one of its jobs, and
+            # the job-shaped URL is what a run of this workflow publishes. A
+            # re-run used to read a cancelled job from the previous attempt and
+            # fail in three seconds (#2163).
             run_json="$(
               jq -c --arg current "${CURRENT_RUN_MARKER}" '
                 .check_runs
-                | map(select((((.details_url // "") | contains($current)) | not)))
+                | map(select(
+                    (((.details_url // "") | contains($current)) | not)
+                    and (((.details_url // "") | contains("/job/")) | not)
+                  ))
                 | sort_by(.started_at // .created_at // "")
                 | reverse
                 | .[0] // empty
               ' "${checks_file}"
-            )"
+            )" || run_json=""
 
             if [ -n "${run_json}" ]; then
               status="$(jq -r '.status' <<<"${run_json}")"
