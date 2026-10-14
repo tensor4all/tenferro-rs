@@ -166,8 +166,10 @@ assert_eq!(ordinary.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 
 // Strings are fine for one-time preparation. The plan does not retain inputs.
 let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
-// One session for the whole batch: each external entry into a multi-worker
-// backend pays a Rayon handoff, so do not reopen the backend per iteration.
+// One session for the whole batch: opening a multi-worker backend admits its
+// workers and installs the session resources, so reopen it once rather than per
+// iteration. The per-operation cost itself is unchanged - the pool installation
+// is per numerical operation.
 backend.with_backend_session(|session| -> Result<(), Box<dyn std::error::Error>> {
     for (data, expected) in [
         (vec![1.0_f64, 2.0, 3.0, 4.0], [2.0, 4.0, 7.0, 10.0]),

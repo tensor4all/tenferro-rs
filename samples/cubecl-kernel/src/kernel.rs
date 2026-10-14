@@ -48,8 +48,9 @@ pub fn scale(input: &[f32], output: &mut [f32], factor: f32) {
 /// `usize::cast_from` is what makes them usable as indices. `ABSOLUTE_POS` is
 /// already `usize`, and an index literal is inferred as `usize`.
 ///
-/// Bounds contract: the launcher sizes the domain to `indices.len()` and every
-/// stored index must be in bounds for `input`.
+/// Bounds contract: the launcher sizes the domain to `indices.len()`, `output`
+/// must be at least `indices.len()` long, and every stored index must be in
+/// bounds for `input`.
 #[cube(launch_unchecked)]
 pub fn gather(input: &[f32], indices: &[u32], output: &mut [f32]) {
     let i = ABSOLUTE_POS;

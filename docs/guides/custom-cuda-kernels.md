@@ -267,8 +267,9 @@ element of an `Array<i32>`/`Array<u32>` — must be converted explicitly:
 /// `usize::cast_from` is what makes them usable as indices. `ABSOLUTE_POS` is
 /// already `usize`, and an index literal is inferred as `usize`.
 ///
-/// Bounds contract: the launcher sizes the domain to `indices.len()` and every
-/// stored index must be in bounds for `input`.
+/// Bounds contract: the launcher sizes the domain to `indices.len()`, `output`
+/// must be at least `indices.len()` long, and every stored index must be in
+/// bounds for `input`.
 #[cube(launch_unchecked)]
 pub fn gather(input: &[f32], indices: &[u32], output: &mut [f32]) {
     let i = ABSOLUTE_POS;
@@ -303,14 +304,18 @@ and NVRTC entry points at runtime, so the floor depends on the path:
 | `raw` `compile_nvrtc` | CUDA 12.6.2 (NVRTC) | CUDA 12.8 NVRTC on a 12.8+ driver |
 | cuTENSOR-backed operations | CUDA 12 cuTENSOR 2.x (2.1.x on compute capability 7.0) | — |
 
-The CUDA backend's hard floor is 12.6.2, set by `cusolverDnXsyevBatched` in
-cuSOLVER >= 11.7.1; CUDA 12.x supports the same GPU architectures throughout,
-so it is a library floor, not a GPU one. On CUDA 12.4 through 12.7 the
-baseline backend works: the emitted PTX version is chosen from the driver, and a
-12.8-only tensor-map format fails with an explicit CUDA-version reason when it is
-reached (`t4a-cubecl-cuda 0.11.0`, `compute/server.rs`: "CUDA version 12.8 required
-for tensor map format Im2ColWide"), rather than being hidden behind a runtime
-capability probe. See the
+CUDA 12.6.2 is the baseline this project supports and tests. It is a library
+floor, not a GPU one: CUDA 12.x supports the same GPU architectures throughout,
+and 12.6.2 is what the CI-tested cuSOLVER provides (`cusolverDnXsyevBatched`
+needs cuSOLVER >= 11.7.1, which is a requirement of the linalg provider rather
+than of the kernel or `raw` paths in the table above). The 12.8-only CubeCL
+features are advertised from the toolkit the crate is *compiled* against, not
+from the loaded driver: the pinned `t4a-cubecl-cuda 0.11.0` gates them on
+`cudarc::driver::sys::n` (`n >= 12080`), the `CUDA_VERSION` constant, so a build
+against CUDA 12.4 through 12.7 does not offer them even on a 12.8 driver, and a
+12.8-only tensor-map format that is reached anyway fails with an explicit reason
+in `compute/server.rs` ("CUDA version 12.8 required for tensor map format
+Im2ColWide"). See the
 [Devices and GPU](devices-and-gpu.md#cuda-and-nvidia-library-compatibility)
 compatibility matrix for the exact loader ABI and CI-tested packages.
 

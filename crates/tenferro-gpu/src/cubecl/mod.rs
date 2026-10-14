@@ -9,9 +9,10 @@
 //! tenferro compiles against the CUDA 12.8 `cudarc` bindings but resolves driver
 //! and NVRTC entry points at runtime, so the floor depends on the path. Custom
 //! `#[cube]` kernels and raw NVRTC compilation share the CUDA 12.6.2 baseline;
-//! CUDA 12.8-or-newer enables the complete CubeCL feature set (the 12.8-only
-//! compiler and tensor-map capabilities, which the runtime omits on CUDA 12.4
-//! through 12.7). cuTENSOR-backed operations additionally require a CUDA 12
+//! the complete CubeCL feature set (the 12.8-only compiler and tensor-map
+//! capabilities) is advertised from the `CUDA_VERSION` the crate was *compiled*
+//! against, so a build against CUDA 12.4 through 12.7 does not offer it whatever
+//! driver is loaded. cuTENSOR-backed operations additionally require a CUDA 12
 //! cuTENSOR 2.x library. See `docs/guides/custom-cuda-kernels.md` and the
 //! compatibility matrix in `docs/guides/devices-and-gpu.md` for the full table.
 //!
