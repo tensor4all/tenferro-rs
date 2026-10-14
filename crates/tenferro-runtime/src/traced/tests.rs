@@ -433,3 +433,29 @@ fn ordered_reductions_reject_complex_dtype_without_panicking() {
         "{err}"
     );
 }
+
+#[test]
+fn concatenate_of_distinct_inputs_compiles_without_input_specs() {
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 4], vec![2.0_f64; 8]).unwrap();
+
+    let joined = TracedTensor::concatenate(&[&a, &b], 1).unwrap();
+    let program = GraphCompiler::new().compile(&joined).unwrap();
+
+    assert_eq!(program.input_count(), 2);
+    let a_key = a.input_key().unwrap();
+    let b_key = b.input_key().unwrap();
+    let mut ordered: [Option<Tensor>; 2] = [None, None];
+    ordered[program.input_key_index(&a_key).unwrap()] =
+        Some(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap());
+    ordered[program.input_key_index(&b_key).unwrap()] =
+        Some(Tensor::from_vec_col_major(vec![2, 4], vec![2.0_f64; 8]).unwrap());
+    let inputs = ordered.into_iter().map(Option::unwrap).collect();
+
+    let result = run_compiled_one(&program, inputs);
+    assert_eq!(result.shape(), &[2, 7]);
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+    );
+}

@@ -1087,7 +1087,10 @@ fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Result<Vec<Dim
             }));
         }
         for (dim_idx, (expected, actual)) in first.iter().zip(*shape).enumerate() {
-            if dim_idx != axis && actual != expected {
+            // A symbolic dim cannot be proven equal at compile time; the
+            // concatenate kernel checks it against the concrete runtime shapes.
+            // Reject only a concrete mismatch, mirroring `broadcast_dim`.
+            if dim_idx != axis && expected.is_const() && actual.is_const() && actual != expected {
                 return Err(shape_infer_invalid_argument(
                     "shapes",
                     format!("input {input_idx} dimension {dim_idx} does not match the first input"),
