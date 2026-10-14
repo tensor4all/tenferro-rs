@@ -2559,9 +2559,9 @@ impl TracedTensor {
     ///
     /// Returns [`Error::Validation`] with `RankMismatch` when the start/limit/
     /// stride vectors do not match the input rank, `InvalidSliceStep` when a
-    /// stride is zero, `InvalidSliceBounds` when a limit precedes its start,
-    /// or [`Error::RuntimeStateSource`] when output metadata cannot be
-    /// registered.
+    /// stride is zero, `InvalidSliceBounds` when a limit precedes its start or
+    /// exceeds a concrete input extent, or [`Error::RuntimeStateSource`] when
+    /// output metadata cannot be registered.
     pub fn slice(&self, config: SliceConfig) -> Result<TracedTensor> {
         let op = StdTensorOp::Slice(config);
         let (out_rank, out_shape_hint) =
@@ -2615,11 +2615,12 @@ impl TracedTensor {
     /// [`Error::RuntimeStateSource`] when output metadata cannot be
     /// registered.
     ///
-    /// # Deferred errors
+    /// # Clamping
     ///
-    /// Runtime index values are checked after binding. An out-of-range index
-    /// is returned as [`Error::TensorRuntime`] with the backend's typed
-    /// validation source and [`ErrorPhase::Execution`].
+    /// Index values are clamped with StableHLO gather clamp semantics: an
+    /// out-of-range or negative index is clamped into `[0, dim - window]` rather than rejected.
+    /// Only a `slice_sizes` window that exceeds its operand dimension is rejected,
+    /// which is a graph-build failure.
     pub fn gather(&self, indices: &TracedTensor, config: GatherConfig) -> Result<TracedTensor> {
         let op = StdTensorOp::Gather(config);
         let (out_rank, out_shape_hint) =
@@ -2686,11 +2687,12 @@ impl TracedTensor {
     /// or extent, and [`Error::RuntimeStateSource`] when output metadata cannot
     /// be registered.
     ///
-    /// # Deferred errors
+    /// # Clamping
     ///
-    /// Runtime start values are checked after binding. An out-of-range start
-    /// is returned as [`Error::TensorRuntime`] with the backend's typed
-    /// validation source and [`ErrorPhase::Execution`].
+    /// Start values are clamped with StableHLO `DynamicSlice` clamp semantics: an
+    /// out-of-range or negative start is clamped into `[0, dim - window]` rather than rejected.
+    /// Only a `slice_sizes` window that exceeds its operand dimension is rejected,
+    /// which is a graph-build failure.
     pub fn dynamic_slice(&self, starts: &TracedTensor, sizes: &[usize]) -> Result<TracedTensor> {
         let op = StdTensorOp::DynamicSlice {
             slice_sizes: sizes.to_vec(),

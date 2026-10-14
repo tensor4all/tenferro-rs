@@ -662,3 +662,103 @@ fn concrete_norm_covers_orders_axis_permutation_and_validation() {
     })
     .unwrap();
 }
+
+#[test]
+fn complex_pinv_matches_the_moore_penrose_inverse() {
+    // #2049: for a complex input the singular values are real, so the inverted
+    // values that scale `v` are real too, while `v` is complex; the multiply
+    // requires one dtype.
+    let input = Tensor::from_typed::<Complex64>(
+        TypedTensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex64::new(2.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(4.0, 1.0),
+            ],
+        )
+        .unwrap(),
+    );
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        let pinv = input.pinv(session).unwrap();
+        assert_eq!(pinv.dtype(), tenferro_tensor::DType::C64);
+        let values = pinv.as_slice::<Complex64>().unwrap().to_vec();
+        // diag(2, 4+i) has the pseudoinverse diag(1/2, 1/(4+i)) = diag(1/2, (4-i)/17).
+        let expected = [
+            Complex64::new(0.5, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(4.0 / 17.0, -1.0 / 17.0),
+        ];
+        for (index, (actual, expected)) in values.iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).norm() < 1.0e-12,
+                "pinv[{index}]: {actual:?} against {expected:?}"
+            );
+        }
+
+        let with_rtol = input.pinv_with_rtol(1.0e-12, session).unwrap();
+        for (index, (actual, expected)) in with_rtol
+            .as_slice::<Complex64>()
+            .unwrap()
+            .iter()
+            .zip(values.iter())
+            .enumerate()
+        {
+            assert!(
+                (actual - expected).norm() < 1.0e-12,
+                "pinv_with_rtol[{index}]: {actual:?} against {expected:?}"
+            );
+        }
+    })
+    .unwrap();
+}
+
+/// Assert the public `eig` column gauge on a square `[n, n]` eigenvector
+/// matrix: every column has unit 2-norm.
+fn assert_unit_norm_eigenvector_columns(vectors: &Tensor) {
+    let [n, columns_count] = <[usize; 2]>::try_from(vectors.shape()).unwrap();
+    assert_eq!(n, columns_count);
+    let columns = vectors.as_slice::<Complex64>().unwrap();
+    for column in 0..n {
+        let norm = (0..n)
+            .map(|row| columns[column * n + row].norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1.0e-12,
+            "eigenvector column {column} must have unit 2-norm, got {norm}"
+        );
+    }
+}
+
+#[test]
+fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
+    // #2148: the vendored oracle records unit 2-norm eigenvector columns for
+    // tenferro and PyTorch, so the seam is where that becomes true for every
+    // provider, and a column a provider left non-finite is a typed numerical
+    // failure rather than NaN.
+    let diagonalizable =
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 2.0]).unwrap();
+    let mut host = CpuBackend::new();
+    host.with_backend_session(|session| {
+        let (values, vectors) = diagonalizable.eig(session).unwrap();
+        assert_eq!(values.shape(), &[2]);
+        assert_eq!(vectors.shape(), &[2, 2]);
+        assert_unit_norm_eigenvector_columns(&vectors);
+    })
+    .unwrap();
+
+    // A finite defective (Jordan) input: unit-norm columns or a typed
+    // numerical failure - never NaN. Checking finiteness alone would miss a
+    // provider that returned a finite but non-unit column, so assert the same
+    // norm contract on the `Ok` branch here too.
+    let defective = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 1.0]).unwrap();
+    host.with_backend_session(|session| match defective.eig(session) {
+        Ok((_, vectors)) => assert_unit_norm_eigenvector_columns(&vectors),
+        Err(error) => assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure),
+    })
+    .unwrap();
+}

@@ -91,11 +91,11 @@ pub fn transpose_extract_diag(
 pub fn transpose_embed_diag(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[TransposeInputRef<'_>],
+    _inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     axis_a: usize,
     axis_b: usize,
-    ctx: &mut ShapeGuardContext,
+    _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if !linear_transpose_input_active(mode, 0) {
         return Ok(vec![None]);
@@ -115,20 +115,6 @@ pub fn transpose_embed_diag(
                     active_mask: vec![true],
                 },
             );
-            if axis_b < axis_a {
-                let rank = ctx.rank_of(&inputs[0].metadata_value())?;
-                let mut perm: Vec<usize> = (0..rank).collect();
-                let diag_axis = perm.remove(axis_b);
-                perm.insert(axis_a, diag_axis);
-                let transposed = builder.add_operation(
-                    StdTensorOp::Transpose { perm },
-                    vec![ValueRef::Local(out[0])],
-                    OperationRole::Linearized {
-                        active_mask: vec![true],
-                    },
-                );
-                return Ok(vec![Some(transposed[0])]);
-            }
             Ok(vec![Some(out[0])])
         }
         None => Ok(vec![None]),

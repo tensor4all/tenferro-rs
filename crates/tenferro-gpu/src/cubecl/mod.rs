@@ -2,7 +2,19 @@
 //!
 //! This module provides GPU acceleration via [CubeCL](https://github.com/tracel-ai/cubecl)
 //! running on NVIDIA CUDA devices. It is gated behind the `cuda` feature flag and
-//! requires **CUDA 12.8+** with a compatible NVIDIA GPU.
+//! requires a compatible NVIDIA GPU.
+//!
+//! # CUDA minimum by path
+//!
+//! tenferro compiles against the CUDA 12.8 `cudarc` bindings but resolves driver
+//! and NVRTC entry points at runtime, so the floor depends on the path. Custom
+//! `#[cube]` kernels and raw NVRTC compilation share the CUDA 12.6.2 baseline;
+//! the complete CubeCL feature set (the 12.8-only compiler and tensor-map
+//! capabilities) is advertised from the `CUDA_VERSION` the crate was *compiled*
+//! against, so a build against CUDA 12.4 through 12.7 does not offer it whatever
+//! driver is loaded. cuTENSOR-backed operations additionally require a CUDA 12
+//! cuTENSOR 2.x library. See `docs/guides/custom-cuda-kernels.md` and the
+//! compatibility matrix in `docs/guides/devices-and-gpu.md` for the full table.
 //!
 //! # Enabling the feature
 //!
@@ -18,7 +30,8 @@
 //! # Prerequisites
 //!
 //! - NVIDIA GPU with CUDA compute capability ≥ 7.0
-//! - CUDA Toolkit 12.8 or newer installed (provides NVRTC for JIT kernel compilation)
+//! - CUDA Toolkit 12.6.2 or newer installed (12.8 or newer enables the complete
+//!   CubeCL feature set; provides NVRTC for JIT kernel compilation)
 //! - cuTENSOR shared library available on `LD_LIBRARY_PATH`
 //!
 //! ## Environment variables
@@ -944,6 +957,38 @@ impl CudaBackend {
             .set_max_retained_bytes(max_retained_bytes)
     }
 
+    /// Return the device-output pool stats of this backend's device.
+    ///
+    /// The pool is a size-keyed free list of device allocations that a dropped
+    /// output returns to, so `entries` and `retained_bytes` describe what is
+    /// currently cached, `hits` counts allocations that reused a retained
+    /// handle, `misses` counts the ones that had to ask the device thread,
+    /// `evictions` counts handles released by the retained-byte bound, and
+    /// `clears` counts [`Self::clear_cuda_output_pool`] calls.
+    pub fn cuda_output_pool_stats(&self) -> tenferro_tensor::CacheStats {
+        crate::output_pool_stats(self.runtime().device_ordinal())
+    }
+
+    /// Return this device's device-output pool retained-byte bound.
+    pub fn cuda_output_pool_max_retained_bytes(&self) -> usize {
+        crate::output_pool_max_retained_bytes(self.runtime().device_ordinal())
+    }
+
+    /// Configure this device's device-output pool retained-byte bound.
+    ///
+    /// Retained handles are evicted until the pool fits the new bound.
+    pub fn set_cuda_output_pool_max_retained_bytes(&self, max_retained_bytes: usize) {
+        crate::set_output_pool_max_retained_bytes(
+            self.runtime().device_ordinal(),
+            max_retained_bytes,
+        );
+    }
+
+    /// Release every handle the device-output pool retains for this device.
+    pub fn clear_cuda_output_pool(&self) {
+        crate::clear_output_pool(self.runtime().device_ordinal());
+    }
+
     /// Return cuTENSOR contraction plan cache stats.
     ///
     /// The returned entry count is the number of retained cuTENSOR contraction
@@ -1401,25 +1446,18 @@ impl CudaBackend {
         T: CubeElement + TensorScalar + Scalar + Clone + Scalar + Send + Sync + 'static,
         R: TensorRank,
     {
-        let len = checked_dim_product(op, "output shape", shape)?;
-        let bytes = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
-            crate::Error::invalid_argument(
-                op,
-                "shape",
-                format!("CubeCL output byte length overflow for shape {shape:?}"),
-            )
-        })?;
-        let handle = self.runtime().client().empty(bytes);
+        // Route through the single device-output allocation path so this output
+        // consults the retained-handle pool like every other one (#2154).
+        // Allocating here directly made the pool one-way for the ranked and
+        // permutation paths: they returned their handle on drop but never reused a
+        // retained one.
+        let buffer =
+            dispatch::alloc_output_bytes(self.runtime(), shape, core::mem::size_of::<T>(), op)?;
         let shape = R::shape_from_vec(shape.to_vec().into())
             .map_err(|err| crate::Error::validation(op, err))?;
         TypedTensor::from_buffer_col_major(
             shape,
-            StorageBuffer::Backend(Box::new(crate::CubeclBuffer::new(
-                handle,
-                bytes,
-                self.runtime().device_ordinal(),
-                self.runtime().allocation_domain_id(),
-            ))),
+            StorageBuffer::Backend(Box::new(buffer)),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

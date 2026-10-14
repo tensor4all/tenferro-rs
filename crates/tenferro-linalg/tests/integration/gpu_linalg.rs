@@ -2396,3 +2396,39 @@ fn cuda_q_column_ranges_past_the_full_q_width_are_rejected() {
         "expected a range validation error, got {error}"
     );
 }
+
+#[test]
+#[ignore = "requires CUDA"]
+fn test_cuda_direct_inv_and_pinv_with_rtol_accept_internal_scalars() {
+    // #2147: both ops build an internal operand on the host - the identity
+    // `inv` solves against, and the rtol threshold `pinv_with_rtol` multiplies
+    // by - and a device backend rejected it, with no way for the caller to
+    // supply a replacement.
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let input = tensor_f64(vec![2, 2], vec![2.0, 0.0, 0.0, 3.0]);
+    let mut gpu = gpu_backend();
+    let device_input = upload(&gpu, &input);
+    let (inverse, pseudoinverse) = with_cuda_linalg_session(&mut gpu, |session| {
+        (
+            device_input.inv(session).unwrap(),
+            device_input.pinv_with_rtol(1.0e-5, session).unwrap(),
+        )
+    });
+    for (label, tensor) in [("inv", inverse), ("pinv_with_rtol", pseudoinverse)] {
+        let host = download(&gpu, &tensor);
+        assert_eq!(host.shape(), &[2, 2], "{label}: shape");
+        let expected = [0.5, 0.0, 0.0, 1.0 / 3.0];
+        for (index, (actual, expected)) in host
+            .as_slice::<f64>()
+            .unwrap()
+            .iter()
+            .zip(expected)
+            .enumerate()
+        {
+            assert!(
+                (actual - expected).abs() < 1.0e-12,
+                "{label}[{index}]: {actual} against {expected}"
+            );
+        }
+    }
+}

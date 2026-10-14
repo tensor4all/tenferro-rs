@@ -915,16 +915,7 @@ fn vjp_core(
                 },
                 cotangent,
             )?;
-            let restored = if axis_b < axis_a {
-                let rank = builder.value_metadata(primal_inputs[0])?.shape().len();
-                let mut perm: Vec<_> = (0..rank).collect();
-                let diagonal_axis = perm.remove(*axis_b);
-                perm.insert(*axis_a, diagonal_axis);
-                unary_ad_value(builder, CoreSemanticOp::Transpose { perm }, extracted)?
-            } else {
-                extracted
-            };
-            primary_cotangent(builder, restored, active_inputs, primal_inputs, false)?
+            primary_cotangent(builder, extracted, active_inputs, primal_inputs, false)?
         }
         CoreSemanticOp::Tril { .. }
         | CoreSemanticOp::Triu { .. }

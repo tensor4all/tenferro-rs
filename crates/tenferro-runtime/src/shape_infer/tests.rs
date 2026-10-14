@@ -488,6 +488,36 @@ fn concatenate_rejects_non_axis_dimension_mismatch() {
 }
 
 #[test]
+fn concatenate_rejects_input_free_compound_non_axis_mismatch() {
+    // `Add(Const(1), Const(2))` is statically 3, so the non-axis mismatch with
+    // `Const(2)` must be rejected at compile time even though the right-hand
+    // extent is not a bare `Const`.
+    let lhs = DimExpr::from_concrete(&[2, 3]);
+    let rhs = vec![
+        DimExpr::add(DimExpr::Const(1), DimExpr::Const(2)),
+        DimExpr::Const(3),
+    ];
+    let op = StdTensorOp::Concatenate {
+        axis: 1,
+        input_count: 2,
+    };
+
+    let err = infer_output_shapes(&op, &[&lhs, &rhs]).unwrap_err();
+
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::Compile,
+            source: ValidationError::InvalidArgument {
+                argument: "shapes",
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
 fn gather_rejects_duplicate_offset_and_collapsed_slice_dims() {
     let operand = DimExpr::from_concrete(&[4, 5]);
     let indices = DimExpr::from_concrete(&[2, 2]);

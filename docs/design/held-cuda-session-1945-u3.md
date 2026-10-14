@@ -59,9 +59,11 @@ CubeCL    cubecl-cuda/src/compute/sync/fence.rs  wait_sync → cudarc event::syn
 `flush` blocks on host dispatch, and after the first flush it also waits for the previous fence that
 protects the staged batch being retired. The first flush of a session has no previous fence and
 therefore only dispatches. Tenferro's existing submission points are exactly the audited interop
-boundaries (with_raw entry, with_cubecl entry and exit, before a raw memset, before cuBLAS/cuTENSOR
+boundaries (with_raw entry, with_cubecl exit, before a raw memset, before cuBLAS/cuTENSOR
 calls, before raw D2H copies, and wherever resource resolution is itself used as a queue barrier),
-plus CubeCL's own host-dispatch batching.
+plus CubeCL's own host-dispatch batching. **Later change:** #1887 removed the
+`with_cubecl` entry flush as redundant with the compact zero fill's own
+`resolve_and_flush` drain; the exit flush remains.
 
 ### 2.2 Automatic retirement waits also exist
 
@@ -202,7 +204,8 @@ This package adds **no** new retention guarantee: raw modules, raw allocations a
 remain the unsafe caller's obligation, exactly as today.
 
 **Documented waits that remain** (unchanged by this package): the fence wait inside `submit`
-(§2.1), CubeCL's automatic staging flush (§2.2), the with_cubecl entry/exit flushes, interop
+(§2.1), CubeCL's automatic staging flush (§2.2), the with_cubecl exit flush (its entry
+flush was removed by #1887), interop
 submissions before vendor calls and raw copies, the cross-stream vendor barrier, workspace-capacity
 barriers, FFT's `cufft_execute_synchronize`, linalg status reads, and the runtime's `Drop`
 synchronization. Each is reported as an existing boundary, not as something this package removed.

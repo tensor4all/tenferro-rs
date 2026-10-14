@@ -937,6 +937,17 @@ fn slice_shape(input_shape: &[DimExpr], config: &SliceConfig) -> Result<Vec<DimE
     }
     (0..rank)
         .map(|axis| {
+            if let DimExpr::Const(dim_size) = &input_shape[axis]
+                && config.limits[axis] > *dim_size
+            {
+                return Err(shape_infer_validation(
+                    ValidationError::InvalidSliceBounds {
+                        start: config.starts[axis] as isize,
+                        end: config.limits[axis] as isize,
+                        axis_len: *dim_size,
+                    },
+                ));
+            }
             let span = config.limits[axis]
                 .checked_sub(config.starts[axis])
                 .ok_or_else(|| {
@@ -1076,7 +1087,16 @@ fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Result<Vec<Dim
             }));
         }
         for (dim_idx, (expected, actual)) in first.iter().zip(*shape).enumerate() {
-            if dim_idx != axis && actual != expected {
+            // A symbolic dim cannot be proven equal at compile time; the
+            // concatenate kernel checks it against the concrete runtime shapes.
+            // Reject a mismatch whenever both extents are input-free (including
+            // compound constant expressions); a dim that depends on an input
+            // extent stays deferred.
+            if dim_idx != axis
+                && let (Ok(expected_value), Ok(actual_value)) =
+                    (expected.eval(&[]), actual.eval(&[]))
+                && actual_value != expected_value
+            {
                 return Err(shape_infer_invalid_argument(
                     "shapes",
                     format!("input {input_idx} dimension {dim_idx} does not match the first input"),

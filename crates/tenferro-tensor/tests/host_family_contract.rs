@@ -550,6 +550,24 @@ fn slice_view_positive_step_and_empty_slice() {
 }
 
 #[test]
+fn slice_view_negative_step_empty_at_axis_end_is_not_rejected() {
+    // An empty selection is step-sign independent: `start == axis_len` must
+    // behave exactly like the positive-step empty case and the
+    // `start < axis_len` negative-step case. See issue #2025.
+    let tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![3], vec![1_i64, 2, 3])
+            .unwrap();
+    for slice in [
+        StridedSliceSpec::new(3, Some(3), -1),
+        StridedSliceSpec::new(3, None, -1),
+    ] {
+        let empty = tensor.as_view().slice_view(&[slice]).unwrap();
+        assert_eq!(empty.shape(), &[0]);
+        assert_eq!(empty.n_elements(), 0);
+    }
+}
+
+#[test]
 fn invalid_slice_steps_and_negative_bounds_are_rejected() {
     let tensor =
         TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![3], vec![1_i64, 2, 3])

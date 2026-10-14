@@ -109,8 +109,19 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (
-        # Keep instrumented build artifacts, never measurements from earlier runs.
-        "cargo llvm-cov clean --profraw-only",
+        # Scope the clean to the workspace members, not just profraw: the
+        # `Swatinem/rust-cache` restore can bring back a `target/llvm-cov-target`
+        # built from another revision (a prefix-key match when the cache key
+        # changes), and `--no-clean` would then merge that revision's zero-count
+        # instrumented regions into `coverage.json`, inflating per-file
+        # denominators without adding covered lines. `--workspace` runs
+        # `cargo clean --package` for every workspace member, so the measured
+        # objects are rebuilt while the restored dependency artifacts stay.
+        # This covers the *current* workspace members only: a former member, a
+        # standalone workspace, or an obsolete dependency's artifacts are not
+        # cleaned, so a restored cache can still contribute those. What is pinned
+        # below is the command, not restored-cache behaviour.
+        "cargo llvm-cov clean --workspace",
         f"cargo llvm-cov nextest --workspace --exclude tenferro-tutorial-code "
         f"{_NEXTEST_PROFILE} --no-clean --json --output-path coverage.json",
         "python3 scripts/check-coverage.py coverage.json",

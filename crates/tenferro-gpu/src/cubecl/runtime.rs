@@ -1045,6 +1045,8 @@ impl CudaRuntimeState {
     }
 
     fn flush_cubecl(&self, op: &'static str) -> crate::Result<()> {
+        #[cfg(test)]
+        BLOCKING_FLUSH_HANDOFFS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.client
             .flush()
             .map_err(|err| crate::Error::backend_source(op, err))
@@ -1475,3 +1477,23 @@ impl Drop for CudaRuntimeState {
 
 #[cfg(test)]
 mod tests;
+
+/// Test-only count of blocking `flush_cubecl` device-thread hand-offs.
+///
+/// The #1887 regression test resets this, reads it at the top of a
+/// `with_cubecl` callback (before the callback runs any work), and asserts the
+/// wrapper issued no entry flush. A global is enough: the CUDA tests run
+/// single-threaded and the measured section runs no other CUDA work.
+#[cfg(test)]
+pub(crate) static BLOCKING_FLUSH_HANDOFFS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_blocking_flush_handoffs() {
+    BLOCKING_FLUSH_HANDOFFS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn blocking_flush_handoffs() -> usize {
+    BLOCKING_FLUSH_HANDOFFS.load(std::sync::atomic::Ordering::Relaxed)
+}

@@ -672,42 +672,64 @@ pub(crate) fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync +
     rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let len = checked_shape_product("cubecl_alloc_output", shape)?;
-    let byte_len = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
+    let buffer = alloc_output_bytes(rt, shape, core::mem::size_of::<T>(), "cubecl_alloc_output")?;
+    typed_from_cubecl(shape.to_vec(), buffer, rt.device_ordinal())
+}
+
+/// One device-output allocation path for every dtype.
+///
+/// INVARIANT: this is the only place a device output buffer is created, so the
+/// retained-handle pool is consulted on every allocation path - the numeric and
+/// `Bool` dispatch paths, and the ranked/permutation canonicalization path in
+/// [`super::alloc_ranked_output`]. Splitting the numeric and `Bool` paths is what
+/// previously let `Bool` outputs bypass reuse while still returning their own
+/// handle to the pool; allocating the ranked output directly is what made the pool
+/// one-way for canonicalization.
+///
+/// The retained handle arrives with its own reason to be idle: it is only in the
+/// pool because no live tensor referenced it, and reuse is write-after-write on
+/// one stream, which CUDA orders.
+pub(crate) fn alloc_output_bytes(
+    rt: &CudaRuntime,
+    shape: &[usize],
+    element_size: usize,
+    op: &'static str,
+) -> crate::Result<CubeclBuffer> {
+    let len = checked_shape_product(op, shape)?;
+    let byte_len = len.checked_mul(element_size).ok_or_else(|| {
         crate::Error::invalid_argument(
-            "cubecl_alloc_output",
+            op,
             "shape",
             format!("output byte length overflow for shape {shape:?}"),
         )
     })?;
-    // A dropped output of this exact length is reused instead of asking the
-    // device thread for a fresh allocation (invariant: the handle is only here
-    // because no live tensor references it).
-    let handle = crate::take_output_handle(rt.device_ordinal(), byte_len)
-        .unwrap_or_else(|| rt.client().empty(byte_len));
-    typed_from_cubecl(
-        shape.to_vec(),
-        CubeclBuffer::new(
-            handle,
-            byte_len,
-            rt.device_ordinal(),
-            rt.allocation_domain_id(),
-        ),
-        rt.device_ordinal(),
-    )
+    let device_ordinal = rt.device_ordinal();
+    let handle = match crate::take_output_handle(device_ordinal, byte_len) {
+        Some(handle) => handle,
+        None => {
+            crate::record_output_pool_miss(device_ordinal);
+            rt.client().empty(byte_len)
+        }
+    };
+    Ok(CubeclBuffer::new(
+        handle,
+        byte_len,
+        device_ordinal,
+        rt.allocation_domain_id(),
+    ))
 }
 
 pub(crate) fn alloc_bool_output(
     rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<bool>> {
-    let len = checked_shape_product("cubecl_alloc_bool_output", shape)?;
-    let handle = rt.client().empty(len);
-    typed_from_cubecl(
-        shape.to_vec(),
-        CubeclBuffer::new(handle, len, rt.device_ordinal(), rt.allocation_domain_id()),
-        rt.device_ordinal(),
-    )
+    let buffer = alloc_output_bytes(
+        rt,
+        shape,
+        core::mem::size_of::<bool>(),
+        "cubecl_alloc_bool_output",
+    )?;
+    typed_from_cubecl(shape.to_vec(), buffer, rt.device_ordinal())
 }
 
 pub(crate) fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(

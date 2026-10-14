@@ -101,7 +101,7 @@ class RunProfileTests(unittest.TestCase):
         )
 
     def test_coverage_excludes_tutorial_package(self) -> None:
-        self.assertEqual(commands_for("coverage")[0], "cargo llvm-cov clean --profraw-only")
+        self.assertEqual(commands_for("coverage")[0], "cargo llvm-cov clean --workspace")
         self.assertEqual(
             commands_for("coverage")[1],
             "cargo llvm-cov nextest --workspace --exclude tenferro-tutorial-code "

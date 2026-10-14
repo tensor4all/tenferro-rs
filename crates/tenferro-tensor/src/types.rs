@@ -8971,9 +8971,19 @@ fn core_slice_spec(
     }
 
     if start >= end {
+        // `core`'s negative-step contract requires the inclusive `start` to
+        // point at an element (`start < axis_len`). An empty selection is
+        // step-sign independent, so encode the `start == axis_len` boundary at
+        // the last element instead of re-encoding it verbatim (which `core`
+        // would reject as out of bounds).
+        let empty_start = if axis_len == 0 {
+            start
+        } else {
+            start.min(axis_len as isize - 1)
+        };
         return Ok(CoreSliceSpec {
-            start,
-            end: start,
+            start: empty_start,
+            end: empty_start,
             step: slice.step(),
         });
     }

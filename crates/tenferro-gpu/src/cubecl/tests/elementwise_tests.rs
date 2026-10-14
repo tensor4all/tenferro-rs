@@ -3132,3 +3132,59 @@ fn libm_free_erf_reference(x: f64) -> f64 {
         .unwrap();
     out.as_slice::<f64>().unwrap()[0]
 }
+
+/// #1928: a `Bool` output must take a retained handle on the next same-length
+/// allocation, exactly as a numeric output does, so the compare path stops
+/// paying a device-thread allocation on every call.
+///
+/// The pool counters are the evidence: the second allocation must record a hit
+/// and must not record a miss. `alloc_output_bytes` is the single allocation
+/// path both dtypes now share.
+#[test]
+#[ignore]
+fn cuda_bool_output_reuses_a_retained_pool_handle() {
+    let lhs = tensor_f64(vec![1027], (0..1027).map(|i| i as f64).collect());
+    let rhs = tensor_f64(vec![1027], (0..1027).map(|i| (i + 1) as f64).collect());
+    let mut gpu = gpu_backend();
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_rhs = upload(&gpu, &rhs);
+
+    let out = gpu
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let after_first = gpu.cuda_output_pool_stats();
+    drop(out);
+
+    let out = gpu
+        .with_backend_session(|__s| {
+            __s.compare_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &CompareDir::Ge,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let after_second = gpu.cuda_output_pool_stats();
+    let actual = download(&gpu, &out);
+    assert_eq!(actual.as_slice::<bool>().unwrap().len(), 1027);
+
+    assert!(
+        after_second.hits > after_first.hits,
+        "the second Bool allocation did not reuse a retained handle: {:?} -> {:?}",
+        after_first,
+        after_second,
+    );
+    assert_eq!(
+        after_second.misses, after_first.misses,
+        "the second Bool allocation asked the device thread: {:?} -> {:?}",
+        after_first, after_second,
+    );
+}
