@@ -80,12 +80,21 @@ fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
 #[test]
 fn cuda_prepared_access_has_one_state_and_one_downcast_boundary() {
     let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
+    // The two state checks below are about the prepared-access type, so they read
+    // its body: the file legitimately carries an `element_size` *parameter* in the
+    // single output-allocation path, which a file-wide search would mistake for a
+    // retained field.
+    let prepared = dispatch
+        .split("pub(crate) struct CubeclPreparedAccess {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("CubeclPreparedAccess must be defined in dispatch.rs");
     assert!(
-        !dispatch.contains("writable: bool"),
+        !prepared.contains("writable"),
         "prepared CUDA state must not retain a dead writable flag"
     );
     assert!(
-        !dispatch.contains("offset: isize") && !dispatch.contains("element_size: usize"),
+        !prepared.contains("offset") && !prepared.contains("element_size"),
         "prepared CUDA state must not retain dead layout scalar fields"
     );
     assert_eq!(
@@ -357,12 +366,26 @@ fn webgpu_materialization_does_not_inherit_host_defaults() {
 fn cubecl_output_allocations_use_checked_shape_products() {
     let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
     assert!(
-        dispatch.contains("let len = checked_shape_product(\"cubecl_alloc_output\", shape)?;"),
-        "CubeCL typed output allocation must reject shape-product overflow"
+        dispatch.contains("fn alloc_output_bytes("),
+        "every device output must be created through the one allocation path"
     );
     assert!(
-        dispatch.contains("let len = checked_shape_product(\"cubecl_alloc_bool_output\", shape)?;"),
-        "CubeCL bool output allocation must reject shape-product overflow"
+        dispatch.contains("let len = checked_shape_product(op, shape)?;"),
+        "CubeCL output allocation must reject shape-product overflow"
+    );
+    assert!(
+        dispatch.contains("let byte_len = len.checked_mul(element_size).ok_or_else"),
+        "CubeCL output allocation must reject byte-length overflow as well"
+    );
+    assert!(
+        dispatch.contains("crate::take_output_handle(device_ordinal, byte_len)"),
+        "the single allocation path must consult the retained-handle pool, which is what \
+         a Bool output previously bypassed"
+    );
+    assert!(
+        dispatch.contains("\"cubecl_alloc_output\"")
+            && dispatch.contains("\"cubecl_alloc_bool_output\""),
+        "both output dtypes must name the allocation op they check"
     );
     assert!(
         !dispatch.contains("let len: usize = shape.iter().product();"),
