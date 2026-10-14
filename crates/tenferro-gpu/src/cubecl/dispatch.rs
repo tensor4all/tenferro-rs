@@ -679,14 +679,17 @@ pub(crate) fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync +
 /// One device-output allocation path for every dtype.
 ///
 /// INVARIANT: this is the only place a device output buffer is created, so the
-/// retained-handle pool is consulted on every allocation path. Splitting the
-/// numeric and `Bool` paths is what previously let `Bool` outputs bypass reuse
-/// while still returning their own handle to the pool on drop.
+/// retained-handle pool is consulted on every allocation path - the numeric and
+/// `Bool` dispatch paths, and the ranked/permutation canonicalization path in
+/// [`super::alloc_ranked_output`]. Splitting the numeric and `Bool` paths is what
+/// previously let `Bool` outputs bypass reuse while still returning their own
+/// handle to the pool; allocating the ranked output directly is what made the pool
+/// one-way for canonicalization.
 ///
 /// The retained handle arrives with its own reason to be idle: it is only in the
 /// pool because no live tensor referenced it, and reuse is write-after-write on
 /// one stream, which CUDA orders.
-fn alloc_output_bytes(
+pub(crate) fn alloc_output_bytes(
     rt: &CudaRuntime,
     shape: &[usize],
     element_size: usize,

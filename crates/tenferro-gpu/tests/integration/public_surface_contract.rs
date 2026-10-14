@@ -390,6 +390,13 @@ fn cubecl_output_allocations_use_checked_shape_products() {
         1,
         "`alloc_output_bytes` must be the only site that creates a device buffer"
     );
+    // The ranked/permutation output used to allocate directly, which made the pool
+    // one-way on that path: it returned handles on drop but never reused one.
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    assert!(
+        !cubecl_mod.contains("client().empty("),
+        "the ranked output must allocate through the single path, not directly"
+    );
     assert!(
         dispatch.contains("\"cubecl_alloc_output\"")
             && dispatch.contains("\"cubecl_alloc_bool_output\""),

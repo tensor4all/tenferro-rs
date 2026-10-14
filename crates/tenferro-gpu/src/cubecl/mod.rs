@@ -1433,25 +1433,18 @@ impl CudaBackend {
         T: CubeElement + TensorScalar + Scalar + Clone + Scalar + Send + Sync + 'static,
         R: TensorRank,
     {
-        let len = checked_dim_product(op, "output shape", shape)?;
-        let bytes = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
-            crate::Error::invalid_argument(
-                op,
-                "shape",
-                format!("CubeCL output byte length overflow for shape {shape:?}"),
-            )
-        })?;
-        let handle = self.runtime().client().empty(bytes);
+        // Route through the single device-output allocation path so this output
+        // consults the retained-handle pool like every other one (#2154).
+        // Allocating here directly made the pool one-way for the ranked and
+        // permutation paths: they returned their handle on drop but never reused a
+        // retained one.
+        let buffer =
+            dispatch::alloc_output_bytes(self.runtime(), shape, core::mem::size_of::<T>(), op)?;
         let shape = R::shape_from_vec(shape.to_vec().into())
             .map_err(|err| crate::Error::validation(op, err))?;
         TypedTensor::from_buffer_col_major(
             shape,
-            StorageBuffer::Backend(Box::new(crate::CubeclBuffer::new(
-                handle,
-                bytes,
-                self.runtime().device_ordinal(),
-                self.runtime().allocation_domain_id(),
-            ))),
+            StorageBuffer::Backend(Box::new(buffer)),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {
