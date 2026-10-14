@@ -135,9 +135,16 @@ class BuildArtifactContracts(unittest.TestCase):
                     f"{name} must pin an exact registry release, got {version!r}",
                 )
                 required.add(version)
-        # One release for all of them, so the provider crates (cpueinsum,
-        # tlinalg) can meet this crate's `StridedView` at a crate boundary.
-        self.assertEqual(len(required), 1, f"strided requirements differ: {required}")
+        # One release *line* for all of them, so the provider crates (cpueinsum,
+        # tlinalg) can meet this crate's `StridedView` at a crate boundary. The family
+        # publishes independent patches -- `strided-basic 0.5.1` with the core at 0.5.0
+        # -- so the condition is the release line, not one identical string; the
+        # resolved graph and the compiled type boundaries are checked by the build.
+        self.assertEqual(
+            len({version.rsplit(".", 1)[0] for version in required}),
+            1,
+            f"strided requirements are not one release line: {required}",
+        )
 
         self.assertNotIn("strided-einsum2", dependencies)
 
