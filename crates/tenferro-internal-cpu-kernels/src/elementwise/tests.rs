@@ -422,7 +422,10 @@ fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
     .unwrap()
     .expect("non-canonical lhs physical order should use lazy outer-product output");
 
-    assert_ne!(out.strides, col_major_strides(&[2, 3, 4]).unwrap());
+    assert_ne!(
+        out.strides.as_slice(),
+        col_major_strides(&[2, 3, 4]).unwrap().as_slice()
+    );
     let value = TensorValue::from_parts(
         Tensor::from_typed::<f64>(out.base),
         vec![2, 3, 4],
@@ -461,7 +464,10 @@ fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
     .unwrap()
     .expect("rhs-prefix output should still support lazy non-canonical lhs order");
 
-    assert_ne!(out.strides, col_major_strides(&[4, 2, 3]).unwrap());
+    assert_ne!(
+        out.strides.as_slice(),
+        col_major_strides(&[4, 2, 3]).unwrap().as_slice()
+    );
     let value = TensorValue::from_parts(
         Tensor::from_typed::<f64>(out.base),
         vec![4, 2, 3],

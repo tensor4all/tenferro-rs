@@ -33,10 +33,11 @@ returns to the driver, or the caller gets a typed `Err`. Never a silent
 retention, and never `Ok` for an allocation that did not happen.
 
 - **Changed**: an output allocation whose tensor is dropped returns its handle to
-  a per-device, size-keyed free list (`OUTPUT_POOLS`), bounded at 64 MiB per
-  device, and `alloc_output` takes an exact-length handle before asking the device
-  thread. Reuse is write-after-write on one stream, which CUDA orders, and a
-  handle only reaches the list once no live tensor references it.
+  a size-keyed free list owned by the runtime that owns the device, bounded at
+  64 MiB per runtime (#2156 moved it out of the former process-global
+  `OUTPUT_POOLS`), and `alloc_output` takes an exact-length handle before asking
+  the device thread. Reuse is write-after-write on one stream, which CUDA orders,
+  and a handle only reaches the list once no live tensor references it.
 - **Evidence**: `add` on a decode-sized tensor 12.0 us -> **9.94 us** per op
   (retained outputs) and **9.11 us** with the result dropped per op, against a
   measured launch-only floor of **5.36 us**.

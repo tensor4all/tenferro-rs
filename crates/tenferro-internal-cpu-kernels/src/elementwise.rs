@@ -238,7 +238,7 @@ where
     O: PoolScalar + KernelStorageElement,
 {
     let strides = col_major_strides(shape)?;
-    let mut out = PooledUninitOutput::<O>::new(buffers, shape.to_vec())?;
+    let mut out = PooledUninitOutput::<O>::new(buffers, shape)?;
     {
         let mut dest = ErasedRawStridedUninitMut::from_uninit_slice(
             out.as_uninit_slice_mut(),
@@ -1346,7 +1346,7 @@ where
     let rhs_operand = Operand::new(&rhs_view);
     let lhs_source = lhs_operand.erased(op)?;
     let rhs_source = rhs_operand.erased(op)?;
-    let mut base = PooledUninitOutput::<T>::new(buffers, layout.base_dims.clone())?;
+    let mut base = PooledUninitOutput::<T>::new(buffers, layout.base_dims)?;
     {
         let mut dest = ErasedRawStridedUninitMut::from_uninit_slice(
             base.as_uninit_slice_mut(),

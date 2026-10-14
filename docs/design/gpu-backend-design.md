@@ -276,6 +276,25 @@ logical retained bytes, and event counters with
 Retained bytes are estimates of cache-owned payloads, not process RSS or
 allocator arena usage.
 
+The retained **device-output pool** (a size-keyed free list of CUDA output
+allocation handles that a dropped output returns to) belongs to the runtime,
+not to process-global state. It used to be a `static` keyed by device ordinal,
+so it outlived every backend and a second runtime on the same device shared
+the first one's free list; it is now owned by the `CudaRuntime` that owns the
+device, and every `CubeclBuffer` holds a shared handle to it so its `Drop`
+reaches the owner. Two runtimes therefore never share a free list, and dropping
+the last runtime (or the last tensor that outlived it) releases the handles it
+retained. Dropping a `cubecl_runtime::server::Handle` is reference-count
+bookkeeping with no device interaction - only a `ManagedMemoryBinding` releases
+arena memory - so the pool may outlive the runtime's client.
+
+The `CudaBackend::cuda_output_pool_*` surface keeps the bound, the clear and the
+hit/miss/eviction counters, and is now scoped to that backend's runtime rather
+than to a device. Two accounting consequences follow: a backend whose pool
+holds nothing reports zeroes instead of the former "unknown device" empty
+snapshot, and `clear_cuda_output_pool` counts a `clears` event even when the
+pool is empty, where the absent-ordinal case previously counted nothing.
+
 CUDA `dot_general` stores cuTENSOR contraction descriptors, plans, and lazy
 per-physical-stream device workspaces inside this backend-owned extension
 cache. All contraction plans share one workspace per physical stream slot.

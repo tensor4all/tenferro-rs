@@ -598,7 +598,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("slice", err))?;
 
-    let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
+    let mut out = PooledUninitOutput::new(buffers, &out_shape)?;
     let input_ref = unsafe {
         // SAFETY: this operation supplies initialized typed bytes with
         // alignment and dtype matching the descriptor; validated dimensions,
@@ -748,7 +748,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
-    let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
+    let mut out = PooledUninitOutput::new(buffers, &out_shape)?;
     let input_refs: SmallVec<[ErasedRawStridedRef<'_>; 4]> = inputs
         .iter()
         .zip(input_strides.iter())
@@ -816,7 +816,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     let plan = ErasedReversePlan::compile(dtype, input_shape, &input_strides, &out_strides, axes)
         .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
-    let mut out = PooledUninitOutput::new(buffers, input_shape.to_vec())?;
+    let mut out = PooledUninitOutput::new(buffers, input_shape)?;
     let input_ref = unsafe {
         // SAFETY: this operation supplies initialized typed bytes with
         // alignment and dtype matching the descriptor; validated dimensions,
@@ -1198,7 +1198,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         let _ = clamp_window_start("gather", 0, dim_size, config.slice_sizes[operand_dim])?;
     }
 
-    let mut out = PooledUninitOutput::<T>::new(buffers, out_shape.clone())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, &out_shape)?;
 
     let dtype = kernel_dtype(T::dtype());
     let operand_strides = col_major_strides(operand_shape);
@@ -1506,7 +1506,7 @@ where
 
     // INVARIANT: ErasedScatterPlan first copies the full operand into `out`,
     // then applies every additive update.
-    let mut out = PooledUninitOutput::<T>::new(buffers, operand_shape.to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, operand_shape)?;
     let operand_ref = unsafe {
         // SAFETY: this operation supplies initialized typed bytes with
         // alignment and dtype matching the descriptor; validated dimensions,
@@ -1654,7 +1654,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         })
         .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
     // INVARIANT: ErasedDynamicSlicePlan writes every output coordinate exactly once.
-    let mut out = PooledUninitOutput::<T>::new(buffers, out_shape.clone())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, &out_shape)?;
     let input_ref = unsafe {
         // SAFETY: this operation supplies initialized typed bytes with
         // alignment and dtype matching the descriptor; validated dimensions,
@@ -1788,7 +1788,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
     // INVARIANT: ErasedDynamicUpdateSlicePlan copies the full operand into
     // `out` before overwriting the update window.
-    let mut out = PooledUninitOutput::<T>::new(buffers, operand_shape.to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, operand_shape)?;
     let operand_ref = unsafe {
         // SAFETY: this operation supplies initialized typed bytes with
         // alignment and dtype matching the descriptor; validated dimensions,
@@ -1966,7 +1966,7 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("pad", err))?;
     let fill = T::pool_zero();
-    let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
+    let mut out = PooledUninitOutput::new(buffers, &out_shape)?;
     let input_ref = unsafe {
         // SAFETY: this operation supplies initialized typed bytes with
         // alignment and dtype matching the descriptor; validated dimensions,

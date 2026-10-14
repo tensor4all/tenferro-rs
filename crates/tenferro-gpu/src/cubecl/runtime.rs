@@ -204,6 +204,12 @@ pub(crate) struct CudaRuntimeState {
     primary_context: CudaPrimaryContext,
     identity: CudaRuntimeIdentity,
     allocation_domain: AllocationDomainId,
+    // The retained device-output handles this runtime owns. Every buffer it
+    // allocated holds a clone of this handle and returns its handle here on
+    // drop, so the pool is released with the runtime (or with the last buffer,
+    // whichever lives longer) instead of outliving it in process-global state
+    // (#2156).
+    output_pool: crate::OutputPoolHandle,
     // Memoized raw CUDA stream handles keyed by the bounded CubeCL stream-pool
     // slot, not the process-global and monotonically increasing `StreamId`.
     //
@@ -543,6 +549,7 @@ impl CudaRuntime {
                 primary_context,
                 identity: CudaRuntimeIdentity::fresh(),
                 allocation_domain: AllocationDomainId::fresh(),
+                output_pool: std::sync::Arc::new(std::sync::Mutex::new(crate::OutputPool::new())),
                 raw_streams: (0..cubecl_stream_slots())
                     .map(|_| OnceLock::new())
                     .collect(),
@@ -655,6 +662,11 @@ impl CudaRuntime {
 
     pub(crate) fn device_ordinal(&self) -> usize {
         self.inner.device_ordinal
+    }
+
+    /// The retained device-output pool this runtime owns.
+    pub(crate) fn output_pool(&self) -> crate::OutputPoolHandle {
+        std::sync::Arc::clone(&self.inner.output_pool)
     }
 
     pub(crate) fn primary_context(&self) -> CUcontext {

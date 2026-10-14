@@ -110,6 +110,40 @@ Provider selection is compile-time (`native` or `blas`); there is no runtime
 provider bundle or override hook. Unsupported dtypes and shapes map to typed
 errors.
 
+### Contraction plan cache and the eager slot
+
+The session's `GemmAnalysisCache` retains the prepared numerical plans, bounded
+by a slot capacity (1024 by default), and reports the retained entries and
+hit/miss counters through `runtime_cache_stats`. A `cache_slot` names one slot of
+that cache.
+
+A compiled program keys a plan by the instruction index of the `dot_general` it
+prepares: a program has exactly one such index per operation, so the same slot
+denotes the same geometry on every execution. **An eager call has no instruction
+index**, so the eager entries (`dot_general_read`, `dot_general_read_into_accum`,
+`dot_general_with_conj`) derive the slot from the request instead: a hash of the
+dtype, the two operand shapes, the four axis lists and the conjugation flags,
+reduced modulo the cache capacity.
+
+The slot only *routes* a request. `contraction::BinaryCache` compares the full
+plan key - dtype, both operand layouts including strides and offsets, the output
+layout, the conjugation flags - and the `DotGeneralConfig` before reusing a plan,
+so a fingerprint collision rebuilds instead of returning the wrong plan. The
+fingerprint deliberately omits the operand strides: reading them here would cost
+the allocation the cache exists to avoid, and including them is not needed for
+correctness. The consequence to keep in mind is a **hit-rate**, not a
+correctness, one: two calls of the same shape reached through differently shaped
+views of the same storage land in the same slot and one of them misses.
+
+This changed what the eager path retains. Before, an eager `dot_general` built
+its plan, used it once, and dropped it; now it is retained until the cache is
+cleared, the capacity shrinks, or the slot is reused by a different geometry.
+That is the intended trade of #2141 item 1 and it is reported through
+`runtime_cache_stats` rather than being hidden. Measured on one AMD EPYC 7713P
+thread (`CpuBackend::with_threads(1)`) with a warm output pool and an f64 64x64
+`matmul`: **84 -> 0 heap allocations per repeated call** (415 on the cold call,
+which also warms the provider) and **22.4-23.6 us -> 16.5-18.5 us per call**.
+
 ## CubeCL/CUDA Execution
 
 When a compiled program is evaluated with `CudaBackend`, the same graph-level

@@ -165,6 +165,7 @@ fn upload_typed<T: CubeElement + TensorScalar + Scalar + Clone + Send + Sync + '
             byte_len,
             rt.device_ordinal(),
             rt.allocation_domain_id(),
+            rt.output_pool(),
         ))),
         Placement {
             memory_kind: MemoryKind::Device,
@@ -320,6 +321,7 @@ fn upload_bool(
             byte_len,
             rt.device_ordinal(),
             rt.allocation_domain_id(),
+            rt.output_pool(),
         ))),
         Placement {
             memory_kind: MemoryKind::Device,

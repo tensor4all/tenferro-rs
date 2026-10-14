@@ -26,6 +26,7 @@ use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionOp, ElementwiseFusionPlan,
 };
 use tenferro_tensor::col_major_strides;
+use tenferro_tensor::{ShapeVec, StrideVec};
 
 const ELEMENTWISE_FUSION_OP: &str = "execute_elementwise_fusion";
 
@@ -185,8 +186,8 @@ fn typed_bytes<T>(data: &[T]) -> &[u8] {
 
 struct ErasedFusionInput<'a> {
     data: &'a [u8],
-    dims: Vec<usize>,
-    strides: Vec<isize>,
+    dims: ShapeVec,
+    strides: StrideVec,
 }
 
 fn tensor_host_bytes<'a>(op: &'static str, input: &'a Tensor) -> crate::Result<&'a [u8]> {
@@ -240,7 +241,7 @@ fn erased_fusion_input<'a>(
     let ElementwiseFusionInputView::BroadcastInDim { shape, dims } = view else {
         return Ok(ErasedFusionInput {
             data,
-            dims: base_shape.to_vec(),
+            dims: ShapeVec::from_slice(base_shape),
             strides: base_strides,
         });
     };
@@ -257,7 +258,7 @@ fn erased_fusion_input<'a>(
         ));
     }
 
-    let mut strides = vec![0; shape.len()];
+    let mut strides = StrideVec::from_elem(0, shape.len());
     let mut seen = vec![false; shape.len()];
     for (source_axis, &target_axis) in dims.iter().enumerate() {
         if target_axis >= shape.len() {
@@ -291,7 +292,7 @@ fn erased_fusion_input<'a>(
 
     Ok(ErasedFusionInput {
         data,
-        dims: shape.to_vec(),
+        dims: ShapeVec::from_slice(shape),
         strides,
     })
 }
@@ -532,7 +533,7 @@ where
     let fused_plan = single_output_strided_fused_plan(plan, output);
     let erased_plan = ErasedFusedPlan::compile(dtype, fused_plan)
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape)?;
     let output_strides = col_major_strides(shape)?;
     // SAFETY: `out` exclusively owns the output allocation with matching
     // dtype/alignment and the fused plan overwrites every reachable element

@@ -422,9 +422,15 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
 
 #[test]
 fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
-    assert_eq!(col_major_strides(&[]).unwrap(), Vec::<isize>::new());
-    assert_eq!(col_major_strides(&[2, 3, 4]).unwrap(), vec![1, 2, 6]);
-    assert_eq!(col_major_strides(&[2, 3, 4]).unwrap(), vec![1, 2, 6]);
+    assert_eq!(col_major_strides(&[]).unwrap().as_slice(), &[] as &[isize]);
+    assert_eq!(
+        col_major_strides(&[2, 3, 4]).unwrap().as_slice(),
+        &[1, 2, 6]
+    );
+    assert_eq!(
+        col_major_strides(&[2, 3, 4]).unwrap().as_slice(),
+        &[1, 2, 6]
+    );
     assert!(matches!(
         col_major_strides(&[usize::MAX, 2]),
         Err(Error::Validation { .. })

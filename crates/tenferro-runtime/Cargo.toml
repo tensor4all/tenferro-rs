@@ -77,3 +77,11 @@ path = "tests/session_surface.rs"
 [[test]]
 name = "binary_allocations"
 path = "tests/binary_allocations.rs"
+
+[[test]]
+name = "eager_dot_plan_reuse"
+path = "tests/eager_dot_plan_reuse.rs"
+
+[[test]]
+name = "typed_elementwise_allocations"
+path = "tests/typed_elementwise_allocations.rs"

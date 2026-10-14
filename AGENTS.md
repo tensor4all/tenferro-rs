@@ -233,6 +233,11 @@ finished:
   its accumulation point, so parallel branches merge there instead of racing on
   `main`. `develop` reaches `main` by pull request when the batch is done, on the
   maintainer's instruction.
+- **A pull request from `develop` merges with a merge commit**
+  (`gh pr merge --merge --delete-branch`), never a squash. The individual commits
+  on `develop` are the reviewed history of several parallel slices, and squashing
+  them collapses work that was reviewed separately. Ordinary single-purpose
+  branches keep the squash default below.
 
 A correctness fix that must not wait for the batch is the exception: it branches
 from `main` as usual, which is what the rest of this section describes.
@@ -309,8 +314,11 @@ with `CARGO_PROFILE_DEV_DEBUG=1` or `CARGO_PROFILE_TEST_DEBUG=1`.
 - Batched remediation PRs follow
   `ai/contribution-workflows/repository-remediation.md`: one PR after all local
   fixes and verification, coherent commits, non-squash merge.
-- For ordinary PRs, enable auto-merge after creation:
+- For ordinary PRs (not `develop`), enable auto-merge after creation:
   `gh pr merge --auto --squash --delete-branch`
+- For a `develop` PR, enable auto-merge with a merge commit instead, once the
+  maintainer has asked for the batch to land: `gh pr merge --auto --merge
+  --delete-branch`
 - `createpr` must confirm auto-merge remains enabled and the required branch protection checks are still configured
 
 ## Build Commands

@@ -3188,3 +3188,44 @@ fn cuda_bool_output_reuses_a_retained_pool_handle() {
         after_first, after_second,
     );
 }
+
+/// #2156: the retained device-output pool belongs to the runtime that owns the
+/// device, not to process-global state.
+///
+/// A second runtime on the same device therefore starts from an empty pool
+/// instead of inheriting the first runtime's retained bytes. That the pool is
+/// released with the runtime - rather than pinning the bytes for the process
+/// lifetime - is the ownership claim this observes from the other side; the
+/// reclamation itself is not observable through the pool's own counters.
+#[test]
+#[ignore]
+fn cuda_output_pool_belongs_to_its_runtime() {
+    let lhs = tensor_f64(vec![8192], (0..8192).map(|i| i as f64).collect());
+    let rhs = tensor_f64(vec![8192], (0..8192).map(|i| (i + 1) as f64).collect());
+
+    let mut first = gpu_backend();
+    let first_lhs = upload(&first, &lhs);
+    let first_rhs = upload(&first, &rhs);
+    let out = first
+        .with_backend_session(|session| {
+            session.add_read(
+                TensorRead::from_tensor(&first_lhs),
+                TensorRead::from_tensor(&first_rhs),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    drop(out);
+    let retained = first.cuda_output_pool_stats();
+    assert!(
+        retained.retained_bytes > 0,
+        "the first runtime retained nothing, so this test observes nothing: {retained:?}"
+    );
+
+    let second = gpu_backend();
+    assert_eq!(
+        second.cuda_output_pool_stats().retained_bytes,
+        0,
+        "a second runtime on the same device saw another runtime's retained bytes"
+    );
+}

@@ -704,10 +704,19 @@ pub(crate) fn alloc_output_bytes(
         )
     })?;
     let device_ordinal = rt.device_ordinal();
-    let handle = match crate::take_output_handle(device_ordinal, byte_len) {
+    let pool = rt.output_pool();
+    // The lock is released before the miss branch takes it again: a `match`
+    // scrutinee temporary lives for the whole match.
+    let retained = pool
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take(byte_len);
+    let handle = match retained {
         Some(handle) => handle,
         None => {
-            crate::record_output_pool_miss(device_ordinal);
+            pool.lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .record_miss();
             rt.client().empty(byte_len)
         }
     };
@@ -716,6 +725,7 @@ pub(crate) fn alloc_output_bytes(
         byte_len,
         device_ordinal,
         rt.allocation_domain_id(),
+        pool,
     ))
 }
 

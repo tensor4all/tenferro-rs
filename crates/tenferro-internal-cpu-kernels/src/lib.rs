@@ -178,7 +178,7 @@ where
         view.offset(),
     )
     .map_err(|err| Error::backend_source(op, err))?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, view.shape().to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, view.shape())?;
     map_into(&mut out.as_uninit_view_mut()?, &src, |x| {
         MaybeUninit::new(x)
     })
