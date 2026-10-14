@@ -294,7 +294,7 @@ where
         view.offset(),
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, view.shape().to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, view.shape())?;
     // INVARIANT: `copy_into_uninit` is the full-overwrite entry: it selects the
     // blocked permutation copy on native floats in a sequential context and
     // the element-wise map elsewhere, so the destination is written completely
@@ -864,7 +864,7 @@ where
         .permute(perm)
         .map_err(|err| crate::Error::backend_source("transpose", err))?;
     checked_shape_product("transpose", "output shape", permuted.dims())?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, permuted.dims().to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, permuted.dims())?;
     // INVARIANT: `copy_into_uninit` fully overwrites the destination and selects
     // the blocked permutation engine for a sequential native-float copy.
     copy_into_uninit(&mut out.as_uninit_view_mut()?, &permuted)
@@ -928,7 +928,7 @@ where
     }
 
     let src = typed_view_from_view("reshape", view)?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape)?;
     let copy_strides = col_major_strides(view.shape());
     let mut copy_target = strided_kernel::StridedViewMut::new(
         out.as_uninit_slice_mut(),
@@ -1021,7 +1021,7 @@ where
         .broadcast(shape)
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     checked_shape_product("broadcast_in_dim", "output shape", shape)?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape)?;
     map_into(&mut out.as_uninit_view_mut()?, &broadcast, MaybeUninit::new)
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     // SAFETY: the successful broadcast copy writes every logical destination element.
@@ -1096,7 +1096,7 @@ where
     S: Copy + Send + Sync + TensorScalar,
     T: Copy + Clone + PoolScalar,
 {
-    let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape().to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape())?;
     map_into(
         &mut out.as_uninit_view_mut()?,
         &typed_view("convert", tensor)?,
@@ -1139,7 +1139,7 @@ where
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
     let diag = extract_diagonal_view(tensor, axis_a, axis_b)?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims().to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims())?;
     // INVARIANT: `copy_into_uninit` fully overwrites the destination and routes a
     // native-float strided copy to the permutation engine, serial or parallel.
     copy_into_uninit(&mut out.as_uninit_view_mut()?, &diag)
@@ -1310,7 +1310,7 @@ where
     }
 
     let input = typed_host_data(op, tensor)?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape().to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape())?;
     strided_kernel::triangular_mask_into_uninit(
         out.as_uninit_slice_mut(),
         input,

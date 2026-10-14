@@ -128,17 +128,18 @@ pub fn broadcast_in_dim_extent_error(
 /// ```
 /// use tenferro_ops::broadcast::broadcast_shape;
 ///
-/// assert_eq!(broadcast_shape(&[3, 1], &[1, 4]).unwrap(), vec![3, 4]);
-/// assert_eq!(broadcast_shape(&[], &[2, 3]).unwrap(), vec![2, 3]);
+/// assert_eq!(broadcast_shape(&[3, 1], &[1, 4]).unwrap().as_slice(), &[3, 4]);
+/// assert_eq!(broadcast_shape(&[], &[2, 3]).unwrap().as_slice(), &[2, 3]);
 /// ```
 ///
 /// # Errors
 ///
 /// Returns [`BroadcastError::IncompatibleBinary`] when a pair of aligned
 /// dimensions is incompatible.
-pub fn broadcast_shape(lhs: &[usize], rhs: &[usize]) -> Result<Vec<usize>, BroadcastError> {
+pub fn broadcast_shape(lhs: &[usize], rhs: &[usize]) -> Result<ShapeVec, BroadcastError> {
     let rank = lhs.len().max(rhs.len());
-    let mut out = Vec::with_capacity(rank);
+    // Inline for common ranks: the eager binary entry calls this on every op.
+    let mut out = ShapeVec::with_capacity(rank);
     for axis in 0..rank {
         let lhs_dim = aligned_dim(lhs, rank, axis);
         let rhs_dim = aligned_dim(rhs, rank, axis);
@@ -166,7 +167,7 @@ pub fn broadcast_shape(lhs: &[usize], rhs: &[usize]) -> Result<Vec<usize>, Broad
 /// use tenferro_ops::broadcast::broadcast_shapes;
 ///
 /// let shape = broadcast_shapes([&[3, 1][..], &[1, 4][..], &[3, 4][..]]).unwrap();
-/// assert_eq!(shape, vec![3, 4]);
+/// assert_eq!(shape.as_slice(), &[3, 4]);
 /// ```
 ///
 /// # Errors
@@ -175,12 +176,12 @@ pub fn broadcast_shape(lhs: &[usize], rhs: &[usize]) -> Result<Vec<usize>, Broad
 /// shapes cannot be broadcast together.
 pub fn broadcast_shapes<'a>(
     shapes: impl IntoIterator<Item = &'a [usize]>,
-) -> Result<Vec<usize>, BroadcastError> {
+) -> Result<ShapeVec, BroadcastError> {
     let mut iter = shapes.into_iter();
     let Some(first) = iter.next() else {
-        return Ok(Vec::new());
+        return Ok(ShapeVec::new());
     };
-    let mut out = first.to_vec();
+    let mut out = ShapeVec::from_slice(first);
     for shape in iter {
         out = broadcast_shape(&out, shape)?;
     }

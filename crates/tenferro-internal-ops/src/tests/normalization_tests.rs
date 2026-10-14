@@ -4,12 +4,17 @@ use crate::reduction::reduced_shape;
 
 #[test]
 fn broadcast_shape_accepts_scalar_rank_padding_and_singletons() {
-    assert_eq!(broadcast_shape(&[], &[3, 4]).unwrap(), vec![3, 4]);
-    assert_eq!(broadcast_shape(&[5], &[3, 5]).unwrap(), vec![3, 5]);
-    assert_eq!(broadcast_shape(&[3, 1], &[1, 4]).unwrap(), vec![3, 4]);
+    assert_eq!(broadcast_shape(&[], &[3, 4]).unwrap().as_slice(), &[3, 4]);
+    assert_eq!(broadcast_shape(&[5], &[3, 5]).unwrap().as_slice(), &[3, 5]);
     assert_eq!(
-        broadcast_shapes([&[3, 1][..], &[1, 4][..], &[3, 4][..]]).unwrap(),
-        vec![3, 4]
+        broadcast_shape(&[3, 1], &[1, 4]).unwrap().as_slice(),
+        &[3, 4]
+    );
+    assert_eq!(
+        broadcast_shapes([&[3, 1][..], &[1, 4][..], &[3, 4][..]])
+            .unwrap()
+            .as_slice(),
+        &[3, 4]
     );
 }
 

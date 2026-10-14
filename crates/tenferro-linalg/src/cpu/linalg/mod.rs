@@ -66,7 +66,7 @@ pub(crate) fn output_from_rhs_view<T: Copy + Clone + PoolScalar + 'static>(
     if !matches!(rank, 1 | 2) {
         return Err(tenferro_tensor::Error::rank_mismatch(op, 2, rank));
     }
-    let mut output = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
+    let mut output = PooledUninitOutput::<T>::new(buffers, rhs.shape())?;
     let data = output.as_uninit_slice_mut();
 
     // PooledUninitOutput::new validates the compact shape product before

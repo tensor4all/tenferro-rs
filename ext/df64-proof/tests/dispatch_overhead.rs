@@ -240,8 +240,16 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
         contribution_twice <= 2 * contribution_allocations + 4,
         "the contribution path accumulates allocations: {contribution_allocations} then {contribution_twice}"
     );
+    // The allocation counter must be live: the runtime path's per-call dispatch still
+    // allocates. The body itself is allocation-free since the elementwise/structural
+    // metadata `Vec`s moved to inline storage (#2139 item 2), so it is no longer a
+    // counter check of its own.
     assert!(
-        contribution_allocations > 0 && direct_allocations > 0,
-        "a path reports no allocations at all, so this report is stale"
+        contribution_allocations > 0,
+        "the runtime path reports no allocations at all, so this report is stale"
+    );
+    assert_eq!(
+        direct_allocations, 0,
+        "the contribution body's direct call should need no heap allocation"
     );
 }

@@ -81,21 +81,21 @@ fn validate_axis_list(
     axes: &[usize],
     rank: usize,
 ) -> crate::Result<()> {
-    let mut seen = vec![false; rank];
-    for &axis in axes {
+    // A linear scan over the axes already seen keeps this path free of a
+    // rank-sized scratch allocation; the axis lists here are short.
+    for (index, &axis) in axes.iter().enumerate() {
         if axis >= rank {
             return Err(validation(
                 op,
                 ValidationError::AxisOutOfBounds { axis, rank },
             ));
         }
-        if seen[axis] {
+        if axes[..index].contains(&axis) {
             return Err(validation(
                 op,
                 ValidationError::DuplicateAxis { axis, role },
             ));
         }
-        seen[axis] = true;
     }
     Ok(())
 }

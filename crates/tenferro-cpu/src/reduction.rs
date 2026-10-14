@@ -931,7 +931,7 @@ where
         )
     }
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    let mut output = PooledUninitOutput::<T>::new(buffers, output_shape.clone())?;
+    let mut output = PooledUninitOutput::<T>::new(buffers, &output_shape)?;
     let mut dest = unsafe {
         // SAFETY: the output guard exclusively owns aligned storage whose
         // byte layout agrees with dtype; validated dimensions, strides, and

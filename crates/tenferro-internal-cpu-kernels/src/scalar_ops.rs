@@ -17,9 +17,9 @@ pub use op::{AddOp, BinaryScalarOp, MulOp, SubOp};
 
 use strided_kernel::{reduce, zip_map2_into, StridedView, StridedViewMut};
 use tenferro_tensor::col_major_strides;
-use tenferro_tensor::{DynRank, Host, TypedTensor};
+use tenferro_tensor::{DynRank, Host, StrideVec, TypedTensor};
 
-fn strides_for(shape: &[usize]) -> crate::Result<Vec<isize>> {
+fn strides_for(shape: &[usize]) -> crate::Result<StrideVec> {
     col_major_strides(shape)
 }
 

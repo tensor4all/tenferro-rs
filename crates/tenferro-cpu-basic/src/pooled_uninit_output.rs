@@ -2,7 +2,9 @@ use std::alloc::Layout;
 use std::mem::{ManuallyDrop, MaybeUninit};
 
 use strided_basic::StridedViewMut;
-use tenferro_tensor::{validate::checked_shape_product, TensorRank, TypedTensor};
+use tenferro_tensor::{
+    validate::checked_shape_product, IntoShapeVec, ShapeVec, TensorRank, TypedTensor,
+};
 
 use crate::buffer_pool::{BufferPool, PoolScalar, UninitCheckoutToken};
 use crate::{Error, Result};
@@ -48,7 +50,7 @@ fn checked_compact_strides(shape: &[usize]) -> Result<tenferro_tensor::StrideVec
 /// ```
 pub struct PooledUninitOutput<T: PoolScalar> {
     pool: BufferPool,
-    shape: Vec<usize>,
+    shape: ShapeVec,
     strides: tenferro_tensor::StrideVec,
     data: Vec<std::mem::MaybeUninit<T>>,
     checkout: Option<UninitCheckoutToken>,
@@ -70,7 +72,8 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// Returns `Error::Validation` for shape-product, layout, or stride
     /// validation failures, or `Error::BackendSource` if allocation
     /// reservation fails. No pool accounting is changed before validation.
-    pub fn new(pool: &BufferPool, shape: Vec<usize>) -> Result<Self> {
+    pub fn new(pool: &BufferPool, shape: impl IntoShapeVec) -> Result<Self> {
+        let shape = shape.into_shape_vec();
         let len = checked_shape_product("pooled_uninit_output", "shape", &shape)?;
         let layout = Layout::array::<T>(len).map_err(|_| {
             Error::invalid_argument(
@@ -241,7 +244,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     }
 
     unsafe fn finish<R: TensorRank>(mut self) -> Result<TypedTensor<T, R>> {
-        let shape = R::shape_from_vec(std::mem::take(&mut self.shape).into())
+        let shape = R::shape_from_vec(std::mem::take(&mut self.shape))
             .map_err(|err| Error::backend_source("pooled_uninit_output", err))?;
         let data = std::mem::take(&mut self.data);
         let mut data = ManuallyDrop::new(data);

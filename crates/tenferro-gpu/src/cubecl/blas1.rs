@@ -244,7 +244,7 @@ impl<T: TensorScalar + 'static + Scalar> ReadRef<'_, '_, T> {
     /// column-major by construction and carries no stored layout.
     fn strides(&self) -> crate::Result<Vec<isize>> {
         match self {
-            Self::Owned(tensor) => Ok(col_major_strides(tensor.shape())?),
+            Self::Owned(tensor) => Ok(col_major_strides(tensor.shape())?.into_vec()),
             Self::View(view) => Ok(view.strides().to_vec()),
         }
     }
@@ -363,7 +363,7 @@ impl<T: CubeElement + TensorScalar + Clone + Scalar + 'static> WriteRef<'_, '_, 
     /// column-major by construction and carries no stored layout.
     fn strides(&self) -> crate::Result<Vec<isize>> {
         match self {
-            Self::Owned(tensor) => Ok(col_major_strides(tensor.shape())?),
+            Self::Owned(tensor) => Ok(col_major_strides(tensor.shape())?.into_vec()),
             Self::View(view) => Ok(view.strides().to_vec()),
         }
     }

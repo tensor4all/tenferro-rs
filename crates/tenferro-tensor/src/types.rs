@@ -8127,7 +8127,7 @@ impl<'a> TensorRead<'a> {
     /// column-major stride arithmetic overflows.
     pub fn strides(&self) -> crate::Result<Vec<isize>> {
         match self {
-            Self::Tensor(tensor) => col_major_strides(tensor.shape()),
+            Self::Tensor(tensor) => Ok(col_major_strides(tensor.shape())?.into_vec()),
             Self::View(view) => Ok(view.strides().to_vec()),
         }
     }
@@ -8395,7 +8395,7 @@ impl<'a> TensorWrite<'a> {
     /// column-major stride arithmetic overflows.
     pub fn strides(&self) -> crate::Result<Vec<isize>> {
         match self {
-            Self::Tensor(tensor) => col_major_strides(tensor.shape()),
+            Self::Tensor(tensor) => Ok(col_major_strides(tensor.shape())?.into_vec()),
             Self::View(view) => Ok(view.strides().to_vec()),
         }
     }
@@ -8538,7 +8538,7 @@ impl<'a> TensorWrite<'a> {
 /// ```rust
 /// use tenferro_tensor::col_major_strides;
 ///
-/// assert_eq!(col_major_strides(&[2, 3])?, vec![1, 2]);
+/// assert_eq!(col_major_strides(&[2, 3])?.as_slice(), &[1, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 /// # Errors
@@ -8546,8 +8546,10 @@ impl<'a> TensorWrite<'a> {
 /// Returns [`crate::Error::Validation`] with
 /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when a
 /// column-major stride product overflows.
-pub fn col_major_strides(shape: &[usize]) -> crate::Result<Vec<isize>> {
-    let mut strides = Vec::with_capacity(shape.len());
+pub fn col_major_strides(shape: &[usize]) -> crate::Result<StrideVec> {
+    // Inline for common ranks: every compact destination on the CPU and CUDA
+    // paths derives its strides here, so the heap is off this path entirely.
+    let mut strides = StrideVec::with_capacity(shape.len());
     let mut stride = 1isize;
     for &extent in shape {
         strides.push(stride);

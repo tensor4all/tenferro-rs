@@ -288,7 +288,7 @@ where
     T: Copy + PoolScalar + 'static,
     R: TensorRank,
 {
-    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape())?;
     map_unary(
         op,
         &mut out.as_uninit_view_mut()?,
@@ -425,7 +425,7 @@ where
             rhs.shape().to_vec(),
         ));
     };
-    let mut out = PooledUninitOutput::<T>::new(buffers, output_shape.to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, output_shape)?;
     if lhs.shape() == rhs.shape() {
         replay_pow_pair(
             op,
@@ -676,7 +676,7 @@ where
             rhs.shape().to_vec(),
         ));
     };
-    let mut out = PooledUninitOutput::<T>::new(buffers, output_shape.to_vec())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, output_shape)?;
     if lhs.shape() == rhs.shape() {
         replay_pow_pair(
             "pow",

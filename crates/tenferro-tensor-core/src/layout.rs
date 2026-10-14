@@ -603,7 +603,6 @@ impl<R: TensorRank> TensorLayout<R> {
         }
 
         let output_rank = shape.as_ref().len();
-        let mut seen = vec![false; output_rank];
         let mut strides = StrideVec::new();
         strides.resize(output_rank, 0);
         for (input_axis, &output_axis) in broadcast_dims.iter().enumerate() {
@@ -613,13 +612,14 @@ impl<R: TensorRank> TensorLayout<R> {
                     rank: output_rank,
                 });
             }
-            if seen[output_axis] {
+            // A linear scan over the axes already placed keeps this path free of
+            // a rank-sized scratch allocation; the ranks here are tiny.
+            if broadcast_dims[..input_axis].contains(&output_axis) {
                 return Err(ValidationError::DuplicateAxis {
                     axis: output_axis,
                     role: "permutation",
                 });
             }
-            seen[output_axis] = true;
 
             let input_extent = self.shape()[input_axis];
             let output_extent = shape.as_ref()[output_axis];
