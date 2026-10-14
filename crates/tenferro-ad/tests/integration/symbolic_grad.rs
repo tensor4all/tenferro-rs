@@ -111,6 +111,48 @@ fn grad_with_concrete_shape_placeholder() {
 
 #[test]
 fn grad_embed_diag_shifted_axis_restores_input_layout() {
+    // Shape alone is not enough: a permutation between equal-sized axes is
+    // invisible to it, and a uniform `reduce_sum` cotangent is invariant under
+    // every permutation. First evaluate the VJP with a distinct cotangent `w`
+    // and assert each entry. For `embed_diag(1, 0)` on `x: [m, n]` the primal
+    // writes `x[i, j]` to `out[j, i, j]` (output shape `[n, m, n]`), so
+    // `d(sum(w * embed_diag(x))) / d x[i, j] = w[j, i, j]`.
+    fn assert_shifted_axis_vjp(m: usize, n: usize) {
+        let w_data: Vec<f64> = (0..n * m * n).map(|k| k as f64 + 1.0).collect();
+
+        let x = TracedTensor::input_concrete_shape(DType::F64, &[m, n]).unwrap();
+        let w = TracedTensor::from_vec_col_major(vec![n, m, n], w_data.clone()).unwrap();
+        let loss = (&x.embed_diag(1, 0).unwrap() * &w)
+            .unwrap()
+            .reduce_sum(Some(&[0, 1, 2]))
+            .unwrap();
+        let grad = loss.grad(&x).unwrap();
+        assert_eq!(grad.try_concrete_shape(), Some(vec![m, n]));
+
+        // The adjoint of a linear map is the (constant) cotangent push-through,
+        // so the gradient graph does not depend on the primal and takes no
+        // bindings.
+        let engine = cpu_runtime();
+        let out = grad.run_with_inputs_auto(&engine, &[]).expect("grad eval");
+        assert_eq!(out.shape(), &[m, n]);
+
+        // `w` is col-major `[n, m, n]`, so `w[j, i, j]` lives at
+        // `j + n * i + n * m * j` and the input-layout gradient is col-major
+        // `[m, n]` at `i + m * j`.
+        let mut expected = vec![0.0_f64; m * n];
+        for i in 0..m {
+            for j in 0..n {
+                expected[i + m * j] = w_data[j + n * i + n * m * j];
+            }
+        }
+        assert_eq!(f64_data(&out), expected.as_slice());
+    }
+
+    // Equal-sized axes: restoring the trailing `Transpose` is shape-preserving
+    // here, so only the values expose it - exactly the gap review found.
+    assert_shifted_axis_vjp(3, 3);
+    assert_shifted_axis_vjp(2, 3);
+
     // Regression for #2107: the adjoint of `EmbedDiag { axis_a: 1, axis_b: 0 }`
     // must land back in the `[2, 3]` input layout, not a transposed `[3, 2]`.
     // The spurious trailing `Transpose` made the VJP metadata `[3, 2]`.

@@ -716,6 +716,24 @@ fn complex_pinv_matches_the_moore_penrose_inverse() {
     .unwrap();
 }
 
+/// Assert the public `eig` column gauge on a square `[n, n]` eigenvector
+/// matrix: every column has unit 2-norm.
+fn assert_unit_norm_eigenvector_columns(vectors: &Tensor) {
+    let [n, columns_count] = <[usize; 2]>::try_from(vectors.shape()).unwrap();
+    assert_eq!(n, columns_count);
+    let columns = vectors.as_slice::<Complex64>().unwrap();
+    for column in 0..n {
+        let norm = (0..n)
+            .map(|row| columns[column * n + row].norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1.0e-12,
+            "eigenvector column {column} must have unit 2-norm, got {norm}"
+        );
+    }
+}
+
 #[test]
 fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
     // #2148: the vendored oracle records unit 2-norm eigenvector columns for
@@ -729,32 +747,17 @@ fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
         let (values, vectors) = diagonalizable.eig(session).unwrap();
         assert_eq!(values.shape(), &[2]);
         assert_eq!(vectors.shape(), &[2, 2]);
-        let columns = vectors.as_slice::<Complex64>().unwrap();
-        for column in 0..2 {
-            let norm = (0..2)
-                .map(|row| columns[column * 2 + row].norm_sqr())
-                .sum::<f64>()
-                .sqrt();
-            assert!(
-                (norm - 1.0).abs() < 1.0e-12,
-                "column {column} must have unit 2-norm, got {norm}"
-            );
-        }
+        assert_unit_norm_eigenvector_columns(&vectors);
     })
     .unwrap();
 
-    // A finite defective (Jordan) input: finite unit-norm columns or a typed
-    // numerical failure - never NaN.
+    // A finite defective (Jordan) input: unit-norm columns or a typed
+    // numerical failure - never NaN. Checking finiteness alone would miss a
+    // provider that returned a finite but non-unit column, so assert the same
+    // norm contract on the `Ok` branch here too.
     let defective = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 1.0]).unwrap();
     host.with_backend_session(|session| match defective.eig(session) {
-        Ok((_, vectors)) => {
-            for value in vectors.as_slice::<Complex64>().unwrap() {
-                assert!(
-                    value.re.is_finite() && value.im.is_finite(),
-                    "eig returned a non-finite eigenvector entry {value:?}"
-                );
-            }
-        }
+        Ok((_, vectors)) => assert_unit_norm_eigenvector_columns(&vectors),
         Err(error) => assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure),
     })
     .unwrap();
