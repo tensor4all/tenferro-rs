@@ -2615,15 +2615,12 @@ impl TracedTensor {
     /// [`Error::RuntimeStateSource`] when output metadata cannot be
     /// registered.
     ///
-    /// # Deferred errors
+    /// # Clamping
     ///
-    /// Index values are consumed after binding with StableHLO gather clamp
-    /// semantics: an out-of-range or negative index is clamped into
-    /// `[0, dim - window]` rather than rejected, so such a value is not a
-    /// graph-build failure. Only a `slice_sizes` window that exceeds its operand
-    /// dimension is rejected, and a symbolic extent that prevents that comparison
-    /// during construction is reported during compilation or execution with the
-    /// corresponding [`ErrorPhase`].
+    /// Index values are clamped with StableHLO gather clamp semantics: an
+    /// out-of-range or negative index is clamped into `[0, dim - window]` rather than rejected.
+    /// Only a `slice_sizes` window that exceeds its operand dimension is rejected,
+    /// which is a graph-build failure.
     pub fn gather(&self, indices: &TracedTensor, config: GatherConfig) -> Result<TracedTensor> {
         let op = StdTensorOp::Gather(config);
         let (out_rank, out_shape_hint) =
@@ -2690,15 +2687,12 @@ impl TracedTensor {
     /// or extent, and [`Error::RuntimeStateSource`] when output metadata cannot
     /// be registered.
     ///
-    /// # Deferred errors
+    /// # Clamping
     ///
-    /// Start values are consumed after binding with StableHLO `DynamicSlice`
-    /// clamp semantics: an out-of-range or negative start is clamped into
-    /// `[0, dim - window]` rather than rejected, so such a value is not a
-    /// graph-build failure. Only a `slice_sizes` window that exceeds its operand
-    /// dimension is rejected, and a symbolic extent that prevents that comparison
-    /// during construction is reported during compilation or execution with the
-    /// corresponding [`ErrorPhase`].
+    /// Start values are clamped with StableHLO `DynamicSlice` clamp semantics: an
+    /// out-of-range or negative start is clamped into `[0, dim - window]` rather than rejected.
+    /// Only a `slice_sizes` window that exceeds its operand dimension is rejected,
+    /// which is a graph-build failure.
     pub fn dynamic_slice(&self, starts: &TracedTensor, sizes: &[usize]) -> Result<TracedTensor> {
         let op = StdTensorOp::DynamicSlice {
             slice_sizes: sizes.to_vec(),
