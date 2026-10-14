@@ -799,7 +799,32 @@ fn compact_slice_extraction_preserves_offset_extent_and_root() {
     let tensor = group
         .into_tensor(slot)
         .expect("a compact root-spanning slice extracts");
-    // The extracted owner still exposes the whole root allocation.
-    let typed = <f64 as crate::TensorScalar>::into_typed(tensor).unwrap_or_else(|_| unreachable!());
-    assert_eq!(typed.host_data().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    let mut typed =
+        <f64 as crate::TensorScalar>::into_typed(tensor).unwrap_or_else(|_| unreachable!());
+    // The extracted owner still retains the whole root allocation, reachable
+    // through the typed view that carries the descriptor offset.
+    assert_eq!(
+        typed.as_view().host_storage().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0]
+    );
+    assert_eq!(typed.as_view().offset(), 1);
+    // Every logical accessor reads the slice, never the root prefix.
+    assert_eq!(typed.as_view().as_slice().unwrap(), &[2.0, 3.0]);
+    assert_eq!(typed.as_slice().unwrap(), &[2.0, 3.0]);
+    assert_eq!(typed.get(&[0]).unwrap(), &2.0);
+    assert_eq!(typed.get(&[1]).unwrap(), &3.0);
+    *typed.get_mut(&[1]).unwrap() = 30.0;
+    assert_eq!(
+        typed.as_view().host_storage().unwrap(),
+        &[1.0, 2.0, 30.0, 4.0],
+        "logical indexing must write the slice element and nothing outside it"
+    );
+    // An explicit copy keeps the logical shape, extent and values.
+    let copy = typed.duplicate().unwrap();
+    assert_eq!(copy.shape(), &[2]);
+    assert_eq!(copy.as_slice().unwrap(), &[2.0, 30.0]);
+    // The vector export returns the slice, not the root allocation.
+    let (shape, data) = typed.into_vec_col_major().unwrap();
+    assert_eq!(shape, vec![2]);
+    assert_eq!(data, vec![2.0, 30.0]);
 }

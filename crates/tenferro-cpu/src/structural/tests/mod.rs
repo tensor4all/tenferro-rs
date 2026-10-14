@@ -4,7 +4,42 @@
 //! the code it constrains (REPOSITORY_RULES.md, Unit Test Organization).
 
 use crate::typed_view;
-use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{SliceConfig, Tensor, TensorScalar, TensorValue, TypedTensor};
+
+/// A group-backed owner extracted from a larger root keeps its descriptor
+/// layout, so the CPU adapters must read the logical slice rather than the root
+/// prefix (#2023 review).
+fn offset_slice_owner() -> TypedTensor<f64> {
+    let value = TensorValue::from_tensor(
+        Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+    )
+    .slice_view(&SliceConfig {
+        starts: vec![1],
+        limits: vec![3],
+        strides: vec![1],
+    })
+    .unwrap();
+    let (group, slot, _, _) = value
+        .try_into_group_parts()
+        .unwrap_or_else(|_| unreachable!("a pooled value enters a group"));
+    let tensor = group
+        .into_tensor(slot)
+        .unwrap_or_else(|_| unreachable!("a compact root-spanning slice extracts"));
+    <f64 as TensorScalar>::into_typed(tensor).unwrap_or_else(|_| unreachable!())
+}
+
+#[test]
+fn per_operation_views_read_a_root_preserving_slice() {
+    let tensor = offset_slice_owner();
+
+    let borrowed = typed_view("convert", &tensor).unwrap();
+    assert_eq!(borrowed.dims(), &[2]);
+    assert_eq!(borrowed.offset(), 0);
+    assert_eq!([borrowed.get(&[0]), borrowed.get(&[1])], [2.0, 3.0]);
+
+    let host = super::host_view("extract_diagonal", &tensor).unwrap();
+    assert_eq!([host.get(&[0]), host.get(&[1])], [2.0, 3.0]);
+}
 
 /// The compact layout lives with the tensor, so the view borrows it: this is
 /// what makes a per-operation view free of allocation.
