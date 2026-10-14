@@ -199,6 +199,7 @@ where
             byte_len,
             rt.device_ordinal(),
             rt.allocation_domain_id(),
+            rt.output_pool(),
         ),
         rt.device_ordinal(),
     )

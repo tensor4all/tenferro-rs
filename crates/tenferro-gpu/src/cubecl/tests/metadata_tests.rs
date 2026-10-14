@@ -18,17 +18,20 @@ use tenferro_tensor::{
 #[test]
 fn cubecl_buffers_keep_domain_and_distinguish_allocations() {
     let domain = AllocationDomainId::fresh();
+    let pool = std::sync::Arc::new(std::sync::Mutex::new(crate::OutputPool::new()));
     let first = CubeclBuffer::new(
         cubecl::server::Handle::new(bookkeeping_service(), StreamId::current(), 4),
         4,
         0,
         domain,
+        std::sync::Arc::clone(&pool),
     );
     let second = CubeclBuffer::new(
         cubecl::server::Handle::new(bookkeeping_service(), StreamId::current(), 4),
         4,
         0,
         domain,
+        pool,
     );
 
     assert_eq!(first.allocation_domain(), domain);
@@ -325,6 +328,7 @@ fn cubecl_tensor_with_len(
             len * std::mem::size_of::<f32>(),
             0,
             domain,
+            std::sync::Arc::new(std::sync::Mutex::new(crate::OutputPool::new())),
         ))),
         Placement {
             memory_kind: MemoryKind::Device,

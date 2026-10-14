@@ -56,9 +56,8 @@ Genuine, and stated so they are not mistaken for candidates:
   `3205`, `9580` -> `dispatch.rs:98`) crosses the tensor-provider API; removing it
   means changing that contract, not this path.
 - One `handle.clone()` per binding retains the allocation (`Arc` increment).
-- `client.empty` on a pool miss and the `take_output_handle`/`return_output_handle`
-  mutex pair (`tenferro-gpu/src/lib.rs:194`, `:210`) are the pool's own cost; the
-  device handle is already reused.
+- `client.empty` on a pool miss and the runtime-owned pool's `take`/`return_handle`
+  lock are the pool's own cost; the device handle is already reused.
 - The new value's identity - its record `Arc`s and the shape `Box<[usize]>`
   (`eager.rs:919-930`) - is what the value *is*, in the streaming arm too.
 

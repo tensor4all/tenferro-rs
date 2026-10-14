@@ -378,9 +378,11 @@ fn cubecl_output_allocations_use_checked_shape_products() {
         "CubeCL output allocation must reject byte-length overflow as well"
     );
     assert!(
-        dispatch.contains("crate::take_output_handle(device_ordinal, byte_len)"),
-        "the single allocation path must consult the retained-handle pool, which is what \
-         a Bool output previously bypassed"
+        dispatch.contains("let pool = rt.output_pool();")
+            && dispatch.contains(".take(byte_len);")
+            && !dispatch.contains("return_output_handle("),
+        "the single allocation path must consult its runtime's retained-handle pool and \
+         return through that same owner, which is what a Bool output previously bypassed"
     );
     // The per-dtype pins above are satisfied by a file that still *contains* them:
     // a second path could call `client().empty` directly and keep the strings. The
