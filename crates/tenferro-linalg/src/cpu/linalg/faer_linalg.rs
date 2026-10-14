@@ -339,12 +339,18 @@ macro_rules! impl_faer_eig {
                 // below is a whole column of the column-major [n, n] block.
                 for block in vectors.chunks_exact_mut(n * n).take(batch_count) {
                     for column in block.chunks_exact_mut(n) {
-                        let norm = column
+                        // Scale before summing squares. `norm_sqr` is evaluated in the
+                        // operand dtype (`f32` for the `Complex32` instantiation), so a
+                        // finite column of large magnitude squares to `inf` and one of
+                        // tiny magnitude squares to `0`, and both were rejected as
+                        // `NonFinite` even though the column is normalizable. Scaling by
+                        // the largest component first keeps every squared term in [0, 1],
+                        // and the scaling itself is done in f64 so it cannot overflow.
+                        let magnitude = column
                             .iter()
-                            .map(|value| f64::from(value.norm_sqr()))
-                            .sum::<f64>()
-                            .sqrt();
-                        if !norm.is_finite() || norm == 0.0 {
+                            .map(|value| f64::from(value.re.abs().max(value.im.abs())))
+                            .fold(0.0_f64, f64::max);
+                        if magnitude == 0.0 {
                             return Err(crate::error::into_tensor_error(
                                 "eig",
                                 crate::Error::NonFinite {
@@ -353,7 +359,26 @@ macro_rules! impl_faer_eig {
                                 },
                             ));
                         }
+                        let norm = magnitude
+                            * column
+                                .iter()
+                                .map(|value| {
+                                    let re = f64::from(value.re) / magnitude;
+                                    let im = f64::from(value.im) / magnitude;
+                                    re * re + im * im
+                                })
+                                .sum::<f64>()
+                                .sqrt();
                         let scale = norm as $real;
+                        if !norm.is_finite() || !scale.is_finite() || scale == 0.0 {
+                            return Err(crate::error::into_tensor_error(
+                                "eig",
+                                crate::Error::NonFinite {
+                                    op: "eig",
+                                    role: "eigenvector column",
+                                },
+                            ));
+                        }
                         for value in column.iter_mut() {
                             *value /= scale;
                         }
