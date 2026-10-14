@@ -3,7 +3,10 @@ use std::cell::Cell;
 use std::hint::black_box;
 
 use num_complex::Complex64;
-use tenferro_tensor::{Rank, Tensor, TensorRead, TypedTensor, TypedTensorView, TypedTensorViewMut};
+use tenferro_tensor::{
+    Rank, SliceConfig, Tensor, TensorRead, TensorValue, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
+};
 
 struct CountingAllocator;
 
@@ -167,4 +170,84 @@ fn small_complex_real_views_do_not_allocate_metadata() {
         high_rank.as_real_view().unwrap().shape(),
         &[2, 1, 1, 1, 1, 1, 1, 1, 1]
     );
+}
+
+/// #2143 item 3 / `metadata_view_alloc_counter`: the public metadata-only view
+/// constructors must not allocate per call at rank <= 8. This is the acceptance
+/// signal for the #2040 rows; the timing rows are secondary evidence.
+#[test]
+fn metadata_only_view_construction_allocates_nothing() {
+    fn square() -> TensorValue {
+        TensorValue::from_tensor(Tensor::from_vec_col_major([2, 2], vec![1.0_f64; 4]).unwrap())
+    }
+
+    fn flat() -> TensorValue {
+        TensorValue::from_tensor(
+            Tensor::from_vec_col_major([1024], (0..1024).map(|i| i as f64).collect()).unwrap(),
+        )
+    }
+
+    fn rank8() -> TensorValue {
+        TensorValue::from_tensor(Tensor::from_vec_col_major([2; 8], vec![0.0_f64; 256]).unwrap())
+    }
+
+    for _ in 0..4 {
+        let value = square();
+        let allocations = count_allocations(|| {
+            black_box(value.transpose_view([1, 0]).unwrap());
+        });
+        assert_eq!(allocations, 0, "transpose_view allocated");
+    }
+
+    for _ in 0..4 {
+        let value = TensorValue::from_tensor(
+            Tensor::from_vec_col_major([4096], (0..4096).map(|i| i as f64).collect()).unwrap(),
+        );
+        let config = SliceConfig {
+            starts: vec![128],
+            limits: vec![3968],
+            strides: vec![2],
+        };
+        let allocations = count_allocations(|| {
+            black_box(value.slice_view(&config).unwrap());
+        });
+        assert_eq!(allocations, 0, "slice_view allocated");
+    }
+
+    // Rank 8 keeps the per-axis slice specs inline.
+    for _ in 0..4 {
+        let value = rank8();
+        let config = SliceConfig {
+            starts: vec![0; 8],
+            limits: vec![2; 8],
+            strides: vec![1; 8],
+        };
+        let allocations = count_allocations(|| {
+            black_box(value.slice_view(&config).unwrap());
+        });
+        assert_eq!(allocations, 0, "rank-8 slice_view allocated");
+    }
+
+    for _ in 0..4 {
+        let value = flat();
+        let allocations = count_allocations(|| {
+            black_box(value.reshape_view([32, 32]).unwrap());
+        });
+        assert_eq!(allocations, 0, "reshape_view allocated");
+    }
+
+    // A singleton axis whose stored stride is not canonical takes the relaxed
+    // col-major-contiguous path instead of the exact compact check.
+    for _ in 0..4 {
+        let value = TensorValue::from_tensor(
+            Tensor::from_vec_col_major([1, 3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
+        )
+        .transpose_view([1, 0])
+        .unwrap();
+        assert_eq!(value.strides(), &[1, 1]);
+        let allocations = count_allocations(|| {
+            black_box(value.reshape_view([3]).unwrap());
+        });
+        assert_eq!(allocations, 0, "relaxed reshape_view allocated");
+    }
 }

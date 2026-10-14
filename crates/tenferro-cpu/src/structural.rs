@@ -829,7 +829,7 @@ pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync + TensorScalar + 'st
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     validate_permutation("transpose", perm, tensor.shape().len())?;
-    let src = host_view("transpose", tensor)?;
+    let src = typed_view("transpose", tensor)?;
     let permuted = src
         .permute(perm)
         .map_err(|err| crate::Error::backend_source("transpose", err))?;

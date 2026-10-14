@@ -1,6 +1,7 @@
 use super::*;
 use crate::FftPlanCache;
 use num_complex::Complex64;
+use tenferro_cpu::linalg_interop::BufferPool;
 
 #[test]
 fn impulse_reference_covers_borrowed_and_consuming_lane_modes() {
@@ -12,6 +13,7 @@ fn impulse_reference_covers_borrowed_and_consuming_lane_modes() {
     ];
     let real = [1., 0., 0., 0.];
     let mut plans = FftPlanCache::default();
+    let mut buffers = BufferPool::new();
     for mode in 0..4 {
         for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
             let (input, shape, operation) = match mode {
@@ -38,6 +40,7 @@ fn impulse_reference_covers_borrowed_and_consuming_lane_modes() {
                     operation,
                     norm,
                     &mut plans,
+                    &mut buffers,
                     &mut output,
                     1,
                     std::convert::identity,
@@ -78,6 +81,7 @@ fn checked_lane_boundary_rejects_mismatched_spans_and_overflow_before_writes() {
         let input = vec![Complex64::new(1., 0.); input_len];
         let mut output = vec![MaybeUninit::uninit(); output_len];
         let mut plans = FftPlanCache::default();
+        let mut buffers = BufferPool::new();
         // SAFETY: Some(input) selects the disjoint borrowed-input path. The
         // kernel must reject invalid spans before any unchecked output access.
         let result = unsafe {
@@ -90,6 +94,7 @@ fn checked_lane_boundary_rejects_mismatched_spans_and_overflow_before_writes() {
                 FftOperation::C2cForward,
                 FftNorm::Backward,
                 &mut plans,
+                &mut buffers,
                 &mut output,
                 8,
                 |value| value,

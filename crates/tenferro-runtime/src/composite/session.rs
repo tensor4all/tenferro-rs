@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use tenferro_ops::broadcast::{broadcast_shape, broadcast_shapes};
 use tenferro_tensor::{
     BackendSession, CompareDir, DType, Error, GatherConfig, Result, Tensor, TensorRead,
-    TensorScalar, TypedTensor,
+    TensorScalar, TensorValue, TypedTensor,
 };
 
 use super::{
@@ -71,6 +71,13 @@ impl<'s, 'a> SessionComposite<'s, 'a> {
     fn finish(&mut self, value: ReadInput<'_>) -> Result<Tensor> {
         match value {
             ReadInput::Owned(tensor) => Ok(tensor),
+            ReadInput::Value(value) => {
+                if value.as_tensor().is_some() {
+                    Ok(value.into_tensor()?)
+                } else {
+                    self.session.to_contiguous_read(value.tensor_read())
+                }
+            }
             ReadInput::Borrowed(read) => self.session.to_contiguous_read(read),
         }
     }
@@ -79,6 +86,12 @@ impl<'s, 'a> SessionComposite<'s, 'a> {
     fn materialized<'v>(&mut self, value: &'v ReadInput<'_>) -> Result<Operand<'v>> {
         match value {
             ReadInput::Owned(tensor) => Ok(Operand::Borrowed(tensor)),
+            ReadInput::Value(value) => match value.as_tensor() {
+                Some(tensor) => Ok(Operand::Borrowed(tensor)),
+                None => Ok(Operand::Owned(Box::new(
+                    self.session.to_contiguous_read(value.tensor_read())?,
+                ))),
+            },
             ReadInput::Borrowed(read) => match read.as_tensor() {
                 Some(tensor) => Ok(Operand::Borrowed(tensor)),
                 None => Ok(Operand::Owned(Box::new(
@@ -214,6 +227,27 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
             .session
             .broadcast_in_dim_read(value.tensor_read(), shape, dims)?;
         Ok(ReadInput::Owned(out))
+    }
+
+    fn broadcast_in_dim_owned(
+        &mut self,
+        value: ReadInput<'a>,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> Result<ReadInput<'a>> {
+        // INVARIANT: the composite surface consumes these operands read-only,
+        // so a broadcast is a layout change over storage this value already
+        // owns; the materializing `broadcast_in_dim` stays for the callers that
+        // only hold a borrow (#2143 item 1).
+        Ok(match value {
+            ReadInput::Borrowed(read) => {
+                ReadInput::Borrowed(read.broadcast_in_dim_view(shape, dims)?)
+            }
+            ReadInput::Owned(tensor) => ReadInput::Value(
+                TensorValue::from_tensor(tensor).broadcast_in_dim_view(shape, dims)?,
+            ),
+            ReadInput::Value(value) => ReadInput::Value(value.broadcast_in_dim_view(shape, dims)?),
+        })
     }
 
     fn reshape(&mut self, value: &ReadInput<'a>, shape: &[usize]) -> Result<ReadInput<'a>> {

@@ -198,6 +198,27 @@ pub trait CompositeOps {
         dims: &[usize],
     ) -> Result<Self::Value, Self::Error>;
 
+    /// Broadcast `value` into `shape`, consuming `value`.
+    ///
+    /// A surface whose value owns its tensor and can carry a metadata-only view
+    /// layout overrides this to return a view; the default materializes through
+    /// [`Self::broadcast_in_dim`]. Callers that still need `value` afterwards, or
+    /// that only hold a borrow of it, keep using `broadcast_in_dim`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValidationError::ShapeMismatch` for incompatible shapes or
+    /// [`Error::BackendSource`] for a backend failure.
+    #[doc(hidden)]
+    fn broadcast_in_dim_owned(
+        &mut self,
+        value: Self::Value,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> Result<Self::Value, Self::Error> {
+        self.broadcast_in_dim(&value, shape, dims)
+    }
+
     /// Reshape to a shape with the same element count.
     ///
     /// # Errors
@@ -421,7 +442,7 @@ fn splat<O: CompositeOps>(
     if shape.is_empty() {
         return Ok(scalar);
     }
-    ops.broadcast_in_dim(&scalar, shape, &[])
+    ops.broadcast_in_dim_owned(scalar, shape, &[])
 }
 
 /// `value * factor` with the factor splatted to `shape` (the value's shape).
@@ -664,7 +685,7 @@ fn mean_over<O: CompositeOps>(
     if count == 0 {
         // Reductions reject zero-length axes; the mean of nothing is 0/0.
         let nan = ops.scalar(dtype, f64::NAN)?;
-        return ops.broadcast_in_dim(&nan, &reduced_shape(shape, axes), &[]);
+        return ops.broadcast_in_dim_owned(nan, &reduced_shape(shape, axes), &[]);
     }
     if axes.is_empty() {
         let count = ops.scalar(dtype, 1.0)?;
@@ -767,7 +788,7 @@ fn softmax_impl<O: CompositeOps>(
     let floor = splat(ops, dtype, lowest, &reduced)?;
     let safe_max = ops.binary(CompositeBinary::Maximum, &max, &floor)?;
     drop((max, floor));
-    let safe_max = ops.broadcast_in_dim(&safe_max, &shape, &keep)?;
+    let safe_max = ops.broadcast_in_dim_owned(safe_max, &shape, &keep)?;
     let shifted = ops.binary(CompositeBinary::Sub, x, &safe_max)?;
     drop((safe_max, masked));
     let exp = ops.unary(CompositeUnary::Exp, &shifted)?;
@@ -781,11 +802,11 @@ fn softmax_impl<O: CompositeOps>(
     if log {
         drop(exp);
         let log_sum = ops.unary(CompositeUnary::Log, &safe_sum)?;
-        let log_sum = ops.broadcast_in_dim(&log_sum, &shape, &keep)?;
+        let log_sum = ops.broadcast_in_dim_owned(log_sum, &shape, &keep)?;
         ops.binary(CompositeBinary::Sub, &shifted, &log_sum)
     } else {
         drop(shifted);
-        let safe_sum = ops.broadcast_in_dim(&safe_sum, &shape, &keep)?;
+        let safe_sum = ops.broadcast_in_dim_owned(safe_sum, &shape, &keep)?;
         ops.binary(CompositeBinary::Div, &exp, &safe_sum)
     }
 }
@@ -1008,7 +1029,7 @@ pub fn layer_norm<O: CompositeOps>(
     let reduced = reduced_shape(&shape, &[axis]);
     let mean = scale_by(ops, &sum, inv_count, &reduced)?;
     drop(sum);
-    let mean = ops.broadcast_in_dim(&mean, &shape, &keep)?;
+    let mean = ops.broadcast_in_dim_owned(mean, &shape, &keep)?;
     let centered = ops.binary(CompositeBinary::Sub, x, &mean)?;
     drop(mean);
     let squares = ops.reduce(CompositeReduce::SumSquares, &centered, &[axis])?;
@@ -1019,7 +1040,7 @@ pub fn layer_norm<O: CompositeOps>(
     drop((variance, eps));
     let inv_std = ops.unary(CompositeUnary::Rsqrt, &shifted)?;
     drop(shifted);
-    let inv_std = ops.broadcast_in_dim(&inv_std, &shape, &keep)?;
+    let inv_std = ops.broadcast_in_dim_owned(inv_std, &shape, &keep)?;
     let normalized = ops.binary(CompositeBinary::Mul, &centered, &inv_std)?;
     drop((centered, inv_std));
     apply_affine(ops, normalized, &shape, axis, weight, bias)
@@ -1070,7 +1091,7 @@ pub fn rms_norm<O: CompositeOps>(
     drop((mean_square, eps));
     let inv_rms = ops.unary(CompositeUnary::Rsqrt, &shifted)?;
     drop(shifted);
-    let inv_rms = ops.broadcast_in_dim(&inv_rms, &shape, &keep)?;
+    let inv_rms = ops.broadcast_in_dim_owned(inv_rms, &shape, &keep)?;
     let normalized = ops.binary(CompositeBinary::Mul, x, &inv_rms)?;
     drop(inv_rms);
     apply_affine(ops, normalized, &shape, axis, weight, bias)
@@ -1215,7 +1236,7 @@ pub fn take_along_axis<O: CompositeOps>(
         };
         for (offset, &position) in positions.iter().enumerate() {
             let values = iota(ops, index_dtype, batch_shape[position])?;
-            let values = ops.broadcast_in_dim(&values, &tuple_shape, &[position])?;
+            let values = ops.broadcast_in_dim_owned(values, &tuple_shape, &[position])?;
             let ec = unit(ops, offset + 1)?;
             let placed = ops.binary(CompositeBinary::Mul, &values, &ec)?;
             tuples = ops.binary(CompositeBinary::Add, &tuples, &placed)?;

@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::SliceConfig;
 use crate::error::ReinterpretError;
+use smallvec::SmallVec;
 pub use tenferro_tensor_core::{DType, DynRank, Rank, TensorLayout, TensorRank};
 use tenferro_tensor_core::{ShapeVec, StrideVec};
 use tenferro_tensor_core::{SliceSpec as CoreSliceSpec, ValidationError};
@@ -6614,12 +6615,15 @@ impl TensorValue {
                 },
             ));
         }
-        let mut slices = Vec::with_capacity(self.shape().len());
-        for ((&start, &limit), &stride) in config
+        // The per-axis specs stay inline: a metadata-only slice must not
+        // allocate its own scratch at rank <= 8 (#2040).
+        let mut specs = SmallVec::<[CoreSliceSpec; 8]>::with_capacity(self.shape().len());
+        for (((&start, &limit), &stride), &axis_len) in config
             .starts
             .iter()
             .zip(config.limits.iter())
             .zip(config.strides.iter())
+            .zip(self.shape())
         {
             let start = isize::try_from(start).map_err(|_| {
                 crate::Error::invalid_argument(
@@ -6642,9 +6646,12 @@ impl TensorValue {
                     "slice stride does not fit in isize",
                 )
             })?;
-            slices.push(StridedSliceSpec::new(start, Some(limit), stride));
+            specs.push(core_slice_spec(
+                StridedSliceSpec::new(start, Some(limit), stride),
+                axis_len,
+                op,
+            )?);
         }
-        let specs = core_slice_specs(&slices, self.shape(), op)?;
         let layout = self
             .layout
             .slice_view(&specs, tensor_buffer_len(&self.owner))
@@ -6765,6 +6772,32 @@ fn cast_view_slice<S: 'static, T: TensorScalar>(source: &[S]) -> crate::Result<&
     // equal size/alignment preserve the element boundaries and the source
     // slice remains borrowed for the returned lifetime.
     Ok(unsafe { std::slice::from_raw_parts(source.as_ptr().cast::<T>(), source.len()) })
+}
+
+/// Re-layout a borrowed typed view while keeping its buffer, retained root and
+/// placement.
+///
+/// #2143 item 1: an eager implicit broadcast is a metadata change, so the view
+/// keeps reading the same storage through zero strides instead of copying the
+/// broadcast tensor into a fresh allocation.
+fn broadcast_typed_view<'a, T: 'static, R: TensorRank>(
+    view: TypedTensorView<'a, T, R>,
+    shape: &[usize],
+    dims: &[usize],
+) -> crate::Result<TypedTensorView<'a, T, R>> {
+    let shape = R::shape_from_vec(ShapeVec::from_slice(shape))
+        .map_err(|err| tensor_layout_error("TensorRead::broadcast_in_dim_view", err))?;
+    let layout = view
+        .layout()
+        .broadcast_in_dim_view::<R>(shape, dims, view.backing_len())
+        .map_err(|err| tensor_layout_error("TensorRead::broadcast_in_dim_view", err))?;
+    Ok(TypedTensorView {
+        buffer: view.buffer,
+        root: view.root,
+        layout,
+        placement: view.placement,
+        _representation: std::marker::PhantomData,
+    })
 }
 
 fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> TensorView<'_> {
@@ -7874,6 +7907,55 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Build a metadata-only stride-0 broadcast of this read.
+    ///
+    /// An owned preset is borrowed and an existing view keeps its buffer,
+    /// retained root and placement, so the result copies no elements and
+    /// allocates no storage. A caller that can consume a read-only operand
+    /// should use this instead of the materializing session
+    /// `broadcast_in_dim_read`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    /// let read = TensorRead::from_tensor(&tensor).broadcast_in_dim_view(&[2, 3], &[1])?;
+    /// assert_eq!(read.shape(), &[2, 3]);
+    /// assert_eq!(read.strides()?, vec![0, 1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::UnsupportedDType`] for a caller-owned payload,
+    /// which has no borrowed view, or a validation error when `dims` does not
+    /// map this read's layout into `shape`.
+    #[doc(hidden)]
+    pub fn broadcast_in_dim_view(self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
+        let dtype = self.dtype();
+        // INVARIANT: `tensor_view()` has no arm for a caller-owned payload, so
+        // the refusal must happen before the read is converted into a view.
+        if let DType::External(_) = dtype {
+            return Err(crate::Error::unsupported_dtype(
+                "TensorRead::broadcast_in_dim_view",
+                dtype,
+                "a caller-owned payload has no borrowed broadcast view",
+            ));
+        }
+        let view = self.tensor_view();
+        Ok(Self::View(match view {
+            TensorView::F32(view) => TensorView::F32(broadcast_typed_view(view, shape, dims)?),
+            TensorView::F64(view) => TensorView::F64(broadcast_typed_view(view, shape, dims)?),
+            TensorView::I32(view) => TensorView::I32(broadcast_typed_view(view, shape, dims)?),
+            TensorView::I64(view) => TensorView::I64(broadcast_typed_view(view, shape, dims)?),
+            TensorView::Bool(view) => TensorView::Bool(broadcast_typed_view(view, shape, dims)?),
+            TensorView::C32(view) => TensorView::C32(broadcast_typed_view(view, shape, dims)?),
+            TensorView::C64(view) => TensorView::C64(broadcast_typed_view(view, shape, dims)?),
+        }))
+    }
+
     /// Borrow this read target as a typed compact host slice without allocation.
     ///
     /// This delegates to [`TensorView::as_slice`]. Cloning a `TensorRead` is a
@@ -8843,7 +8925,7 @@ fn core_slice_specs(
     slices: &[StridedSliceSpec],
     shape: &[usize],
     op: &'static str,
-) -> crate::Result<Vec<CoreSliceSpec>> {
+) -> crate::Result<SmallVec<[CoreSliceSpec; 8]>> {
     if slices.len() != shape.len() {
         return Err(crate::Error::validation(
             op,
@@ -8854,7 +8936,7 @@ fn core_slice_specs(
         ));
     }
 
-    let mut specs = Vec::with_capacity(slices.len());
+    let mut specs = SmallVec::<[CoreSliceSpec; 8]>::with_capacity(slices.len());
     for (slice, &axis_len) in slices.iter().zip(shape) {
         specs.push(core_slice_spec(*slice, axis_len, op)?);
     }
