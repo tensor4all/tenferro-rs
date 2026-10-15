@@ -540,6 +540,58 @@ fn gather_rejects_duplicate_offset_and_collapsed_slice_dims() {
     assert!(infer_output_shapes(&duplicate_collapsed_slice_dims, &[&operand, &indices]).is_err());
 }
 
+/// #2042: a slice limit beyond a *concrete* operand extent is a build-time
+/// failure, like the `slice_axis` builder and both backends already report. The
+/// arm computed the extent from the config alone and published a phantom output
+/// shape, so the invalid config built and failed only at execution.
+#[test]
+fn slice_rejects_concrete_limits_beyond_the_operand_extent() {
+    let operand = DimExpr::from_concrete(&[4]);
+    let op = StdTensorOp::Slice(SliceConfig {
+        starts: vec![0],
+        limits: vec![100],
+        strides: vec![1],
+    });
+    let err = infer_output_shapes(&op, &[&operand]).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            Error::Validation {
+                phase: ErrorPhase::Compile,
+                source: ValidationError::InvalidSliceBounds {
+                    start: 0,
+                    end: 100,
+                    axis_len: 4
+                },
+                ..
+            }
+        ),
+        "unexpected error: {err}"
+    );
+
+    // A concrete limit that fits still builds with the extent the slice selects.
+    let fits = StdTensorOp::Slice(SliceConfig {
+        starts: vec![1],
+        limits: vec![4],
+        strides: vec![1],
+    });
+    assert_eq!(
+        infer_output_shapes(&fits, &[&operand]).unwrap(),
+        vec![vec![DimExpr::Const(3)]]
+    );
+
+    // A symbolic extent defers the bound: a limit that may still fit is not
+    // rejected here, and the backends check it against the bound tensor.
+    let symbolic = vec![DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    }];
+    assert_eq!(
+        infer_output_shapes(&op, &[&symbolic]).unwrap(),
+        vec![vec![DimExpr::Const(100)]]
+    );
+}
+
 #[test]
 fn gather_rejects_concrete_slice_sizes_larger_than_operand_dims() {
     let operand = DimExpr::from_concrete(&[4, 5]);
