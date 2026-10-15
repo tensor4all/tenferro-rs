@@ -310,6 +310,41 @@ where
     Some(unsafe { f(data.cast::<CpuExecSession<'static>>().as_mut()) })
 }
 
+/// The faer build this crate links, re-exported so a direct call cannot
+/// disagree with it.
+///
+/// [`FaerParallelismExt::with_faer_parallelism`] hands out a `faer::Par` of this
+/// very type, and `MatRef`/`MatMut` views are built over tenferro-owned storage.
+/// A downstream crate that pins its own `faer` can resolve a different build,
+/// and the mismatch then surfaces as a confusing type error at the callback
+/// boundary rather than at dependency resolution (#1939). Spell direct faer
+/// work with this path: `tenferro_cpu::faer::{MatRef, Par, ...}`.
+///
+/// # Examples
+///
+/// ```rust
+/// # #[cfg(feature = "native")]
+/// # {
+/// use tenferro_cpu::faer::{linalg::matmul::matmul, Accum, Mat, MatRef, Par};
+///
+/// let identity = [1.0_f64, 0.0, 0.0, 1.0];
+/// let a = [1.0_f64, 3.0, 2.0, 4.0];
+/// let mut out = Mat::<f64>::zeros(2, 2);
+/// matmul(
+///     out.as_mut(),
+///     Accum::Replace,
+///     MatRef::from_column_major_slice(&identity, 2, 2),
+///     MatRef::from_column_major_slice(&a, 2, 2),
+///     1.0,
+///     Par::Seq,
+/// );
+/// assert_eq!(*out.as_ref().get(1, 0), 3.0);
+/// # }
+/// ```
+#[cfg(feature = "native")]
+#[cfg_attr(docsrs, doc(cfg(feature = "native")))]
+pub use faer;
+
 /// Invoke a direct faer operation with the parallelism selected by a CPU session.
 ///
 /// The `faer::Par` value is scoped to the callback and is derived from the

@@ -7,11 +7,16 @@ you can call [faer] or BLAS/LAPACK directly on tenferro-owned storage from a
 downstream application. This page is the supported contract for that escape
 hatch.
 
-The contract is **direct dependencies**: your application adds `faer`, and for
-BLAS/LAPACK `cblas-sys` + `lapack`, at the tested compatible versions listed
-below, and enables the matching CPU provider feature on the tenferro crates.
-tenferro does not re-export these crates and does not wrap them; there is no
-hidden interop layer to learn.
+The contract is **direct dependencies** for BLAS/LAPACK: your application adds
+`cblas-sys` + `lapack` at the tested compatible versions listed below, and
+enables the matching CPU provider feature on the tenferro crates. For faer you
+have a choice. `tenferro-cpu` re-exports the build it links as
+`tenferro_cpu::faer` (behind `native`), which makes the `Par` and `Mat` types a
+session hands out the same ones your own code sees and removes the
+version-mismatch class entirely; add a direct `faer` dependency only when you
+want to control that build yourself, and then keep it on the version below.
+tenferro does not wrap these crates and does not add a hidden interop layer to
+learn.
 
 The examples below are compiled and run in CI from
 [`docs/tutorial-code`](https://github.com/tensor4all/tenferro-rs/tree/main/docs/tutorial-code)
@@ -43,7 +48,9 @@ backend.with_backend_session(|session| {
 })??;
 ```
 
-This capability supplies the session-selected `faer::Par`: managed multi-thread
+This capability supplies the session-selected `faer::Par` - spell it as
+`tenferro_cpu::faer::Par`, the re-exported build, so it is the same type the
+capability produces: managed multi-thread
 inner execution receives bounded `Par::rayon(n)`, while one-thread or nested
 execution receives `Par::Seq`. The callback cannot retain the capability or
 session executor. A direct `Par::Seq` call remains the simplest portable escape
@@ -71,15 +78,17 @@ Depend directly on the same major versions the tenferro workspace pins
 
 | Crate | Tested version | Purpose |
 |---|---|---|
-| `faer` | `0.24` | Pure-Rust column-major linear algebra |
+| `faer` (`tenferro_cpu::faer`) | `t4a-faer` `0.24.5` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` under `native` |
 | `cblas-sys` | `0.1` | CBLAS entry points (`cblas_dgemm`, ...) |
 | `lapack` | `0.20` | Fortran LAPACK entry points (`dpotrf`, ...) |
 
 `cblas-sys` is pre-1.0, so pin the exact tested minor (`0.1.x`) rather than
-expecting semver compatibility from `0.1` alone. tenferro does not re-export
-these crates on purpose: keeping the external library a normal direct
-dependency means your application controls the version, the provider link, and
-the threading environment exactly as if tenferro were not involved.
+expecting semver compatibility from `0.1` alone. `cblas-sys` and `lapack` stay
+normal direct dependencies on purpose: your application then controls the
+version, the provider link, and the threading environment exactly as if tenferro
+were not involved. `faer` is the exception, because its `Par` value crosses
+tenferro's `with_faer_parallelism` callback, where a second build could only
+surface as a confusing type error (#1939).
 
 ### Provider features
 

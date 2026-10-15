@@ -201,30 +201,72 @@ pub(crate) mod private {
     }
 }
 
+/// How many emptied bins one acquisition may walk before it starts dropping them.
+///
+/// A bin that empties while another capacity is taken is usually transient: a kernel
+/// that cycles a handful of scratch sizes keeps them in flight in turn, and
+/// re-inserting their map nodes is what the pool exists to avoid. `tenferro-linalg`'s
+/// LAPACK allocation ceilings count exactly that and are the guard: they hold at this
+/// budget of 8 or 16 and break at 4 (measured locally with
+/// `--no-default-features --features blas`), so 16 leaves margin above the empties an
+/// SVD/QR call crosses.
+///
+/// A varying-shape run instead leaves one emptied bin per capacity it has ever used,
+/// and then every acquisition walks all of them (#2170: 41.8 us per acquire after
+/// 10 000 distinct capacities against 21 ns with none). Past this budget the emptied
+/// bins the walk passes are capacities the run has stopped using, so they go, and the
+/// walk stays bounded by the budget instead of by the history.
+const EMPTIED_BIN_SCAN_BUDGET: usize = 16;
+
 fn take_best_fit<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>, len: usize) -> Option<Vec<T>> {
-    // Keep the capacity bin after it empties. A kernel that acquires and
-    // releases the same scratch size every call would otherwise remove and
-    // re-insert this map node on every call, and each re-insert is itself an
-    // allocation — which is what the pool exists to avoid. Empty bins hold no
-    // buffers, so `pool_len` and the retained-bytes accounting are unaffected,
-    // and `clear` still drops them.
-    let key = *pool.range(len..).find(|(_, vecs)| !vecs.is_empty())?.0;
-    pool.get_mut(&key)?.pop()
+    // Walk upward from `len` to the smallest retained capacity that can serve it,
+    // counting the emptied bins passed and dropping them once past the budget. The
+    // walk is one pass and allocates nothing until the budget is exceeded, so a hot
+    // loop that finds its own bin immediately pays nothing for it.
+    let mut cursor = len;
+    let mut emptied = 0usize;
+    let mut stale: Vec<usize> = Vec::new();
+    let serving = loop {
+        match pool
+            .range(cursor..)
+            .next()
+            .map(|(&key, vecs)| (key, vecs.is_empty()))
+        {
+            None => break None,
+            Some((key, false)) => break Some(key),
+            Some((key, true)) => {
+                emptied += 1;
+                if emptied > EMPTIED_BIN_SCAN_BUDGET {
+                    stale.push(key);
+                }
+                cursor = key.saturating_add(1);
+            }
+        }
+    };
+    for key in stale {
+        pool.remove(&key);
+    }
+    let key = serving?;
+    let vecs = pool.get_mut(&key)?;
+    vecs.pop()
 }
 
 fn pool_len<T>(pool: &BTreeMap<usize, Vec<Vec<T>>>) -> usize {
     pool.values().map(Vec::len).sum()
 }
 
+#[cfg(test)]
+fn empty_bins<T>(pool: &BTreeMap<usize, Vec<Vec<T>>>) -> usize {
+    pool.values().filter(|vecs| vecs.is_empty()).count()
+}
+
 fn evict_one_from_pool<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>) -> Option<usize> {
-    // Retained bins may be empty (see `take_best_fit`), and an empty bin has
-    // nothing to evict.
     let key = *pool.iter().find(|(_, vecs)| !vecs.is_empty())?.0;
     let vecs = pool.get_mut(&key)?;
     let _ = vecs.pop()?;
     if vecs.is_empty() {
-        // Eviction runs because the pool is over its retention limit, so here
-        // the bin is dropped rather than kept for reuse.
+        // `take_best_fit` drops an emptied bin too; eviction cannot leave one
+        // behind either.
         pool.remove(&key);
     }
     Some(key.saturating_mul(size_of::<T>()))
@@ -245,7 +287,9 @@ fn smallest_pool_candidate<T>(
     pool: &BTreeMap<usize, Vec<Vec<T>>>,
     kind: TypedPoolKind,
 ) -> Option<(usize, TypedPoolKind)> {
-    // Only a bin that still holds a buffer is an eviction candidate.
+    // Bins are dropped when they empty (see `take_best_fit`), so the first
+    // entry is the smallest retained capacity; the emptiness check stays as a
+    // guard for a bin a future path could leave behind.
     pool.iter()
         .find(|(_, vecs)| !vecs.is_empty())
         .map(|(&capacity, _)| (capacity.saturating_mul(size_of::<T>()), kind))
@@ -264,14 +308,16 @@ fn decrement_in_flight(in_flight: &mut BTreeMap<usize, usize>, cap: usize) {
     let Some(count) = in_flight.get_mut(&cap) else {
         return;
     };
-    // Keep the zero entry for the same reason `take_best_fit` keeps an empty
-    // bin: a steady acquire/release cycle must not re-insert this node every
-    // call. `replenish_in_flight_for` skips zero counts, and
-    // `clear_in_flight_retained` still drops them.
+    // Keep the zero entry. Its cost is off the acquisition path: only
+    // `replenish_in_flight_for` walks the map, and it runs when the pool is
+    // replenished or cleared, not per operation. Dropping the entry instead was
+    // measured to cost a map insertion per tracked acquire/release cycle in a pool
+    // that has seen many capacities (`pool_in_flight_f64_bins10000`: 194 ns per
+    // cycle with the entries kept against 249 ns with them dropped, #2170), which
+    // buys nothing for a walk that is not on any hot path.
     //
     // The decrement saturates because a caller may release a buffer this pool
-    // never handed out. That used to be a no-op only because the entry was
-    // removed at zero; with the entry retained it has to stay a no-op here.
+    // never handed out; that stays a no-op instead of removing a live count.
     *count = count.saturating_sub(1);
 }
 
@@ -430,6 +476,45 @@ impl BufferPool {
             && none_in_flight(&state.bool_in_flight)
             && none_in_flight(&state.c64_in_flight)
             && none_in_flight(&state.c32_in_flight)
+    }
+
+    /// Number of retained capacity bins, one per capacity the pool still holds.
+    #[cfg(test)]
+    pub(crate) fn bin_count(&self) -> usize {
+        let state = lock_pool(&self.state);
+        state.f64_pool.len()
+            + state.f32_pool.len()
+            + state.i32_pool.len()
+            + state.i64_pool.len()
+            + state.bool_pool.len()
+            + state.c64_pool.len()
+            + state.c32_pool.len()
+    }
+
+    /// Number of retained capacity bins that hold no buffer.
+    #[cfg(test)]
+    pub(crate) fn empty_bin_count(&self) -> usize {
+        let state = lock_pool(&self.state);
+        empty_bins(&state.f64_pool)
+            + empty_bins(&state.f32_pool)
+            + empty_bins(&state.i32_pool)
+            + empty_bins(&state.i64_pool)
+            + empty_bins(&state.bool_pool)
+            + empty_bins(&state.c64_pool)
+            + empty_bins(&state.c32_pool)
+    }
+
+    /// Number of in-flight bookkeeping entries, idle ones included.
+    #[cfg(test)]
+    pub(crate) fn in_flight_entries(&self) -> usize {
+        let state = lock_pool(&self.state);
+        state.f64_in_flight.len()
+            + state.f32_in_flight.len()
+            + state.i32_in_flight.len()
+            + state.i64_in_flight.len()
+            + state.bool_in_flight.len()
+            + state.c64_in_flight.len()
+            + state.c32_in_flight.len()
     }
     /// Create an empty typed buffer pool.
     ///

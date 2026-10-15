@@ -16,6 +16,26 @@ use tenferro_tensor::{CompareDir, DType, Error, GatherConfig, PadConfig, Tensor}
 
 pub(crate) mod session;
 
+/// Which broadcast route a composite took (#2143 item 1).
+///
+/// Hidden observation surface for test and benchmark harnesses: it is how a
+/// caller checks that the session softmax does not enter the materializing
+/// `broadcast_in_dim_read` route. Recording is off by default.
+#[doc(hidden)]
+pub use session::BroadcastRoute;
+
+/// Start or stop recording composite broadcast routes on every thread.
+#[doc(hidden)]
+pub fn set_broadcast_route_observation(enabled: bool) {
+    session::set_broadcast_route_observation(enabled);
+}
+
+/// Take the composite broadcast routes recorded on this thread.
+#[doc(hidden)]
+pub fn take_broadcast_routes() -> Vec<BroadcastRoute> {
+    session::take_broadcast_routes()
+}
+
 /// Elementwise unary primitives a composite may emit.
 ///
 /// # Examples

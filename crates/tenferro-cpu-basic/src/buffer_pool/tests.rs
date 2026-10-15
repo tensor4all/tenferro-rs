@@ -2,7 +2,7 @@ use std::mem::size_of;
 
 use super::{
     parse_default_max_retained_capacity_bytes, BufferPool, PoolScalar,
-    DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
+    DEFAULT_MAX_RETAINED_CAPACITY_BYTES, EMPTIED_BIN_SCAN_BUDGET,
 };
 use crate::PooledUninitOutput;
 
@@ -549,4 +549,113 @@ fn pooled_uninit_guard_shape_product_failure_does_not_touch_pool() {
     let error = PooledUninitOutput::<i32>::new(&pool, vec![usize::MAX, 2]).unwrap_err();
     assert!(error.to_string().contains("pooled_uninit_output"));
     assert!(pool.is_empty());
+}
+
+/// #2170: an acquisition that has to walk a capacity history drops the emptied bins
+/// it passes, so the pool does not keep one entry per capacity the run has ever used
+/// and later acquisitions stop being linear in that history.
+#[test]
+fn a_capacity_history_is_swept_by_the_walk_that_crosses_it() {
+    let mut pool = BufferPool::with_max_retained_capacity_bytes(usize::MAX);
+    // One retained buffer per distinct capacity, as a varying-shape run leaves them
+    // behind.
+    let capacities: Vec<usize> = (1..=200).collect();
+    for &cap in &capacities {
+        let buf = pool.acquire_with_capacity::<f64>(cap);
+        <f64 as PoolScalar>::pool_release(&mut pool, buf);
+    }
+    assert_eq!(pool.bin_count(), capacities.len());
+    assert_eq!(pool.empty_bin_count(), 0);
+
+    // Checking them all out largest-first empties every bin and holds them out of
+    // the pool. Each take finds the bin it asked for immediately, so nothing is
+    // swept here.
+    let held: Vec<Vec<f64>> = capacities
+        .iter()
+        .rev()
+        .map(|&cap| pool.acquire_with_capacity::<f64>(cap))
+        .collect();
+    assert_eq!(pool.empty_bin_count(), capacities.len());
+
+    // A request nothing can serve walks the whole history. The emptied bins past the
+    // scan budget are capacities the run has stopped using, so they go; later
+    // acquisitions are then no longer linear in the history.
+    assert!(pool.acquire_with_capacity::<f64>(1).capacity() >= 1);
+    assert_eq!(
+        pool.empty_bin_count(),
+        EMPTIED_BIN_SCAN_BUDGET,
+        "the walk keeps the scan budget of emptied bins and drops the rest"
+    );
+    assert!(pool.acquire_with_capacity::<f64>(1).capacity() >= 1);
+    assert_eq!(pool.empty_bin_count(), EMPTIED_BIN_SCAN_BUDGET);
+
+    // Returning the held buffers retains exactly the live capacities again.
+    for buf in held {
+        <f64 as PoolScalar>::pool_release(&mut pool, buf);
+    }
+    assert_eq!(pool.bin_count(), capacities.len());
+    assert_eq!(pool.empty_bin_count(), 0);
+}
+
+/// #1831's trade-off, kept for #2170: a hot loop with a handful of sizes keeps
+/// its bins, so it neither grows nor loses the reuse the retention exists for.
+#[test]
+fn steady_cycle_keeps_one_bin_and_reuses_it() {
+    let mut pool = BufferPool::with_max_retained_capacity_bytes(usize::MAX);
+    for _ in 0..64 {
+        let buf = pool.acquire_with_capacity::<f64>(8);
+        <f64 as PoolScalar>::pool_release(&mut pool, buf);
+    }
+    assert_eq!(pool.bin_count(), 1);
+    assert_eq!(pool.empty_bin_count(), 0);
+
+    let buf = pool.acquire_with_capacity::<f64>(8);
+    let ptr = buf.as_ptr();
+    <f64 as PoolScalar>::pool_release(&mut pool, buf);
+    let reused = pool.acquire_with_capacity::<f64>(8);
+    assert_eq!(
+        reused.as_ptr(),
+        ptr,
+        "the retained buffer is reused rather than re-allocated"
+    );
+
+    // Two sizes alternating also keep both bins.
+    for _ in 0..8 {
+        for cap in [8usize, 64] {
+            let buf = pool.acquire_with_capacity::<f64>(cap);
+            <f64 as PoolScalar>::pool_release(&mut pool, buf);
+        }
+    }
+    assert_eq!(pool.bin_count(), 2);
+    assert_eq!(pool.empty_bin_count(), 0);
+}
+
+/// #2170: idle in-flight bookkeeping entries are kept, because only
+/// `replenish_in_flight_for` walks them and that is not an acquisition path.
+#[test]
+fn idle_in_flight_entries_are_kept() {
+    let mut pool = BufferPool::with_max_retained_capacity_bytes(usize::MAX);
+    let capacities: Vec<usize> = (0..=20).map(|shift| 1usize << shift).collect();
+    for &cap in &capacities {
+        // The first cycle allocates, the second reuses and so passes through the
+        // in-flight bookkeeping for this capacity.
+        for _ in 0..2 {
+            let buf = pool.acquire_with_capacity::<f64>(cap);
+            <f64 as PoolScalar>::pool_release(&mut pool, buf);
+        }
+    }
+    assert_eq!(
+        pool.in_flight_entries(),
+        capacities.len(),
+        "every capacity that was checked out keeps its bookkeeping entry"
+    );
+    assert!(pool.in_flight_is_empty());
+
+    // A live checkout is still counted, and stops being in flight when it returns.
+    <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4096));
+    let held = pool.acquire_with_capacity::<f64>(4096);
+    assert!(pool.in_flight_entries() >= 1);
+    assert!(!pool.in_flight_is_empty());
+    <f64 as PoolScalar>::pool_release(&mut pool, held);
+    assert!(pool.in_flight_is_empty());
 }
