@@ -1695,11 +1695,25 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     /// # Errors
     /// Returns [`crate::Error::HostAccess`] with
     /// [`HostAccessError::Unsupported`] when the group's allocation is not
-    /// host-accessible.
+    /// host-accessible, or [`crate::Error::Validation`] with
+    /// [`ValidationError::NonContiguousViewAsSlice`] or
+    /// [`ValidationError::ViewOutOfBounds`] when the owner has no contiguous
+    /// logical extent inside its backing storage.
     pub fn map_read(&self) -> crate::Result<HostReadGuard<'_, T>> {
         match &self.storage {
             DynamicStorage::Host(host) => Ok(host_read_guard(host.data.as_slice())),
-            DynamicStorage::Group(core) => core.group.host_slice::<T>().map(host_read_guard),
+            DynamicStorage::Group(core) => {
+                // A root-preserving extraction exports only its descriptor
+                // extent (#2023), so the mapping must not expose the root.
+                let range = group_logical_range(&core.group, "TypedTensor::map_read")?;
+                let data = core.group.host_slice::<T>()?;
+                data.get(range).map(host_read_guard).ok_or_else(|| {
+                    crate::Error::validation(
+                        "TypedTensor::map_read",
+                        ValidationError::ViewOutOfBounds,
+                    )
+                })
+            }
         }
     }
 
@@ -1723,14 +1737,26 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     /// # Errors
     /// Returns [`crate::Error::HostAccess`] with
     /// [`HostAccessError::Unsupported`] when the group's allocation is not
-    /// host-writable.
+    /// host-writable, or [`crate::Error::Validation`] with
+    /// [`ValidationError::NonContiguousViewAsSlice`] or
+    /// [`ValidationError::ViewOutOfBounds`] when the owner has no contiguous
+    /// logical extent inside its backing storage.
     pub fn map_write(&mut self) -> crate::Result<HostWriteGuard<'_, T>>
     where
         T: Clone,
     {
         match &mut self.storage {
             DynamicStorage::Host(host) => Ok(host_write_guard(host.data.as_mut_slice())),
-            DynamicStorage::Group(core) => core.group.host_slice_mut::<T>().map(host_write_guard),
+            DynamicStorage::Group(core) => {
+                let range = group_logical_range(&core.group, "TypedTensor::map_write")?;
+                let data = core.group.host_slice_mut::<T>()?;
+                data.get_mut(range).map(host_write_guard).ok_or_else(|| {
+                    crate::Error::validation(
+                        "TypedTensor::map_write",
+                        ValidationError::ViewOutOfBounds,
+                    )
+                })
+            }
         }
     }
 }
@@ -1840,9 +1866,14 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
     /// ```
     ///
     /// # Errors
-    /// Returns [`crate::Error::RuntimeState`] for a device-only allocation.
+    /// Returns [`crate::Error::RuntimeState`] for a device-only allocation and
+    /// the non-compact-descriptor validation error for a strided owner.
     pub fn host_data(&self) -> crate::Result<&[T]> {
-        self.storage.group.host_slice::<T>()
+        let data = self.storage.group.host_slice::<T>()?;
+        let range = group_logical_range(&self.storage.group, "TypedTensor::host_data")?;
+        data.get(range).ok_or_else(|| {
+            crate::Error::validation("TypedTensor::host_data", ValidationError::ViewOutOfBounds)
+        })
     }
 
     /// Exclusively borrow host elements when the group's allocation is host-accessible.
@@ -1858,9 +1889,17 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
     /// ```
     ///
     /// # Errors
-    /// Returns [`crate::Error::RuntimeState`] for a device-only allocation.
+    /// Returns [`crate::Error::RuntimeState`] for a device-only allocation and
+    /// the non-compact-descriptor validation error for a strided owner.
     pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
-        self.storage.group.host_slice_mut::<T>()
+        let range = group_logical_range(&self.storage.group, "TypedTensor::host_data_mut")?;
+        let data = self.storage.group.host_slice_mut::<T>()?;
+        data.get_mut(range).ok_or_else(|| {
+            crate::Error::validation(
+                "TypedTensor::host_data_mut",
+                ValidationError::ViewOutOfBounds,
+            )
+        })
     }
 
     /// Prepare this group-backed owner for one provider-native read binding.
@@ -1876,7 +1915,7 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
     where
         T: TensorScalar + 'static,
     {
-        let layout = self.layout();
+        let layout = group_physical_layout(&self.storage.group);
         self.storage
             .group
             .prepare_device_read_for_layout::<T>(&layout)
@@ -1896,7 +1935,7 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
     where
         T: TensorScalar + 'static,
     {
-        let layout = self.layout();
+        let layout = group_physical_layout(&self.storage.group);
         self.storage
             .group
             .prepare_device_write_for_layout::<T>(&layout)
@@ -1999,6 +2038,54 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
             )),
         }
     }
+}
+
+impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
+    /// Layout that reflects the owned storage rather than the compact shape.
+    ///
+    /// [`Self::layout`] reports the compact construction layout. A
+    /// root-preserving extraction may instead carry a nonzero descriptor offset
+    /// and fewer logical elements than the backing root, so callers that
+    /// canonicalize an owned tensor must use this accessor.
+    pub(crate) fn physical_layout(&self) -> TensorLayout<R> {
+        match &self.storage {
+            DynamicStorage::Host(_) => TensorLayout::<R>::compact(self.shape.clone())
+                .unwrap_or_else(|err| unreachable!("validated owned shape: {err}")),
+            DynamicStorage::Group(core) => group_physical_layout(&core.group),
+        }
+    }
+}
+
+/// Descriptor layout of a group-backed owner over its whole backing root.
+///
+/// The descriptor is the storage truth for a root-preserving extraction, so its
+/// offset and backing length override the compact logical shape cached on the
+/// tensor.
+fn group_physical_layout<R: TensorRank>(core: &OwnedTensorGroup<R>) -> TensorLayout<R> {
+    let descriptor = core
+        .group
+        .descriptor_layout(core.slot)
+        .unwrap_or_else(|| unreachable!("a live group carries its descriptor layout"));
+    let shape = R::shape_from_vec(descriptor.shape().to_vec().into())
+        .unwrap_or_else(|err| unreachable!("validated descriptor shape: {err:?}"));
+    let strides = R::strides_from_vec(descriptor.strides().to_vec().into())
+        .unwrap_or_else(|err| unreachable!("validated descriptor strides: {err:?}"));
+    let buffer_len = core
+        .group
+        .descriptor_backing_len(core.slot)
+        .unwrap_or_else(|| unreachable!("a live group carries its root length"));
+    TensorLayout::<R>::from_parts(shape, strides, descriptor.offset(), buffer_len)
+        .unwrap_or_else(|err| unreachable!("validated descriptor layout: {err:?}"))
+}
+
+/// Contiguous logical element range of a group-backed owner inside its root.
+fn group_logical_range<R: TensorRank>(
+    core: &OwnedTensorGroup<R>,
+    op: &'static str,
+) -> crate::Result<std::ops::Range<usize>> {
+    core.group
+        .descriptor_logical_range(core.slot)
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::NonContiguousViewAsSlice))
 }
 
 impl<T, R: TensorRank, D: Representation> std::fmt::Debug for TypedTensor<T, R, D> {
@@ -6238,7 +6325,7 @@ impl TensorValue {
     /// Returns [`crate::Error::RuntimeState`] or [`crate::Error::Unsupported`]
     /// when the backend/storage owner cannot be duplicated.
     pub fn duplicate(&self) -> crate::Result<Self> {
-        let tensor = self.owner.duplicate()?;
+        let tensor = duplicate_backing_storage(&self.owner)?;
         Self::from_parts(
             tensor,
             self.shape().to_vec(),
@@ -6703,6 +6790,60 @@ impl TensorValue {
     }
 }
 
+/// Copy a value's backing storage into a fresh owned tensor carrying `layout`.
+///
+/// A value layout is relative to its owner's backing root. For a plain compact
+/// owner that root is the owner itself, and [`TypedTensor::duplicate`] is
+/// enough. A root-preserving extraction (#2023) exports only its descriptor
+/// extent over a wider root, so the copy has to carry the root and be rebased
+/// onto the same descriptor layout.
+fn duplicate_backing_storage(tensor: &Tensor) -> crate::Result<Tensor> {
+    fn typed<T: TensorScalar>(tensor: &TypedTensor<T>) -> crate::Result<Tensor> {
+        // The owner's descriptor, not the outer value layout: the copy is an
+        // owner of the same kind, and a value layout may be a strided view over
+        // it that the owner must not adopt.
+        let layout = tensor.physical_layout();
+        // `as_view().host_storage()` reports the whole root for a host owner
+        // (including one produced by an owning reinterpretation) and refuses a
+        // backend owner, which `buffer()` cannot express.
+        let root = tensor.as_view().host_storage()?.to_vec();
+        let op = "TensorValue::duplicate";
+        let (group, slot) =
+            AllocationGroup::from_host_vec::<T, DynRank>(ShapeVec::from_slice(&[root.len()]), root)
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let group = group
+            .update_descriptor_layout(
+                slot,
+                layout.shape().to_vec(),
+                layout.strides().to_vec(),
+                layout.offset(),
+            )
+            .map_err(|(_, error)| crate::Error::runtime_state_source(op, error))?;
+        let allocation = group
+            .allocation_index(slot)
+            .unwrap_or_else(|_| unreachable!("the duplicate group carries a live descriptor"));
+        let descriptor_layout = group
+            .descriptor_layout(slot)
+            .unwrap_or_else(|| unreachable!("the duplicate group carries a live descriptor"));
+        let placement = tensor.placement().clone();
+        Ok(tensor_from_group(
+            group,
+            slot,
+            allocation,
+            T::dtype(),
+            descriptor_layout,
+            placement,
+        ))
+    }
+
+    match &tensor.payload {
+        // A caller-owned payload keeps its existing duplication route: it has no
+        // allocation group to rebuild.
+        TensorPayload::External(..) => tensor.duplicate(),
+        TensorPayload::Native(preset) => with_preset!(preset, |inner| typed(inner)),
+    }
+}
+
 fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
     match &tensor.payload {
         // A caller-owned payload carries its own view layout, so strides and offset
@@ -6719,7 +6860,7 @@ fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
             // payload it was created from and this construction cannot fail.
             unreachable!("a validated payload yields a layout inside its own storage")
         }),
-        TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.layout()),
+        TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.physical_layout()),
     }
 }
 
@@ -9325,7 +9466,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     ///
     /// # Errors
     /// Returns [`ReinterpretError`] carrying the unchanged tensor when the
-    /// storage is device-only or the managed root cannot export a host vector.
+    /// storage is device-only, the managed root cannot export a host vector, or
+    /// a group-backed descriptor is not compact column-major
+    /// ([`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`]).
     pub fn into_host_vec(self) -> std::result::Result<Vec<T>, ReinterpretError<Self>>
     where
         T: 'static,
@@ -9338,20 +9481,47 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         } = self;
         match storage {
             DynamicStorage::Host(HostStorage { data }) => Ok(data.into_vec()),
-            DynamicStorage::Group(GroupStorage { group }) => match group.into_host_vec::<T>() {
-                Ok(data) => Ok(data),
-                Err((group, error)) => Err(ReinterpretError::new(
-                    TypedTensor {
-                        shape,
-                        placement,
-                        layout,
-                        storage: DynamicStorage::Group(GroupStorage {
-                            group: Box::new(group),
-                        }),
-                    },
-                    error,
-                )),
-            },
+            DynamicStorage::Group(GroupStorage { group }) => {
+                let range = match group_logical_range(&group, "TypedTensor::into_host_vec") {
+                    Ok(range) => range,
+                    Err(error) => {
+                        return Err(ReinterpretError::new(
+                            TypedTensor {
+                                shape,
+                                placement,
+                                layout,
+                                storage: DynamicStorage::Group(GroupStorage { group }),
+                            },
+                            error,
+                        ))
+                    }
+                };
+                match group.into_host_vec::<T>() {
+                    Ok(mut data) => {
+                        // INVARIANT: the live descriptor's compact logical range
+                        // was validated inside its root span, so the exported
+                        // vector covers it.
+                        debug_assert!(range.end <= data.len(), "descriptor range exceeds its root");
+                        data.truncate(range.end);
+                        data.drain(..range.start);
+                        // The exported vector represents the logical extent only,
+                        // so it must not retain the root's capacity.
+                        data.shrink_to_fit();
+                        Ok(data)
+                    }
+                    Err((group, error)) => Err(ReinterpretError::new(
+                        TypedTensor {
+                            shape,
+                            placement,
+                            layout,
+                            storage: DynamicStorage::Group(GroupStorage {
+                                group: Box::new(group),
+                            }),
+                        },
+                        error,
+                    )),
+                }
+            }
         }
     }
 
@@ -9370,7 +9540,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     ///
     /// # Errors
     /// Returns [`ReinterpretError`] carrying the unchanged tensor when the
-    /// storage is device-only or the managed root cannot export a host vector.
+    /// storage is device-only, the managed root cannot export a host vector, or
+    /// a group-backed descriptor is not compact column-major
+    /// ([`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`]).
     pub fn into_vec_col_major(
         self,
     ) -> std::result::Result<(Vec<usize>, Vec<T>), ReinterpretError<Self>>
@@ -9384,7 +9556,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         }
     }
 
-    /// Borrow the plain host values (or an existing managed host root).
+    /// Borrow the plain host values of this tensor.
+    ///
+    /// A group-backed owner extracted from a larger root exposes only its
+    /// logical, compact values; [`Self::as_view`] retains the whole backing
+    /// root when a caller needs to inspect elements outside the extent.
     ///
     /// # Examples
     ///
@@ -9396,15 +9572,30 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     ///
     /// # Errors
-    /// Returns [`crate::Error::RuntimeState`] for device-only storage.
+    /// Returns [`crate::Error::RuntimeState`] for device-only storage and the
+    /// non-compact-descriptor validation error for a strided owner.
     pub fn host_data(&self) -> crate::Result<&[T]> {
         match &self.storage {
             DynamicStorage::Host(HostStorage { data }) => Ok(data.as_slice()),
-            DynamicStorage::Group(core) => core.group.host_slice::<T>(),
+            DynamicStorage::Group(core) => {
+                let data = core.group.host_slice::<T>()?;
+                let range = group_logical_range(&core.group, "TypedTensor::host_data")?;
+                data.get(range).ok_or_else(|| {
+                    crate::Error::validation(
+                        "TypedTensor::host_data",
+                        ValidationError::ViewOutOfBounds,
+                    )
+                })
+            }
         }
     }
 
-    /// Borrow compact host storage as a flat column-major slice without copying.
+    /// Borrow the logical host values as a flat column-major slice without
+    /// copying.
+    ///
+    /// This is the value view of [`Self::host_data`]: a root-preserving
+    /// extraction exposes only its compact logical slice, never the root prefix
+    /// and never elements outside its extent.
     ///
     /// # Examples
     /// ```
@@ -9419,7 +9610,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         self.host_data()
     }
 
-    /// Mutably borrow the plain host values (or an existing managed host root).
+    /// Mutably borrow the plain host values of this tensor.
+    ///
+    /// The exclusive borrow covers exactly the logical, compact values of a
+    /// root-preserving owner, so writes cannot reach elements outside its
+    /// extent.
     ///
     /// # Examples
     ///
@@ -9432,11 +9627,21 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     ///
     /// # Errors
-    /// Returns [`crate::Error::RuntimeState`] for device-only storage.
+    /// Returns [`crate::Error::RuntimeState`] for device-only storage and the
+    /// non-compact-descriptor validation error for a strided owner.
     pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.storage {
             DynamicStorage::Host(HostStorage { data }) => Ok(data.as_mut_slice()),
-            DynamicStorage::Group(core) => core.group.host_slice_mut::<T>(),
+            DynamicStorage::Group(core) => {
+                let range = group_logical_range(&core.group, "TypedTensor::host_data_mut")?;
+                let data = core.group.host_slice_mut::<T>()?;
+                data.get_mut(range).ok_or_else(|| {
+                    crate::Error::validation(
+                        "TypedTensor::host_data_mut",
+                        ValidationError::ViewOutOfBounds,
+                    )
+                })
+            }
         }
     }
 
@@ -9723,7 +9928,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                 crate::AccessError::Unsupported { backend: "host" },
             ));
         };
-        let layout = self.layout();
+        let layout = self.physical_layout();
         core.group
             .prepare_device_read_for_layout::<T>(&layout)
             .map_err(|error| crate::Error::runtime_state_source(op, error))
@@ -9738,7 +9943,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let layout = self.layout();
+        let layout = self.physical_layout();
         let DynamicStorage::Group(core) = &mut self.storage else {
             return Err(crate::Error::runtime_state_source(
                 op,
@@ -9750,6 +9955,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
 
+    /// Element count of the tensor's backing storage.
+    ///
+    /// A root-preserving owner reports its whole backing root, not just the
+    /// logical view extent, so layout validation for views and reshapes bounds
+    /// against the real allocation.
     pub(crate) fn buffer_len(&self) -> usize
     where
         T: 'static,
@@ -9759,7 +9969,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             DynamicStorage::Group(core) => core
                 .group
                 .group
-                .descriptor_len(core.group.slot)
+                .descriptor_backing_len(core.group.slot)
                 .unwrap_or_else(|| unreachable!("typed tensor group descriptor mismatch")),
         }
     }
@@ -9816,6 +10026,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
 
     /// Borrow this tensor as a typed view preserving rank and layout metadata.
     ///
+    /// The view carries the descriptor's physical layout, so a root-preserving
+    /// extraction exposes its full backing allocation with the logical slice at
+    /// the descriptor offset.
+    ///
     /// # Panics
     ///
     /// Panics only if the typed descriptor and its single group owner are
@@ -9834,7 +10048,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        let layout = self.layout();
+        let layout = self.physical_layout();
         let placement = self.placement.clone();
         match &self.storage {
             DynamicStorage::Host(HostStorage { data }) => TypedTensorView {
@@ -9889,7 +10103,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let layout = self.layout();
+        let layout = self.physical_layout();
         let placement = self.placement.clone();
         match &mut self.storage {
             DynamicStorage::Host(HostStorage { data }) => TypedTensorViewMut {
@@ -10061,7 +10275,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         })
     }
 
-    /// Consume this tensor and return its storage, layout, and placement.
+    /// Consume this tensor and return its logical host storage, layout, and
+    /// placement.
+    ///
+    /// A root-preserving owner exports only its compact logical values, exactly
+    /// like [`TypedTensor::into_host_vec`].
     ///
     /// # Examples
     ///
@@ -10081,39 +10299,26 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// # Errors
     ///
     /// Returns [`ReinterpretError`] carrying the unchanged tensor when it uses
-    /// backend storage; download it before extracting host storage.
+    /// backend storage (download it before extracting host storage) or when a
+    /// group-backed descriptor is not compact column-major
+    /// ([`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`]).
     pub fn into_parts(
         self,
     ) -> std::result::Result<(StorageBuffer<T>, TensorLayout<R>, Placement), ReinterpretError<Self>>
     where
         T: TensorScalar,
     {
-        let TypedTensor {
-            shape,
-            placement,
-            layout: cached_layout,
-            storage,
-        } = self;
-        let layout = TensorLayout::compact(shape.clone())
-            .unwrap_or_else(|err| unreachable!("validated owned shape: {err}"));
-        match storage {
-            DynamicStorage::Host(HostStorage { data }) => {
-                Ok((StorageBuffer::Host(data.into_vec()), layout, placement))
-            }
-            DynamicStorage::Group(GroupStorage { group }) => match group.into_host_vec::<T>() {
-                Ok(data) => Ok((StorageBuffer::Host(data), layout, placement)),
-                Err((group, error)) => Err(ReinterpretError::new(
-                    TypedTensor {
-                        shape,
-                        placement,
-                        layout: cached_layout,
-                        storage: DynamicStorage::Group(GroupStorage {
-                            group: Box::new(group),
-                        }),
-                    },
-                    error,
-                )),
-            },
+        let placement = self.placement().clone();
+        let layout = TensorLayout::<R>::compact(
+            R::shape_from_vec(self.shape().to_vec().into())
+                .unwrap_or_else(|err| unreachable!("validated owned shape: {err:?}")),
+        )
+        .unwrap_or_else(|err| unreachable!("validated owned shape: {err}"));
+        // The export contract is identical to `into_host_vec`; reuse it rather
+        // than repeating the descriptor rebase and its failure recovery.
+        match self.into_host_vec() {
+            Ok(data) => Ok((StorageBuffer::Host(data), layout, placement)),
+            Err(error) => Err(error),
         }
     }
 }
@@ -10218,6 +10423,18 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         }
     }
 
+    /// Whole backing host buffer, including bytes outside a root-preserving
+    /// extraction's logical extent (#2023).
+    ///
+    /// A mutable reinterpretation rebases the descriptor over the whole root,
+    /// so it must borrow that root rather than the exported logical slice.
+    fn backing_host_slice_mut(&mut self) -> crate::Result<&mut [T]> {
+        match &mut self.storage {
+            DynamicStorage::Host(HostStorage { data }) => Ok(data.as_mut_slice()),
+            DynamicStorage::Group(core) => core.group.host_slice_mut::<T>(),
+        }
+    }
+
     fn group_host_slice(&self) -> &[T] {
         let DynamicStorage::Group(core) = &self.storage else {
             return &[];
@@ -10254,7 +10471,7 @@ fn reinterpret_owned<S: TensorScalar, U: TensorScalar, R: TensorRank>(
             ),
         ));
     }
-    let source_layout = owner.layout();
+    let source_layout = owner.physical_layout();
     let target_layout = match make_layout(
         source_layout.shape(),
         source_layout.strides(),
@@ -10326,7 +10543,7 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
     pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f32, DynRank>> {
         let op = "TypedTensor::as_real_view_mut";
         validate_representation_pair(op, DType::C32, DType::F32)?;
-        let source_layout = self.layout();
+        let source_layout = self.physical_layout();
         let layout = reinterpret_complex_to_real_layout(
             self.shape(),
             source_layout.strides(),
@@ -10345,7 +10562,7 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
         }
         let placement = self.placement().clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex32, f32>(
-            self.host_data_mut()?,
+            self.backing_host_slice_mut()?,
             op,
         )?);
         Ok(TypedTensorViewMut {
@@ -10402,7 +10619,7 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
     pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f64, DynRank>> {
         let op = "TypedTensor::as_real_view_mut";
         validate_representation_pair(op, DType::C64, DType::F64)?;
-        let source_layout = self.layout();
+        let source_layout = self.physical_layout();
         let layout = reinterpret_complex_to_real_layout(
             self.shape(),
             source_layout.strides(),
@@ -10421,7 +10638,7 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
         }
         let placement = self.placement().clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex64, f64>(
-            self.host_data_mut()?,
+            self.backing_host_slice_mut()?,
             op,
         )?);
         Ok(TypedTensorViewMut {
@@ -10480,7 +10697,7 @@ impl<R: TensorRank> TypedTensor<f32, R> {
     ) -> crate::Result<TypedTensorViewMut<'_, Complex32, DynRank>> {
         let op = "TypedTensor::as_complex_view_mut";
         validate_representation_pair(op, DType::F32, DType::C32)?;
-        let source_layout = self.layout();
+        let source_layout = self.physical_layout();
         let layout = reinterpret_real_to_complex_layout(
             self.shape(),
             source_layout.strides(),
@@ -10499,7 +10716,7 @@ impl<R: TensorRank> TypedTensor<f32, R> {
         }
         let placement = self.placement().clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f32, Complex32>(
-            self.host_data_mut()?,
+            self.backing_host_slice_mut()?,
             op,
         )?);
         Ok(TypedTensorViewMut {
@@ -10559,7 +10776,7 @@ impl<R: TensorRank> TypedTensor<f64, R> {
     ) -> crate::Result<TypedTensorViewMut<'_, Complex64, DynRank>> {
         let op = "TypedTensor::as_complex_view_mut";
         validate_representation_pair(op, DType::F64, DType::C64)?;
-        let source_layout = self.layout();
+        let source_layout = self.physical_layout();
         let layout = reinterpret_real_to_complex_layout(
             self.shape(),
             source_layout.strides(),
@@ -10578,7 +10795,7 @@ impl<R: TensorRank> TypedTensor<f64, R> {
         }
         let placement = self.placement().clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f64, Complex64>(
-            self.host_data_mut()?,
+            self.backing_host_slice_mut()?,
             op,
         )?);
         Ok(TypedTensorViewMut {

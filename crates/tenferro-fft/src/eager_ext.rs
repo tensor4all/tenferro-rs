@@ -25,6 +25,10 @@ use crate::{
 pub trait EagerTensorFftExt {
     /// Consume a uniquely owned, untracked, compact column-major CPU complex
     /// tensor and overwrite it with its FFT. Shape and allocation are preserved; no implicit copy occurs.
+    /// A compact slice of a larger plain host allocation keeps that allocation:
+    /// only the slice's logical elements are overwritten and the elements outside
+    /// it are untouched (#2023). A device-backed or managed owner must be
+    /// whole-root, because the provider binding path carries no descriptor offset.
     /// Gradient-tracked inputs and active trace capture are rejected even under no_grad.
     ///
     /// # Errors

@@ -1280,10 +1280,44 @@ impl AllocationGroup {
             .map(|owner| owner.root_span().root_resource())
     }
 
-    pub(crate) fn descriptor_len(&self, slot: DescriptorSlot) -> Option<usize> {
+    pub(crate) fn descriptor_layout(&self, slot: DescriptorSlot) -> Option<TensorLayout<DynRank>> {
         self.resolve_descriptor(slot)
             .ok()
-            .map(|(_, descriptor)| descriptor.element_count)
+            .map(|(_, descriptor)| descriptor.layout().clone())
+    }
+
+    /// Element count of the descriptor's backing allocation.
+    ///
+    /// For a root-preserving descriptor the span is the whole root, so this is
+    /// the physical buffer length rather than the logical view extent.
+    pub(crate) fn descriptor_backing_len(&self, slot: DescriptorSlot) -> Option<usize> {
+        self.resolve_descriptor(slot)
+            .ok()
+            .and_then(|(_, descriptor)| {
+                descriptor
+                    .span()
+                    .byte_len()
+                    .checked_div(descriptor.element_size())
+            })
+    }
+
+    /// Contiguous element range of the descriptor's logical values inside its
+    /// backing root.
+    ///
+    /// Returns `None` for a strided descriptor, which has no contiguous
+    /// logical range, so callers expose values only for the compact case.
+    pub(crate) fn descriptor_logical_range(
+        &self,
+        slot: DescriptorSlot,
+    ) -> Option<std::ops::Range<usize>> {
+        let (_, descriptor) = self.resolve_descriptor(slot).ok()?;
+        if !descriptor.layout().is_compact_col_major().ok()? {
+            return None;
+        }
+        let start = usize::try_from(descriptor.layout().offset()).ok()?;
+        start
+            .checked_add(descriptor.element_count())
+            .map(|end| start..end)
     }
 
     pub(crate) fn backend_identity(
@@ -1517,7 +1551,7 @@ impl AllocationGroup {
     /// # Errors
     ///
     /// Returns [`GroupError::AliasedAllocation`] for an aliased allocation,
-    /// [`GroupError::NonCompactDescriptor`] for a strided, offset or partial
+    /// [`GroupError::NonCompactDescriptor`] for a strided or non-root-spanning
     /// descriptor, or [`GroupError::InvalidDescriptor`] for an invalid slot;
     /// every extraction failure leaves the group unchanged.
     #[allow(clippy::result_large_err)]
@@ -1574,7 +1608,7 @@ impl AllocationGroup {
     ///
     /// Returns [`GroupError::AliasedAllocation`] when another descriptor
     /// references the allocation, [`GroupError::NonCompactDescriptor`] for a
-    /// strided, offset or partial descriptor, or
+    /// strided or non-root-spanning descriptor, or
     /// [`GroupError::InvalidDescriptor`] for an invalid slot. Each extraction
     /// failure returns the unchanged group.
     #[allow(clippy::result_large_err)]
@@ -1720,10 +1754,19 @@ impl AllocationGroup {
         }
     }
 
-    /// Reject a descriptor an owned tensor cannot represent: an owned tensor is
-    /// its whole allocation in compact column-major order at offset zero, so a
-    /// strided, offset or partial descriptor would otherwise change value on
-    /// extraction.
+    /// Accept a descriptor an owned tensor can represent without changing
+    /// values: a compact column-major layout over the allocation's whole root
+    /// span. The layout may start at a nonzero offset and cover fewer elements
+    /// than the root; extraction keeps that layout, so reads and writes stay
+    /// descriptor-bounded while the root allocation is preserved. Strided and
+    /// non-root-spanning descriptors are refused.
+    ///
+    /// A nonzero offset or a shorter extent is accepted only for an actual
+    /// host-storage root (#2023). The provider binding path reads the root
+    /// handle and does not carry a descriptor offset, so a device-backed or
+    /// managed owner stays whole-root. The allocation's own storage kind is the
+    /// predicate, not the placement metadata: `TypedTensor::set_placement` can
+    /// relabel a backend allocation, but it cannot change what the root holds.
     fn ensure_whole_compact(
         &self,
         slot: DescriptorSlot,
@@ -1745,13 +1788,15 @@ impl AllocationGroup {
                 .map_err(|error| GroupError::InvalidDescriptor {
                     message: error.to_string(),
                 })?;
-        let whole = span.byte_offset() == root.byte_offset()
-            && span.byte_len() == root.byte_len()
+        let root_spanning =
+            span.byte_offset() == root.byte_offset() && span.byte_len() == root.byte_len();
+        let whole = root_spanning
             && descriptor
                 .element_count()
                 .checked_mul(descriptor.element_size())
                 == Some(span.byte_len());
-        if compact && layout.offset() == 0 && whole {
+        let host_owned = owner.backend_allocation().is_none();
+        if (compact && layout.offset() == 0 && whole) || (compact && root_spanning && host_owned) {
             Ok(())
         } else {
             Err(GroupError::NonCompactDescriptor { slot: slot.index() })

@@ -212,6 +212,10 @@ escapes: use them only inside the callback and never retain or destroy them.
   not escape the session callback.
 - A successful launch only enqueues work. Call `session.synchronize()` only
   when the host must wait; later work on the same stream is already ordered.
+- A `#[cube]` launch issued *inside* a raw session is not ordered before the raw
+  work that follows it; call `session.flush_cubecl()` after the launch, before
+  the dependent raw work (#2092; see
+  [Mixing `#[cube]` launches with raw work](#mixing-cube-launches-with-raw-work)).
 - Keep modules, inputs, outputs, and external-library resources alive until the
   last asynchronous use completes.
 - Every `unsafe session.launch` must state the kernel ABI, argument order,
@@ -248,6 +252,62 @@ CudaBackend::with_backend_session
   -> cuda::cubecl::Session::client
   -> #[cube(launch_unchecked)] kernel launch
 ```
+
+### Mixing `#[cube]` launches with raw work
+
+A `#[cube]` launch is handed to CubeCL's device thread, while raw kernels,
+vendor calls, and transfers are enqueued from the caller's thread onto the same
+stream. A raw enqueue that follows a launch issued inside the same raw session
+can therefore reach the stream first and read the value the launch was about to
+overwrite (tenferro-rs #2092). `cuda::raw::Session::flush_cubecl` hands the
+queued launches to CubeCL's device thread and returns without reading a result
+back, so it is not a host barrier for device completion:
+
+<!-- snippet-source: samples/cubecl-kernel/src/run.rs#custom_cuda_cubecl_ordering -->
+```rust
+/// Launch [`scale`], then run raw work that depends on its output.
+///
+/// The fence is what orders the raw continuation after the launch; see the
+/// external-kernel guide for the mechanism.
+fn launch_then_raw(
+    exec: &mut CudaExecSession<'_>,
+    client: &Client,
+    input: BufferArg,
+    output: BufferArg,
+) -> tenferro_tensor::Result<()> {
+    exec.with_raw("downstream.hybrid", |raw| {
+        // SAFETY: the caller owns both bindings, the launch domain matches their
+        // element counts, and the kernel writes only `output`.
+        unsafe {
+            scale::launch_unchecked(
+                client,
+                CubeCount::Static(1, 1, 1),
+                CubeDim::new_1d(1),
+                input,
+                output,
+                2.0f32,
+            );
+        }
+        // Dispatch the launch onto this session's stream before the raw work
+        // that depends on it: without this fence the raw kernel below can reach
+        // the stream first (#2092).
+        raw.flush_cubecl()?;
+        // The raw continuation reads `output` here: an NVRTC/PTX launch, a
+        // vendor call, or a transfer.
+        Ok(())
+    })
+}
+```
+<!-- end-snippet-source -->
+
+Entering a raw session dispatches the launches queued before the scope, and
+leaving a `with_cubecl` scope dispatches those issued inside it, so the fence is
+needed only for a launch issued after the raw scope was entered. The fence
+blocks the host while CubeCL's device thread takes the queue (and while CubeCL
+retires dropped buffers), so keep it to the raw operations that depend on a
+launch. It does not report a failed launch: that failure surfaces on the buffer
+the work left unwritten. Call `session.synchronize()` when the host must wait
+for device completion, and `download_tensor` when it needs the values.
 
 ### Index expressions must be `usize`
 

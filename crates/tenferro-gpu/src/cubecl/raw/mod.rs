@@ -246,6 +246,70 @@ impl<'s> Session<'s> {
         self.runtime.synchronize()
     }
 
+    /// Dispatch every CubeCL launch queued so far onto this session's stream.
+    ///
+    /// A raw session does **not** order a `#[cube]` launch issued inside it
+    /// before later raw work: CubeCL hands launches to its device thread while
+    /// raw kernels and vendor calls are enqueued from this thread, so a raw
+    /// kernel can reach the shared stream first, and the raw reader then sees
+    /// the value the launch was about to overwrite (tenferro-rs #2092). Call
+    /// this after the launch and before the raw work that depends on it.
+    ///
+    /// Entering a raw session already dispatches the launches queued *before*
+    /// the scope, and leaving a CubeCL session dispatches those issued inside
+    /// it; only a launch issued after this scope was entered needs the fence.
+    ///
+    /// This is a dispatch fence, not a result barrier: it hands the queued
+    /// launches to CubeCL's device thread, which can also retire the drop queue
+    /// behind a stream fence, and returns without reading any result back.
+    /// Use [`Session::synchronize`] when the host must wait for device
+    /// completion, and a download when it needs the values. A launch that fails
+    /// is reported by the buffer it left unwritten, not here.
+    ///
+    /// # Examples
+    ///
+    /// Hardware-gated: a machine without a CUDA device returns early, and a
+    /// CUDA host runs the fence inside a real raw session.
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::{
+    ///     cuda_devices, gpu_available, with_cuda_exec_session, CudaBackend, CudaExecSession,
+    /// };
+    /// use tenferro_tensor::backend::BackendSessionHost;
+    ///
+    /// fn flush(session: &mut CudaExecSession<'_>) -> tenferro_tensor::Result<()> {
+    ///     session.with_raw("docs.flush_cubecl", |raw| raw.flush_cubecl())
+    /// }
+    ///
+    /// // `gpu_available` never panics without a CUDA driver.
+    /// if !gpu_available() {
+    ///     return Ok(());
+    /// }
+    /// let device = cuda_devices()?
+    ///     .first()
+    ///     .map(|device| device.id())
+    ///     .ok_or_else(|| {
+    ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "no CUDA device")
+    ///     })?;
+    /// let mut backend = CudaBackend::new(device)?;
+    /// backend
+    ///     .with_backend_session(|session| with_cuda_exec_session(session, flush))?
+    ///     .ok_or_else(|| {
+    ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "not a CUDA backend")
+    ///     })??;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CubeCL cannot hand the
+    /// queued launches to the device thread. A failure of the launched work
+    /// itself is not reported here; it surfaces on the buffer the work left
+    /// unwritten.
+    pub fn flush_cubecl(&self) -> crate::Result<()> {
+        self.runtime.flush_cubecl("raw::Session::flush_cubecl")
+    }
+
     /// Borrow the captured execution stream.
     pub fn stream(&self) -> StreamRef<'s> {
         StreamRef {
