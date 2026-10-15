@@ -7,15 +7,16 @@
 //! `docs/guides/external-linalg-interop.md`; the guide quotes these regions
 //! through `snippet-source` markers.
 //!
-//! Everything here uses only public tenferro APIs and a direct `faer`
-//! dependency pinned to the same version the workspace uses. There is no
-//! hidden materialization: a non-contiguous view or a non-host tensor is
+//! Everything here uses only public tenferro APIs and the faer build
+//! `tenferro-cpu` re-exports (`tenferro_cpu::faer`), so this file cannot resolve
+//! a different faer than the session hands to `with_faer_parallelism`. There is
+//! no hidden materialization: a non-contiguous view or a non-host tensor is
 //! rejected with an explicit error, and the caller decides when to copy or
 //! transfer.
 
-use faer::linalg::matmul::matmul;
-use faer::linalg::solvers::Solve;
-use faer::{Accum, Mat, MatMut, MatRef, Par};
+use tenferro_cpu::faer::linalg::matmul::matmul;
+use tenferro_cpu::faer::linalg::solvers::Solve;
+use tenferro_cpu::faer::{Accum, Mat, MatMut, MatRef, Par};
 use tenferro_cpu::{CpuBackend, FaerParallelismExt};
 use tenferro_tensor::{
     BackendSessionHost, BackendStorage, BackendStorageHandle, DeviceId, DeviceKind, MemoryKind,
