@@ -65,6 +65,12 @@ Complete this phase before changing manifests or making any other release edit.
 5. Use a fresh worktree of the latest `origin/main`; require a clean tree and
    green CI on `origin/main`.
 6. Run `python3 scripts/check-publish-layout.py` and fix findings first.
+7. Confirm every CUDA-touching change merged since the baseline carries its GPU
+   evidence: a hosted `CI GPU gate` pass, or a recorded local A100 run (the
+   `Local GPU validation:` comment plus the `gpu-validated-locally` label that
+   `REPOSITORY_RULES.md`, CI Cost Discipline, describes). The release itself
+   reuses the tagged SHA's CI results and spends no new GPU gate; a change with
+   neither record is validated on the local A100 before the tag is cut.
 
 ## Phase 1 — Version-Bump PR To Main
 

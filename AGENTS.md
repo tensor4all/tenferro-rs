@@ -319,6 +319,10 @@ with `CARGO_PROFILE_DEV_DEBUG=1` or `CARGO_PROFILE_TEST_DEBUG=1`.
 - For a `develop` PR, enable auto-merge with a merge commit instead, once the
   maintainer has asked for the batch to land: `gh pr merge --auto --merge
   --delete-branch`
+- A CUDA-touching change records its local A100 run and applies the
+  `gpu-validated-locally` label: the required `CI GPU gate` then concludes from
+  that record with no pod. Spend the hosted gate only for a change this host
+  cannot cover. `REPOSITORY_RULES.md` (CI Cost Discipline) is authoritative.
 - `createpr` must confirm auto-merge remains enabled and the required branch protection checks are still configured
 
 ## Build Commands

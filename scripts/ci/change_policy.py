@@ -53,14 +53,23 @@ class ChangePolicy:
 
 _DOC_FILES = frozenset(
     {
+        "AGENTS.md",
         "CHANGELOG.md",
+        "CLAUDE.md",
         "CONTRIBUTING.md",
+        "CONTRIBUTORS.md",
+        "GOVERNANCE.md",
         "LICENSE-APACHE",
         "LICENSE-MIT",
+        "PERFORMANCE_TIPS.md",
         "README.md",
+        "REPOSITORY_RULES.md",
     }
 )
-_DOC_PREFIXES = ("docs/",)
+# `ai/` holds the contribution workflows and agent prompts. They are prose about
+# how work is done and cannot change what any lane executes, so editing one must
+# not reserve the paid GPU lane the way an unknown path does.
+_DOC_PREFIXES = ("docs/", "ai/")
 _CI_FILES = frozenset(
     {
         ".github/dependabot.yml",
