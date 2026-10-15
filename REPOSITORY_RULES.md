@@ -322,17 +322,19 @@ diff-scoped review bot.
   hosted archive build overlaps those independent required checks. Those
   checks remain merge-blocking; this is a deliberate latency trade-off, not a
   reduction in validation.
-- A GPU-affecting change that was validated on a local GPU may be merged with
-  the paid `CI GPU gate` red while RunPod cannot deliver a runner. That is a
-  maintainer decision recorded on the PR: apply the `gpu-validated-locally`
-  label, post a PR comment containing a line that starts with
-  `Local GPU validation:` naming the GPU model, the exact commit, the commands,
-  and the observed result. The workflow then skips every paid step for that PR
-  (no pod is created) and publishes `CI GPU gate` as passed only after verifying
-  that the comment exists and that its author is an admin or maintainer, so the
-  label alone never waives GPU validation. It is a maintainer decision recorded
-  on the PR, never a default: the paid gate stays the required path whenever a
-  runner is available.
+- **A recorded local GPU run is the default route for a GPU-affecting change.**
+  This workspace has an A100; run the affected CUDA tests on it, then apply the
+  `gpu-validated-locally` label and post a PR comment containing a line that
+  starts with `Local GPU validation:`, naming the GPU model, the exact commit,
+  the commands, and the observed result. The required `CI GPU gate` then
+  concludes on the host from that record - no pod is provisioned, and a queued,
+  saturated or broken RunPod dispatch cannot hold the merge - and it passes only
+  after verifying that the comment's author is an admin or maintainer, so the
+  label alone never waives GPU validation. The paid gate is the route only for a
+  change the host cannot cover: Apple/Metal, another vendor, or a matrix this
+  machine cannot run. Keep CUDA-touching branches local until they are complete,
+  and spend a hosted GPU gate once per finished PR, never to see whether CI
+  passes.
 - The macOS lane compiles and runs Apple-specific targets with Accelerate and
   default features disabled, not a duplicate faer workspace/doctest suite.
   Keep numerical Accelerate and Apple/Metal shared-storage checks, and never

@@ -67,8 +67,8 @@ def extract_step_script() -> str:
 
 class GatePollerTests(unittest.TestCase):
     def setUp(self) -> None:
-        real_jq = shutil.which("jq")
-        if real_jq is None:
+        self.real_jq = shutil.which("jq")
+        if self.real_jq is None:
             self.skipTest("jq is not installed")
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -86,16 +86,34 @@ class GatePollerTests(unittest.TestCase):
             textwrap.dedent(
                 """\
                 #!/bin/bash
-                n=$(cat "${GATE_STATE}/calls"); n=$((n + 1)); echo "${n}" > "${GATE_STATE}/calls"
-                if [ "${n}" -le "$(cat "${GATE_STATE}/fail_until")" ]; then
-                  echo "gh: HTTP 502" >&2
-                  exit 1
+                # Answers every endpoint the step uses, and applies the step's own
+                # `--jq` expression with the real jq, so the expressions under
+                # test are the ones the workflow runs.
+                case "$*" in
+                  *"/check-runs"*)
+                    n=$(cat "${GATE_STATE}/calls"); n=$((n + 1)); echo "${n}" > "${GATE_STATE}/calls"
+                    if [ "${n}" -le "$(cat "${GATE_STATE}/fail_until")" ]; then
+                      echo "gh: HTTP 502" >&2
+                      exit 1
+                    fi
+                    body="${GATE_STATE}/checks.json"
+                    ;;
+                  *"/files"*) body="${GATE_STATE}/files.json" ;;
+                  *"/labels"*) body="${GATE_STATE}/labels.json" ;;
+                  *"/comments"*) body="${GATE_STATE}/comments.json" ;;
+                  *"/collaborators/"*) body="${GATE_STATE}/role.json" ;;
+                  *) body="${GATE_STATE}/checks.json" ;;
+                esac
+                jq_expr=""
+                previous=""
+                for argument in "$@"; do
+                  if [ "${previous}" = "--jq" ]; then jq_expr="${argument}"; fi
+                  previous="${argument}"
+                done
+                if [ -n "${jq_expr}" ]; then
+                  exec "${GATE_STATE}/real_jq" -r "${jq_expr}" "${body}"
                 fi
-                if [[ "$*" == *"/files"* ]]; then
-                  cat "${GATE_STATE}/files.txt"
-                else
-                  cat "${GATE_STATE}/checks.json"
-                fi
+                exec cat "${body}"
                 """
             )
         )
@@ -103,14 +121,11 @@ class GatePollerTests(unittest.TestCase):
             textwrap.dedent(
                 f"""\
                 #!/bin/bash
+                # Vets a checks body the way the API would: an empty one means the
+                # request failed, which is the incident this step was fixed for.
                 last="${{@: -1}}"
-                if [ -f "${{last}}" ]; then
-                  if [ ! -s "${{last}}" ]; then exit 5; fi
-                  if [[ "${{last}}" == *checks.json ]] && ! grep -q '"check_runs"' "${{last}}"; then
-                    exit 5
-                  fi
-                fi
-                exec "{real_jq}" "$@"
+                if [ -f "${{last}}" ] && [ ! -s "${{last}}" ]; then exit 5; fi
+                exec "{self.real_jq}" "$@"
                 """
             )
         )
@@ -126,6 +141,9 @@ class GatePollerTests(unittest.TestCase):
         *,
         check_runs: list[dict] | None = None,
         files: list[str] | None = None,
+        labels: list[str] | None = None,
+        comments: list[dict] | None = None,
+        role: str = "admin",
         fail_until: int = 0,
         timeout: float = 30,
     ) -> tuple[int, str]:
@@ -133,7 +151,19 @@ class GatePollerTests(unittest.TestCase):
         (self.state / "checks.json").write_text(
             json.dumps({"check_runs": check_runs if check_runs is not None else []})
         )
-        (self.state / "files.txt").write_text("\n".join(files or []) + "\n")
+        (self.state / "files.json").write_text(
+            json.dumps([{"filename": name} for name in (files or [])])
+        )
+        (self.state / "labels.json").write_text(
+            json.dumps([{"name": name} for name in (labels or [])])
+        )
+        (self.state / "comments.json").write_text(json.dumps(comments or []))
+        (self.state / "role.json").write_text(json.dumps({"role_name": role}))
+        # The stub applies the step's own `--jq` with the real jq, so the
+        # expressions under test are the ones the workflow runs.
+        real_jq = self.state / "real_jq"
+        real_jq.write_text(f'#!/bin/bash\nexec "{self.real_jq}" "$@"\n')
+        real_jq.chmod(0o755)
         (self.state / "calls").write_text("0")
         env = dict(os.environ)
         env.update(
@@ -242,6 +272,57 @@ class GatePollerTests(unittest.TestCase):
             self.assertIn("checks API is unavailable", output)
             return
         self.fail(f"the loop exited instead of waiting: {done.stdout}{done.stderr}")
+
+
+
+    def test_local_gpu_evidence_skips_the_runpod_wait(self) -> None:
+        """A maintainer's recorded A100 run is the gate, with no pod involved.
+
+        The paid lane exists to supply device coverage. When a maintainer has
+        already recorded that coverage on the PR, the required check concludes on
+        the host, so a RunPod dispatch that is queued, saturated or broken cannot
+        hold the merge (REPOSITORY_RULES.md, CI Cost Discipline).
+        """
+        code, output = self.run_step(
+            files=["crates/tenferro-tensor/src/config.rs"],
+            labels=["gpu-validated-locally"],
+            comments=[
+                {
+                    "user": {"login": "maintainer"},
+                    "html_url": "https://example/pull/1#issuecomment-1",
+                    "body": "Local GPU validation: A100 80GB, commit abc, 221 passed.",
+                }
+            ],
+            role="maintain",
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn("Local GPU validation recorded by maintainer", output)
+        self.assertNotIn("Waiting for RunPod", output)
+
+    def test_local_gpu_evidence_from_a_non_maintainer_is_refused(self) -> None:
+        code, output = self.run_step(
+            files=["crates/tenferro-tensor/src/config.rs"],
+            labels=["gpu-validated-locally"],
+            comments=[
+                {
+                    "user": {"login": "someone"},
+                    "html_url": "https://example/pull/1#issuecomment-2",
+                    "body": "Local GPU validation: trust me",
+                }
+            ],
+            role="read",
+        )
+        self.assertEqual(code, 1, output)
+        self.assertIn("not an admin or maintainer", output)
+
+    def test_the_label_alone_does_not_waive_the_gate(self) -> None:
+        code, output = self.run_step(
+            files=["crates/tenferro-tensor/src/config.rs"],
+            labels=["gpu-validated-locally"],
+            comments=[],
+        )
+        self.assertEqual(code, 1, output)
+        self.assertIn("no 'Local GPU validation:' comment", output)
 
 
 if __name__ == "__main__":
