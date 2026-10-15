@@ -501,3 +501,44 @@ fn dynamic_slice_rejects_an_invalid_window_when_the_graph_is_built() {
     let sliced = x.dynamic_slice(&starts, &[2]).unwrap();
     assert_eq!(sliced.rank, 1);
 }
+
+#[test]
+fn slice_rejects_a_limit_beyond_a_concrete_operand_extent_when_the_graph_is_built() {
+    // #2042: the raw `TracedTensor::slice` config API was the only slice surface
+    // that accepted a limit beyond its operand, registered a phantom output
+    // shape, and failed only at execution. The `slice_axis` builder, CPU and CUDA
+    // all reject it.
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[4]).unwrap();
+    let err = x
+        .slice(tenferro_tensor::SliceConfig {
+            starts: vec![0],
+            limits: vec![100],
+            strides: vec![1],
+        })
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::Validation {
+                phase: ErrorPhase::GraphBuild,
+                source: ValidationError::InvalidSliceBounds {
+                    start: 0,
+                    end: 100,
+                    axis_len: 4
+                },
+                ..
+            }
+        ),
+        "unexpected error: {err}"
+    );
+
+    // A limit that fits still builds, with the extent it selects.
+    let sliced = x
+        .slice(tenferro_tensor::SliceConfig {
+            starts: vec![1],
+            limits: vec![4],
+            strides: vec![1],
+        })
+        .unwrap();
+    assert_eq!(sliced.rank, 1);
+}
