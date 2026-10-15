@@ -1,6 +1,7 @@
 //! End-to-end run of the fixture kernel through the public session seam.
 
-use cubecl::prelude::{BufferArg, CubeCount};
+use cubecl::client::Client;
+use cubecl::prelude::{BufferArg, CubeCount, CubeDim};
 use tenferro_gpu::cuda::{
     download_tensor, upload_tensor, with_cuda_exec_session, CudaBackend, CudaExecSession,
     CudaRuntime,
@@ -139,3 +140,40 @@ fn run_in_cuda_session(
 // inference on `exec.runtime().clone()`.
 #[allow(dead_code)]
 fn _cuda_runtime_type_check(_: &CudaRuntime) {}
+
+#[allow(dead_code)]
+// compile-checked source of the guide's ordering snippet
+// snippet-start:custom_cuda_cubecl_ordering
+/// Launch [`scale`], then run raw work that depends on its output.
+///
+/// The fence is what orders the raw continuation after the launch; see the
+/// external-kernel guide for the mechanism.
+fn launch_then_raw(
+    exec: &mut CudaExecSession<'_>,
+    client: &Client,
+    input: BufferArg,
+    output: BufferArg,
+) -> tenferro_tensor::Result<()> {
+    exec.with_raw("downstream.hybrid", |raw| {
+        // SAFETY: the caller owns both bindings, the launch domain matches their
+        // element counts, and the kernel writes only `output`.
+        unsafe {
+            scale::launch_unchecked(
+                client,
+                CubeCount::Static(1, 1, 1),
+                CubeDim::new_1d(1),
+                input,
+                output,
+                2.0f32,
+            );
+        }
+        // Dispatch the launch onto this session's stream before the raw work
+        // that depends on it: without this fence the raw kernel below can reach
+        // the stream first (#2092).
+        raw.flush_cubecl()?;
+        // The raw continuation reads `output` here: an NVRTC/PTX launch, a
+        // vendor call, or a transfer.
+        Ok(())
+    })
+}
+// snippet-end:custom_cuda_cubecl_ordering

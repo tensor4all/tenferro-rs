@@ -49,6 +49,7 @@ gpu	tenferro-gpu	cubecl::tests::capability_tests::cuda_descriptor_supported_entr
 gpu	tenferro-gpu	cubecl::tests::copy_fault_tests::a_completion_record_failure_is_unproven_and_retains_the_package
 gpu	tenferro-gpu	cubecl::tests::copy_fault_tests::a_recoverable_preparation_failure_refuses_with_the_publication
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::alloc_zero_output_avoids_the_with_cubecl_entry_flush
+gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_launch_inside_a_raw_scope_is_ordered_by_flush_cubecl
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_refused_allocation_is_reported_on_the_buffer
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_allocates_and_binds_output
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_allocates_zero_filled_output

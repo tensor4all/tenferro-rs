@@ -449,3 +449,138 @@ fn alloc_zero_output_avoids_the_with_cubecl_entry_flush() {
         );
     });
 }
+
+/// The `#[cube]` writer of the in-scope ordering test (#2092).
+mod in_scope_order_kernel {
+    use cubecl::prelude::*;
+
+    #[cube(launch_unchecked)]
+    pub fn fill_one(out: &mut [f32], value: f32) {
+        let i = ABSOLUTE_POS;
+        if i < out.len() {
+            out[i] = value;
+        }
+    }
+}
+
+/// CUDA source for the raw reader that samples `x[0]` into one output slot.
+///
+/// It is a raw NVRTC kernel on the same stream, not a CubeCL launch, so it is
+/// enqueued from the caller's thread while the CubeCL launch above is handed to
+/// CubeCL's device thread.
+const READ_SLOT_SRC: &str = r#"
+extern "C" __global__ void read_slot(float* out, const float* x, int slot) {
+    out[slot] = x[0];
+}
+"#;
+
+/// #2092: a `#[cube]` launch issued on a cloned CubeCL client **inside** an
+/// already-entered raw scope, immediately before a raw enqueue, is ordered
+/// before that raw work by [`Session::flush_cubecl`].
+///
+/// The two existing flushes do not cover this route: a raw-scope entry flush
+/// dispatches the work queued *before* the scope (and stays a non-blocking host
+/// dispatch, #2078/#1887), and a CubeCL-scope exit flush dispatches the work
+/// queued inside `with_cubecl`. Here the launch is issued after the entry flush
+/// on a cloned client, and the raw enqueue follows it. Without the fence every
+/// read sees the zero-filled buffer instead of the launched value (measured: 16
+/// of 16 trials stale before this fence was added).
+#[test]
+#[ignore = "requires CUDA"]
+fn cubecl_launch_inside_a_raw_scope_is_ordered_by_flush_cubecl() {
+    use crate::cuda::raw::{KernelArg, LaunchConfig, NvrtcOptions};
+    use cubecl::prelude::{CubeCount, CubeDim};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    const TRIALS: usize = 16;
+    with_cuda_exec(&mut backend, |session| {
+        // Allocate the writer, bind one launch argument per trial and clone the
+        // client in one CubeCL scope: the audited route.
+        let (x, client, mut args) = session
+            .with_cubecl("test.in_scope_order.setup", |cubecl| {
+                let x = cubecl.alloc_zero_output::<f32>(&[1])?;
+                let mut args = Vec::new();
+                for _ in 0..TRIALS {
+                    // SAFETY: this scope owns `x`, nothing else writes it, and
+                    // the binding is consumed by a launch within the session.
+                    args.push(unsafe { cubecl.array_arg(&x, "test.in_scope_order.setup")? });
+                }
+                Ok((x, cubecl.client().clone(), args))
+            })
+            .unwrap();
+
+        let recorded = session
+            .with_raw("test.in_scope_order", |raw| {
+                let module = raw.compile_nvrtc(READ_SLOT_SRC, &NvrtcOptions::default())?;
+                let reader = module.function("read_slot")?;
+                let mut out = raw.alloc_output::<f32>(&[TRIALS])?;
+                let config = LaunchConfig::flat(1, 1, 0)?;
+                // The span borrow ends before the download below.
+                {
+                    // Resolve the raw spans before the launches, as an engine
+                    // that resolves its buffers once per scope does: a
+                    // resolution after the launch would round-trip through
+                    // CubeCL's device thread and drain it, hiding the ordering
+                    // under test.
+                    let out_ref = raw.tensor_mut(&mut out)?;
+                    let x_ref = raw.tensor(&x)?;
+                    for trial in 0..TRIALS {
+                        let value = (trial + 1) as f32;
+                        let arg = args.pop().expect("one launch argument per trial");
+                        // SAFETY: `arg` was bound to `x` by the owning session,
+                        // the kernel writes element 0 only, and `x` stays alive.
+                        unsafe {
+                            in_scope_order_kernel::fill_one::launch_unchecked(
+                                &client,
+                                CubeCount::new_single(),
+                                CubeDim::new_1d(1),
+                                arg,
+                                value,
+                            );
+                        }
+                        // Dispatch the launch issued above before enqueueing raw
+                        // work that depends on it: CubeCL submits launches from
+                        // its device thread, so without this fence the reader
+                        // reaches the stream first.
+                        raw.flush_cubecl()?;
+                        // SAFETY: the reader writes one in-bounds `out` element
+                        // and reads one in-bounds `x` element; both refs are
+                        // live.
+                        unsafe {
+                            raw.launch(
+                                &reader,
+                                config,
+                                &[
+                                    KernelArg::output(&out_ref),
+                                    KernelArg::tensor(&x_ref),
+                                    KernelArg::i32(trial as i32),
+                                ],
+                            )?;
+                        }
+                    }
+                }
+                raw.synchronize()?;
+                Ok(raw
+                    .download_tensor::<f32>(&out, "test.in_scope_order")?
+                    .host_data()?
+                    .to_vec())
+            })
+            .unwrap();
+
+        let stale: Vec<(usize, f32, f32)> = recorded
+            .iter()
+            .enumerate()
+            .filter_map(|(trial, &got)| {
+                let value = (trial + 1) as f32;
+                (got != value).then_some((trial, value, got))
+            })
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "#2092: {} of {TRIALS} raw reads saw a value the ordered CubeCL \
+             launch had already written: {stale:?}",
+            stale.len()
+        );
+    });
+}

@@ -275,6 +275,16 @@ impl CudaExecSession<'_> {
     /// stalling the pipeline. [`Session::synchronize`](crate::cuda::CudaExecSession::synchronize)
     /// and downloads stay the explicit host barriers.
     ///
+    /// A `#[cube]` launch issued **inside** the callback is not ordered before
+    /// the raw work that follows it: CubeCL submits launches from its device
+    /// thread while raw kernels are enqueued from this thread, so a raw kernel
+    /// can reach the shared stream first and read the value the launch was about
+    /// to overwrite. Call
+    /// [`raw::Session::flush_cubecl`](crate::cuda::raw::Session::flush_cubecl)
+    /// after the launch and before the dependent raw work; it dispatches the
+    /// queued launches to the stream and reads no result back (tenferro-rs
+    /// #2092).
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose the
