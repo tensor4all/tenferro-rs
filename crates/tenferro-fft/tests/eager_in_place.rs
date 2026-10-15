@@ -114,14 +114,30 @@ fn consuming_fft_respects_compact_slice_extent_and_offset() {
                 Complex64::new(-1., 0.)
             ]
         );
-        let root = output
+        // The inverse transform consumes the same slice owner and restores the
+        // original values, so the offset survives a second round trip.
+        let restored = output.ifft_in_place(0, FftNorm::Backward).unwrap();
+        assert_eq!(
+            restored.tensor_read().as_slice::<Complex64>().unwrap(),
+            &[
+                Complex64::new((start + 1) as f64, 0.),
+                Complex64::new((start + 2) as f64, 0.)
+            ]
+        );
+        assert_eq!(
+            restored
+                .tensor_read()
+                .as_slice::<Complex64>()
+                .unwrap()
+                .as_ptr(),
+            pointer
+        );
+        let root = restored
             .into_value()
             .unwrap()
             .into_typed::<tenferro_tensor::Complex64>()
             .unwrap_or_else(|_| unreachable!());
-        let mut expected: Vec<_> = (1..=4).map(|x| Complex64::new(x as f64, 0.)).collect();
-        expected[start] = Complex64::new((2 * start + 3) as f64, 0.);
-        expected[start + 1] = Complex64::new(-1., 0.);
+        let expected: Vec<_> = (1..=4).map(|x| Complex64::new(x as f64, 0.)).collect();
         // The typed view retains the whole root, so outside-the-slice bytes stay
         // observable even though logical accessors export only the slice.
         assert_eq!(

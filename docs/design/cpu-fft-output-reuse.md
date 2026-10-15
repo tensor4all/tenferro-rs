@@ -66,6 +66,18 @@ preserves a descriptor's layout and must not be mistaken for canonicalization.
 Use the existing descriptor-bounded host write guard after extraction, not a
 whole-root mutable slice. This preserves the offset and extent of compact
 slices while leaving elements outside the logical tensor untouched.
+
+An extracted owner exports its own logical values; the whole root allocation and
+the descriptor offset are a separate, physical view (`as_view`, `buffer`,
+`prepare_device_*`, and the owning reinterpretations). Every typed accessor -
+`host_data`/`host_data_mut`, `as_slice`, the host mapping guards, `duplicate`,
+`get`/`get_mut`, the CPU adapters and `into_host_vec`/`into_parts` - reads and
+writes the exported extent only, so no consumer can reach the root prefix or the
+bytes outside it. A value (`TensorValue`) layout stays relative to the backing
+root, so a value duplicate copies that root rather than the exported prefix.
+A nonzero descriptor offset is accepted only for a plain host allocation: the
+provider binding path reads the root handle without a descriptor offset, so a
+device-backed or managed owner stays whole-root.
 Existing borrowed fft/ifft
 remain nondestructive. Validate dtype, axis and backend before taking ownership.
 Reject active grad/capture participation; do not infer safety from no_grad alone.

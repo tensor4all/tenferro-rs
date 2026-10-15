@@ -40,6 +40,10 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     ),
     "workspace-faer": (
         f"cargo nextest run --workspace {_NEXTEST_PROFILE} --no-fail-fast",
+        # Issue #2023: the consuming in-place FFT acceptance lives behind
+        # `tenferro-fft/autodiff` and no other lane selects that feature, so a
+        # default workspace pass neither runs nor protects it.
+        f"cargo nextest run -p tenferro-fft --features autodiff {_NEXTEST_PROFILE} --no-fail-fast",
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE}",
         # Issue #1790 asks for proportionate CI for the external scalar work. The object-level
         # evidence behind #1785's compilation boundary is otherwise only ever produced by hand,

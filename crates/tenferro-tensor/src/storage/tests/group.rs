@@ -775,6 +775,27 @@ fn non_compact_view_descriptors_are_refused_by_extraction_and_keep_their_values(
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 }
 
+/// The extracted owner of the compact `[1..3]` slice of a four-element `f64`
+/// root (#2023): a host owner whose descriptor offset is one.
+fn offset_slice_owner() -> crate::TypedTensor<f64> {
+    let value = crate::TensorValue::from_tensor(
+        crate::Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+    )
+    .slice_view(&crate::SliceConfig {
+        starts: vec![1],
+        limits: vec![3],
+        strides: vec![1],
+    })
+    .unwrap();
+    let (group, slot, _, _) = value
+        .try_into_group_parts()
+        .expect("a pooled value enters a group");
+    let tensor = group
+        .into_tensor(slot)
+        .expect("a compact root-spanning slice extracts");
+    <f64 as crate::TensorScalar>::into_typed(tensor).unwrap_or_else(|_| unreachable!())
+}
+
 /// A compact offset slice extracts by preserving its descriptor layout over the
 /// whole root allocation: logical reads stay slice-bounded while the root is
 /// retained so an in-place consumer can write only the slice (#2023).
@@ -819,12 +840,229 @@ fn compact_slice_extraction_preserves_offset_extent_and_root() {
         &[1.0, 2.0, 30.0, 4.0],
         "logical indexing must write the slice element and nothing outside it"
     );
+    // The host mapping guards expose the same logical extent, so a
+    // mapping-based consumer cannot read or overwrite the root prefix (#2023).
+    assert_eq!(typed.map_read().unwrap().len(), 2);
+    assert_eq!(&typed.map_read().unwrap()[..], &[2.0, 30.0]);
+    typed
+        .map_write()
+        .unwrap()
+        .copy_from_slice(&[2.0, 40.0])
+        .unwrap_or_else(|_| unreachable!());
+    assert_eq!(
+        typed.as_view().host_storage().unwrap(),
+        &[1.0, 2.0, 40.0, 4.0],
+        "a mapping write must not touch the root outside the slice"
+    );
+    // The exclusive view applies the descriptor offset once and stays inside
+    // the slice.
+    {
+        let mut view = typed.as_view_mut();
+        assert_eq!(view.offset(), 1);
+        *view.get_mut(&[1]).unwrap() = 50.0;
+    }
+    assert_eq!(
+        typed.as_view().host_storage().unwrap(),
+        &[1.0, 2.0, 50.0, 4.0]
+    );
+    assert_eq!(typed.host_data().unwrap(), &[2.0, 50.0]);
     // An explicit copy keeps the logical shape, extent and values.
     let copy = typed.duplicate().unwrap();
     assert_eq!(copy.shape(), &[2]);
-    assert_eq!(copy.as_slice().unwrap(), &[2.0, 30.0]);
+    assert_eq!(copy.as_slice().unwrap(), &[2.0, 50.0]);
+    // The parts export keeps the logical extent as well.
+    let (buffer, layout, _placement) = copy.into_parts().expect("a host owner extracts its parts");
+    assert_eq!(layout.shape(), &[2]);
+    let crate::StorageBuffer::Host(data) = buffer else {
+        unreachable!("an extracted host owner keeps its host root")
+    };
+    assert_eq!(data, vec![2.0, 50.0]);
     // The vector export returns the slice, not the root allocation.
     let (shape, data) = typed.into_vec_col_major().unwrap();
     assert_eq!(shape, vec![2]);
-    assert_eq!(data, vec![2.0, 30.0]);
+    assert_eq!(data, vec![2.0, 50.0]);
+}
+
+/// #2023: the parts export consumes the descriptor's logical extent too, so an
+/// offset owner is not exported as its root.
+#[test]
+fn offset_owner_exports_its_logical_extent() {
+    let typed = offset_slice_owner();
+    let (buffer, layout, _placement) = typed.into_parts().expect("a host owner exports its parts");
+    assert_eq!(layout.shape(), &[2]);
+    let crate::StorageBuffer::Host(data) = buffer else {
+        unreachable!("an extracted host owner keeps its host root")
+    };
+    assert_eq!(data, vec![2.0, 3.0]);
+}
+
+/// #2023: an owning reinterpretation rebases the descriptor over the same root,
+/// and a value over the result duplicates like the original.
+#[test]
+fn offset_owner_owning_reinterpretation_round_trips() {
+    let value = crate::TensorValue::from_tensor(
+        crate::Tensor::from_vec_col_major(
+            vec![4],
+            (1..=4)
+                .map(|x| crate::Complex64::new(x as f64, 0.0))
+                .collect(),
+        )
+        .unwrap(),
+    )
+    .slice_view(&crate::SliceConfig {
+        starts: vec![1],
+        limits: vec![3],
+        strides: vec![1],
+    })
+    .unwrap();
+    let (group, slot, _, _) = value
+        .try_into_group_parts()
+        .expect("a pooled value enters a group");
+    let tensor = group
+        .into_tensor(slot)
+        .expect("a compact root-spanning slice extracts");
+    let typed = <crate::Complex64 as crate::TensorScalar>::into_typed(tensor)
+        .unwrap_or_else(|_| unreachable!());
+    let real = typed.into_real().unwrap_or_else(|_| unreachable!());
+    let reals = [2.0_f64, 0.0, 3.0, 0.0];
+    assert_eq!(real.host_data().unwrap(), &reals);
+    let value = crate::TensorValue::from_tensor(crate::Tensor::from_typed(real));
+    let duplicated = value
+        .duplicate()
+        .expect("a reinterpreted root-relative value duplicates");
+    assert_eq!(duplicated.tensor_read().as_slice::<f64>().unwrap(), &reals);
+}
+
+/// #2023: a backend owner stays whole-root. The provider binding path reads the
+/// root handle without a descriptor offset, so a compact slice of a managed or
+/// device allocation must not extract - even when its placement metadata says
+/// host.
+#[test]
+fn compact_slice_extraction_refuses_a_backend_owner() {
+    let host_label = crate::Placement {
+        memory_kind: crate::MemoryKind::UnpinnedHost,
+        device: None,
+        cpu_affinity: None,
+    };
+    for (case, relabel_as_host) in [("managed placement", false), ("host-labelled", true)] {
+        let (allocation, _reads, _writes) = ByteAllocation::build(902, 32);
+        let placement = crate::Placement {
+            memory_kind: crate::MemoryKind::Managed,
+            device: None,
+            cpu_affinity: None,
+        };
+        let mut tensor =
+            crate::TypedTensor::<i64>::from_backend_allocation([4], allocation, placement).unwrap();
+        // The label is not authority: relabelling a backend root as host must
+        // not make its compact slice extractable.
+        if relabel_as_host {
+            tensor.set_placement(host_label.clone());
+        }
+        let value = crate::TensorValue::from_tensor(crate::Tensor::from_typed(tensor))
+            .slice_view(&crate::SliceConfig {
+                starts: vec![1],
+                limits: vec![3],
+                strides: vec![1],
+            })
+            .unwrap();
+        let (group, slot, _, _) = value
+            .try_into_group_parts()
+            .expect("a pooled value enters a group");
+        assert!(
+            matches!(
+                group.into_tensor(slot),
+                Err((_, GroupError::NonCompactDescriptor { .. }))
+            ),
+            "{case} must not extract"
+        );
+    }
+}
+
+/// #2023: a value whose layout is relative to a retained root duplicates that
+/// backing root, not the exported prefix the owner's logical accessors expose.
+#[test]
+fn root_relative_value_duplicates_its_backing_root() {
+    let value = crate::TensorValue::from_tensor(
+        crate::Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+    )
+    .slice_view(&crate::SliceConfig {
+        starts: vec![1],
+        limits: vec![3],
+        strides: vec![1],
+    })
+    .unwrap();
+    let (group, slot, _, _) = value
+        .try_into_group_parts()
+        .expect("a pooled value enters a group");
+    let tensor = group
+        .into_tensor(slot)
+        .expect("a compact root-spanning slice extracts");
+    let typed = <f64 as crate::TensorScalar>::into_typed(tensor).unwrap_or_else(|_| unreachable!());
+    let value = crate::TensorValue::from_tensor(crate::Tensor::from_typed(typed));
+    assert_eq!(value.offset(), 1);
+    let duplicated = value
+        .duplicate()
+        .expect("a root-relative value duplicates its backing storage");
+    assert_eq!(duplicated.shape(), &[2]);
+    assert_eq!(duplicated.offset(), 1);
+    assert_eq!(
+        duplicated.tensor_read().as_slice::<f64>().unwrap(),
+        &[2.0, 3.0]
+    );
+    // The duplicate is the same kind of value as the original: both keep the
+    // root-relative descriptor, so both convert to an owned tensor.
+    assert_eq!(
+        value.as_tensor().is_some(),
+        duplicated.as_tensor().is_some()
+    );
+    assert!(duplicated.as_tensor().is_some());
+    assert_eq!(
+        duplicated.into_tensor().unwrap().as_slice::<f64>().unwrap(),
+        &[2.0, 3.0]
+    );
+}
+
+/// #2023: an exclusive real reinterpretation of a root-preserving complex owner
+/// reads the same root region as the borrowed one, so the descriptor offset is
+/// applied once.
+#[test]
+fn compact_slice_extraction_reinterprets_through_the_same_root() {
+    let value = crate::TensorValue::from_tensor(
+        crate::Tensor::from_vec_col_major(
+            vec![4],
+            (1..=4)
+                .map(|x| crate::Complex64::new(x as f64, 0.0))
+                .collect(),
+        )
+        .unwrap(),
+    )
+    .slice_view(&crate::SliceConfig {
+        starts: vec![1],
+        limits: vec![3],
+        strides: vec![1],
+    })
+    .unwrap();
+    let (group, slot, _, _) = value
+        .try_into_group_parts()
+        .expect("a pooled value enters a group");
+    let tensor = group
+        .into_tensor(slot)
+        .expect("a compact root-spanning slice extracts");
+    let mut typed = <crate::Complex64 as crate::TensorScalar>::into_typed(tensor)
+        .unwrap_or_else(|_| unreachable!());
+    let slice_reals = [2.0_f64, 0.0, 3.0, 0.0];
+    assert_eq!(
+        typed.as_real_view().unwrap().as_slice().unwrap(),
+        &slice_reals
+    );
+    assert_eq!(
+        typed
+            .as_real_view_mut()
+            .unwrap()
+            .as_read_only()
+            .as_slice()
+            .unwrap(),
+        &slice_reals,
+        "the exclusive reinterpretation must not shift into the root prefix"
+    );
 }

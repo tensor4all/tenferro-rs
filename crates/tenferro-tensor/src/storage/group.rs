@@ -1758,8 +1758,15 @@ impl AllocationGroup {
     /// values: a compact column-major layout over the allocation's whole root
     /// span. The layout may start at a nonzero offset and cover fewer elements
     /// than the root; extraction keeps that layout, so reads and writes stay
-    /// descriptor-bounded while the root allocation is preserved. A strided or
-    /// non-root-spanning descriptor is refused.
+    /// descriptor-bounded while the root allocation is preserved. Strided and
+    /// non-root-spanning descriptors are refused.
+    ///
+    /// A nonzero offset or a shorter extent is accepted only for an actual
+    /// host-storage root (#2023). The provider binding path reads the root
+    /// handle and does not carry a descriptor offset, so a device-backed or
+    /// managed owner stays whole-root. The allocation's own storage kind is the
+    /// predicate, not the placement metadata: `TypedTensor::set_placement` can
+    /// relabel a backend allocation, but it cannot change what the root holds.
     fn ensure_whole_compact(
         &self,
         slot: DescriptorSlot,
@@ -1783,7 +1790,13 @@ impl AllocationGroup {
                 })?;
         let root_spanning =
             span.byte_offset() == root.byte_offset() && span.byte_len() == root.byte_len();
-        if compact && root_spanning {
+        let whole = root_spanning
+            && descriptor
+                .element_count()
+                .checked_mul(descriptor.element_size())
+                == Some(span.byte_len());
+        let host_owned = owner.backend_allocation().is_none();
+        if (compact && layout.offset() == 0 && whole) || (compact && root_spanning && host_owned) {
             Ok(())
         } else {
             Err(GroupError::NonCompactDescriptor { slot: slot.index() })

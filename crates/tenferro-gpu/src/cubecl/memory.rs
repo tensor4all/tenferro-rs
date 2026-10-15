@@ -121,18 +121,7 @@ fn upload_typed<T: CubeElement + TensorScalar + Scalar + Clone + Send + Sync + '
     client: &Client,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
-    let host_data = match typed.buffer() {
-        StorageBuffer::Host(data) => data,
-        StorageBuffer::Backend(buffer) => {
-            return Err(crate::Error::runtime_state(
-                "upload",
-                format!(
-                    "expected host buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            ));
-        }
-    };
+    let host_data = typed.host_data()?;
 
     let byte_len = T::as_bytes(host_data).len();
     // A payload larger than the staging chunk goes through the runtime's pinned staging lease: the
@@ -297,18 +286,7 @@ fn upload_bool(
     client: &Client,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
-    let host_data = match typed.buffer() {
-        StorageBuffer::Host(data) => data,
-        StorageBuffer::Backend(buffer) => {
-            return Err(crate::Error::runtime_state(
-                "upload",
-                format!(
-                    "expected host buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            ));
-        }
-    };
+    let host_data = typed.host_data()?;
 
     let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
     let byte_len = bytes.len();

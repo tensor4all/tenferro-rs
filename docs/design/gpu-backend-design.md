@@ -588,6 +588,13 @@ Same-placement canonicalization is allowed: host views may be copied into host
 compact tensors, and GPU views may be copied into compact tensors on the same
 GPU provider. It is not a transfer mechanism.
 
+An upload transfers the source tensor's exported logical values. An owned host
+tensor may keep a descriptor offset over a larger host allocation (a compact
+slice of another allocation, #2023); it uploads its logical extent, not the
+backing root, so the device tensor's shape and buffer stay consistent. The
+in-place root preservation of that owner is a host-side property and does not
+cross the transfer boundary.
+
 The object-safe CUDA runtime boundaries have deliberately narrower current
 contracts. `to_contiguous_read` canonicalizes numeric and complex CUDA reads on
 the active device; `Bool` is an explicit current limitation. `copy_read_into`
