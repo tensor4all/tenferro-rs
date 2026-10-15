@@ -223,6 +223,7 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
         shape: &[usize],
         dims: &[usize],
     ) -> Result<ReadInput<'a>> {
+        record_broadcast_route(BroadcastRoute::Materializing);
         let out = self
             .session
             .broadcast_in_dim_read(value.tensor_read(), shape, dims)?;
@@ -235,6 +236,7 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
         shape: &[usize],
         dims: &[usize],
     ) -> Result<ReadInput<'a>> {
+        record_broadcast_route(BroadcastRoute::View);
         // INVARIANT: the composite surface consumes these operands read-only,
         // so a broadcast is a layout change over storage this value already
         // owns; the materializing `broadcast_in_dim` stays for the callers that
@@ -291,4 +293,46 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
             &config,
         )?))
     }
+}
+
+/// Which broadcast route the session composite took (#2143 item 1).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BroadcastRoute {
+    /// [`SessionComposite::broadcast_in_dim_owned`] over an owned value: the
+    /// broadcast is a metadata view over storage the caller already owns.
+    View,
+    /// [`SessionComposite::broadcast_in_dim`]: the materializing route, kept for
+    /// callers that only hold a borrow of the operand.
+    Materializing,
+}
+
+/// Observation is off by default, so a release build pays one relaxed atomic load
+/// per composite broadcast and nothing else.
+static OBSERVE_BROADCAST_ROUTES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+thread_local! {
+    /// Broadcast routes taken by `SessionComposite` on this thread.
+    static BROADCAST_ROUTES: std::cell::RefCell<Vec<BroadcastRoute>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Start or stop recording composite broadcast routes.
+pub(crate) fn set_broadcast_route_observation(enabled: bool) {
+    if !enabled {
+        let _ = take_broadcast_routes();
+    }
+    OBSERVE_BROADCAST_ROUTES.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn record_broadcast_route(route: BroadcastRoute) {
+    if OBSERVE_BROADCAST_ROUTES.load(std::sync::atomic::Ordering::Relaxed) {
+        BROADCAST_ROUTES.with(|routes| routes.borrow_mut().push(route));
+    }
+}
+
+/// Take the composite broadcast routes recorded on this thread.
+pub(crate) fn take_broadcast_routes() -> Vec<BroadcastRoute> {
+    BROADCAST_ROUTES.with(|routes| std::mem::take(&mut *routes.borrow_mut()))
 }

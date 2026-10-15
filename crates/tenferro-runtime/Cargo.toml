@@ -79,6 +79,11 @@ name = "binary_allocations"
 path = "tests/binary_allocations.rs"
 
 [[test]]
+name = "session_softmax_broadcast_routes"
+path = "tests/session_softmax_broadcast_routes.rs"
+required-features = ["native"]
+
+[[test]]
 name = "degenerate_dot_shape"
 path = "tests/degenerate_dot_shape.rs"
 
