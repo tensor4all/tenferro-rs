@@ -15,6 +15,23 @@ SCRIPT = ROOT / "scripts" / "ci" / "change_policy.py"
 
 
 class ChangePolicyTests(unittest.TestCase):
+    def test_repository_prose_is_docs_only(self) -> None:
+        # The instruction files and the contribution workflows are prose about
+        # how work is done; they cannot change what any lane executes, so they
+        # must not reserve the paid GPU lane.
+        for path in (
+            "AGENTS.md",
+            "REPOSITORY_RULES.md",
+            "PERFORMANCE_TIPS.md",
+            "ai/contribution-workflows/release-publish.md",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertIs(policy.change_class, ChangeClass.DOCS_ONLY)
+                self.assertTrue(policy.run_docs)
+                self.assertFalse(policy.run_rust)
+                self.assertFalse(policy.run_gpu)
+
     def test_docs_only_runs_docs_without_rust_or_gpu(self) -> None:
         policy = classify_paths(["docs/guides/cpu.md", "README.md"])
         self.assertIs(policy.change_class, ChangeClass.DOCS_ONLY)
