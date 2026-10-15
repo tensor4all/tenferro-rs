@@ -58,8 +58,9 @@ pub struct DotGeneralConfig {
 /// it implicitly (invariant I4 of the #2112 umbrella).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DegenerateDotKind {
-    /// No contracting and no batch dims, and both operands carry the same
-    /// dimensions: an elementwise product.
+    /// Every axis of both operands is a batch axis, in each operand's own
+    /// order, and both operands carry the same dimensions: an elementwise
+    /// product.
     Hadamard,
     /// No contracting and no batch dims, free dims on both sides: an outer
     /// product (the concatenated product).
@@ -95,18 +96,37 @@ pub fn degenerate_dot_kind<T: PartialEq>(
             && all_contract(rhs_shape.len(), &config.rhs_contracting_dims))
         .then_some(DegenerateDotKind::FullContraction);
     }
-    // Nothing contracts. When every axis of both operands is a batch axis,
-    // nothing is free either and the product is elementwise.
-    let every_axis_is_batch = config.lhs_batch_dims.len() == lhs_shape.len()
-        && config.rhs_batch_dims.len() == rhs_shape.len();
-    if every_axis_is_batch && lhs_shape == rhs_shape {
+    // Nothing contracts. Every axis of both operands being a batch axis means
+    // nothing is free either and the product is elementwise - but only when both
+    // batch lists put the axes in the operand's own order. Batch axis `k` pairs
+    // `lhs_batch_dims[k]` with `rhs_batch_dims[k]`, so a permuted list pairs
+    // different axes (`out[i, j] = a[i, j] * b[j, i]`) and a plain multiply would
+    // be wrong. The general path handles that form; measured with `[2, 2]`
+    // operands, batch `[0, 1]` against `[1, 0]`, which came back transposed.
+    let identity_ordered = |dims: &[usize], rank: usize| {
+        dims.len() == rank
+            && dims
+                .iter()
+                .enumerate()
+                .all(|(position, &axis)| axis == position)
+    };
+    if identity_ordered(&config.lhs_batch_dims, lhs_shape.len())
+        && identity_ordered(&config.rhs_batch_dims, rhs_shape.len())
+        && lhs_shape == rhs_shape
+    {
         return Some(DegenerateDotKind::Hadamard);
     }
     if !config.lhs_batch_dims.is_empty() || !config.rhs_batch_dims.is_empty() {
         return None;
     }
+    // No batch and no contracting dims means **every** operand axis is free, so
+    // `dot_general_output_shape` makes the output `lhs ++ rhs` - an outer
+    // product, whatever the two shapes are. Equal shapes do not make it a
+    // Hadamard: that form needs every axis to be a *batch* axis, which the arm
+    // above already covers. Reading equal shapes as a Hadamard here made both
+    // consumers of this classifier produce `a.shape` where the graph declared
+    // `lhs ++ rhs` (#2165).
     match (lhs_shape.is_empty(), rhs_shape.is_empty()) {
-        (false, false) if lhs_shape == rhs_shape => Some(DegenerateDotKind::Hadamard),
         (false, false) => Some(DegenerateDotKind::OuterProduct),
         (true, false) | (false, true) => Some(DegenerateDotKind::ScalarTranspose),
         (true, true) => None,

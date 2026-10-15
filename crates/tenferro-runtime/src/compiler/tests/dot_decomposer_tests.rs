@@ -374,13 +374,15 @@ fn test_dot_decomposer_noncanonical_dot_then_dot_downstream() {
 
 #[test]
 fn test_dot_decomposer_pure_hadamard_becomes_multiply() {
-    // No contracting dims and no batch dims: the algebra is an elementwise
-    // product, so no backend should see a degenerate contraction.
+    // Every axis of both operands is a batch axis and they agree, so nothing is
+    // free and the algebra is an elementwise product. (Without the batch dims
+    // the same shapes would be an *outer* product: `dot_general_output_shape`
+    // makes that form's output `lhs ++ rhs` - #2165.)
     let instr = dot_general_exec_instr(
         vec![],
         vec![],
-        vec![],
-        vec![],
+        vec![0, 1],
+        vec![0, 1],
         vec![0, 1],
         2,
         dim_shape(&[4, 6]),
@@ -426,8 +428,8 @@ fn test_dot_decomposer_hadamard_preserves_conjugation() {
     let mut instr = dot_general_exec_instr(
         vec![],
         vec![],
-        vec![],
-        vec![],
+        vec![0, 1],
+        vec![0, 1],
         vec![0, 1],
         2,
         dim_shape(&[4, 6]),
@@ -454,15 +456,30 @@ fn test_dot_decomposer_hadamard_preserves_conjugation() {
 fn test_dot_decomposer_degenerate_forms_never_reach_a_lowering() {
     // The rewrite set is enumerated, so the assertion is on the lowered op
     // kinds: no DotGeneral survives for the degenerate shapes.
-    for (contracting_l, contracting_r, shape, output) in [
-        (vec![], vec![], dim_shape(&[4, 6]), dim_shape(&[4, 6])),
-        (vec![0, 1], vec![0, 1], dim_shape(&[4, 6]), vec![]),
+    for (contracting_l, contracting_r, batch, shape, output) in [
+        // Batched elementwise: the output is the shared shape.
+        (
+            vec![],
+            vec![],
+            vec![0, 1],
+            dim_shape(&[4, 6]),
+            dim_shape(&[4, 6]),
+        ),
+        // Same shapes, no batch dims: an outer product, output `lhs ++ rhs`.
+        (
+            vec![],
+            vec![],
+            vec![],
+            dim_shape(&[4, 6]),
+            dim_shape(&[4, 6, 4, 6]),
+        ),
+        (vec![0, 1], vec![0, 1], vec![], dim_shape(&[4, 6]), vec![]),
     ] {
         let instr = dot_general_exec_instr(
             contracting_l,
             contracting_r,
-            vec![],
-            vec![],
+            batch.clone(),
+            batch,
             vec![0, 1],
             2,
             output,

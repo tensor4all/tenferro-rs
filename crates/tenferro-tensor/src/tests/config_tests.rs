@@ -98,3 +98,73 @@ fn validate_dims_with_explicit_ranks_accepts_valid_config() {
     };
     config.validate_dims_with_ranks(2, 2).unwrap();
 }
+
+/// #2165: no contracting and no batch dims is an outer product, not a Hadamard.
+///
+/// `dot_general_output_shape` makes that form's output `lhs ++ rhs`, because
+/// every operand axis is free. Reading equal operand shapes as a Hadamard here
+/// made the eager and CUDA rewrites return `mul(a, b)` - rank 2 for rank-2
+/// operands - where the graph declared rank 4, and made the compiler's
+/// degenerate rewrite emit the same mismatch.
+#[test]
+fn degenerate_no_contract_is_an_outer_product_even_for_equal_shapes() {
+    use crate::{degenerate_dot_kind, DegenerateDotKind};
+
+    let no_dims = || smallvec::SmallVec::new();
+    let empty = DotGeneralConfig {
+        lhs_contracting_dims: no_dims(),
+        rhs_contracting_dims: no_dims(),
+        lhs_batch_dims: no_dims(),
+        rhs_batch_dims: no_dims(),
+    };
+
+    // Equal shapes are the arm that used to answer `Hadamard`.
+    assert_eq!(
+        degenerate_dot_kind(&empty, &[2, 2], &[2, 2]),
+        Some(DegenerateDotKind::OuterProduct)
+    );
+    // Different shapes were already an outer product.
+    assert_eq!(
+        degenerate_dot_kind(&empty, &[2, 3], &[4, 5]),
+        Some(DegenerateDotKind::OuterProduct)
+    );
+    // One scalar side stays the transpose-and-scale form.
+    assert_eq!(
+        degenerate_dot_kind(&empty, &[], &[2, 3]),
+        Some(DegenerateDotKind::ScalarTranspose)
+    );
+
+    // The real Hadamard is the one whose operands are *entirely* batched, so the
+    // output is the shared shape; the rewrite must keep answering that.
+    let all_batch = DotGeneralConfig {
+        lhs_contracting_dims: no_dims(),
+        rhs_contracting_dims: no_dims(),
+        lhs_batch_dims: [0, 1].as_slice().into(),
+        rhs_batch_dims: [0, 1].as_slice().into(),
+    };
+    assert_eq!(
+        degenerate_dot_kind(&all_batch, &[2, 2], &[2, 2]),
+        Some(DegenerateDotKind::Hadamard)
+    );
+
+    // Every axis batched is not enough: batch axis `k` pairs `lhs_batch_dims[k]`
+    // with `rhs_batch_dims[k]`, so a permuted list pairs different axes and a
+    // plain multiply would transpose the result. Measured with `[2, 2]` operands
+    // against `[1, 0]` on the right: `a[i, j] * b[j, i]`, which the general path
+    // computes and a Hadamard would not.
+    let permuted = DotGeneralConfig {
+        lhs_contracting_dims: no_dims(),
+        rhs_contracting_dims: no_dims(),
+        lhs_batch_dims: [0, 1].as_slice().into(),
+        rhs_batch_dims: [1, 0].as_slice().into(),
+    };
+    assert_eq!(degenerate_dot_kind(&permuted, &[2, 2], &[2, 2]), None);
+
+    let permuted_left = DotGeneralConfig {
+        lhs_contracting_dims: no_dims(),
+        rhs_contracting_dims: no_dims(),
+        lhs_batch_dims: [1, 0].as_slice().into(),
+        rhs_batch_dims: [0, 1].as_slice().into(),
+    };
+    assert_eq!(degenerate_dot_kind(&permuted_left, &[2, 2], &[2, 2]), None);
+}
