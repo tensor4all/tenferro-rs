@@ -62,6 +62,21 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         # linkage is verified, not just compilation.
         f"cargo run -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
         "--features blas --bin blas_interop",
+        # TEMPORARY DIAGNOSTIC for #1987. The reported batched LU/triangular-solve
+        # failure at n=33 happened once on this 4-core lane and did not reproduce in
+        # 20 local runs, so loop the module here once with pinned OpenBLAS threads
+        # and once with nextest's default parallelism, in the lane's own feature
+        # set. `native` and `blas` cannot be enabled together (they define the same
+        # items), and the cross-provider test of the report no longer exists.
+        # Remove this step with the finding.
+        "for i in $(seq 1 20); do OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "
+        f"cargo nextest run -p tenferro-linalg --no-default-features "
+        f"--features blas {_NEXTEST_PROFILE} cpu::tests::batched --no-fail-fast "
+        "|| exit 1; done",
+        "for i in $(seq 1 20); do "
+        f"cargo nextest run -p tenferro-linalg --no-default-features "
+        f"--features blas {_NEXTEST_PROFILE} cpu::tests::batched --no-fail-fast "
+        "|| exit 1; done",
     ),
     "macos-accelerate": (
         # Select targets, not just test-name filters: do not compile the full workspace.

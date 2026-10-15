@@ -72,6 +72,16 @@ class RunProfileTests(unittest.TestCase):
                 # the system OpenBLAS/LAPACK via the profile RUSTFLAGS.
                 "cargo run -p tenferro-tutorial-code --profile ci "
                 "--no-default-features --features blas --bin blas_interop",
+                # Temporary #1987 diagnostic: the batched module is looped with
+                # pinned and unpinned OpenBLAS threads on the cpu-blas lane.
+                "for i in $(seq 1 20); do OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "
+                "cargo nextest run -p tenferro-linalg --no-default-features "
+                "--features blas --cargo-profile ci cpu::tests::batched "
+                "--no-fail-fast || exit 1; done",
+                "for i in $(seq 1 20); do "
+                "cargo nextest run -p tenferro-linalg --no-default-features "
+                "--features blas --cargo-profile ci cpu::tests::batched "
+                "--no-fail-fast || exit 1; done",
             ),
         )
 
