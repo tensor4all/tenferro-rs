@@ -659,6 +659,37 @@ jobs:
             exit 0
           fi
 
+          # A CUDA-touching change that a maintainer validated on a local GPU
+          # needs no pod either (REPOSITORY_RULES.md, CI Cost Discipline). The
+          # label is the switch and the recorded evidence is the requirement;
+          # both are verified here, so a RunPod dispatch that is queued, saturated
+          # or broken cannot hold the required check. This is the default route
+          # for a change with local coverage; the paid gate is for one without.
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
+              --jq '.[].name' 2>/dev/null | grep -Fxq "gpu-validated-locally"; then
+            evidence="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+              --jq '.[] | select(.body | contains("Local GPU validation:")) | "\(.user.login)\t\(.html_url)"' \
+              | tail -1)"
+            evidence_login="${evidence%%$'\t'*}"
+            evidence_url="${evidence##*$'\t'}"
+            if [ -z "${evidence_login}" ]; then
+              echo "::error::Label gpu-validated-locally has no 'Local GPU validation:' comment."
+              exit 1
+            fi
+            evidence_role="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${evidence_login}/permission" --jq .role_name)"
+            case "${evidence_role}" in
+              admin|maintain)
+                echo "Local GPU validation recorded by ${evidence_login} (${evidence_role}): ${evidence_url}"
+                exit 0
+                ;;
+              *)
+                echo "::error::Local GPU evidence from ${evidence_login} is not an admin or maintainer (${evidence_role})."
+                exit 1
+                ;;
+            esac
+          fi
+
           deadline=$((SECONDS + 90 * 60))
           while [ "${SECONDS}" -lt "${deadline}" ]; do
             # This loop polls for up to 90 minutes, so it is the most exposed

@@ -79,6 +79,10 @@ name = "binary_allocations"
 path = "tests/binary_allocations.rs"
 
 [[test]]
+name = "degenerate_dot_shape"
+path = "tests/degenerate_dot_shape.rs"
+
+[[test]]
 name = "eager_dot_plan_reuse"
 path = "tests/eager_dot_plan_reuse.rs"
 
