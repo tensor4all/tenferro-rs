@@ -1066,3 +1066,61 @@ fn compact_slice_extraction_reinterprets_through_the_same_root() {
         "the exclusive reinterpretation must not shift into the root prefix"
     );
 }
+
+/// An owning real reinterpretation keeps the complex root, so the descriptor's
+/// dtype and the root's scalar type differ from then on. Both read routes must
+/// see it: the extracted owner and the group's own read view.
+#[test]
+fn owning_reinterpretation_of_a_complex_root_reads_back() {
+    let value = crate::TensorValue::from_tensor(
+        crate::Tensor::from_vec_col_major(
+            vec![4],
+            (1..=4)
+                .map(|x| crate::Complex64::new(x as f64, 0.0))
+                .collect(),
+        )
+        .unwrap(),
+    )
+    .slice_view(&crate::SliceConfig {
+        starts: vec![1],
+        limits: vec![3],
+        strides: vec![1],
+    })
+    .unwrap();
+    let (group, slot, _, _) = value
+        .try_into_group_parts()
+        .expect("a pooled value enters a group");
+    let tensor = group
+        .into_tensor(slot)
+        .expect("a compact root-spanning slice extracts");
+    let typed = <crate::Complex64 as crate::TensorScalar>::into_typed(tensor)
+        .unwrap_or_else(|_| unreachable!());
+    let real = typed.into_real().unwrap_or_else(|_| unreachable!());
+    let reals = [2.0_f64, 0.0, 3.0, 0.0];
+    assert_eq!(real.host_data().unwrap(), &reals);
+
+    // The extracted owner, then the same owner back in a group: the group read
+    // resolves the descriptor's `f64` over a `Complex64` root.
+    let value = crate::TensorValue::from_tensor(crate::Tensor::from_typed(real));
+    assert_eq!(value.tensor_read().as_slice::<f64>().unwrap(), &reals);
+
+    let (group, slot, _, _) = value
+        .try_into_group_parts()
+        .expect("the reinterpreted value enters a group again");
+    let read = group
+        .read_view(slot)
+        .expect("the reinterpreted descriptor has backing storage");
+    let crate::TensorView::F64(view) = read.tensor_view() else {
+        panic!("the reinterpreted descriptor is f64");
+    };
+    assert_eq!(view.shape(), &[2, 2]);
+    assert_eq!(
+        crate::Tensor::from_typed(
+            <f64 as crate::TensorScalar>::into_typed(group.into_tensor(slot).unwrap())
+                .unwrap_or_else(|_| unreachable!())
+        )
+        .as_slice::<f64>()
+        .unwrap(),
+        &reals
+    );
+}

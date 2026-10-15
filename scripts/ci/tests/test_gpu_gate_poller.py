@@ -70,7 +70,11 @@ class GatePollerTests(unittest.TestCase):
         self.real_jq = shutil.which("jq")
         if self.real_jq is None:
             self.skipTest("jq is not installed")
-        self._tmp = tempfile.TemporaryDirectory()
+        # A killed step can leave a stub `gh` writing its state files while the
+        # cleanup walks the tree, so the removal may race a writer that is still
+        # live (the reported `OSError: [Errno 39] Directory not empty: 'state'`).
+        # The leftover directory is harmless; the teardown must not fail the run.
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self._tmp.cleanup)
         root = Path(self._tmp.name)
         self.state = root / "state"
