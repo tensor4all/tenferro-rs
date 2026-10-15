@@ -68,15 +68,19 @@ syn = "2"
 # contraction/linalg stack (#2004). Keep the providers (cpueinsum, tlinalg, strided)
 # on one registry source: a split strided source gives two `StridedView` types that
 # cannot meet at a crate boundary. `strided-basic` carries the newest patch of that
-# family (0.5.1, the raw copy/scale/axpy fusion, strided-rs#300) while the core stays
-# 0.5.0, as that release left it, and the providers move with it (tcontract and
-# cpueinsum 0.2.1).
+# family (0.5.2, the ordered product reduction that fixes tenferro-rs#2150, on top
+# of the raw copy/scale/axpy fusion of strided-rs#300) while the core stays 0.5.0,
+# as that release left it, and the providers move with it: the published
+# `cpueinsum 0.2.2` carries `tcontract 0.2.2` (tenferro does not depend on
+# tcontract directly). They must move together, because the published
+# `cpueinsum 0.2.1` reaches `tcontract 0.2.1`, which pins `strided-basic =0.5.1`
+# exactly and would not resolve beside the 0.5.2 requirement.
 strided-view = "=0.5.0"
 strided-traits = "=0.5.0"
 strided-perm = { version = "=0.5.0", features = ["parallel"] }
-cpueinsum = "=0.2.1"
-cpueinsum-blas = "=0.2.1"
-strided-basic = { version = "=0.5.1", default-features = false }
+cpueinsum = "=0.2.2"
+cpueinsum-blas = "=0.2.2"
+strided-basic = { version = "=0.5.2", default-features = false }
 strided-fused = { version = "=0.5.0", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "=0.5.0", features = ["parallel"] }
 libloading = "0.8"

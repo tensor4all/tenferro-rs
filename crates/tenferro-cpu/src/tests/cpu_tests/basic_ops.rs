@@ -938,15 +938,13 @@ fn test_reduce_prod_matches_a_sequential_product_within_range() {
 
 /// #2150: `reduce_prod` must not turn a representable product into `NaN`.
 ///
-/// The pinned `strided-kernel` folds a product run into lane-vectors and multiplies
-/// those partials at the end, so an alternating `2.0, 0.5` axis gives one lane
-/// `inf` and another `0`, and the combine is `inf * 0 = NaN` while the sequential
-/// product is exactly `1.0`. The fix belongs in the `strided-rs` product kernel
-/// (tenferro-rs pins the published `strided-kernel 0.5.0`), so this test records
-/// the contract and is expected to fail until that pin carries the fix; remove the
-/// `ignore` with that bump.
+/// The product kernel used to fold each run into lane-vectors and multiply those
+/// partials at the end, so an alternating `2.0, 0.5` axis gave one lane `inf` and
+/// another `0`, and the combine was `inf * 0 = NaN` while the sequential product is
+/// exactly `1.0`. `strided-basic 0.5.2` (strided-rs#302) reduces a product in
+/// source order with one accumulator through every run, which is why this test no
+/// longer carries an `ignore`.
 #[test]
-#[ignore = "#2150: the reassociating product kernel is upstream in strided-rs; fixed there on\n            the `fix/product-order-2150` branch (`ReduceKernel::reassociable` and one ordered\n            accumulator through every run). Lift this with the pin bump once a release carries it"]
 fn test_reduce_prod_survives_lane_reassociation() {
     for len in [1000usize, 1_000_000] {
         let values: Vec<f32> = (0..len)
@@ -965,6 +963,120 @@ fn test_reduce_prod_survives_lane_reassociation() {
     let t = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![len], values).unwrap());
     let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(r.as_slice::<f64>().unwrap(), &[1.0], "f64 len {len}");
+}
+
+/// #2150: the engine's product reduction follows source order on every route,
+/// so a representable product is not lost to a lane that ran away. Every case is
+/// compared against a sequential fold of the same factors.
+#[test]
+fn test_reduce_prod_follows_source_order_across_routes() {
+    use tenferro_tensor::StridedSliceSpec;
+
+    fn tensor_of<T: tenferro_tensor::TensorScalar>(shape: Vec<usize>, values: Vec<T>) -> Tensor {
+        Tensor::from_typed::<T>(TypedTensor::from_vec_col_major(shape, values).unwrap())
+    }
+    fn engine_product<T: tenferro_tensor::TensorScalar>(
+        tensor: &Tensor,
+        axes: &[usize],
+        threads: usize,
+    ) -> Vec<T> {
+        let mut backend = CpuBackend::with_threads(threads).unwrap();
+        backend
+            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(tensor), axes))
+            .unwrap()
+            .unwrap()
+            .as_slice::<T>()
+            .unwrap()
+            .to_vec()
+    }
+    // A strided source reaches the engine as an erased view, whose dtype has to
+    // be named once at this boundary; the strided case below is the f64 instance.
+    fn engine_product_view(
+        view: tenferro_tensor::TypedTensorView<'_, f64>,
+        axes: &[usize],
+        threads: usize,
+    ) -> Vec<f64> {
+        let mut backend = CpuBackend::with_threads(threads).unwrap();
+        backend
+            .with_backend_session(|__s| {
+                __s.reduce_prod_read(TensorRead::from_view(TensorView::F64(view)), axes)
+            })
+            .unwrap()
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap()
+            .to_vec()
+    }
+
+    // The alternating factors whose true product is exactly 1.0 while a lane's
+    // partial product can run away.
+    let alternating_f64: Vec<f64> = (0..1000)
+        .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
+        .collect();
+    let alternating_f32: Vec<f32> = (0..1000)
+        .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
+        .collect();
+
+    // A strided read of those factors: step 2 behind a zero-padded root.
+    let padded: Vec<f64> = alternating_f64.iter().flat_map(|v| [*v, 0.0]).collect();
+    let root = tensor_of::<f64>(vec![padded.len()], padded);
+    let typed = root.as_typed::<f64>().unwrap();
+    let strided = typed
+        .as_view()
+        .slice_axis_view(0, StridedSliceSpec::new(0, Some(2 * 1000), 2))
+        .unwrap();
+    assert_eq!(engine_product_view(strided, &[0], 1), vec![1.0]);
+    let strided = typed
+        .as_view()
+        .slice_axis_view(0, StridedSliceSpec::new(0, Some(2 * 1000), 2))
+        .unwrap();
+    assert_eq!(engine_product_view(strided, &[0], 4), vec![1.0]);
+
+    // Contiguous, one axis, serial and multi-threaded.
+    let contiguous = tensor_of::<f64>(vec![alternating_f64.len()], alternating_f64.clone());
+    assert_eq!(engine_product::<f64>(&contiguous, &[0], 1), vec![1.0]);
+    assert_eq!(engine_product::<f64>(&contiguous, &[0], 4), vec![1.0]);
+    let contiguous_f32 = tensor_of::<f32>(vec![alternating_f32.len()], alternating_f32.clone());
+    assert_eq!(engine_product::<f32>(&contiguous_f32, &[0], 1), vec![1.0]);
+    assert_eq!(engine_product::<f32>(&contiguous_f32, &[0], 4), vec![1.0]);
+
+    // Batch and multi-axis: [3, 1000] in column-major order, so each of the three
+    // outputs of an axis-1 reduction is the alternating pattern and the full
+    // reduction multiplies the three outputs.
+    // The axis is longer than the kernel's thread-split threshold (2^15), so the
+    // parallel axis route really splits one output over several runs.
+    let axis_len = 40_000;
+    let mut batch_values = vec![0.0_f64; 3 * axis_len];
+    for (j, value) in alternating_f64.iter().cycle().take(axis_len).enumerate() {
+        for i in 0..3 {
+            batch_values[i + 3 * j] = *value;
+        }
+    }
+    let batch = tensor_of::<f64>(vec![3, axis_len], batch_values);
+    assert_eq!(engine_product::<f64>(&batch, &[1], 1), vec![1.0, 1.0, 1.0]);
+    assert_eq!(engine_product::<f64>(&batch, &[1], 4), vec![1.0, 1.0, 1.0]);
+    // Axis 0 multiplies the three equal copies of each factor, so every output
+    // alternates 8.0 / 0.125 and their own product is again 1.0.
+    let column_products: Vec<f64> = (0..axis_len)
+        .map(|j| if j % 2 == 0 { 8.0 } else { 0.125 })
+        .collect();
+    assert_eq!(engine_product::<f64>(&batch, &[0], 1), column_products);
+    assert_eq!(engine_product::<f64>(&batch, &[0, 1], 1), vec![1.0]);
+    assert_eq!(engine_product::<f64>(&batch, &[0, 1], 4), vec![1.0]);
+
+    // Zero, sign and genuine range exits.
+    let zero = tensor_of::<f64>(vec![3], vec![2f64.powi(600), 0.0, 2f64.powi(-600)]);
+    assert_eq!(engine_product::<f64>(&zero, &[0], 1), vec![0.0]);
+    let signs = tensor_of::<f64>(vec![2], vec![-2.0, 3.0]);
+    assert_eq!(engine_product::<f64>(&signs, &[0], 1), vec![-6.0]);
+    let even_signs = tensor_of::<f64>(vec![4], vec![-2.0, -3.0, -5.0, -7.0]);
+    assert_eq!(engine_product::<f64>(&even_signs, &[0], 1), vec![210.0]);
+    let overflow_f64 = tensor_of::<f64>(vec![2000], vec![2.0; 2000]);
+    assert!(engine_product::<f64>(&overflow_f64, &[0], 1)[0].is_infinite());
+    let overflow_f32 = tensor_of::<f32>(vec![200], vec![2.0; 200]);
+    assert!(engine_product::<f32>(&overflow_f32, &[0], 1)[0].is_infinite());
+    let underflow_f32 = tensor_of::<f32>(vec![1000], vec![0.5; 1000]);
+    assert_eq!(engine_product::<f32>(&underflow_f32, &[0], 1), vec![0.0]);
 }
 
 #[test]
