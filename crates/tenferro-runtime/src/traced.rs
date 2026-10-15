@@ -2639,11 +2639,19 @@ impl TracedTensor {
     /// represented, or [`Error::RuntimeStateSource`] when output metadata
     /// cannot be registered.
     ///
+    /// # Clamping
+    ///
+    /// Index *values* clamp with StableHLO scatter semantics: an out-of-range or
+    /// negative index is clamped rather than rejected, into the operand's extent.
+    ///
     /// # Deferred errors
     ///
-    /// Runtime index/update values are checked after binding. An invalid
-    /// index or update shape is returned as [`Error::TensorRuntime`] with its
-    /// typed validation source and [`ErrorPhase::Execution`].
+    /// The index and update *shapes* and the scatter configuration are checked
+    /// after binding: an incompatible one is returned as [`Error::TensorRuntime`]
+    /// with its typed validation source and [`ErrorPhase::Execution`]. An update
+    /// window that exceeds the operand is the one exception: the CPU backend
+    /// rejects it, while the CUDA kernel drops the update, so it is not part of
+    /// this contract.
     pub fn scatter(
         &self,
         indices: &TracedTensor,
@@ -2682,17 +2690,25 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] with `RankMismatch`, `AxisOutOfBounds`,
-    /// or `InvalidArgument` when `starts` or `sizes` has an incompatible rank
-    /// or extent, and [`Error::RuntimeStateSource`] when output metadata cannot
-    /// be registered.
+    /// Returns [`Error::Validation`] with `RankMismatch` when `sizes` has a rank
+    /// other than the operand's, with `ShapeMismatch` when a `sizes` window
+    /// exceeds a concrete operand dimension, and with `InvalidArgument` when
+    /// `starts` is not a rank-1 vector holding one entry per operand axis. These
+    /// are graph-build checks (`ErrorPhase::GraphBuild`, #2160) mirroring the
+    /// `gather` sibling. The eager surface reaches the same conditions at
+    /// execution, where the backends name the oversized window `InvalidArgument`
+    /// (`"configuration"` on CPU, `"slice_sizes"` on CUDA) rather than
+    /// `ShapeMismatch`. Also returns [`Error::RuntimeStateSource`] when output
+    /// metadata cannot be registered.
     ///
     /// # Clamping
     ///
-    /// Start values are clamped with StableHLO `DynamicSlice` clamp semantics: an
-    /// out-of-range or negative start is clamped into `[0, dim - window]` rather than rejected.
-    /// Only a `slice_sizes` window that exceeds its operand dimension is rejected,
-    /// which is a graph-build failure.
+    /// Start *values* clamp with StableHLO `DynamicSlice` semantics: an
+    /// out-of-range or negative start is clamped rather than rejected, into
+    /// `[0, dim - window]`. Only the `slice_sizes` window itself is rejected, and
+    /// it is rejected when the graph is built. An operand extent or a `starts`
+    /// length that is still symbolic at that point defers its check to the phase
+    /// that supplies the extent, and the reported [`ErrorPhase`] says which.
     pub fn dynamic_slice(&self, starts: &TracedTensor, sizes: &[usize]) -> Result<TracedTensor> {
         let op = StdTensorOp::DynamicSlice {
             slice_sizes: sizes.to_vec(),

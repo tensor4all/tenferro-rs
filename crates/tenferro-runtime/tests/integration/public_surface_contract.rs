@@ -351,4 +351,17 @@ fn traced_index_op_docs_match_clamping_execution_semantics() {
             "{signature} rustdoc must not promise a deferred typed rejection that no execution path performs"
         );
     }
+
+    // `scatter` clamps index *values* the same way, and its one true deferral is
+    // the index/update shape, which no path checks at graph build. Pin both, so
+    // the old "values are checked after binding" claim cannot come back (#2068).
+    let doc = trailing_doc_block(&source, "pub fn scatter(");
+    assert!(
+        doc.contains("clamp") && doc.contains("rather than rejected"),
+        "scatter rustdoc must describe the clamping the backends implement"
+    );
+    assert!(
+        !doc.contains("values are checked after binding"),
+        "scatter rustdoc must not promise a runtime rejection of index values, which clamp"
+    );
 }

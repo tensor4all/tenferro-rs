@@ -459,3 +459,45 @@ fn concatenate_of_distinct_inputs_compiles_without_input_specs() {
         &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
     );
 }
+
+#[test]
+fn dynamic_slice_rejects_an_invalid_window_when_the_graph_is_built() {
+    // #2160: the traced surface documents a graph-build rejection for a window
+    // that does not fit its operand. It rejected nothing, built a graph with the
+    // wrong output metadata, and left the backend to fail at execution.
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
+    let starts = TracedTensor::input_concrete_shape(DType::I64, &[1]).unwrap();
+
+    let err = x.dynamic_slice(&starts, &[2, 2]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::Validation {
+                phase: ErrorPhase::GraphBuild,
+                source: ValidationError::RankMismatch {
+                    expected: 1,
+                    actual: 2
+                },
+                ..
+            }
+        ),
+        "unexpected error: {err}"
+    );
+
+    let err = x.dynamic_slice(&starts, &[4]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::Validation {
+                phase: ErrorPhase::GraphBuild,
+                source: ValidationError::ShapeMismatch(_),
+                ..
+            }
+        ),
+        "unexpected error: {err}"
+    );
+
+    // A window that fits still builds, and the result keeps the operand's rank.
+    let sliced = x.dynamic_slice(&starts, &[2]).unwrap();
+    assert_eq!(sliced.rank, 1);
+}

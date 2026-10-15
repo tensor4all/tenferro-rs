@@ -755,3 +755,106 @@ fn shape_arithmetic_overflow_returns_errors_instead_of_wrapping() {
     });
     assert!(infer_output_shapes(&pad, &[&[DimExpr::Const(usize::MAX)]]).is_err());
 }
+
+#[test]
+fn dynamic_slice_rejects_the_windows_its_backends_reject() {
+    // #2160: `slice_sizes` is a graph-time constant, and the CPU and CUDA
+    // backends reject a window whose rank or extent does not fit the operand.
+    // The arm used to transcribe `slice_sizes` into the output verbatim, so an
+    // invalid window built a graph with wrong output metadata and was only
+    // rejected at execution.
+    let operand = DimExpr::from_concrete(&[3]);
+    let starts = DimExpr::from_concrete(&[1]);
+
+    let rank_mismatch = StdTensorOp::DynamicSlice {
+        slice_sizes: vec![2, 2],
+    };
+    let err = infer_output_shapes(&rank_mismatch, &[&operand, &starts]).unwrap_err();
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::Compile,
+            source: ValidationError::RankMismatch {
+                expected: 1,
+                actual: 2
+            },
+            ..
+        }
+    ));
+
+    let oversize = StdTensorOp::DynamicSlice {
+        slice_sizes: vec![4],
+    };
+    let err = infer_output_shapes(&oversize, &[&operand, &starts]).unwrap_err();
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::Compile,
+            source: ValidationError::ShapeMismatch(_),
+            ..
+        }
+    ));
+
+    // A window that fits is transcribed unchanged.
+    let fits = StdTensorOp::DynamicSlice {
+        slice_sizes: vec![3],
+    };
+    assert_eq!(
+        infer_output_shapes(&fits, &[&operand, &starts]).unwrap(),
+        vec![vec![DimExpr::Const(3)]]
+    );
+
+    // A symbolic operand extent defers the bound: nothing rejects a window that
+    // may still fit, and the start length waits for the bound tensor too.
+    let symbolic = vec![DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    }];
+    let symbolic_starts = vec![DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    }];
+    assert_eq!(
+        infer_output_shapes(&oversize, &[&symbolic, &symbolic_starts]).unwrap(),
+        vec![vec![DimExpr::Const(4)]]
+    );
+}
+
+#[test]
+fn dynamic_slice_rejects_a_starts_rank_the_backends_reject() {
+    let operand = DimExpr::from_concrete(&[3]);
+    let op = StdTensorOp::DynamicSlice {
+        slice_sizes: vec![2],
+    };
+
+    // `starts` is a rank-1 vector; the CPU backend refuses anything else with the
+    // same `InvalidArgument`.
+    let matrix_starts = DimExpr::from_concrete(&[1, 1]);
+    let err = infer_output_shapes(&op, &[&operand, &matrix_starts]).unwrap_err();
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::Compile,
+            source: ValidationError::InvalidArgument {
+                argument: "starts",
+                ..
+            },
+            ..
+        }
+    ));
+
+    // A concrete length that does not match the operand rank is refused too.
+    let short_starts = DimExpr::from_concrete(&[0]);
+    let err = infer_output_shapes(&op, &[&operand, &short_starts]).unwrap_err();
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::Compile,
+            source: ValidationError::InvalidArgument {
+                argument: "starts",
+                ..
+            },
+            ..
+        }
+    ));
+}

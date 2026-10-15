@@ -356,9 +356,11 @@ pub fn infer_output_shapes(
         StdTensorOp::Slice(config) => {
             vec![slice_shape(require_input(op, input_shapes, 0)?, config)?]
         }
-        StdTensorOp::DynamicSlice { slice_sizes } => {
-            vec![slice_sizes.iter().copied().map(DimExpr::Const).collect()]
-        }
+        StdTensorOp::DynamicSlice { slice_sizes } => vec![dynamic_slice_shape(
+            require_input(op, input_shapes, 0)?,
+            require_input(op, input_shapes, 1)?,
+            slice_sizes,
+        )?],
         StdTensorOp::DynamicUpdateSlice => vec![require_input(op, input_shapes, 0)?.to_vec()],
         StdTensorOp::Pad(config) => vec![pad_shape(require_input(op, input_shapes, 0)?, config)?],
         StdTensorOp::DotGeneral { config, .. } => vec![dot_general_shape(
@@ -827,7 +829,7 @@ fn gather_shape_from_slice_sizes(
             actual: slice_sizes.len(),
         }));
     }
-    validate_gather_slice_sizes_within_operand(operand_shape, slice_sizes)?;
+    validate_slice_sizes_within_operand(operand_shape, slice_sizes)?;
     if index_vector_dim > index_shape.len() {
         return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
             axis: index_vector_dim,
@@ -897,7 +899,60 @@ fn gather_shape_from_slice_sizes(
     Ok(out_shape)
 }
 
-fn validate_gather_slice_sizes_within_operand(
+/// The output shape of a `DynamicSlice`, with the graph-build checks the CPU and
+/// CUDA backends already enforce (#2160).
+///
+/// `slice_sizes` is a graph-time constant, so the two checks it can carry run
+/// here instead of at execution, where the sibling `gather` arm has always run
+/// them: the window's length must match the operand's rank, and a window that
+/// exceeds a *concrete* operand dimension is rejected. Only start *values*
+/// clamp (StableHLO `DynamicSlice` semantics), so an oversized window is never
+/// one of them.
+///
+/// `starts` is a rank-1 vector holding one entry per operand axis. Its rank is
+/// always known here; a length that is still symbolic defers to execution, where
+/// the backends check it against the bound tensor.
+fn dynamic_slice_shape(
+    operand_shape: &[DimExpr],
+    starts_shape: &[DimExpr],
+    slice_sizes: &[usize],
+) -> Result<Vec<DimExpr>> {
+    if slice_sizes.len() != operand_shape.len() {
+        return Err(shape_infer_validation(ValidationError::RankMismatch {
+            expected: operand_shape.len(),
+            actual: slice_sizes.len(),
+        }));
+    }
+    match starts_shape {
+        [DimExpr::Const(starts_len)] => {
+            if *starts_len != operand_shape.len() {
+                return Err(shape_infer_invalid_argument(
+                    "starts",
+                    format!(
+                        "starts must hold one entry per operand axis: expected {}, got {starts_len}",
+                        operand_shape.len()
+                    ),
+                ));
+            }
+        }
+        [_] => {}
+        starts => {
+            return Err(shape_infer_invalid_argument(
+                "starts",
+                format!("starts must be a rank-1 tensor, got rank {}", starts.len()),
+            ));
+        }
+    }
+    let window: Vec<DimExpr> = slice_sizes.iter().copied().map(DimExpr::Const).collect();
+    validate_slice_sizes_within_operand(operand_shape, &window)?;
+    Ok(window)
+}
+
+/// Reject a slice window that exceeds a *concrete* operand dimension.
+///
+/// Both `gather` and `dynamic_slice` take a graph-time `slice_sizes` constant, so
+/// this is a build-time check on both: only start values and indices clamp.
+fn validate_slice_sizes_within_operand(
     operand_shape: &[DimExpr],
     slice_sizes: &[DimExpr],
 ) -> Result<()> {
