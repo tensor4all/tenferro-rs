@@ -2653,7 +2653,7 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
     }
 }
 
-fn host_metadata<T: 'static>(
+fn host_metadata<T: TensorScalar>(
     group: &AllocationGroup,
     slot: DescriptorSlot,
 ) -> (Option<NonZeroUsize>, usize) {
@@ -7029,15 +7029,22 @@ pub(crate) fn tensor_view_from_group<'a, T: TensorScalar>(
     let buffer = if let Some(allocation) = view.backend_allocation() {
         TensorStorageRef::Root(allocation)
     } else {
-        let storage = view.storage_buffer().ok_or_else(|| {
-            crate::Error::runtime_state(
-                "AllocationGroup::tensor_read",
-                "group descriptor has no backing storage",
-            )
-        })?;
+        let storage = view.storage_buffer();
         match storage {
-            StorageBuffer::Host(data) => TensorStorageRef::Host(data),
-            StorageBuffer::Backend(buffer) => TensorStorageRef::Backend(buffer.as_ref()),
+            Some(StorageBuffer::Host(data)) => TensorStorageRef::Host(data),
+            Some(StorageBuffer::Backend(buffer)) => TensorStorageRef::Backend(buffer.as_ref()),
+            // A sealed representation reinterpretation changes the descriptor's
+            // dtype while the host root keeps its own, so the typed downcast
+            // above cannot see it.
+            None => match view.host_root_slice() {
+                Some(data) => TensorStorageRef::Host(data),
+                None => {
+                    return Err(crate::Error::runtime_state(
+                        "AllocationGroup::tensor_read",
+                        "group descriptor has no backing storage",
+                    ));
+                }
+            },
         }
     };
     let layout = view.descriptor().layout().clone();

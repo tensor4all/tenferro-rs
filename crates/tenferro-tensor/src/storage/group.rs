@@ -353,6 +353,23 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
         })
     }
 
+    /// Borrow the whole host root as `T` when the root's own scalar type differs
+    /// from the descriptor's through a sealed representation reinterpretation
+    /// (`Complex64` → `f64`, `f32` → `Complex32`).
+    ///
+    /// `storage_buffer` downcasts the root's concrete allocation, so it cannot
+    /// see such a descriptor; the root-scoped accessor validates the pair and
+    /// the returned alignment instead. `None` for a non-host root or a pair the
+    /// sealing does not allow.
+    pub(crate) fn host_root_slice(&self) -> Option<&'a [T]> {
+        // SAFETY: `owner` is bounded by the group borrow carried by `'a`.
+        let owner = unsafe { self.owner.as_ref() };
+        owner
+            .as_ref()
+            .host_slice::<T>(owner.root_span(), self.descriptor.dtype())
+            .ok()
+    }
+
     pub(crate) fn map_read(&self) -> Result<ProviderReadMapping<'_>, AccessError> {
         // SAFETY: `owner` points into the group borrowed for `'a`; this method
         // creates only a shared owner capability and maps the retained span.
@@ -1231,7 +1248,7 @@ impl AllocationGroup {
             .host_buffer::<T>()
     }
 
-    pub(crate) fn host_root_metadata<T: 'static>(
+    pub(crate) fn host_root_metadata<T: TensorScalar>(
         &self,
         slot: DescriptorSlot,
     ) -> Option<(usize, usize)> {
@@ -1243,11 +1260,23 @@ impl AllocationGroup {
         if descriptor.span() != owner.root_span() {
             return None;
         }
-        let crate::StorageBuffer::Host(data) = owner.host_buffer::<T>()? else {
-            return None;
+        let (pointer, byte_len) = match owner.host_buffer::<T>() {
+            Some(crate::StorageBuffer::Host(data)) => (
+                data.as_ptr() as usize,
+                data.len().checked_mul(size_of::<T>())?,
+            ),
+            // A sealed representation reinterpretation changes the descriptor's
+            // dtype while the root keeps its own, which the typed downcast
+            // cannot see; the root-scoped accessor validates the pair and the
+            // alignment of the reinterpreted root.
+            _ => {
+                let slice = owner
+                    .as_ref()
+                    .host_slice::<T>(owner.root_span(), descriptor.dtype())
+                    .ok()?;
+                (slice.as_ptr() as usize, size_of_val(slice))
+            }
         };
-        let pointer = data.as_ptr() as usize;
-        let byte_len = data.len().checked_mul(size_of::<T>())?;
         Some((pointer, byte_len))
     }
 
