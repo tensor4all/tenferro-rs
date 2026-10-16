@@ -103,6 +103,24 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
                 }};
             }
             budget!("add n=16", 0, |s| a.add(&b, s));
+            // #2139 item 3: the caller-output route allocates nothing at all for the
+            // output, and writes it in place. The allocating form above reaches zero
+            // only because the warmed pool serves its checkout.
+            let mut out =
+                TypedTensor::<f64>::from_vec_col_major(vec![LEN], vec![0.0; LEN]).unwrap();
+            let ((), into_allocations, into_bytes) =
+                measure(|| a.add_into(&b, &mut out, session).unwrap());
+            eprintln!("typed add_into n=16: {into_allocations} allocations, {into_bytes} bytes");
+            assert_eq!(
+                into_allocations, 0,
+                "typed add_into made {into_allocations} heap allocations ({into_bytes} bytes)"
+            );
+            assert_eq!(out.host_data().unwrap(), &[5.0; LEN]);
+            // A wrong-shaped output is refused before anything is written.
+            let mut wrong =
+                TypedTensor::<f64>::from_vec_col_major(vec![LEN + 1], vec![9.0; LEN + 1]).unwrap();
+            assert!(a.add_into(&b, &mut wrong, session).is_err());
+            assert_eq!(wrong.host_data().unwrap(), &[9.0; LEN + 1]);
             budget!("mul n=16", 0, |s| a.mul(&b, s));
             budget!("sub n=16", 0, |s| a.sub(&b, s));
             budget!("mul rank-3", 0, |s| cube.mul(&cube, s));
