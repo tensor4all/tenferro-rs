@@ -65,23 +65,25 @@ proc-macro2 = "1"
 quote = "1"
 syn = "2"
 # Published strided v0.5.x and the matching providers, shared with the CPU
-# contraction/linalg stack (#2004). Keep the providers (cpueinsum, tlinalg, strided)
+# contraction/linalg stack (#2004). Keep every crate (cpueinsum, tlinalg, strided)
 # on one registry source: a split strided source gives two `StridedView` types that
 # cannot meet at a crate boundary. `strided-basic` carries the newest patch of that
-# family (0.5.2, the ordered product reduction that fixes tenferro-rs#2150, on top
-# of the raw copy/scale/axpy fusion of strided-rs#300) while the core stays 0.5.0,
-# as that release left it, and the providers move with it: the published
-# `cpueinsum 0.2.2` carries `tcontract 0.2.2` (tenferro does not depend on
-# tcontract directly). They must move together, because the published
-# `cpueinsum 0.2.1` reaches `tcontract 0.2.1`, which pins `strided-basic =0.5.1`
-# exactly and would not resolve beside the 0.5.2 requirement.
+# family (0.5.3, whose erased `Product` reassociates like `Sum` across lanes, SIMD
+# and the parallel split, matching `torch.prod`; 0.5.3 also adds the opt-in
+# `StableProduct`), while the core stays 0.5.0 because `tlinalg 0.2.0` pins
+# `strided-view =0.5.0`. The providers move together: the published
+# `cpueinsum 0.2.3` carries `tcontract 0.2.3` (tenferro does not depend on
+# tcontract directly), which pins `strided-basic =0.5.3` and `strided-view =0.5.0`
+# from crates.io; an older `cpueinsum` reaches an older `tcontract` that pins an
+# older `strided-basic` exactly and would not resolve beside the 0.5.3
+# requirement.
 strided-view = "=0.5.0"
 strided-traits = "=0.5.0"
 strided-perm = { version = "=0.5.0", features = ["parallel"] }
-cpueinsum = "=0.2.2"
-cpueinsum-blas = "=0.2.2"
-strided-basic = { version = "=0.5.2", default-features = false }
-strided-fused = { version = "=0.5.0", default-features = false, features = ["parallel"] }
+cpueinsum = "=0.2.3"
+cpueinsum-blas = "=0.2.3"
+strided-basic = { version = "=0.5.3", default-features = false }
+strided-fused = { version = "=0.5.1", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "=0.5.0", features = ["parallel"] }
 libloading = "0.8"
 # One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.2.0`
