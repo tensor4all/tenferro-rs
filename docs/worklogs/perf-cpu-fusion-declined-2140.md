@@ -47,3 +47,28 @@
   value on large, memory-bound chains and almost none on the analytic chains
   this measurement used, where compute dominates: ten `tanh` cost 1.6 ms of
   arithmetic and 0.17 ms of traffic.
+
+## Reassessment after `strided-fused 0.5.1` (#2161)
+
+- `strided-fused 0.5.1` vectorized the replay for **contiguous** blocks (a chunked
+  register machine over `elem-simd-math`), so CPU fusion was re-measured rather
+  than re-enabled. The decline stays: on the predeclared rule "enable only if
+  fused/declined `<= 1.05` in every case", two reachable cases lose.
+- The chunked replay is not taken when any operand is not unit-stride along the
+  block's contiguous axis. A broadcast on the column-major innermost axis
+  (`b[1, 64]` added to `x[1024, 64]`, reduced by the shared input-view path to a
+  rank-1 operand) has stride `0` there, so `chunk::block_is_contiguous` fails and
+  `strided-fused` runs `interpret_inner_loop_uninit`; fusion loses 16x at both 1T
+  and 4T. A broadcast on the outer axis is fine (0.83 at 1T, 1.07 at 4T).
+- The CPU adapter still compiles one `strided-fused` plan per live output
+  (`single_output_strided_fused_plan`), so a two-live-output region replays its
+  whole instruction list twice; fusion loses 1.85x at 1T and 1.54x at 4T.
+- The winning cases are unchanged and real: ten `tanh`/`mul` f32 and f64
+  `1024x64` chains win 0.34-1.00, the 16,384-element floor wins 0.75-0.89, and a
+  `1<<20` chain wins 0.89-0.90. That is why the re-enable is worth doing once the
+  two upstream blockers are fixed, not that the constant should be dropped.
+- Measured 2026-10-16, `AMD EPYC 7713P`, release, commit `47dc94c98`, pinned with
+  `taskset` to idle cores 56-63, 5 warm runs plus 300 timed runs per round, median
+  of three interleaved rounds, 1 and 4 worker threads. The per-case table is in
+  the `SELECTS_FUSED_ELEMENTWISE_REGION` doc comment and in
+  `docs/design/cpu-backend-execution.md`.

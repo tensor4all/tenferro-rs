@@ -164,8 +164,12 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
 ///
 /// The hook stays reachable and answers `Ok(None)` rather than being absent or
 /// failing; that is what the runtime's per-instruction fallback keys on. It
-/// declines because `strided-fused`'s replay is a scalar interpreter that costs
-/// 13x to 70x the vectorized instructions it replaces (#2140 item 3).
+/// declines because `strided-fused 0.5.1`'s chunked replay still falls back to
+/// the scalar `interpret_inner_loop_uninit` for a non-unit-stride operand, and
+/// the adapter recompiles per live output; measured fusion loses 16x on a
+/// broadcast on the contiguity axis and 1.5-1.9x on a two-live-output region
+/// (`tenferro-cpu`'s `SELECTS_FUSED_ELEMENTWISE_REGION` carries the table,
+/// #2161).
 #[test]
 fn ordinary_cpu_declines_elementwise_fusion_by_policy() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
