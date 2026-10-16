@@ -251,3 +251,63 @@ fn metadata_only_view_construction_allocates_nothing() {
         assert_eq!(allocations, 0, "relaxed reshape_view allocated");
     }
 }
+
+/// #2177: the dtype-erased constructors build the typed owner once, so they cost the
+/// same metadata as the typed route. The erased route used to hand the shape through
+/// `T::into_tensor(Vec<usize>, _)`, one exact-size heap `Vec` per construction (two on
+/// the row-major path) that the payload cannot keep.
+///
+/// The data buffers are allocated outside the measured regions, so only metadata is
+/// counted, and the row-major routes keep their one legitimate reorder copy.
+#[test]
+fn erased_constructors_match_the_typed_route_metadata_cost() {
+    for shape in [vec![3_usize, 4], vec![1; 9]] {
+        let elements = shape.iter().product::<usize>();
+        let mut typed_data = Some(vec![0.0_f64; elements]);
+        let typed_col = count_allocations(|| {
+            let tensor = TypedTensor::<f64>::from_vec_col_major(
+                shape.as_slice(),
+                typed_data.take().unwrap(),
+            )
+            .unwrap();
+            black_box(&tensor);
+        });
+        let mut erased_data = Some(vec![0.0_f64; elements]);
+        let mut erased = None;
+        let erased_col = count_allocations(|| {
+            erased = Some(
+                Tensor::from_vec_col_major(shape.as_slice(), erased_data.take().unwrap()).unwrap(),
+            );
+            black_box(&erased);
+        });
+        assert_eq!(
+            erased_col, typed_col,
+            "erased col-major metadata allocations, shape {shape:?}"
+        );
+        assert_eq!(erased.as_ref().unwrap().shape(), shape.as_slice());
+        assert_eq!(erased.as_ref().unwrap().as_slice::<f64>().unwrap()[0], 0.0);
+
+        let mut typed_data = Some(vec![0.0_f64; elements]);
+        let typed_row = count_allocations(|| {
+            let tensor = TypedTensor::<f64>::from_vec_row_major(
+                shape.as_slice(),
+                typed_data.take().unwrap(),
+            )
+            .unwrap();
+            black_box(&tensor);
+        });
+        let mut erased_data = Some((0..elements).map(|index| index as f64).collect::<Vec<_>>());
+        let mut erased = None;
+        let erased_row = count_allocations(|| {
+            erased = Some(
+                Tensor::from_vec_row_major(shape.as_slice(), erased_data.take().unwrap()).unwrap(),
+            );
+            black_box(&erased);
+        });
+        assert_eq!(
+            erased_row, typed_row,
+            "erased row-major metadata allocations, shape {shape:?}"
+        );
+        assert_eq!(erased.as_ref().unwrap().shape(), shape.as_slice());
+    }
+}

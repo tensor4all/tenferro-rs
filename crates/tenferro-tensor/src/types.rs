@@ -11121,7 +11121,13 @@ impl Tensor {
         shape: impl tenferro_tensor_core::IntoShapeVec,
         data: Vec<T>,
     ) -> crate::Result<Self> {
-        T::into_tensor(shape.into_shape_vec().to_vec(), data)
+        // Build the typed owner once and wrap it: routing the shape through
+        // `T::into_tensor(Vec<usize>, _)` costs an exact-size `Vec` per construction
+        // that the destination cannot keep, because the erased payload stores the
+        // inline shape the typed constructor already produces (#2177).
+        Ok(Self::from_typed(TypedTensor::<T>::from_vec_col_major(
+            shape, data,
+        )?))
     }
 
     /// Create a tensor from a shape and row-major (C-order) flat data.
@@ -11155,12 +11161,17 @@ impl Tensor {
         shape: impl tenferro_tensor_core::IntoShapeVec,
         data: Vec<T>,
     ) -> crate::Result<Self> {
+        // The reorder keeps its own `op` name, and the shape comes back as the inline
+        // vector the typed constructor takes, so neither `.to_vec()` in the erased
+        // route is needed (#2177).
         let (shape, reordered) = row_major_reorder::<T, tenferro_tensor_core::DynRank>(
-            shape.into_shape_vec().to_vec(),
+            shape,
             data,
             "Tensor::from_vec_row_major",
         )?;
-        T::into_tensor(shape.as_ref().to_vec(), reordered)
+        Ok(Self::from_typed(TypedTensor::<T>::from_vec_col_major(
+            shape, reordered,
+        )?))
     }
 
     /// Tensor shape.
