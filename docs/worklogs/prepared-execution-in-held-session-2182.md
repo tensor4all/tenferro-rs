@@ -43,3 +43,6 @@
   and was discarded because it inflated gesvdj times.
 - `run_prepared_in` measures ~23 µs vs ~25 µs for `run_prepared` on the small fused route-matrix graph: the per-call barrier,
   not session entry, dominates small CUDA prepared calls, which is what stage 2 would address.
+- The dispatch fence that fixes the early completion event costs about 5 µs per scheduled CUDA node (8-node matmul chain
+  163 -> 204 µs per call). Recording one event per single-stream run instead of one per node would remove it, but changes the
+  event-domain model and belongs with the stage-2 decision.
