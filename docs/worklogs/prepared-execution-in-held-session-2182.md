@@ -19,24 +19,27 @@
 - `download_tensor_into` with a reused buffer: 256 MiB 18.5 ms vs 176.7 ms for `download_tensor` (fresh `Vec`), A100; the copy
   itself is unchanged at 8 MiB. The gap is the per-call host allocation and first touch.
 - CUDA SVD driver comparison (`cargo bench -p tenferro-linalg --features cuda --bench cuda_svd_driver`, A100 80GB PCIe,
-  2026-10-17, shared host, load average 2-14 during the run; thin SVD with vectors; median time / relative reconstruction error):
+  2026-10-17, shared host, load average 3-8 during the run; dense pseudo-random square input, thin SVD with vectors; median time /
+  relative reconstruction error):
 
   | dtype | n | Auto (= gesvdj) | gesvd | xgesvdp |
   |---|---:|---:|---:|---:|
-  | f32 | 64 | 2.37 ms / 8.7e-06 | 3.85 ms / 6.0e-07 | 2.75 ms / 1.1e-06 |
-  | f32 | 256 | 17.3 ms / 6.7e-05 | 15.0 ms / 9.7e-07 | 6.34 ms / 1.4e-06 |
-  | f32 | 1024 | 124.5 ms / 1.9e-04 | 75.0 ms / 1.0e-06 | 34.5 ms / 4.1e-06 |
-  | f64 | 64 | 5.61 ms / 2.6e-14 | 4.06 ms / 3.6e-15 | 3.09 ms / 2.0e-15 |
-  | f64 | 256 | 49.2 ms / 2.6e-13 | 14.0 ms / 3.1e-15 | 7.02 ms / 2.3e-15 |
-  | f64 | 1024 | 416.0 ms / 8.0e-13 | 65.5 ms / 4.3e-15 | 41.1 ms / 6.8e-15 |
-  | c32 | 64 | 3.33 ms / 2.0e-05 | 4.85 ms / 9.4e-07 | 3.13 ms / 1.1e-06 |
-  | c32 | 256 | 34.3 ms / 1.2e-04 | 18.7 ms / 1.0e-06 | 7.57 ms / 1.3e-06 |
-  | c32 | 1024 | 288.9 ms / 2.6e-04 | 116.6 ms / 2.5e-06 | 45.5 ms / 3.0e-06 |
-  | c64 | 64 | 8.99 ms / 5.4e-14 | 5.43 ms / 2.9e-15 | 3.53 ms / 2.0e-15 |
-  | c64 | 256 | 122.2 ms / 4.9e-13 | 17.4 ms / 3.3e-15 | 9.04 ms / 2.9e-15 |
-  | c64 | 1024 | 1127 ms / 1.4e-12 | 79.2 ms / 5.3e-15 | 60.3 ms / 4.9e-15 |
+  | f32 | 64 | 1.70 ms / 9.0e-06 | 4.37 ms / 1.3e-06 | 2.74 ms / 9.8e-07 |
+  | f32 | 256 | 9.85 ms / 6.4e-05 | 20.3 ms / 2.4e-06 | 6.57 ms / 1.3e-06 |
+  | f32 | 1024 | 77.8 ms / 3.1e-04 | 133 ms / 5.5e-06 | 35.7 ms / 2.0e-06 |
+  | f64 | 64 | 2.39 ms / 2.1e-14 | 4.83 ms / 2.6e-15 | 3.00 ms / 1.8e-15 |
+  | f64 | 256 | 16.1 ms / 7.6e-14 | 22.7 ms / 5.5e-15 | 7.84 ms / 3.2e-15 |
+  | f64 | 1024 | 144 ms / 4.6e-13 | 162 ms / 1.0e-14 | 42.7 ms / 5.1e-15 |
+  | c32 | 64 | 2.60 ms / 2.1e-05 | 4.70 ms / 1.3e-06 | 3.05 ms / 1.1e-06 |
+  | c32 | 256 | 18.8 ms / 1.4e-04 | 22.3 ms / 2.5e-06 | 7.71 ms / 1.8e-06 |
+  | c32 | 1024 | 170 ms / 5.5e-04 | 151 ms / 5.0e-06 | 46.7 ms / 2.7e-06 |
+  | c64 | 64 | 4.96 ms / 3.8e-14 | 5.43 ms / 3.2e-15 | 3.42 ms / 2.2e-15 |
+  | c64 | 256 | 39.3 ms / 3.2e-13 | 27.6 ms / 5.3e-15 | 9.92 ms / 4.1e-15 |
+  | c64 | 1024 | 400 ms / 1.9e-12 | 220 ms / 9.8e-15 | 61.8 ms / 6.2e-15 |
 
-  On this machine xgesvdp is fastest in every row except f32 n=64 and is never less accurate than gesvdj; these are shared-host
-  single runs, so ratios below about 1.2x are not conclusions. Square inputs only; tall/wide and batched shapes are not measured.
+  On this input family xgesvdp is fastest from n=256 up in every dtype and at n=64 for c64, gesvdj is fastest at n=64 for
+  f32/f64/c32, and xgesvdp has the smallest reconstruction error in every row. Shared-host single runs: ratios below about 1.2x are
+  not conclusions. Square inputs only; tall/wide and batched shapes are not measured. A first run used a low-rank, clustered input
+  and was discarded because it inflated gesvdj times.
 - `run_prepared_in` measures ~23 µs vs ~25 µs for `run_prepared` on the small fused route-matrix graph: the per-call barrier,
   not session entry, dominates small CUDA prepared calls, which is what stage 2 would address.
