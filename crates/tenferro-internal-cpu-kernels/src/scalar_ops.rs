@@ -71,9 +71,9 @@ where
     require_same_shape(op, lhs.shape(), rhs.shape())?;
 
     let strides = strides_for(lhs.shape())?;
-    // INVARIANT: `require_same_shape` above proved the destination and lhs shapes
-    // equal, so the destination view can borrow the lhs shape instead of copying
-    // it into a fresh `Vec` on every call.
+    // INVARIANT: the first `require_same_shape(op, destination.shape(),
+    // lhs.shape())` above proved destination == lhs, so the destination view can
+    // borrow the lhs shape instead of copying it into a fresh `Vec` each call.
     let mut destination_view: StridedViewMut<'_, T> =
         StridedViewMut::new(destination.host_data_mut(), lhs.shape(), &strides, 0)
             .map_err(|err| crate::Error::backend_source(op, err))?;
