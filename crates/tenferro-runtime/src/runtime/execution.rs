@@ -2622,6 +2622,30 @@ pub(crate) struct DuplicateTransferDestinationError {
     pub(crate) destination: ExecutionLocation,
 }
 
+/// Prove that same-stream submission order can replace per-node scheduler
+/// events for `schedule`.
+///
+/// True only when every scheduled location and node names one event domain and
+/// no transfer node bridges providers. The provider run must still accept the
+/// mode; this predicate is necessary, not sufficient.
+fn single_domain_coalescing_eligible(schedule: &ScheduledGraph) -> bool {
+    let domain = schedule.root_location().event_domain_id();
+    let same_domain = |location: &ExecutionLocation| location.event_domain_id() == domain;
+    !schedule
+        .nodes()
+        .iter()
+        .any(|node| matches!(node, ScheduledNode::Transfer(_)))
+        && schedule.input_locations().iter().all(same_domain)
+        && schedule.operation_locations().iter().all(same_domain)
+        && schedule.nodes().iter().all(|node| {
+            node.completion().domain() == domain
+                && node
+                    .dependencies()
+                    .iter()
+                    .all(|dependency| dependency.domain() == domain)
+        })
+}
+
 impl ScheduledEventDomains {
     pub(crate) fn new(schedule: &ScheduledGraph) -> Result<Self> {
         schedule.preflight().map_err(|source| {
@@ -2688,6 +2712,12 @@ impl ScheduledEventDomains {
                 }));
             }
             runs.push(run);
+        }
+        // The coalescing decision is made once, here, before any node launch:
+        // the provider run accepts the mode only when every scheduled location
+        // and node shares one event domain and the schedule has no transfer.
+        if single_domain_coalescing_eligible(schedule) && runs.len() == 1 {
+            runs[0].enable_single_domain_coalescing();
         }
         Ok(Self {
             runs,
@@ -2914,6 +2944,17 @@ impl RuntimeOwnedEventDomainRun {
 
     fn requested_domain(&self) -> super::EventDomainId {
         self.requested_domain
+    }
+
+    /// Ask the provider run to accept coalesced single-domain submission.
+    ///
+    /// A run that keeps the default per-node contract ignores this, and a
+    /// retired or failed run is never asked.
+    fn enable_single_domain_coalescing(&mut self) {
+        match &mut self.state {
+            RuntimeOwnedEventDomainRunState::Pending(run) => run.enable_single_domain_coalescing(),
+            RuntimeOwnedEventDomainRunState::Retired | RuntimeOwnedEventDomainRunState::Failed => {}
+        }
     }
 
     fn domain(&self, operation: EventDomainOperation) -> Result<super::EventDomainId> {

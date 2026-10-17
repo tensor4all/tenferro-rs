@@ -46,3 +46,8 @@
 - The dispatch fence that fixes the early completion event costs about 5 µs per scheduled CUDA node (8-node matmul chain
   163 -> 204 µs per call). Recording one event per single-stream run instead of one per node would remove it, but changes the
   event-domain model and belongs with the stage-2 decision.
+- Stage 2a (single-domain scheduler coalescing, #2182) removes that per-node cost: an eligible single-stream prepared run records
+  zero per-node scheduler events and one scheduler dispatch fence per call, with the same retirement barrier after output
+  collection. A100, 2026-10-17, shared host, short Criterion rows (`--warm-up-time 1 --measurement-time 2 prepared_`), before ->
+  after: `prepared_fused` 32.7/30.6 -> 24.6/27.4 µs and `prepared_matmul_chain` 288/382 -> 162/156 µs (standalone/in_held). A
+  multi-domain or transfer schedule keeps the per-node path.

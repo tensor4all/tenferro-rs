@@ -654,3 +654,111 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     };
     assert_eq!(output.as_slice().expect("host slice"), &[3.0, 6.0]);
 }
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn coalesced_event_domain_token_waits_on_its_captured_stream() {
+    use cubecl_environment::stream::StreamId;
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+
+    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let runtime = backend.runtime().clone();
+    let driver = CudaEventDomainDriver::new(runtime.clone());
+    let domain = test_event_domain("coalesced-native");
+
+    // Capture the run's stream on this thread, then move the run to a worker.
+    let run_stream = StreamId::current();
+    let mut run = driver.begin_run(domain).expect("CUDA event-domain run");
+    run.enable_single_domain_coalescing();
+
+    // A 128M-element elementwise kernel stays outstanding across the waiter
+    // join; a smaller kernel can finish before the idle query and hide a wait
+    // on the wrong stream.
+    let len = 1usize << 27;
+    let host = Tensor::from_vec_col_major(vec![len], vec![1.0_f32; len]).expect("host input");
+    let input = upload_tensor(&runtime, &host).expect("CUDA upload");
+    let mut output = None;
+    let mut launch = || {
+        output = Some(
+            backend
+                .with_backend_session(|session| {
+                    session.add_read(
+                        TensorRead::from_tensor(&input),
+                        TensorRead::from_tensor(&input),
+                    )
+                })
+                .unwrap()
+                .map_err(tenferro_runtime::Error::from)?,
+        );
+        Ok(())
+    };
+    let token = run.enqueue(&[], &mut launch).expect("coalesced enqueue");
+    assert!(output.is_some());
+
+    // The waiter's per-thread stream differs from the run's captured stream;
+    // the token must retire the captured one, not the waiter's.
+    std::thread::spawn(move || token.wait().expect("coalesced wait"))
+        .join()
+        .expect("wait worker");
+
+    let raw = run_stream
+        .executes(|| runtime.raw_cuda_stream())
+        .expect("captured raw stream");
+    let query = unsafe {
+        cudarc::driver::sys::cuStreamQuery(raw as usize as cudarc::driver::sys::CUstream)
+    };
+    query
+        .result()
+        .expect("the captured stream must be idle after the coalesced wait");
+
+    run.drain().expect("CUDA event-domain drain");
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn coalesced_event_domain_unwind_retires_before_the_panic_returns() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+
+    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let counters = backend.runtime().clone();
+    let runtime = counters.clone();
+    let driver = CudaEventDomainDriver::new(runtime.clone());
+    let domain = test_event_domain("coalesced-unwind");
+    let mut run = driver.begin_run(domain).expect("CUDA event-domain run");
+    run.enable_single_domain_coalescing();
+
+    let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).expect("host");
+    let input = upload_tensor(&runtime, &host).expect("upload");
+    let mut panic_output = None;
+
+    counters.reset_scheduler_counters();
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut panicking = || -> tenferro_runtime::Result<()> {
+            panic_output = Some(
+                backend
+                    .with_backend_session(|session| {
+                        session.add_read(
+                            TensorRead::from_tensor(&input),
+                            TensorRead::from_tensor(&input),
+                        )
+                    })
+                    .unwrap()
+                    .map_err(tenferro_runtime::Error::from)?,
+            );
+            panic!("injected coalesced post-launch panic");
+        };
+        let _ = run.enqueue(&[], &mut panicking);
+    }));
+    assert!(unwind.is_err());
+    assert!(
+        counters.scheduler_retirements() >= 1,
+        "the coalesced unwind path must retire the captured stream before the panic returns"
+    );
+
+    let retired = download_tensor(&runtime, panic_output.as_ref().expect("panic output"))
+        .expect("panic-path work retired before unwind returned");
+    assert_eq!(retired.as_slice::<f32>().expect("host slice"), &[2.0, 4.0]);
+
+    run.drain().expect("CUDA event-domain drain");
+}

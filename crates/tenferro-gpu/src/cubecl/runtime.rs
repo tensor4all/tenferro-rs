@@ -239,6 +239,19 @@ pub(crate) struct CudaRuntimeState {
     // a time and fixed at `STAGING_CHUNK_BYTES`. A lease that returns here is proven complete; one
     // whose completion was never proven is retired through `transfer_retirements` and never returns.
     pinned_staging: Mutex<PinnedStagingSlot>,
+    // Test-visible event-domain scheduler accounting. Per runtime so parallel
+    // libtest cases never share one counter (#2182 stage 2a review).
+    #[cfg(test)]
+    scheduler_counters: SchedulerCounters,
+}
+
+/// Test-only event-domain scheduler accounting owned by one runtime.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct SchedulerCounters {
+    event_records: std::sync::atomic::AtomicUsize,
+    fences: std::sync::atomic::AtomicUsize,
+    retirements: std::sync::atomic::AtomicUsize,
 }
 
 /// One cached cuBLAS handle bound to a fixed CUDA stream.
@@ -562,6 +575,8 @@ impl CudaRuntime {
                 workspace_retirements: Mutex::new(Default::default()),
                 transfer_retirements: Mutex::new(Default::default()),
                 pinned_staging: Mutex::new(PinnedStagingSlot { buffer: None }),
+                #[cfg(test)]
+                scheduler_counters: SchedulerCounters::default(),
             }),
         })
     }
@@ -804,6 +819,63 @@ impl CudaRuntime {
 
     pub(crate) fn state(&self) -> &CudaRuntimeState {
         &self.inner
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_scheduler_event(&self) {
+        self.inner
+            .scheduler_counters
+            .event_records
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_scheduler_fence(&self) {
+        self.inner
+            .scheduler_counters
+            .fences
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_scheduler_retirement(&self) {
+        self.inner
+            .scheduler_counters
+            .retirements
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_scheduler_counters(&self) {
+        use std::sync::atomic::Ordering;
+        let counters = &self.inner.scheduler_counters;
+        counters.event_records.store(0, Ordering::Relaxed);
+        counters.fences.store(0, Ordering::Relaxed);
+        counters.retirements.store(0, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scheduler_event_records(&self) -> usize {
+        self.inner
+            .scheduler_counters
+            .event_records
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scheduler_fences(&self) -> usize {
+        self.inner
+            .scheduler_counters
+            .fences
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scheduler_retirements(&self) -> usize {
+        self.inner
+            .scheduler_counters
+            .retirements
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(crate) fn raw_cuda_stream(&self) -> crate::Result<u64> {

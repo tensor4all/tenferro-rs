@@ -278,9 +278,20 @@ reported, and everything else belongs to the substrate.
   session, the runtime executor state is leased once without waiting, and preflight rejects a
   multi-engine graph, a foreign-backend session, and a non-session-capable prepared operation before
   the first launch. **Stage 1** keeps the current contract that the run still retires its device work
-  (the CUDA event run drains) before `run_prepared_in` returns, success or error. **Stage 2** - handing
-  completion to the held session so retirement is deferred to its `synchronize`/`close` - depends on
-  the non-blocking-submission change above and is an open maintainer decision, not implemented here.
+  (the CUDA event run drains) before `run_prepared_in` returns, success or error.
+- **Stage 2a (single-domain scheduler coalescing, #2182) is implemented.** When every scheduled
+  location and node of a prepared run uses one event domain and the schedule has no transfer, the
+  runtime asks the CUDA event-domain run to accept coalesced submission; the run then skips the
+  per-node completion event, CUDA event record and dispatch fence because same-stream submission order
+  already orders its nodes, and keeps one dispatch fence plus the unchanged retirement barrier in
+  `drain`, after output collection, for identity graphs too. Ineligible runs keep the per-node path.
+- **Stage 2 (full async submission) is still open, and neither candidate is complete.** Deferring
+  completion to the held session needs completion-aware reuse and pending ownership, not only moved
+  inputs: a held session does not prove runtime-wide exclusivity because a scoped callback or a
+  runtime-only `upload_pending` can still race it (finding 1); dropping an output returns its
+  allocation to the free pool before the pending work drains (finding 2); and an unbounded submit loop
+  needs a defined queue-full policy that reclaims ready events and rejects before enqueue when still
+  full (finding 5).
 - **A waiting admission policy** (a CUDA arbiter with the CPU's queueing semantics), multi-device P2P,
   and the WebGPU held session.
 

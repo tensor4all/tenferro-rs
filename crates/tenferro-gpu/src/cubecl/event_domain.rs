@@ -46,6 +46,7 @@ impl EventDomainDriver for CudaEventDomainDriver {
             domain,
             stream_id: StreamId::current(),
             state: EventDomainRunState::Pending,
+            coalesced: false,
         }))
     }
 }
@@ -56,6 +57,9 @@ struct CudaEventDomainRun {
     domain: EventDomainId,
     stream_id: StreamId,
     state: EventDomainRunState,
+    /// Set once by [`EventDomainRun::enable_single_domain_coalescing`] when the
+    /// scheduler proved that this run is the only domain and has no transfers.
+    coalesced: bool,
 }
 
 impl EventDomainRun for CudaEventDomainRun {
@@ -63,11 +67,18 @@ impl EventDomainRun for CudaEventDomainRun {
         self.domain
     }
 
+    fn enable_single_domain_coalescing(&mut self) {
+        self.coalesced = true;
+    }
+
     fn enqueue(
         &mut self,
         dependencies: &[Arc<dyn EventToken>],
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
+        if self.coalesced {
+            return self.enqueue_coalesced(launch);
+        }
         admit_cuda_tokens(dependencies, self.domain, |dependencies| {
             self.stream_id
                 .executes(|| self.enqueue_on_current_stream(dependencies, launch))
@@ -96,6 +107,34 @@ impl EventDomainRun for CudaEventDomainRun {
 }
 
 impl CudaEventDomainRun {
+    /// Enqueue one coalesced node.
+    ///
+    /// Same-stream submission order already orders the run's nodes, so this
+    /// skips the per-node CUDA event and dependency waits. The run's final
+    /// [`EventDomainRun::drain`] dispatch fence and retirement barrier still
+    /// cover every launch, including output collection after the last node.
+    fn enqueue_coalesced(
+        &mut self,
+        launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
+    ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
+        self.stream_id.executes(|| {
+            self.runtime
+                .set_current_cuda_context(EVENT_OP)
+                .map_err(RuntimeError::from)?;
+            let stream = raw_stream(&self.runtime).map_err(RuntimeError::from)?;
+            let mut cleanup = SubmissionCleanupGuard::new(&self.runtime, stream);
+            if let Err(launch_error) = launch() {
+                return Err(cleanup.finish_with_error(launch_error));
+            }
+            cleanup.disarm();
+            Ok(Arc::new(CoalescedEventToken {
+                domain: self.domain,
+                runtime: self.runtime.clone(),
+                stream_id: self.stream_id,
+            }) as Arc<dyn EventToken>)
+        })
+    }
+
     fn enqueue_on_current_stream(
         &mut self,
         dependencies: &[&CudaEventToken],
@@ -128,12 +167,16 @@ impl CudaEventDomainRun {
         // `retire_cuda_run` would synchronize an empty stream (#2182 B3). This
         // is a dispatch fence, not a device barrier: it only makes the event
         // (and therefore the run's retirement) cover the queued launches.
+        #[cfg(test)]
+        self.runtime.record_scheduler_fence();
         if let Err(flush_error) = self.runtime.flush_cubecl(EVENT_OP) {
             return Err(cleanup.finish_with_error(RuntimeError::from(flush_error)));
         }
         if let Err(record_error) = event.record(stream) {
             return Err(cleanup.finish_with_error(RuntimeError::from(record_error)));
         }
+        #[cfg(test)]
+        self.runtime.record_scheduler_event();
         cleanup.disarm();
         Ok(Arc::new(CudaEventToken {
             domain: self.domain,
@@ -223,6 +266,36 @@ impl EventToken for CudaEventToken {
     }
 }
 
+/// Completion token returned for each node of a coalesced single-domain run.
+///
+/// No per-node CUDA event is recorded on this path, so the token carries no
+/// stream position of its own. It retains the run's captured [`StreamId`] so a
+/// wait from any worker retires that stream, not the waiting thread's current
+/// one. Eligibility proves it is never consumed by a transfer; waiting on it
+/// synchronizes the run's whole stream, which over-waits rather than
+/// under-waits if that precondition were ever violated.
+#[derive(Debug)]
+struct CoalescedEventToken {
+    domain: EventDomainId,
+    runtime: CudaRuntime,
+    stream_id: StreamId,
+}
+
+impl EventToken for CoalescedEventToken {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn origin(&self) -> EventDomainId {
+        self.domain
+    }
+
+    fn wait(&self) -> tenferro_runtime::Result<()> {
+        self.stream_id
+            .executes(|| retire_cuda_run(&self.runtime).map_err(RuntimeError::from))
+    }
+}
+
 struct CudaEventHandle {
     runtime: CudaRuntime,
     raw: RawCudaEvent,
@@ -304,6 +377,8 @@ fn synchronize_stream(runtime: &CudaRuntime, stream: CUstream) -> crate::Result<
     // the launches it still holds (#2182 B3). The barrier is attempted even when
     // the dispatch fails, and the dispatch result is folded into the barrier
     // result instead of replacing it.
+    #[cfg(test)]
+    runtime.record_scheduler_fence();
     let dispatch = runtime.flush_cubecl(EVENT_OP);
     let activation = runtime.set_current_cuda_context(EVENT_OP);
     // `cuStreamSynchronize` is the retirement barrier even when it reports an
@@ -312,6 +387,8 @@ fn synchronize_stream(runtime: &CudaRuntime, stream: CUstream) -> crate::Result<
     // barrier is still attempted when context selection reports an error so
     // cleanup never returns before trying either retirement path.
     let barrier = unsafe { cuda_result::stream::synchronize(stream) };
+    #[cfg(test)]
+    runtime.record_scheduler_retirement();
     let barrier = match (activation, barrier) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(activation), Ok(())) => Err(crate::Error::backend_source(
@@ -356,6 +433,8 @@ fn retire_cuda_run(runtime: &CudaRuntime) -> crate::Result<()> {
     // releasing live storage.
     let activation = runtime.set_current_cuda_context(EVENT_OP);
     let fallback = cuda_result::ctx::synchronize();
+    #[cfg(test)]
+    runtime.record_scheduler_retirement();
     let barrier = match (activation, fallback) {
         (Ok(()), Ok(())) => stream,
         (Err(activation), Ok(())) => crate::Error::backend_source(

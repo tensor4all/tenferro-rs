@@ -263,6 +263,33 @@ pub trait EventDomainRun: fmt::Debug + Send {
     /// ```
     fn domain(&self) -> EventDomainId;
 
+    /// Accept the single-domain coalesced submission fast path when supported.
+    ///
+    /// The scheduler calls this at most once per run, before any launch, and
+    /// only after it has proven that every scheduled location and node of the
+    /// run uses this exact domain and that the schedule contains no transfer
+    /// node. The default no-op keeps the per-node completion contract, so an
+    /// unknown provider behaves exactly as before.
+    ///
+    /// A run that accepts keeps only the run's final [`Self::drain`] retirement
+    /// between its nodes. It must not rely on per-node completion events for
+    /// ordering when this is called, because same-stream submission order
+    /// already orders its nodes; it must still dispatch and synchronize all
+    /// submitted work, success or failure, before [`Self::drain`] returns.
+    /// Operation-level barriers that a launch needs for raw or vendor work are
+    /// unaffected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::EventDomainRun;
+    ///
+    /// fn request_coalescing(run: &mut dyn EventDomainRun) {
+    ///     run.enable_single_domain_coalescing();
+    /// }
+    /// ```
+    fn enable_single_domain_coalescing(&mut self) {}
+
     /// Enqueue one launch after its dependency tokens.
     ///
     /// # Errors

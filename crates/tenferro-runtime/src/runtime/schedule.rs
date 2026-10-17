@@ -152,7 +152,7 @@ impl ExecutionLocation {
     }
 
     #[cfg(test)]
-    fn for_test_with_driver(
+    pub(crate) fn for_test_with_driver(
         domain: EventDomainId,
         provider_device_identity: super::ProviderDeviceIdentity,
         event_domain_driver: Arc<dyn super::EventDomainDriver>,

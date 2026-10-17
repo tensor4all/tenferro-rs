@@ -41,6 +41,8 @@ gpu	tenferro-gpu	cubecl::runtime::tests::an_unproven_pinned_staging_lease_is_ret
 gpu	tenferro-gpu	cubecl::runtime::tests::cuda_backend_identity_tracks_the_exact_runtime_when_hardware_is_available
 gpu	tenferro-gpu	cubecl::runtime::tests::dropping_an_unproven_pinned_staging_lease_leaks_it_in_place
 gpu	tenferro-gpu	cubecl::runtime::tests::runtime_teardown_releases_the_cached_staging_buffer
+gpu	tenferro-gpu	cubecl::runtime_adapter::tests::coalesced_event_domain_token_waits_on_its_captured_stream
+gpu	tenferro-gpu	cubecl::runtime_adapter::tests::coalesced_event_domain_unwind_retires_before_the_panic_returns
 gpu	tenferro-gpu	cubecl::runtime_adapter::tests::cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies
 gpu	tenferro-gpu	cubecl::runtime_adapter::tests::cuda_registration_ingress_accepts_backend_created_tensor
 gpu	tenferro-gpu	cubecl::tests::blas1_tests::cuda_axpby_keeps_compact_operands_on_cublas
@@ -175,7 +177,12 @@ gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_reductions_column_m
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_sum_squares_does_not_contract_multiply_and_add
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_split_reduction_large_axis_matches_cpu
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::cuda_event_domain_keeps_per_node_events_until_coalescing_is_enabled
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_coalesced_error_retires_before_returning
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_identity_run_retires_collection_before_returning
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_in_held_single_domain_run_coalesces_scheduler_events
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_run_dispatches_cubecl_launches_before_recording_retirement
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_single_domain_run_coalesces_scheduler_events
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_backend_add_matches_cpu_reference
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_cached_scalar_read_observes_queued_writes
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_complex_sign_is_scale_safe
@@ -314,6 +321,14 @@ gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_rejects_unsupported_d
 gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_tall_above_the_gesvdj_threshold_uses_gesvd
 gpu	tenferro-linalg::integration	gpu_linalg::cuda_full_svd_wide_above_the_gesvdj_threshold_reuses_the_adjoint_trick
 gpu	tenferro-linalg::integration	gpu_linalg::cuda_q_column_ranges_past_the_full_q_width_are_rejected
+gpu	tenferro-linalg::integration	gpu_linalg::svd_auto::cuda_svd_auto_default_pinv_rank_deficient_double_precision
+gpu	tenferro-linalg::integration	gpu_linalg::svd_auto::cuda_svd_auto_keeps_the_accurate_driver_across_the_1024_boundary
+gpu	tenferro-linalg::integration	gpu_linalg::svd_auto::cuda_svd_auto_pinv_mask_matches_gesvd_near_cutoff
+gpu	tenferro-linalg::integration	gpu_linalg::svd_auto::cuda_svd_auto_rank_deficient_spectrum_and_pinv_residual
+gpu	tenferro-linalg::integration	gpu_linalg::svd_auto::cuda_svd_auto_reconstructs_dense_dtypes_and_shapes_from_min_dim_256
+gpu	tenferro-linalg::integration	gpu_linalg::svd_auto::cuda_svd_auto_values_only_matches_full_factors_for_all_dtypes
+gpu	tenferro-linalg::integration	gpu_linalg::svd_auto::cuda_svd_xgesvdp_rejects_a_bad_batch_member_beside_a_large_one
+gpu	tenferro-linalg::integration	gpu_linalg::svd_auto::cuda_svd_xgesvdp_rejects_unreliable_single_precision_factorization
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_cholesky_batched_f64_matches_cpu
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_c32_returns_unsupported_error
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_f32_returns_unsupported_error
