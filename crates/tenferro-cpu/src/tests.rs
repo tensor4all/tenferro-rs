@@ -803,6 +803,8 @@ mod indexing;
 mod indexing_coverage;
 #[path = "tests/cpu_tests/managed_copy_boundaries.rs"]
 mod managed_copy_boundaries;
+#[path = "tests/cpu_tests/reshape_tensor_pool.rs"]
+mod reshape_tensor_pool;
 #[cfg(feature = "native")]
 /// The analytic read view carries one arm per preset scalar, and the read entry for `pow` takes it for both
 /// operands. The owned-tensor tests reach the floating arms only, so this drives every dtype, including the

@@ -408,6 +408,26 @@ pub(crate) fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> 
     dispatch_tensor_unary_result!(input, |t| typed_reshape(t, shape))
 }
 
+/// Owned `reshape` element count at or below which the copy keeps the serial
+/// host path. Mirrors `strided-kernel`'s `MINTHREADLENGTH`, so a copy the
+/// strided scheduler would keep sequential also skips the pooled engine entry
+/// and does not take a pool buffer.
+pub(crate) const SERIAL_RESHAPE_MAX_ELEMS: usize = strided_kernel::execution::MINTHREADLENGTH;
+
+/// Whether an owned `reshape` of `input` should run the copy on the pool.
+///
+/// The serial metadata-only copy is kept at or below
+/// [`SERIAL_RESHAPE_MAX_ELEMS`] and whenever `parallel_copy` is false. The
+/// session entry and the entered execution-context seam both decide with this
+/// predicate, so a change to the threshold reaches both callers.
+pub(crate) fn reshape_uses_pool(input: &Tensor, parallel_copy: bool) -> crate::Result<bool> {
+    if !parallel_copy {
+        return Ok(false);
+    }
+    let elements = checked_shape_product("reshape", "input shape", input.shape())?;
+    Ok(elements > SERIAL_RESHAPE_MAX_ELEMS)
+}
+
 pub(crate) fn reshape_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,

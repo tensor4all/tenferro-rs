@@ -216,7 +216,12 @@ impl<'a> CpuExecutionContext<'a> {
 
     /// Reshape a compact tensor while retaining the current execution proof.
     ///
-    /// This metadata-only helper does not enter an executor or borrow scratch.
+    /// Small inputs and contexts that cannot parallelize keep the serial
+    /// metadata-only copy. A large input in a parallel-capable context
+    /// materializes through the same pooled strided copy the session's
+    /// `reshape_read` uses, sharing `structural::reshape_uses_pool` and its
+    /// threshold rather than a second copy of either. The helper does not enter
+    /// an executor; the pooled branch takes a buffer from the caller's pool.
     ///
     /// # Errors
     ///
@@ -225,9 +230,19 @@ impl<'a> CpuExecutionContext<'a> {
     #[doc(hidden)]
     pub fn reshape_tensor(
         &self,
+        buffers: &mut BufferPool,
         input: &Tensor,
         shape: &[usize],
     ) -> tenferro_tensor::Result<Tensor> {
+        if crate::structural::reshape_uses_pool(input, self.uses_inner_parallelism())? {
+            return self.with_native_parallelism(|| {
+                crate::structural::reshape_read_with_pool(
+                    buffers,
+                    TensorRead::from_tensor(input),
+                    shape,
+                )
+            });
+        }
         crate::structural::reshape(input, shape)
     }
 }
