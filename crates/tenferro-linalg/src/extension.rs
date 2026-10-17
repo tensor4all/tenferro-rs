@@ -115,9 +115,12 @@ pub enum QrGauge {
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SvdDriver {
-    /// The backend's default policy. On CUDA this is the JAX-compatible rule:
-    /// `gesvdj` when both matrix dimensions are at most 1024, otherwise
-    /// `gesvd`.
+    /// The backend's default policy. On CUDA this is the accuracy-preserving,
+    /// JAX-compatible rule: `gesvdj` when both matrix dimensions are at most
+    /// 1024, otherwise `gesvd`. It never selects the polar
+    /// [`Self::Xgesvdp`], whose small singular values are only accurate to
+    /// about `1e-6` of the largest (#2182). CPU providers have a single SVD
+    /// kernel and ignore the driver.
     #[default]
     Auto,
     /// cuSOLVER's Jacobi driver (`cusolverDn<t>gesvdj`) regardless of size.
@@ -126,10 +129,21 @@ pub enum SvdDriver {
     Gesvd,
     /// cuSOLVER's polar-decomposition driver (`cusolverDnXgesvdp`).
     ///
-    /// Explicit only: [`Self::Auto`] never selects this routine. Near-singular
-    /// inputs may be perturbed by cuSOLVER, shifting small singular values.
-    /// The perturbation magnitude (`h_err_sigma`) is discarded, not returned
-    /// with the factors. CPU providers accept and ignore this selection.
+    /// Explicit only: [`Self::Auto`] never selects this routine. It is the
+    /// fastest of the three drivers for `min(m, n) >= 256` on an A100 (see the
+    /// `cuda_svd_driver` benchmark), but its small singular values are only
+    /// accurate to about `1e-6` of the largest singular value. Do not use it
+    /// for an `eps`-scale truncation (a pseudoinverse or tensor-network
+    /// truncation at `1e-12`..`1e-14`): the perturbation can change the
+    /// retained rank.
+    ///
+    /// Tenferro reads cuSOLVER's `h_err_sigma` perturbation bound and returns a
+    /// typed backend failure instead of silently wrong factors when it is not
+    /// small relative to the largest singular value. On rank-deficient
+    /// `F32`/`C32` input cuSOLVER reports a perturbation comparable to the
+    /// spectrum, so an explicit single-precision call there fails rather than
+    /// returning the perturbed values. CPU providers accept and ignore this
+    /// selection.
     ///
     /// Accuracy is input-dependent, not uniformly better or worse than
     /// [`Self::Gesvd`]. On ten-decade spectra built as `U diag(s) Vᴴ` it was

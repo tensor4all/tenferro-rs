@@ -71,6 +71,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         stats.held_operations, stats.close_submits, stats.explicit_synchronizes
     );
 
+    // A prepared compiled graph runs on the same held session, so steady-state replay does not
+    // re-open a scoped session per call.
+    // snippet-start:cuda_prepared_in_held
+    let mut prepared_builder = tenferro_runtime::Runtime::builder();
+    prepared_builder.register_engine(tenferro_gpu::cuda::cuda_runtime_engine_registration(
+        &backend,
+        tenferro_runtime::EngineId::new("tenferro.example.held-prepared.v1")?,
+    )?)?;
+    let prepared_runtime = prepared_builder.build()?;
+    let x = tenferro_runtime::TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 1)?;
+    let y = (&x * &x)?;
+    let program = tenferro_runtime::GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, tenferro_runtime::DType::F64, &[4])])?;
+    let prepared = prepared_runtime.prepare_compiled(&program, &[&seed])?;
+    let prepared_inputs: [&Tensor; 1] = [&seed];
+    let mut prepared_session = backend.open_session()?;
+    let outputs = prepared_session.with_session(|view| {
+        prepared_runtime.run_prepared_in(view, &prepared, &prepared_inputs)
+    })??;
+    prepared_session.close()?;
+    assert_eq!(outputs[0].shape(), &[4]);
+    // snippet-end:cuda_prepared_in_held
+
     // Owning transfers: the value and the buffer are moved in and come back from `wait`, so neither is
     // reachable while the copy is in flight.
     // snippet-start:cuda_pinned_transfer

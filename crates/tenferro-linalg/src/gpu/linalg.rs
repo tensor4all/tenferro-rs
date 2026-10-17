@@ -32,7 +32,7 @@ type Result<T> = tenferro_tensor::Result<T>;
 trait LinalgScalar:
     CubeElement + CubePrimitive + Copy + Clone + One + Zero + Neg<Output = Self>
 {
-    type Real: TensorScalar + CubeElement + CubePrimitive + Copy + Clone + Zero;
+    type Real: TensorScalar + CubeElement + CubePrimitive + Scalar + Copy + Clone + Zero + Into<f64>;
 
     const DATA_TYPE: CudaDataType;
     const NEEDS_RWORK: bool;
@@ -159,6 +159,16 @@ impl LinalgScalar for Complex64 {
 
 const JAX_COMPATIBLE_GESVDJ_MAX_DIM: usize = 1024;
 
+/// Relative `h_err_sigma` above which an explicit Xgesvdp factorization is
+/// rejected.
+///
+/// cuSOLVER reports `h_err_sigma` as the absolute perturbation of the computed
+/// singular values. On single-precision rank-deficient input it can be as large
+/// as the spectrum itself, so an explicit `Xgesvdp` call returns an error
+/// instead of wrong factors (#2182). `Auto` never selects that driver, so this
+/// guard is only reachable through an explicit request.
+const XGESVDP_MAX_RELATIVE_ERROR: f64 = 1.0e-6;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CusolverSvdRoutine {
     Gesvdj,
@@ -166,7 +176,12 @@ enum CusolverSvdRoutine {
     Xgesvdp,
 }
 
-/// `Auto` follows the JAX-compatible size policy; an explicit driver wins.
+/// `Auto` follows the JAX-compatible accurate size policy and is the default;
+/// an explicit driver always wins.
+///
+/// `Auto` never selects the polar `Xgesvdp`: its small singular values are only
+/// accurate to about `1e-6` of the largest (#2182), which an `eps`-scale
+/// truncation cannot tolerate, so it stays opt-in.
 fn select_svd_driver(driver: SvdDriver, m: usize, n: usize) -> CusolverSvdRoutine {
     match driver {
         SvdDriver::Gesvdj => CusolverSvdRoutine::Gesvdj,

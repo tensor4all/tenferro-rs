@@ -28,6 +28,16 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("add", out)
     }
 
+    fn add_into(
+        &self,
+        rhs: &TypedTensor<T>,
+        out: &mut TypedTensor<T>,
+        session: &mut dyn BackendSession,
+    ) -> Result<()> {
+        let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
+        session.add_read_into(lhs.tensor_read(), rhs.tensor_read(), T::tensor_write(out))
+    }
+
     fn mul(
         &self,
         rhs: &TypedTensor<T>,

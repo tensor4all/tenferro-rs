@@ -57,3 +57,44 @@
   `SvdDriver::Xgesvdp` doc comment, because a caller choosing this driver for
   accuracy on small singular values cannot assume it transfers between input
   families.
+
+## #2182: single-precision rank-deficient failure and the Auto policy
+
+The stage-2 Auto switch first made `Xgesvdp` the default for every dtype at
+`min(m, n) >= 256`. Rank-deficient validation on an A100 (256x256, rank 64)
+found that cuSOLVER's polar driver returns an impossible spectrum for single
+precision: `f32` reported `smax = 9.03e2` and a tail of `8.09e2` for a matrix
+whose true `smax` is `1.42e2` (device `gesvd` and the CPU reference agree), and
+`c32` reported a tail of `16.2` against `1.2e-4`. The `pinv` residuals were
+`0.996` (`f32`) and `1.48` (`c32`).
+
+The integration is not at fault. The FFI signature and the
+`dataTypeA`/`dataTypeS`/`dataTypeU`/`dataTypeV`/`computeType` pairings match
+`cusolverDnXgesvdp` in CUDA 12.6, and cuSOLVER reports the inaccuracy itself
+through `h_err_sigma`, its absolute perturbation bound on the computed singular
+values. Measured `h_err_sigma`: `808.69` for the failing `f32` matrix (equal to
+the bogus tail), `1.5e-8` for `f64` rank-deficient, `0` for full rank and for
+the ten-decade spectrum, and `2.5e-13` for the near-cutoff c64 case.
+
+Resolution (final):
+
+- `SvdDriver::Auto` stays the accuracy-preserving JAX-compatible rule
+  (`gesvdj` when both dimensions are at most 1024, else `gesvd`) for every
+  dtype; `Xgesvdp` is opt-in only. The stage-2 speed proposal (`Auto =
+  Xgesvdp` at `min(m, n) >= 256`) was dropped: `Xgesvdp`'s own `h_err_sigma`
+  bound only guarantees the singular values to about `1e-6` of the largest, so
+  any `eps`-scale truncation is unsafe, not just `pinv`. The speed table below
+  stays as evidence for the opt-in choice.
+- `svd_polar_typed` still reads `h_err_sigma` and returns a typed
+  `BackendFailure` when it exceeds `1e-6` of the largest singular value, so an
+  explicit `Xgesvdp` request cannot return silently wrong factors. The check is
+  per matrix (a batch member is paired with its own spectrum) and reports the
+  failing batch index, so a large well-conditioned member cannot mask a bad one.
+- The pinv measurement that drove the decision: with `Auto = Xgesvdp` and the
+  default `eps * max(m, n)` cutoff, the f64 rank-deficient case retained 253 of
+  256 singular values against the CPU reference's 64, and
+  `||P - P_cpu|| / ||P_cpu||` was `2.1e12`. Reverting `Auto` restores the
+  reference rank and drops the error below `1e-13`; the CUDA test
+  `cuda_svd_auto_default_pinv_rank_deficient_double_precision` pins that.
+- The circulant-like family is no longer a correctness test; the
+  `cuda_svd_driver` bench prints its accuracy alongside the other drivers.

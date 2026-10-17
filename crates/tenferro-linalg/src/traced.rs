@@ -1407,6 +1407,9 @@ pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
 /// Floating-point and complex inputs are supported. Integer and boolean inputs
 /// return an unsupported-dtype error.
 ///
+/// The cutoff is applied to an accuracy-preserving default SVD
+/// (`SvdDriver::Auto`), so the retained rank matches the CPU reference.
+///
 /// # Examples
 ///
 /// ```

@@ -55,6 +55,42 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
         rhs: &TypedTensor<T>,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Elementwise addition into a caller-owned output inside a session.
+    ///
+    /// The caller keeps the output's storage, so the operation allocates nothing for
+    /// it: this is the caller-output route [`Self::add`] cannot offer, the one the
+    /// dispatch floor in #2139 is measured against. `out` is written in place and must
+    /// have the broadcast result shape with a write-injective layout; the session
+    /// rejects anything else before writing, leaving `out` unchanged on failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
+    /// let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
+    /// backend.with_backend_session(|session| a.add_into(&b, &mut out, session))??;
+    /// assert_eq!(out.host_data().unwrap(), &[4.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `ShapeMismatch` for
+    /// incompatible operands or an output of the wrong shape,
+    /// `ValidationError::OverlappingMutableLayout` for a non-injective output layout,
+    /// or [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn add_into(
+        &self,
+        rhs: &TypedTensor<T>,
+        out: &mut TypedTensor<T>,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<()>;
     /// Elementwise multiplication with NumPy-style broadcasting inside a session.
     ///
     /// # Examples

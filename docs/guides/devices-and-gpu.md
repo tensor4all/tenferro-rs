@@ -57,10 +57,15 @@ CUDA transfers make one host-side copy at most. `upload_tensor` borrows the
 host tensor, so CubeCL copies it once into a staging buffer before queueing the
 device write; the call returns without waiting, and the host tensor can be
 changed or dropped immediately. `download_tensor` has the driver copy straight
-into the vector the returned host tensor owns and waits for that copy. Both
-allocate fresh pageable host memory per call, so large transfers still pay
-first-touch page faults; pinned and asynchronous transfers are not part of the
-public API yet (#1885 §1.1).
+into the vector the returned host tensor owns and waits for that copy.
+`download_tensor_into` is the blocking alternative for repeated readback: it
+copies into a caller-owned `Vec<T>` and hands it back, so a loop that reads the
+same size back reuses one pageable allocation instead of paying first-touch
+page faults per call (a `bool` destination is rejected; use `download_tensor`
+to decode). For a one-off download the pageable routes allocate fresh host
+memory; the pinned and asynchronous routes (`upload_pending`/`download_pending`
+with a reusable `PinnedHostBuffer`) avoid the pageable transport for large
+payloads when the caller can wait later.
 
 ## Eager GPU Synchronization
 

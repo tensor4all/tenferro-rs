@@ -8,12 +8,13 @@
 //! downloads observing earlier device writes without an explicit barrier.
 
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{backend::BackendSessionHost, TensorRead};
+use tenferro_tensor::{backend::BackendSessionHost, ErrorKind, TensorRead, ValidationKind};
 
 use super::super::interop::upload_typed_tensor;
 use super::{download, gpu_backend, tensor_bool, tensor_c32, tensor_c64, tensor_f32, tensor_f64};
 use super::{tensor_i32, tensor_i64, upload};
 use crate::config::SliceConfig;
+use crate::cuda::{download_tensor_into, CudaRuntime, DownloadIntoError};
 use crate::{DType, Tensor};
 
 /// Element counts around the small-download fast path (16 bytes), page and
@@ -224,4 +225,153 @@ fn download_observes_queued_device_writes_on_this_and_other_streams() {
         download(&gpu, &produced).as_slice::<f64>().unwrap(),
         expected.as_slice()
     );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn download_tensor_into_round_trips_and_reuses_one_allocation() {
+    let gpu = gpu_backend();
+    let runtime = gpu.runtime();
+
+    // f64 round trip and pointer stability across repeated readbacks.
+    let host_f64 = tensor_f64(
+        vec![4096],
+        (0..4096).map(|i| i as f64 * 0.5 - 1.0).collect(),
+    );
+    let device_f64 = upload(&gpu, &host_f64);
+    let filled =
+        download_tensor_into(runtime, &device_f64, Vec::<f64>::with_capacity(4096)).unwrap();
+    assert_eq!(filled.as_slice(), host_f64.as_slice::<f64>().unwrap());
+    let pointer = filled.as_ptr();
+    let mut filled = filled;
+    for _ in 0..2 {
+        filled = download_tensor_into(runtime, &device_f64, filled).unwrap();
+        assert_eq!(filled.as_slice(), host_f64.as_slice::<f64>().unwrap());
+        assert_eq!(
+            filled.as_ptr(),
+            pointer,
+            "a sufficient capacity must not be reallocated"
+        );
+    }
+
+    // Small uploads share CubeCL pool pages, so later handles start at a nonzero offset inside
+    // their page; the readback must honor that offset.
+    let mut offset_buffer = Vec::<f64>::new();
+    for k in 0..64usize {
+        let host = tensor_f64(
+            vec![5 + k],
+            (0..5 + k).map(|i| (k * 100 + i) as f64).collect(),
+        );
+        let device = upload(&gpu, &host);
+        offset_buffer = download_tensor_into(runtime, &device, offset_buffer).unwrap();
+        assert_eq!(
+            offset_buffer.as_slice(),
+            host.as_slice::<f64>().unwrap(),
+            "offset tensor {k}"
+        );
+    }
+
+    // f32 and c64 through a fresh buffer.
+    let host_f32 = tensor_f32(vec![17], (0..17).map(|i| i as f32 + 0.25).collect());
+    let device_f32 = upload(&gpu, &host_f32);
+    let filled_f32 = download_tensor_into(runtime, &device_f32, Vec::<f32>::new()).unwrap();
+    assert_eq!(filled_f32, host_f32.as_slice::<f32>().unwrap());
+
+    let data_c64: Vec<Complex64> = (0..32)
+        .map(|i| Complex64::new(i as f64, -(i as f64)))
+        .collect();
+    let host_c64 = tensor_c64(vec![32], data_c64.clone());
+    let device_c64 = upload(&gpu, &host_c64);
+    let filled_c64 = download_tensor_into(runtime, &device_c64, Vec::<Complex64>::new()).unwrap();
+    assert_eq!(filled_c64, data_c64);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn download_tensor_into_grows_a_short_buffer_and_handles_empty() {
+    let gpu = gpu_backend();
+    let runtime = gpu.runtime();
+
+    let small = tensor_f64(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+    let small_device = upload(&gpu, &small);
+    let buffer = download_tensor_into(runtime, &small_device, Vec::<f64>::new()).unwrap();
+    assert_eq!(buffer, [1.0, 2.0, 3.0, 4.0]);
+
+    // A later, larger readback must grow the reused allocation and land correctly.
+    let large = tensor_f64(vec![64], (0..64).map(|i| i as f64).collect());
+    let large_device = upload(&gpu, &large);
+    let buffer = download_tensor_into(runtime, &large_device, buffer).unwrap();
+    assert_eq!(buffer.as_slice(), large.as_slice::<f64>().unwrap());
+    assert!(buffer.capacity() >= 64);
+
+    // An empty tensor clears the buffer and hands it back.
+    let empty = tensor_f64(vec![0], Vec::new());
+    let empty_device = upload(&gpu, &empty);
+    let buffer = download_tensor_into(runtime, &empty_device, buffer).unwrap();
+    assert!(buffer.is_empty());
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn download_tensor_into_rejects_dtype_mismatch_and_returns_the_buffer() {
+    let gpu = gpu_backend();
+    let runtime = gpu.runtime();
+    let host = tensor_f64(vec![8], (0..8).map(|i| i as f64).collect());
+    let device = upload(&gpu, &host);
+
+    let buffer = Vec::<f32>::with_capacity(8);
+    let error = download_tensor_into(runtime, &device, buffer).unwrap_err();
+    match error {
+        DownloadIntoError::Rejected { error, buffer } => {
+            assert_eq!(
+                error.kind(),
+                ErrorKind::Validation(ValidationKind::DTypeMismatch)
+            );
+            assert!(buffer.is_empty());
+            assert_eq!(buffer.capacity(), 8, "the submitted buffer is handed back");
+        }
+        other => panic!("expected a pre-enqueue rejection, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn download_tensor_into_rejects_bool_destination() {
+    let gpu = gpu_backend();
+    let runtime = gpu.runtime();
+    let host = tensor_bool(vec![4], vec![true, false, true, false]);
+    let device = upload(&gpu, &host);
+
+    let error = download_tensor_into::<bool>(runtime, &device, Vec::new()).unwrap_err();
+    match error {
+        DownloadIntoError::Rejected { error, buffer } => {
+            assert_eq!(error.kind(), ErrorKind::Unsupported);
+            assert!(buffer.is_empty());
+        }
+        other => panic!("expected a pre-enqueue rejection, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn download_tensor_into_rejects_host_and_foreign_runtime_tensors() {
+    let gpu = gpu_backend();
+    let runtime = gpu.runtime();
+    let host = tensor_f64(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+
+    // A host tensor has no device allocation to read.
+    let error = download_tensor_into(runtime, &host, Vec::<f64>::new()).unwrap_err();
+    assert!(matches!(
+        error,
+        DownloadIntoError::Rejected { error, .. } if error.kind() == ErrorKind::RuntimeState
+    ));
+
+    // A same-ordinal but distinct runtime owns another allocation domain.
+    let device = upload(&gpu, &host);
+    let foreign = CudaRuntime::new(crate::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let error = download_tensor_into(&foreign, &device, Vec::<f64>::new()).unwrap_err();
+    assert!(matches!(
+        error,
+        DownloadIntoError::Rejected { error, .. } if error.kind() == ErrorKind::RuntimeState
+    ));
 }

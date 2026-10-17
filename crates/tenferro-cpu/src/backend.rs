@@ -1982,6 +1982,13 @@ impl BackendSessionHost for CpuBackend {
         maybe_print_cpu_session_profile();
         result
     }
+
+    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+        crate::with_cpu_exec_session(session, |cpu| {
+            cpu.child_backend.runtime_identity() == self.runtime_identity()
+        })
+        .unwrap_or(false)
+    }
 }
 
 /// Hand a tensor back to the pool's typed free list, keyed by its runtime tag.

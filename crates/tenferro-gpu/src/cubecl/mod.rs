@@ -185,7 +185,7 @@ pub use exec_session::{
     with_cuda_exec_session, CudaExecSession, CudaHeldSession, CudaSessionStats,
 };
 pub use identity::{CudaComputeCapability, CudaDeviceUuid, GpuExtensionCapability};
-pub use memory::{download_tensor, upload_tensor};
+pub use memory::{download_tensor, download_tensor_into, upload_tensor, DownloadIntoError};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};
 pub use transfer::{

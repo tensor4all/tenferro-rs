@@ -15,18 +15,19 @@ use tenferro_tensor::{
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
 use crate::runtime::execution::{
     collect_scoped_outputs, collect_tensor_outputs_with, retain_instruction_results,
-    spawn_in_flight, submit_with_spawner, ErasedTensorBackendExecutor, InFlightSubmission,
-    LocatedExecSlot, OsThreadSpawner, RuntimeOutputMode, SubmissionSpawner,
+    spawn_in_flight, submit_with_spawner, BorrowedExecutorSessionState,
+    ErasedTensorBackendExecutor, InFlightSubmission, LocatedExecSlot, OsThreadSpawner,
+    RuntimeOutputMode, SubmissionSpawner,
 };
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
-    CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId,
-    ExecutableEngineContract, ExecutionContextIdentity, ExecutionInputs, HardwareClassId,
-    ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract,
-    InputSignatureContract, PreparedOperationPlan, ProviderDeviceIdentity,
-    ProviderExecutableBinding, ProviderId, RegistrationIdentity, ResidentOutputContract, Runtime,
-    RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeInputContract, ScopedExecutionOutcome,
-    ScopedReadInputs, StorageClass, SubmissionError,
+    CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration,
+    EventDomainDriver, EventDomainId, EventDomainRun, EventToken, ExecutableEngineContract,
+    ExecutionContextIdentity, ExecutionInputs, HardwareClassId, ImmediateEventDomainDriver,
+    InputIngressContract, InputPlacementContract, InputSignatureContract, PreparedOperationPlan,
+    ProviderDeviceIdentity, ProviderExecutableBinding, ProviderId, RegistrationIdentity,
+    ResidentOutputContract, Runtime, RuntimeConfigError, RuntimeEpoch, RuntimeId,
+    RuntimeInputContract, ScopedExecutionOutcome, ScopedReadInputs, StorageClass, SubmissionError,
 };
 use crate::{Error, ErrorPhase, GraphCompiler, TracedTensor};
 
@@ -132,11 +133,25 @@ impl SubmissionSpawner for FailingSpawner {
 #[derive(Debug)]
 struct AdmissionTestExecutor {
     fail_materialize: bool,
+    /// Ordered log shared with an [`OrderingProbeDriver`] so a test can assert
+    /// that output materialization ran before the event domain was retired.
+    events: Option<Arc<Mutex<Vec<&'static str>>>>,
 }
 
 impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
     fn backend_type_name(&self) -> &'static str {
         "AdmissionTestExecutor"
+    }
+
+    fn try_lease_session_state<'a>(
+        &'a self,
+        caller: &'static str,
+    ) -> Result<Box<dyn BorrowedExecutorSessionState + 'a>, Error> {
+        Err(Error::unsupported(
+            caller,
+            ErrorPhase::Execution,
+            "AdmissionTestExecutor does not lease a session state",
+        ))
     }
 
     fn extension_cache_stats(&self) -> Result<CacheStats, CacheOwnerError> {
@@ -221,6 +236,9 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
     }
 
     fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> crate::Result<Tensor> {
+        if let Some(events) = &self.events {
+            events.lock().expect("event log lock").push("materialize");
+        }
         if self.fail_materialize {
             return Err(Error::runtime_state(
                 "AdmissionTestExecutor",
@@ -249,6 +267,19 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
 fn admission_test_registration(
     fail_materialize: bool,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    admission_test_registration_with(
+        Arc::new(AdmissionTestExecutor {
+            fail_materialize,
+            events: None,
+        }),
+        Arc::new(ImmediateEventDomainDriver::new()),
+    )
+}
+
+fn admission_test_registration_with(
+    executor: Arc<AdmissionTestExecutor>,
+    driver: Arc<dyn EventDomainDriver>,
+) -> Result<EngineRegistration, RuntimeConfigError> {
     let storage = StorageClass::new("tenferro-test.admission-storage.v1")?;
     let engine_id = EngineId::new("tenferro-test.admission-engine.v1")?;
     let registration = EngineRegistration::executable(ProviderExecutableBinding::new(
@@ -264,8 +295,8 @@ fn admission_test_registration(
             .expect("provider target"),
             ExecutionContextIdentity::of::<AdmissionTestExecutor>(),
             CoreCapabilityBundle::builder().build(),
-            Arc::new(AdmissionTestExecutor { fail_materialize }),
-            Arc::new(ImmediateEventDomainDriver::new()),
+            executor,
+            driver,
             InputIngressContract::new(
                 InputPlacementContract::new({
                     let storage = storage.clone();
@@ -294,6 +325,108 @@ fn admission_test_registration(
         ),
     )?);
     Ok(registration)
+}
+
+#[derive(Debug)]
+struct OrderingProbeRun {
+    domain: EventDomainId,
+    events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl EventDomainRun for OrderingProbeRun {
+    fn domain(&self) -> EventDomainId {
+        self.domain
+    }
+
+    fn enqueue(
+        &mut self,
+        dependencies: &[Arc<dyn EventToken>],
+        launch: &mut dyn FnMut() -> crate::Result<()>,
+    ) -> crate::Result<Arc<dyn EventToken>> {
+        assert!(
+            dependencies.is_empty(),
+            "the ordering probe has no inter-node dependencies"
+        );
+        launch()?;
+        Ok(Arc::new(OrderingProbeToken {
+            domain: self.domain,
+        }))
+    }
+
+    fn drain(&mut self) -> crate::Result<()> {
+        self.events.lock().expect("event log lock").push("drain");
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct OrderingProbeToken {
+    domain: EventDomainId,
+}
+
+impl EventToken for OrderingProbeToken {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn origin(&self) -> EventDomainId {
+        self.domain
+    }
+
+    fn wait(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct OrderingProbeDriver {
+    events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl EventDomainDriver for OrderingProbeDriver {
+    fn begin_run(&self, domain: EventDomainId) -> crate::Result<Box<dyn EventDomainRun>> {
+        self.events.lock().expect("event log lock").push("begin");
+        Ok(Box::new(OrderingProbeRun {
+            domain,
+            events: Arc::clone(&self.events),
+        }))
+    }
+}
+
+#[test]
+fn prepared_materialization_runs_inside_the_event_domain_retirement(
+) -> Result<(), Box<dyn StdError>> {
+    // The identity graph has no scheduled node, so the only evidence that the
+    // run owns a retirement barrier is the event-domain run seeded from the
+    // scheduled locations. The shared log proves output materialization runs
+    // before that run is retired; an identity or zero-node graph without the
+    // location seed would never retire the copy at all.
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let executor = Arc::new(AdmissionTestExecutor {
+        fail_materialize: false,
+        events: Some(Arc::clone(&events)),
+    });
+    let driver: Arc<dyn EventDomainDriver> = Arc::new(OrderingProbeDriver {
+        events: Arc::clone(&events),
+    });
+    let mut builder = Runtime::builder();
+    builder.register_engine(admission_test_registration_with(executor, driver)?)?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    let output = runtime.run_prepared(&prepared, &[&input])?;
+    assert_eq!(output[0].as_slice::<f64>()?, &[1.0, 2.0]);
+    assert_eq!(
+        *events.lock().expect("event log lock"),
+        vec!["begin", "materialize", "drain"],
+        "output materialization must run before the run's event domain is retired"
+    );
+    Ok(())
 }
 
 #[test]

@@ -272,15 +272,19 @@ assert_eq!(vt_rank2.concrete_shape()?, vec![2, 3]);
 <!-- end-snippet-source -->
 
 `SvdOptions::driver` selects the cuSOLVER routine on the CUDA backend.
-`SvdDriver::Auto` (the default) uses Jacobi `gesvdj` when both matrix
-dimensions are at most 1024 and QR-based `gesvd` otherwise, matching JAX.
-`SvdDriver::Gesvd` or `SvdDriver::Gesvdj` forces one routine regardless of
-size; which one is faster depends on the singular-value spectrum, so measure
-on your workload. `SvdDriver::Xgesvdp` explicitly selects cuSOLVER's
-polar-decomposition routine; `Auto` never selects it. Xgesvdp may perturb
-near-singular inputs and shift small singular values. The reported perturbation
-magnitude (`h_err_sigma`) is discarded, so use another driver when that
-diagnostic is needed to judge a truncation. CPU providers ignore the driver.
+`SvdDriver::Auto` (the default) is accuracy-preserving and matches JAX: Jacobi
+`gesvdj` when both matrix dimensions are at most 1024 and QR-based `gesvd`
+beyond that. `SvdDriver::Gesvd` or `SvdDriver::Gesvdj` forces one routine
+regardless of size; which one is faster depends on the singular-value spectrum,
+so measure on your workload. `SvdDriver::Xgesvdp` is opt-in: it is the fastest
+driver for `min(m, n) >= 256` (see the `cuda_svd_driver` benchmark), but its
+small singular values are only accurate to about `1e-6` of the largest, so do
+not combine it with an `eps`-scale truncation (a pseudoinverse or
+tensor-network truncation at `1e-12`..`1e-14`) - the retained rank can change.
+Tenferro reads cuSOLVER's `h_err_sigma` perturbation bound and returns a typed
+backend failure rather than silently wrong factors when the perturbation is not
+small relative to the largest singular value; that is what rejects a
+rank-deficient `F32`/`C32` explicit request. CPU providers ignore the driver.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_svd_driver -->
 ```rust

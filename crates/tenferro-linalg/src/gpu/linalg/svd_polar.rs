@@ -175,8 +175,39 @@ where
         for &value in host_info.host_data()? {
             check_solver_info(op, "cusolverDnXgesvdp", value)?;
         }
-        // Option A of #1849: discard h_err_sigma; public SvdDriver documents
-        // the possible shift of small singular values instead of changing output.
+        // `h_err_sigma` is cuSOLVER's absolute bound on the perturbation of the
+        // computed singular values. When it is comparable to a matrix's own
+        // spectrum that member is not trustworthy; single-precision
+        // rank-deficient input makes cuSOLVER report an error as large as the
+        // spectrum itself (#2182). Pair each matrix's bound with its own
+        // singular values and reject the whole call if any member fails, so a
+        // large well-conditioned member cannot mask a bad one.
+        // ponytail: downloads the whole spectrum to find each member's max. A
+        // device reduction would avoid the copy for large batched `k`, but the
+        // SVD already synchronizes here and the copy is small next to it.
+        let host_s = raw.download_tensor::<<T as LinalgScalar>::Real>(&s, op)?;
+        let host_values = host_s.host_data()?;
+        for (batch, &error_bound) in err_sigma.iter().enumerate() {
+            let s_max = host_values[batch * k..(batch + 1) * k]
+                .iter()
+                .fold(0.0_f64, |acc, &value| acc.max(value.into()));
+            if !error_bound.is_finite()
+                || error_bound > XGESVDP_MAX_RELATIVE_ERROR * s_max.max(f64::MIN_POSITIVE)
+            {
+                return Err(Error::BackendFailure {
+                    op,
+                    message: format!(
+                        "cusolverDnXgesvdp batch {batch} reported h_err_sigma={error_bound:e} \
+                         against a largest singular value of {s_max:e}; the factorization is not \
+                         reliable"
+                    ),
+                });
+            }
+        }
+        // Each member's perturbation is within the bound. This says the
+        // singular values are accurate to `XGESVDP_MAX_RELATIVE_ERROR` of the
+        // largest one; it does not promise the perturbation is zero, so small
+        // singular values (and a pseudoinverse cutoff near them) can still move.
         Ok((u, s, v))
     })
 }

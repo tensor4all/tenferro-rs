@@ -11,9 +11,10 @@ use cubecl_environment::stream::StreamId;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
-    CudaDeviceId, GpuExtensionCapability,
+    cuda_runtime_engine_registration, download_tensor, gpu_available, upload_tensor,
+    with_cuda_exec_session, CudaBackend, CudaDeviceId, GpuExtensionCapability,
 };
+use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{
     has_held_backend_session, BackendSessionHost, SessionEntryError, Tensor, TensorRead,
 };
@@ -232,4 +233,211 @@ fn a_second_backend_state_cannot_be_opened_from_inside_a_held_callback() {
         .expect("the failed attempt must not have kept the second state reserved")
         .close()
         .expect("close");
+}
+
+/// Build a runtime whose single engine is `backend`, for prepared execution.
+fn prepared_runtime(backend: &CudaBackend) -> Runtime {
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            cuda_runtime_engine_registration(
+                backend,
+                EngineId::new("tenferro-cuda.test.held-prepared.v1").expect("engine id"),
+            )
+            .expect("cuda engine registration"),
+        )
+        .expect("register engine");
+    builder.build().expect("runtime")
+}
+
+fn square_graph(input_len: usize) -> tenferro_runtime::CompiledGraph {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let y = (&x * &x).expect("square");
+    GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[input_len])])
+        .expect("compile")
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn held_session_runs_prepared_graph_in_caller_session() {
+    let mut backend = cuda();
+    let runtime = prepared_runtime(&backend);
+    let program = square_graph(4);
+
+    let host = vector(&[1.0, 2.0, 3.0, 4.0]);
+    let gpu_input = upload_tensor(backend.runtime(), &host).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&gpu_input])
+        .expect("prepare");
+
+    let mut outputs = Vec::new();
+    let mut session = backend.open_session().expect("open");
+    for _ in 0..16 {
+        let produced = session
+            .with_session(|view| runtime.run_prepared_in(view, &prepared, &[&gpu_input]))
+            .expect("held callback")
+            .expect("prepared run");
+        outputs.push(produced.into_iter().next().expect("one output"));
+    }
+    let stats = session.stats();
+    assert_eq!(
+        stats.held_operations, 16,
+        "one callback per prepared run is observed by the held session"
+    );
+    session.close().expect("close");
+
+    for output in &outputs {
+        let resident = download_tensor(backend.runtime(), output).expect("download");
+        assert_eq!(payload(&resident), vec![1.0, 4.0, 9.0, 16.0]);
+    }
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn held_session_runs_fused_prepared_graph_in_caller_session() {
+    let mut backend = cuda();
+    let runtime = prepared_runtime(&backend);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let squared = (&x * &x).expect("square");
+    let cubed = (&squared * &x).expect("cube");
+    let shifted = (&cubed + &x).expect("shift");
+    let y = (&shifted * &x).expect("scale");
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .expect("compile");
+
+    let host = vector(&[2.0, 3.0]);
+    let gpu_input = upload_tensor(backend.runtime(), &host).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&gpu_input])
+        .expect("prepare");
+
+    let mut session = backend.open_session().expect("open");
+    let output = session
+        .with_session(|view| runtime.run_prepared_in(view, &prepared, &[&gpu_input]))
+        .expect("held callback")
+        .expect("prepared run");
+    session.close().expect("close");
+
+    let resident = download_tensor(backend.runtime(), &output[0]).expect("download");
+    // ((x*x)*x + x) * x for x = [2, 3] -> [20, 90].
+    assert_eq!(payload(&resident), vec![20.0, 90.0]);
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn held_session_runs_identity_prepared_graph_from_a_device_input() {
+    let mut backend = cuda();
+    let runtime = prepared_runtime(&backend);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    // The output placeholder is the input: no instruction writes the output
+    // slot, so collection copies the borrowed device input instead of reading
+    // it through host memory.
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&x, &[(&x, DType::F64, &[3])])
+        .expect("compile");
+
+    let host = vector(&[4.0, 7.0, 9.0]);
+    let gpu_input = upload_tensor(backend.runtime(), &host).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&gpu_input])
+        .expect("prepare");
+
+    let mut session = backend.open_session().expect("open");
+    let output = session
+        .with_session(|view| runtime.run_prepared_in(view, &prepared, &[&gpu_input]))
+        .expect("held callback")
+        .expect("prepared run");
+    session.close().expect("close");
+
+    let resident = download_tensor(backend.runtime(), &output[0]).expect("download");
+    assert_eq!(payload(&resident), vec![4.0, 7.0, 9.0]);
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn held_session_rejects_a_foreign_prepared_session_before_launch() {
+    let mut backend = cuda();
+    let runtime = prepared_runtime(&backend);
+    let host = vector(&[1.0, 2.0, 3.0, 4.0]);
+    let program = square_graph(4);
+    let gpu_input = upload_tensor(backend.runtime(), &host).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&gpu_input])
+        .expect("prepare");
+
+    // A second independent backend state has a different runtime witness.
+    let mut foreign = cuda();
+    let mut session = foreign.open_session().expect("foreign open");
+    let error = session
+        .with_session(|view| runtime.run_prepared_in(view, &prepared, &[&gpu_input]))
+        .expect("held callback")
+        .expect_err("a foreign session must be rejected before launch");
+    assert!(
+        error.to_string().contains("different backend state"),
+        "{error}"
+    );
+    assert_eq!(
+        session.stats().held_operations,
+        1,
+        "the rejection still ran inside one observed callback"
+    );
+    session.close().expect("foreign close");
+
+    // The owning session still runs and retires, so the rejection did not
+    // corrupt the prepared handle or the foreign state.
+    let mut owner = backend.open_session().expect("owner open");
+    let output = owner
+        .with_session(|view| runtime.run_prepared_in(view, &prepared, &[&gpu_input]))
+        .expect("held callback")
+        .expect("prepared run");
+    owner.close().expect("close");
+    let resident = download_tensor(backend.runtime(), &output[0]).expect("download");
+    assert_eq!(payload(&resident), vec![1.0, 4.0, 9.0, 16.0]);
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn held_session_retires_after_a_prepared_ingress_error() {
+    let mut backend = cuda();
+    let runtime = prepared_runtime(&backend);
+    let host = vector(&[1.0, 2.0]);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let y = (&x + &x).expect("add");
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .expect("compile");
+    let owner_input = upload_tensor(backend.runtime(), &host).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&owner_input])
+        .expect("prepare");
+
+    // A tensor resident on a different CUDA runtime is rejected by ingress
+    // after the run's event domains were created, so the run must still drain
+    // (retire) before the error returns.
+    let foreign_backend = cuda();
+    let foreign_input = upload_tensor(foreign_backend.runtime(), &host).expect("foreign upload");
+
+    let mut session = backend.open_session().expect("open");
+    let error = session
+        .with_session(|view| runtime.run_prepared_in(view, &prepared, &[&foreign_input]))
+        .expect("held callback")
+        .expect_err("a foreign allocation domain must be rejected by ingress");
+    assert!(
+        error.to_string().contains("residency")
+            || error.to_string().contains("allocation")
+            || error.to_string().contains("ingress"),
+        "unexpected ingress error: {error}"
+    );
+
+    // The event run was drained: the same held session runs the owner input and
+    // retires its work before returning.
+    let output = session
+        .with_session(|view| runtime.run_prepared_in(view, &prepared, &[&owner_input]))
+        .expect("held callback")
+        .expect("prepared run after the ingress error");
+    session.close().expect("close");
+    let resident = download_tensor(backend.runtime(), &output[0]).expect("download");
+    assert_eq!(payload(&resident), vec![2.0, 4.0]);
 }

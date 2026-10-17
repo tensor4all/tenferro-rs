@@ -127,7 +127,12 @@ impl<'a> ExecSlot<'a> {
                     Ok(exec.to_contiguous_read(value.tensor_read())?)
                 }
             }
-            Self::Read(TensorRead::Tensor(tensor)) => Ok(tensor.duplicate()?),
+            Self::Read(TensorRead::Tensor(tensor)) => {
+                // Route the copy through the session so a device-only tensor is
+                // copied by its owning backend; `Tensor::duplicate` reads host
+                // memory and rejects device-only storage (#2182 I4).
+                Ok(exec.to_contiguous_read(TensorRead::from_tensor(tensor))?)
+            }
             Self::Read(read @ TensorRead::View(_)) => Ok(exec.to_contiguous_read(read)?),
         }
     }
@@ -136,9 +141,9 @@ impl<'a> ExecSlot<'a> {
         match self {
             Self::Owned(tensor) => Ok(TensorValue::from_tensor(tensor)),
             Self::Value(value) => Ok(value),
-            Self::Read(TensorRead::Tensor(tensor)) => {
-                Ok(TensorValue::from_tensor(tensor.duplicate()?))
-            }
+            Self::Read(TensorRead::Tensor(tensor)) => Ok(TensorValue::from_tensor(
+                exec.to_contiguous_read(TensorRead::from_tensor(tensor))?,
+            )),
             Self::Read(read @ TensorRead::View(_)) => {
                 Ok(TensorValue::from_tensor(exec.to_contiguous_read(read)?))
             }

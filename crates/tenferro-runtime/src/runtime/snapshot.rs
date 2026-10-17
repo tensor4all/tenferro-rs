@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use tenferro_tensor::{Tensor, TensorValue};
+use tenferro_tensor::{BackendSession, Tensor, TensorValue};
 
 use crate::graph::CompiledGraph;
 use crate::program::FrozenProgram;
@@ -1090,6 +1090,68 @@ impl Runtime {
         inputs: &[&Tensor],
     ) -> crate::Result<Vec<Tensor>> {
         super::execution::run_prepared(self, prepared, inputs)
+    }
+
+    /// Run a graph previously prepared by [`Self::prepare_compiled`] on a
+    /// backend session the caller has already entered.
+    ///
+    /// Every node of the graph executes on `session`; no scoped
+    /// `with_backend_session`, cached session entry, or owner-extension fallback
+    /// runs on this path. Preflight rejects, before any launch, a graph that
+    /// spans more than one engine, a prepared operation without session support,
+    /// and a session that belongs to a different backend state than the graph's
+    /// engine; the executor state is leased exactly once without waiting. The
+    /// call still retires its device work before returning.
+    ///
+    /// Use this to keep one caller-held session (such as a
+    /// `CudaHeldSession`) across many prepared runs instead of paying a fresh
+    /// scoped entry per run. For a graph that is not a single engine, or when no
+    /// session is held, use [`Self::run_prepared`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{runtime_engine_registration, CpuBackend};
+    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut backend = CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder.register_engine(runtime_engine_registration(&backend)?)?;
+    /// let runtime = builder.build()?;
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let graph = GraphCompiler::new().compile(&x)?;
+    /// let prepared = runtime.prepare_compiled(&graph, &[])?;
+    /// let outputs = backend.with_backend_session(|session| {
+    ///     runtime.run_prepared_in(session, &prepared, &[])
+    /// })??;
+    /// assert_eq!(outputs[0].as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Unsupported`] when the prepared graph spans more
+    /// than one engine, when a prepared operation does not support a
+    /// caller-borrowed session, or when `session` belongs to a different backend
+    /// state than the graph's engine; the message names the remedy (use
+    /// [`Self::run_prepared`] outside a session, or pass a session of the
+    /// prepared engine). Returns [`crate::Error::RuntimeState`] when the
+    /// executor state is busy on another thread or reentered on this thread,
+    /// when runtime preparation, snapshot access, or the stale epoch check
+    /// fails, and for the same prepared-handle and input-metadata failures as
+    /// [`Self::run_prepared`]. Backend execution may also return concrete
+    /// variants such as [`crate::Error::Validation`] or
+    /// [`crate::Error::Extension`].
+    pub fn run_prepared_in(
+        &self,
+        session: &mut dyn BackendSession,
+        prepared: &super::execution::PreparedCompiledGraph,
+        inputs: &[&Tensor],
+    ) -> crate::Result<Vec<Tensor>> {
+        super::execution::run_prepared_in(self, session, prepared, inputs)
     }
 
     /// Submit a compiled graph for asynchronous runtime-owned execution.

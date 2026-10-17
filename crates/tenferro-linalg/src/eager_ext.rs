@@ -468,6 +468,9 @@ pub trait EagerSessionLinalgExt {
 
     /// Compute the Moore-Penrose pseudoinverse using the default tolerance.
     ///
+    /// The cutoff is applied to an accuracy-preserving default SVD
+    /// (`SvdDriver::Auto`), so the retained rank matches the CPU reference.
+    ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
@@ -488,6 +491,9 @@ pub trait EagerSessionLinalgExt {
     fn pinv(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
 
     /// Compute the pseudoinverse with an explicit relative tolerance.
+    ///
+    /// Like [`Self::pinv`], the threshold is applied to an accuracy-preserving
+    /// default SVD (`SvdDriver::Auto`).
     ///
     /// # Examples
     /// ```rust

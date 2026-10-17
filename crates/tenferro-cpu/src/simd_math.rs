@@ -1,6 +1,6 @@
 //! Vectorized kernels for the elementwise analytic operations.
 //!
-//! `tenferro-cpu` evaluates `exp`/`log`/`sin`/`cos`/`tanh`/`expm1`/`log1p` one element at a time
+//! `tenferro-cpu` evaluates `exp`/`log`/`sin`/`cos`/`tanh`/`expm1`/`log1p`/`erf` one element at a time
 //! through `strided_kernel::map_into`, and Rust does not vectorize calls into libm, so those paths
 //! run at the speed of the scalar C library. This module maps an operation onto `elem-simd-math`,
 //! which selects the best SIMD level for the running CPU.
@@ -32,6 +32,7 @@ pub(crate) enum VectorKernel {
     Tanh,
     Expm1,
     Log1p,
+    Erf,
 }
 
 /// Applies `kernel` to `src`, writing `dst`.
@@ -61,6 +62,7 @@ pub(crate) fn apply<T: 'static>(
             VectorKernel::Tanh => kernels64::tanh(src, dst),
             VectorKernel::Expm1 => kernels64::expm1(src, dst),
             VectorKernel::Log1p => kernels64::log1p(src, dst),
+            VectorKernel::Erf => kernels64::erf(src, dst),
             VectorKernel::None => unreachable!("guarded above"),
         };
         result.is_ok()
@@ -77,6 +79,7 @@ pub(crate) fn apply<T: 'static>(
             VectorKernel::Tanh => kernels32::tanh(src, dst),
             VectorKernel::Expm1 => kernels32::expm1(src, dst),
             VectorKernel::Log1p => kernels32::log1p(src, dst),
+            VectorKernel::Erf => kernels32::erf(src, dst),
             VectorKernel::None => unreachable!("guarded above"),
         };
         result.is_ok()
@@ -90,7 +93,7 @@ mod tests {
     use super::*;
 
     /// Every kernel the module offers, so that each `match` arm in `apply` is exercised.
-    const KERNELS: [VectorKernel; 7] = [
+    const KERNELS: [VectorKernel; 8] = [
         VectorKernel::Exp,
         VectorKernel::Log,
         VectorKernel::Sin,
@@ -98,6 +101,7 @@ mod tests {
         VectorKernel::Tanh,
         VectorKernel::Expm1,
         VectorKernel::Log1p,
+        VectorKernel::Erf,
     ];
 
     /// `src` is positive, so `log` and `log1p` are defined over all of it.
@@ -119,7 +123,7 @@ mod tests {
     #[test]
     fn f64_kernels_match_the_scalar_definition_over_a_compact_buffer() {
         let src: Vec<f64> = samples(|x| x);
-        let scalar: [fn(f64) -> f64; 7] = [
+        let scalar: [fn(f64) -> f64; 8] = [
             f64::exp,
             f64::ln,
             f64::sin,
@@ -127,6 +131,7 @@ mod tests {
             f64::tanh,
             f64::exp_m1,
             f64::ln_1p,
+            libm::erf,
         ];
         for (&kernel, &f) in KERNELS.iter().zip(scalar.iter()) {
             let mut dst = vec![MaybeUninit::<f64>::uninit(); src.len()];
@@ -142,7 +147,7 @@ mod tests {
     #[test]
     fn f32_kernels_match_the_scalar_definition_over_a_compact_buffer() {
         let src: Vec<f32> = samples(|x| x as f32);
-        let scalar: [fn(f32) -> f32; 7] = [
+        let scalar: [fn(f32) -> f32; 8] = [
             f32::exp,
             f32::ln,
             f32::sin,
@@ -150,6 +155,7 @@ mod tests {
             f32::tanh,
             f32::exp_m1,
             f32::ln_1p,
+            libm::erff,
         ];
         for (&kernel, &f) in KERNELS.iter().zip(scalar.iter()) {
             let mut dst = vec![MaybeUninit::<f32>::uninit(); src.len()];
