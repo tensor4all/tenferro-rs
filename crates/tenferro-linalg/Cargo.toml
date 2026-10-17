@@ -99,13 +99,12 @@ cudarc = { workspace = true, optional = true }
 faer = { workspace = true, optional = true }
 # The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
 # and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
-# The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
-# and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
-# lives in this crate. Requirements are exact so the whole CPU stack resolves one strided source;
-# tlinalg 0.2.0 carries the borrowed-or-owned view metadata (tlinalg-rs#52). Keep the two
-# requirements identical.
-tlinalg = { version = "=0.2.0", optional = true }
-tlinalg-blas = { version = "=0.2.0", optional = true }
+# lives in this crate. Requirements are exact so the whole CPU stack resolves one strided source
+# and one faer identity; tlinalg 0.3.0 takes a `tcontract_exec::Exec` parallelism token and pins
+# `t4a-faer =0.24.6`. Keep the two requirements identical.
+tlinalg = { version = "=0.3.0", optional = true }
+tlinalg-blas = { version = "=0.3.0", optional = true }
+tcontract-exec.workspace = true
 rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }

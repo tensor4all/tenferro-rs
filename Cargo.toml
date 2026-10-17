@@ -64,34 +64,39 @@ lru = "0.18.5"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# Published strided v0.5.x and the matching providers, shared with the CPU
-# contraction/linalg stack (#2004). Keep every crate (cpueinsum, tlinalg, strided)
-# on one registry source: a split strided source gives two `StridedView` types that
-# cannot meet at a crate boundary. `strided-basic` carries the newest patch of that
-# family (0.5.4), while the core stays 0.5.0 because `tlinalg 0.2.0` pins
-# `strided-view =0.5.0`. The providers move together: the published
-# `cpueinsum 0.2.4` carries `tcontract 0.2.4` (tenferro does not depend on
-# tcontract directly), which pins `strided-basic =0.5.4` and `strided-view =0.5.0`
-# from crates.io; an older `cpueinsum` reaches an older `tcontract` that pins an
-# older `strided-basic` exactly and would not resolve beside the 0.5.4
-# requirement. `strided-fused 0.5.2` vectorizes the non-contiguous broadcast
-# block and executes a multi-output plan in one replay (#2161).
-strided-view = "=0.5.0"
-strided-traits = "=0.5.0"
-strided-perm = { version = "=0.5.0", features = ["parallel"] }
-cpueinsum = "=0.2.4"
-cpueinsum-blas = "=0.2.4"
-strided-basic = { version = "=0.5.4", default-features = false }
-strided-fused = { version = "=0.5.2", default-features = false, features = ["parallel"] }
-strided-kernel = { version = "=0.5.0", features = ["parallel"] }
+# Published strided v0.6.0 and the matching providers, shared with the CPU
+# contraction/linalg stack (#2178, #2142, #2180). Keep every crate (cpueinsum,
+# tlinalg, strided) on one registry source: a split strided source gives two
+# `StridedView` types that cannot meet at a crate boundary. All six strided
+# crates move together at 0.6.0 -- the core no longer lags a patch behind the
+# providers. The providers move together too: the published `cpueinsum 0.3.0`
+# carries `tcontract 0.3.0`, which pins `strided-view =0.6.0` and
+# `strided-basic =0.6.0` from crates.io; an older `cpueinsum` reaches an older
+# `tcontract` that pins an older strided exactly and would not resolve beside
+# the 0.6.0 requirement. `strided-fused 0.6.0` propagates NaN through the fused
+# DAG so ordered reductions can use it (TF5), and `strided-view` owns its view
+# metadata inline. `tcontract-exec` is named directly because tenferro now
+# passes its `Exec` to tlinalg and cpueinsum.
+strided-view = "=0.6.0"
+strided-traits = "=0.6.0"
+strided-perm = { version = "=0.6.0", features = ["parallel"] }
+cpueinsum = "=0.3.0"
+cpueinsum-blas = "=0.3.0"
+tcontract-exec = "=0.3.0"
+strided-basic = { version = "=0.6.0", default-features = false }
+strided-fused = { version = "=0.6.0", default-features = false, features = ["parallel"] }
+strided-kernel = { version = "=0.6.0", features = ["parallel"] }
 libloading = "0.8"
-# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.2.0`
-# resolves `t4a-faer` (its own manifest renames it via `package = "t4a-faer"`),
-# and a second, crates.io `faer` would hand a different `Par`/`Mat` type to a
-# downstream direct call than the one `with_faer_parallelism` passes. tenferro-cpu
-# re-exports this build as `tenferro_cpu::faer` under `native`. The fork keeps the
-# 0.24 API and the `faer` library name.
-faer = { package = "t4a-faer", version = "=0.24.5", default-features = false, features = ["std", "rayon"] }
+# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.3.0`
+# resolves `t4a-faer =0.24.6` (its own manifest renames it via
+# `package = "t4a-faer"`), and a second, crates.io `faer` would hand a different
+# `Par`/`Mat` type to a downstream direct call than the one
+# `with_faer_parallelism` passes. `t4a-faer 0.24.6` is the fork commit 04542fae
+# that tlinalg 0.3.0 pins: it carries the evd eigenvector-normalization fix
+# (#2131) on top of the 0.24.5 tag. tenferro-cpu re-exports this build as
+# `tenferro_cpu::faer` under `native`. The fork keeps the 0.24 API and the
+# `faer` library name.
+faer = { package = "t4a-faer", version = "=0.24.6", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
 cblas-inject = "0.1.1"
 blas-src = { version = "0.14", default-features = false }
