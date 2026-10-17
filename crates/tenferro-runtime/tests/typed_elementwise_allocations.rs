@@ -14,10 +14,10 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use smallvec::smallvec;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{scalar_binary_into, AddOp, CpuBackend};
 use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::backend::dot_general_output_shape;
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig};
+use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, DynRank, Host};
 
 /// The `strided-basic` fused-plan scratch a stride-0 operand costs today.
 const BROADCAST_FUSED_PLAN_ALLOCATIONS: usize = 16;
@@ -137,4 +137,42 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             );
         })
         .unwrap();
+
+    // #2178 item 3: `scalar_binary_into` proves destination and lhs shapes equal
+    // before building its views, so the destination metadata borrows the
+    // validated lhs shape. Counting every allocation (not only payload-sized
+    // ones) catches the former `destination.shape().to_vec()`, which allocated
+    // once for any rank in 1..=8. Setup lives outside the measured window and
+    // the numeric result is checked so the arm cannot pass by skipping the copy.
+    for rank in 1..=8 {
+        let shape = vec![2usize; rank];
+        let len = shape.iter().product::<usize>();
+        let lhs = tenferro_tensor::TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(
+            shape.clone(),
+            vec![2.0; len],
+        )
+        .unwrap();
+        let rhs = tenferro_tensor::TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(
+            shape.clone(),
+            vec![3.0; len],
+        )
+        .unwrap();
+        let mut out = tenferro_tensor::TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(
+            shape,
+            vec![0.0; len],
+        )
+        .unwrap();
+        let (result, allocations, bytes) =
+            measure(|| scalar_binary_into::<f64, AddOp>("add", &mut out, &lhs, &rhs));
+        result.unwrap();
+        eprintln!("scalar_binary_into rank {rank}: {allocations} allocations, {bytes} bytes");
+        assert_eq!(
+            allocations, 0,
+            "scalar_binary_into rank {rank} made {allocations} heap allocations ({bytes} bytes)"
+        );
+        assert!(
+            out.as_slice().iter().all(|&value| value == 5.0),
+            "scalar_binary_into rank {rank} numeric result"
+        );
+    }
 }
