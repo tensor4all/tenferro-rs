@@ -14,6 +14,8 @@ use tenferro_linalg::{
 };
 use tenferro_tensor::{BackendSessionHost, DType, Error, Tensor, TensorRead, TypedTensor};
 
+#[path = "gpu_linalg/svd_auto.rs"]
+mod svd_auto;
 #[path = "gpu_linalg/xgesvdp.rs"]
 mod xgesvdp;
 

@@ -692,28 +692,38 @@ alignment of that shifted address, not the 256-byte allocation alignment;
 claiming more than the pointer can satisfy fails the launch with `misaligned
 address`.
 
-CUDA SVD follows JAX-compatible default driver selection when the caller
-leaves `SvdOptions::driver` at `SvdDriver::Auto`: use cuSOLVER Jacobi `gesvdj`
-when both matrix dimensions are at most 1024, otherwise use QR-based `gesvd`.
+CUDA SVD follows the accuracy-preserving, JAX-compatible default driver
+selection when the caller leaves `SvdOptions::driver` at `SvdDriver::Auto`: use
+cuSOLVER Jacobi `gesvdj` when both matrix dimensions are at most 1024,
+otherwise QR-based `gesvd`. `Auto` never selects the polar `Xgesvdp` (#2182).
 `SvdDriver::Gesvdj` and `SvdDriver::Gesvd` force the routine regardless of
-size, because the faster driver depends on the spectrum, not the dimensions
-alone. The driver is part of the traced op identity and survives pruning to
-the values-only op; CPU providers ignore it. `gesvdj` returns V, so the backend
-materializes the public `vt` output by copying V to V^H on the device. The
-singular-values-only path still passes scratch U/V buffers to `gesvdj` because
-cuSOLVER rejects null U/V pointers on that path.
+size, because the faster driver depends on the spectrum and the shape, not the
+dimensions alone. The driver is part of the traced op identity and survives
+pruning to the values-only op; CPU providers ignore it. `gesvdj` returns V, so
+the backend materializes the public `vt` output by copying V to V^H on the
+device. The singular-values-only path still passes scratch U/V buffers to
+`gesvdj` because cuSOLVER rejects null U/V pointers on that path.
 
-`SvdDriver::Xgesvdp` is an explicit-only polar-decomposition alternative; it
-does not change `Auto`. Its 64-bit cuSOLVER call uses matching real singular
-values and separate device/host byte workspaces. Both matrix orientations are
-supported directly. Like `gesvdj`, it returns V and needs an on-device adjoint
-for the public Vᴴ result. Values-only execution selects `NoVector`, not a full
-decomposition. Host workspace and `h_err_sigma` storage remain live through a
-completion barrier, including vendor-error paths. The perturbation diagnostic
-is discarded: near-singular inputs may have shifted small singular values, as
-documented on the public variant. The existing `svd_full` API has no driver
-option and continues to use `Auto`; full Xgesvdp factors are covered internally
-without extending that public API.
+`SvdDriver::Xgesvdp` is the opt-in polar-decomposition routine; `Auto` never
+selects it, and the explicit variant forces it at any size and dtype. It is the
+fastest of the three drivers for `min(m, n) >= 256` on an A100 (see the
+`cuda_svd_driver` benchmark), but its small singular values are only accurate to
+about `1e-6` of the largest. Do not combine it with an `eps`-scale truncation
+(a pseudoinverse or tensor-network truncation at `1e-12`..`1e-14`): the
+perturbation can change the retained rank. Its 64-bit cuSOLVER call uses
+matching real singular values and separate device/host byte workspaces. Both
+matrix orientations are supported directly. Like `gesvdj`, it returns V and
+needs an on-device adjoint for the public Vᴴ result. Values-only execution
+selects `NoVector`, not a full decomposition. Host workspace and `h_err_sigma`
+storage remain live through a completion barrier, including vendor-error paths.
+`h_err_sigma` is cuSOLVER's absolute perturbation bound on the computed
+singular values; tenferro rejects the factorization with a typed backend
+failure when the bound is not small relative to the largest singular value,
+instead of returning silently wrong factors. The check pairs each batch member
+with its own spectrum and names the failing batch. That check is what makes an
+explicit rank-deficient `F32`/`C32` request fail rather than return the perturbed
+values. The existing `svd_full` API has no driver option and uses `Auto`; full
+Xgesvdp factors are covered internally without extending that public API.
 
 CUDA eigh routes by batch count, not by order. A real batch
 (`batch_total > 1`) always takes a batched cuSOLVER routine, because that

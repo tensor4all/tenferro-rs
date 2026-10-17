@@ -719,6 +719,7 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
 
     for needle in [
         "const JAX_COMPATIBLE_GESVDJ_MAX_DIM: usize = 1024",
+        "const XGESVDP_MAX_RELATIVE_ERROR: f64 = 1.0e-6",
         "enum CusolverSvdRoutine",
         "fn select_svd_driver(driver: SvdDriver, m: usize, n: usize) -> CusolverSvdRoutine",
         "SvdDriver::Gesvdj => CusolverSvdRoutine::Gesvdj",
@@ -733,6 +734,9 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
         );
     }
 
+    // The polar driver's h_err_sigma rejection is covered behaviourally by the
+    // svd_auto guard tests (single-precision rank-deficient and mixed-scale
+    // batched), so the source contract only pins the selection policy here.
     for (section, op_tag) in [(svd, "op"), (svd_values, "OP")] {
         for needle in [
             "match select_svd_driver(driver, m, n)".to_string(),

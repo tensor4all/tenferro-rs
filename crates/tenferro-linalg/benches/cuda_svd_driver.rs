@@ -14,10 +14,13 @@
 //! because linalg owns `SvdOptions::driver`, and the repository rule keeps a
 //! performance case with the code it exercises.
 //!
-//! `SvdDriver::Auto` is measured, never changed: its JAX-compatible policy
-//! (`gesvdj` up to the 1024 order threshold, `gesvd` beyond it — #971) is the
-//! maintainer's default and stays untouched here. The harness exists so a
-//! policy change can be judged on per-driver time *and* per-driver accuracy.
+//! `SvdDriver::Auto` is measured but stays the accuracy-preserving,
+//! JAX-compatible policy (`gesvdj` up to the 1024 order threshold, `gesvd`
+//! beyond it - #971); `Xgesvdp` is opt-in. The harness exists so the opt-in
+//! tradeoff can be judged on per-driver time *and* per-driver accuracy:
+//! `Xgesvdp` is faster for `min(m, n) >= 256` but its small singular values are
+//! only accurate to about `1e-6` of the largest (cuSOLVER's `h_err_sigma`), so
+//! an `eps`-scale truncation below that is not reliable.
 //!
 //! An untimed accuracy table is printed to stderr before the timing groups. It
 //! reports the relative reconstruction error `||A - U diag(S) Vᴴ||_F / ||A||_F`
