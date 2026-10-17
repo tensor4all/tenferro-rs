@@ -3,9 +3,10 @@
 //! The entered linalg seam (`tenferro-linalg`'s `solve_entered`) reshapes a
 //! vector right-hand side and restores the solution shape through
 //! `reshape_tensor`. This module pins that the helper keeps exact column-major
-//! values across the preset dtypes and both thread counts, that an input above
-//! the session's serial threshold takes the pooled copy, and that a
-//! non-contiguous source is read in logical order rather than raw storage order.
+//! values across the preset dtypes above the session's serial threshold, that
+//! the parallel branch really checks out and recycles a pool buffer while the
+//! serial branch does not, and that a non-contiguous source is read in logical
+//! order rather than raw storage order.
 
 use super::*;
 
@@ -18,24 +19,6 @@ fn reshape_via_context(
     with_cpu_session(backend, |cpu| {
         cpu.with_linalg_pool(|context, buffers| context.reshape_tensor(buffers, input, shape))
     })
-}
-
-/// Whether a freshly entered context can run the pooled copy.
-fn parallel_capable(threads: usize) -> bool {
-    let mut backend = CpuBackend::with_threads(threads).unwrap();
-    with_cpu_session(&mut backend, |cpu| {
-        cpu.with_linalg_pool(|context, _| Ok(context.uses_inner_parallelism()))
-    })
-    .unwrap()
-}
-
-#[test]
-fn a_single_thread_context_cannot_pool_and_a_four_thread_context_can() {
-    // The threshold branch in `reshape_tensor` is only reachable when the
-    // context owns an inner parallel region; pin that the test's thread counts
-    // select the serial and pooled branches respectively.
-    assert!(!parallel_capable(1));
-    assert!(parallel_capable(4));
 }
 
 /// Build a compact owner, reshape it through the seam, and compare exactly.
@@ -58,54 +41,70 @@ where
     );
 }
 
+fn patterned<T>(len: usize, make: impl Fn(usize) -> T) -> Vec<T> {
+    (0..len).map(make).collect()
+}
+
 #[test]
-fn reshape_tensor_is_exact_for_every_preset_dtype_below_the_threshold() {
-    // Small inputs keep the serial host copy; the values must not depend on the
-    // dtype or the session's thread count.
+fn reshape_tensor_is_exact_for_every_preset_dtype_above_the_threshold() {
+    // Every dtype must round-trip a patterned payload larger than the serial
+    // threshold: the four-thread session takes the pooled copy and the
+    // one-thread session keeps the serial copy, so both branches are checked
+    // for exact column-major values.
+    const N: usize = 256;
+    let from = [N, N];
+    let to = [2 * N, N / 2];
+    let len = N * N;
+    assert!(len > crate::structural::SERIAL_RESHAPE_MAX_ELEMS);
     for threads in [1, 4] {
-        assert_exact::<f32>(threads, &[2, 3], &[6], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-        assert_exact::<f64>(
-            threads,
-            &[2, 3],
-            &[3, 2],
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        );
-        assert_exact::<i32>(threads, &[2, 3], &[6], vec![-1, 2, -3, 4, -5, 6]);
-        assert_exact::<i64>(threads, &[2, 3], &[6], vec![-1, 2, -3, 4, -5, 6]);
-        assert_exact::<bool>(
-            threads,
-            &[2, 3],
-            &[6],
-            vec![true, false, true, false, true, false],
-        );
+        assert_exact::<f32>(threads, &from, &to, patterned(len, |i| i as f32));
+        assert_exact::<f64>(threads, &from, &to, patterned(len, |i| i as f64));
+        assert_exact::<i32>(threads, &from, &to, patterned(len, |i| i as i32 - 1000));
+        assert_exact::<i64>(threads, &from, &to, patterned(len, |i| i as i64 - 1000));
+        assert_exact::<bool>(threads, &from, &to, patterned(len, |i| i % 3 == 0));
         assert_exact::<Complex32>(
             threads,
-            &[2, 3],
-            &[6],
-            (0..6)
-                .map(|i| Complex32::new(i as f32, -(i as f32)))
-                .collect(),
+            &from,
+            &to,
+            patterned(len, |i| Complex32::new(i as f32, -(i as f32) / 2.0)),
         );
         assert_exact::<Complex64>(
             threads,
-            &[2, 3],
-            &[6],
-            (0..6)
-                .map(|i| Complex64::new(i as f64, -(i as f64)))
-                .collect(),
+            &from,
+            &to,
+            patterned(len, |i| Complex64::new(i as f64, -(i as f64) / 2.0)),
         );
     }
 }
 
 #[test]
-fn reshape_tensor_above_the_threshold_preserves_column_major_order() {
-    // 256 x 256 is above the strided parallel threshold, so a four-thread
-    // session materializes through the pool; a one-thread session cannot
-    // parallelize and keeps the serial copy. Both must preserve order.
+fn reshape_tensor_recycles_a_pool_buffer_only_on_the_parallel_branch() {
+    // The regression signal for the routing itself: an owned copy above the
+    // threshold must check a buffer out of the caller's pool and hand it back
+    // when the output drops on a parallel-capable context, and must not touch
+    // the pool on a one-thread context. Reverting `reshape_tensor` to the
+    // serial `to_vec` copy leaves the pool empty in both cases and fails here.
     const N: usize = 256;
     let values: Vec<f64> = (0..N * N).map(|i| i as f64).collect();
-    for threads in [1, 4] {
-        assert_exact::<f64>(threads, &[N, N], &[512, 128], values.clone());
+    let input =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![N, N], values).unwrap());
+    for (threads, expect_checkout) in [(1usize, false), (4usize, true)] {
+        let mut backend = CpuBackend::with_threads(threads).unwrap();
+        assert_eq!(
+            backend.buffer_pool_len().unwrap(),
+            0,
+            "threads={threads}: a fresh engine pool starts empty"
+        );
+        let out = reshape_via_context(&mut backend, &input, &[512, 128]).unwrap();
+        assert_eq!(out.as_slice::<f64>().unwrap().len(), N * N);
+        drop(out);
+        let retained = backend.buffer_pool_len().unwrap();
+        assert_eq!(
+            retained == 1,
+            expect_checkout,
+            "threads={threads}: retained={retained}; the pooled branch returns one buffer and \
+             the serial branch returns none"
+        );
     }
 }
 

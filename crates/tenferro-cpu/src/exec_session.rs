@@ -636,7 +636,7 @@ impl TensorStructural for CpuExecSession<'_> {
             // above the strided scheduler's parallel threshold. Such a copy
             // materializes on the pool; `run_native` (not `run_native_fresh`)
             // keeps the input placement that the copy puts on the output, as the
-            // metadata-only reshape contract requires.
+            // reshape contract requires.
             let parallel = match self.entered {
                 Some(context) => context.uses_inner_parallelism(),
                 None => self.entry.preferred_engine_mode() == ParallelMode::Inner,

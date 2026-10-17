@@ -416,7 +416,7 @@ pub(crate) const SERIAL_RESHAPE_MAX_ELEMS: usize = strided_kernel::execution::MI
 
 /// Whether an owned `reshape` of `input` should run the copy on the pool.
 ///
-/// The serial metadata-only copy is kept at or below
+/// The serial host copy is kept at or below
 /// [`SERIAL_RESHAPE_MAX_ELEMS`] and whenever `parallel_copy` is false. The
 /// session entry and the entered execution-context seam both decide with this
 /// predicate, so a change to the threshold reaches both callers.

@@ -216,8 +216,8 @@ impl<'a> CpuExecutionContext<'a> {
 
     /// Reshape a compact tensor while retaining the current execution proof.
     ///
-    /// Small inputs and contexts that cannot parallelize keep the serial
-    /// metadata-only copy. A large input in a parallel-capable context
+    /// Small inputs and contexts that cannot parallelize keep the serial host
+    /// copy. A large input in a parallel-capable context
     /// materializes through the same pooled strided copy the session's
     /// `reshape_read` uses, sharing `structural::reshape_uses_pool` and its
     /// threshold rather than a second copy of either. The helper does not enter
