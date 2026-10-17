@@ -199,9 +199,11 @@ impl NativeStridedCopyPlan {
             })?;
 
         Ok(Self {
-            dims: fusion.dims,
-            src_strides: fusion.src_strides,
-            dst_strides: fusion.dst_strides,
+            // strided-perm 0.6 stores the fused axes inline; this plan keeps
+            // the previous heap vectors, one allocation per plan build.
+            dims: fusion.dims.to_vec(),
+            src_strides: fusion.src_strides.to_vec(),
+            dst_strides: fusion.dst_strides.to_vec(),
             src_offset,
             dst_offset,
             len,

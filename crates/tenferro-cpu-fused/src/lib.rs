@@ -140,18 +140,13 @@ fn should_defer_to_broadcast_multiply_special_case(plan: &ElementwiseFusionPlan)
 }
 
 fn strided_fused_plan(plan: &ElementwiseFusionPlan) -> FusedPlan {
-    FusedPlan {
-        input_count: plan.input_count(),
-        outputs: plan.outputs().to_vec(),
-        ops: plan
-            .ops()
+    FusedPlan::new(
+        plan.input_count(),
+        plan.outputs().iter().copied(),
+        plan.ops()
             .iter()
-            .map(|inst| FusedInst {
-                op: strided_fused_op(inst.op()),
-                inputs: inst.inputs().to_vec(),
-            })
-            .collect(),
-    }
+            .map(|inst| FusedInst::new(strided_fused_op(inst.op()), inst.inputs().iter().copied())),
+    )
 }
 
 /// The two dtypes the CPU fused replay covers.
@@ -173,12 +168,13 @@ impl FusedDType {
 
 /// The fused dtype a plan selects, or `None` when the region stays unfused.
 ///
-/// Only `F32`/`F64` are selected: `strided-fused 0.5.2`'s vectorized chunk
+/// Only `F32`/`F64` are selected: `strided-fused 0.6.0`'s vectorized chunk
 /// replay covers only those dtypes, and every other preset dtype would run the
 /// unmeasured per-element interpreter. An ordered op (`Maximum`/`Minimum`/
-/// `Clamp`) also declines for a real dtype: the upstream kernels use Rust
-/// `.max`/`.min`, which do not propagate NaN, while tenferro's ordinary kernels
-/// do (`R-numerics-01`).
+/// `Clamp`) also declines for a real dtype: `strided-fused 0.6.0` now
+/// propagates NaN through its ordered kernels, but the decline is retained
+/// until the ordered-op lift (TF5) lands, so tenferro's NaN semantics are
+/// unchanged here (`R-numerics-01`).
 fn select_fused_dtype(plan: &ElementwiseFusionPlan) -> Option<FusedDType> {
     if plan_uses_ordered_op(plan) {
         return None;

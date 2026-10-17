@@ -6,10 +6,9 @@
 //! that reintroduces a per-call shape `Vec` fails here even though no
 //! payload-sized temporary is allocated (that is `binary_allocations.rs`).
 //!
-//! Same-shape and same-rank ops are covered at zero. A stride-0 broadcast still
-//! pays the upstream `strided-basic` fused-plan builder (its `compress_dims`
-//! scratch), which is a pinned-provider change, not a tenferro one; the arm
-//! below records that residual rather than hiding it.
+//! Same-shape and same-rank ops are covered at zero. A stride-0 broadcast is
+//! also zero: `strided-fused 0.6.0` builds its plan with inline vectors, so the
+//! `strided-basic` fused-plan scratch this arm used to record is gone.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -20,7 +19,7 @@ use tenferro_tensor::backend::dot_general_output_shape;
 use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, DynRank, Host};
 
 /// The `strided-basic` fused-plan scratch a stride-0 operand costs today.
-const BROADCAST_FUSED_PLAN_ALLOCATIONS: usize = 16;
+const BROADCAST_FUSED_PLAN_ALLOCATIONS: usize = 0;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -125,7 +124,8 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             budget!("sub n=16", 0, |s| a.sub(&b, s));
             budget!("mul rank-3", 0, |s| cube.mul(&cube, s));
             budget!("exp rank-2", 0, |s| matrix.exp(s));
-            // Residual: the broadcast arm still pays the upstream fused plan.
+            // strided-fused 0.6 stores the fused plan inline, so a broadcast
+            // add is now metadata-allocation free like the same-shape arms.
             budget!(
                 "mul row-into-matrix broadcast",
                 BROADCAST_FUSED_PLAN_ALLOCATIONS,

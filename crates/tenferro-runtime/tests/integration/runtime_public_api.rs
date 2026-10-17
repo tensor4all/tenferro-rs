@@ -825,10 +825,9 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
 /// An ordered op (`maximum`/`minimum`/`clamp`) stays unfused above the floor and
 /// keeps tenferro's NaN propagation.
 ///
-/// `strided-fused 0.5.2` implements the ordered ops with Rust `.max`/`.min`,
-/// which drop NaN, while the per-instruction kernels propagate it. The region is
-/// therefore declined (`R-numerics-01`), and the fallback must return NaN for a
-/// NaN operand.
+/// `strided-fused 0.6.0` propagates NaN through its ordered kernels, but this
+/// region is still declined until the ordered-op lift (TF5) lands. The fallback
+/// must return NaN for a NaN operand (`R-numerics-01`).
 #[test]
 fn prepared_ordered_region_declines_and_propagates_nan() {
     for dtype in [DType::F32, DType::F64] {
@@ -898,7 +897,7 @@ fn prepared_ordered_region_declines_and_propagates_nan() {
 
 /// A region whose dtype is not F32/F64 stays unfused above the floor.
 ///
-/// `strided-fused 0.5.2`'s vectorized chunk replay covers only F32/F64; every
+/// `strided-fused 0.6.0`'s vectorized chunk replay covers only F32/F64; every
 /// other dtype would run the unmeasured per-element interpreter, so the region
 /// is declined and the per-instruction path is compared against a host
 /// reference.
