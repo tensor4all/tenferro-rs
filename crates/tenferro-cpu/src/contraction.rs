@@ -1,6 +1,8 @@
 //! Tensor-boundary adapters; numerical plans and scheduling belong to cpueinsum.
 
 pub(crate) mod grouped;
+#[cfg(test)]
+mod tests;
 mod workspaces;
 pub use workspaces::ContractionWorkspaces;
 pub(crate) use workspaces::WorkspaceLease;
@@ -39,7 +41,7 @@ impl<T: PoolScalar + cpueinsum_blas::BlasScalar> Scalar for T {}
 ///
 /// A lower `Unsupported`/declined step is the lower library refusing a route it
 /// owns, not a tenferro backend failure, so it maps to `Unsupported` while the
-/// lower diagnostic stays in the message.
+/// lower typed error is preserved as the source (not formatted into a string).
 pub(crate) trait LowerContractionError {
     fn into_crate_error(self, op: &'static str) -> crate::Error;
 }
@@ -48,9 +50,11 @@ pub(crate) trait LowerContractionError {
 impl LowerContractionError for cpueinsum::tcontract::Error {
     fn into_crate_error(self, op: &'static str) -> crate::Error {
         if self.is_unsupported() {
-            return crate::Error::unsupported(
+            return tenferro_tensor::Error::extension(
                 op,
-                format!("lower contraction declined this route: {self}"),
+                "contraction",
+                tenferro_tensor::ErrorKind::Unsupported,
+                self,
             );
         }
         crate::Error::backend_source(op, self)
@@ -59,13 +63,22 @@ impl LowerContractionError for cpueinsum::tcontract::Error {
 
 impl LowerContractionError for cpueinsum::Error {
     fn into_crate_error(self, op: &'static str) -> crate::Error {
-        if let cpueinsum::Error::Contract { source, .. } = &self {
-            if source.is_unsupported() {
-                return crate::Error::unsupported(
-                    op,
-                    format!("lower contraction declined this route: {source}"),
-                );
-            }
+        // A caller-owned arena shortage is a runtime-state failure and keeps its
+        // typed `cpueinsum` source rather than becoming a text-only backend error.
+        if let cpueinsum::Error::Workspace { .. } = &self {
+            return crate::Error::runtime_state_source(op, self);
+        }
+        let declined = matches!(
+            &self,
+            cpueinsum::Error::Contract { source, .. } if source.is_unsupported()
+        );
+        if declined {
+            return tenferro_tensor::Error::extension(
+                op,
+                "contraction",
+                tenferro_tensor::ErrorKind::Unsupported,
+                self,
+            );
         }
         crate::Error::backend_source(op, self)
     }
@@ -74,18 +87,26 @@ impl LowerContractionError for cpueinsum::Error {
 #[cfg(feature = "blas")]
 impl LowerContractionError for cpueinsum_blas::BlasError {
     fn into_crate_error(self, op: &'static str) -> crate::Error {
-        let inner = match &self {
+        // A short work buffer is a runtime-state failure with a typed source.
+        if let cpueinsum_blas::BlasError::Work { .. } = &self {
+            return crate::Error::runtime_state_source(op, self);
+        }
+        let declined = match &self {
+            cpueinsum_blas::BlasError::StrategyUnavailable => true,
             cpueinsum_blas::BlasError::Prepare { source }
-            | cpueinsum_blas::BlasError::Native { source } => Some(source),
-            _ => None,
+            | cpueinsum_blas::BlasError::Native { source } => matches!(
+                source,
+                cpueinsum::Error::Contract { source, .. } if source.is_unsupported()
+            ),
+            _ => false,
         };
-        if let Some(cpueinsum::Error::Contract { source, .. }) = inner {
-            if source.is_unsupported() {
-                return crate::Error::unsupported(
-                    op,
-                    format!("lower contraction declined this route: {source}"),
-                );
-            }
+        if declined {
+            return tenferro_tensor::Error::extension(
+                op,
+                "contraction",
+                tenferro_tensor::ErrorKind::Unsupported,
+                self,
+            );
         }
         crate::Error::backend_source(op, self)
     }
