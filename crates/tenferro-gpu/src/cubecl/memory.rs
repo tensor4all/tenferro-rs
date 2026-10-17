@@ -179,30 +179,36 @@ pub enum DownloadIntoError<T> {
 ///
 /// # Examples
 ///
+/// Hardware-gated: a machine without a CUDA device returns early, and a CUDA
+/// host runs the readback for real.
+///
 /// ```
-/// use tenferro_gpu::{cuda::download_tensor_into, cuda::CudaRuntime};
+/// use tenferro_gpu::cuda::{
+///     cuda_devices, download_tensor_into, gpu_available, upload_tensor, CudaBackend,
+/// };
 /// use tenferro_tensor::Tensor;
 ///
-/// let _download: fn(&CudaRuntime, &Tensor, Vec<f64>)
-///     -> Result<Vec<f64>, tenferro_gpu::cuda::DownloadIntoError<f64>> = download_tensor_into;
-/// ```
-///
-/// ```no_run
-/// use tenferro_gpu::{cuda::download_tensor_into, cuda::CudaRuntime, cuda::upload_tensor};
-/// use tenferro_tensor::Tensor;
-///
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime: CudaRuntime = unimplemented!();
-/// let device = upload_tensor(&runtime, &Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+/// if !gpu_available() {
+///     return Ok(());
+/// }
+/// let device = cuda_devices()?
+///     .first()
+///     .map(|device| device.id())
+///     .ok_or_else(|| {
+///         tenferro_tensor::Error::runtime_state("download_tensor_into", "no CUDA device")
+///     })?;
+/// let backend = CudaBackend::new(device)?;
+/// let runtime = backend.runtime().clone();
+/// let device_tensor =
+///     upload_tensor(&runtime, &Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
 /// // Reuse one allocation across readbacks; `buffer` is handed back on success.
 /// let mut buffer: Vec<f64> = Vec::new();
 /// for _ in 0..3 {
-///     buffer = download_tensor_into(&runtime, &device, buffer)
+///     buffer = download_tensor_into(&runtime, &device_tensor, buffer)
 ///         .map_err(|err| err.to_string())?;
 ///     assert_eq!(buffer, [1.0, 2.0]);
 /// }
-/// # Ok(())
-/// # }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn download_tensor_into<T>(
     rt: &CudaRuntime,

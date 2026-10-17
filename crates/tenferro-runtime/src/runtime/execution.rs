@@ -1435,13 +1435,13 @@ where
     fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor> {
         let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| materialize_slot_in_session(exec, slot))?
+        backend.with_backend_session(|exec| slot.into_tensor(exec))?
     }
 
     fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue> {
         let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| materialize_slot_value_in_session(exec, slot))?
+        backend.with_backend_session(|exec| slot.into_value(exec))?
     }
 }
 
@@ -1593,22 +1593,6 @@ fn execute_elementwise_fusion_slots_in_session<'input>(
     Ok(true)
 }
 
-/// Collect one scheduled output tensor on `exec` without entering a session.
-fn materialize_slot_in_session<'input>(
-    exec: &mut dyn BackendSession,
-    slot: ExecSlot<'input>,
-) -> Result<Tensor> {
-    slot.into_tensor(exec)
-}
-
-/// Collect one scheduled output value on `exec` without entering a session.
-fn materialize_slot_value_in_session<'input>(
-    exec: &mut dyn BackendSession,
-    slot: ExecSlot<'input>,
-) -> Result<TensorValue> {
-    slot.into_value(exec)
-}
-
 fn cache_owner_error(error: Error) -> CacheOwnerError {
     CacheOwnerError::new(Arc::new(error))
 }
@@ -1705,7 +1689,10 @@ fn execute_scoped_admitted<'env>(
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scoped tensor executor")?;
     let input_slots = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    let mut located = execute_scheduled_slots(
+    let ScheduledExecution {
+        mut outputs,
+        event_domains,
+    } = execute_scheduled_slots(
         program,
         schedule,
         &[],
@@ -1715,7 +1702,8 @@ fn execute_scoped_admitted<'env>(
         RuntimeOutputMode::Tensor,
         &mut ScheduledRunner::Leased,
     )?;
-    collect_scoped_outputs(program, &mut located)
+    let collection = collect_scoped_outputs(program, &mut outputs);
+    drain_after_collection(collection, event_domains)
 }
 
 pub(crate) fn collect_scoped_outputs<'env>(
@@ -1902,7 +1890,6 @@ pub(super) fn run_prepared_in(
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
     let schedule = prepared.prepared.root().schedule();
     let executor = single_engine_executor(schedule, "Runtime::run_prepared_in")?;
-    ensure_operations_support_session(prepared.prepared.operations(), "Runtime::run_prepared_in")?;
     let mut state = executor.try_lease_session_state("Runtime::run_prepared_in")?;
     if !state.owns_session(session) {
         return Err(Error::unsupported(
@@ -1913,6 +1900,12 @@ pub(super) fn run_prepared_in(
              session",
         ));
     }
+    ensure_instructions_support_session(
+        prepared.prepared.root().staging(),
+        prepared.prepared.operations(),
+        state.extension_caches_mut(),
+        "Runtime::run_prepared_in",
+    )?;
     let mut runner = ScheduledRunner::Borrowed {
         session,
         state: state.as_mut(),
@@ -1937,62 +1930,57 @@ fn single_engine_executor(
     schedule: &ScheduledGraph,
     caller: &'static str,
 ) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
-    fn consider<'a>(
-        selected: &mut Option<&'a Arc<dyn ErasedTensorBackendExecutor>>,
-        witness: &'a super::snapshot::ExecutableEngineSnapshot,
+    fn require_same(
+        first: &Arc<dyn ErasedTensorBackendExecutor>,
+        witness: &super::snapshot::ExecutableEngineSnapshot,
         caller: &'static str,
     ) -> Result<()> {
-        let executor = witness.executor();
-        match selected {
-            None => *selected = Some(executor),
-            Some(first) if Arc::ptr_eq(first, executor) => {}
-            Some(_) => {
-                return Err(Error::unsupported(
-                    caller,
-                    ErrorPhase::Execution,
-                    "the prepared graph spans multiple engines; Runtime::run_prepared_in runs one \
-                     engine on a caller-borrowed session, so use Runtime::run_prepared outside a \
-                     session",
-                ));
-            }
+        if Arc::ptr_eq(first, witness.executor()) {
+            return Ok(());
         }
-        Ok(())
-    }
-
-    let mut selected: Option<&Arc<dyn ErasedTensorBackendExecutor>> = None;
-    consider(&mut selected, schedule.root_location().witness(), caller)?;
-    for location in schedule.input_locations() {
-        consider(&mut selected, location.witness(), caller)?;
-    }
-    for location in schedule.operation_locations() {
-        consider(&mut selected, location.witness(), caller)?;
-    }
-    for node in schedule.nodes() {
-        consider(&mut selected, node.event_domain_witness(), caller)?;
-    }
-    selected.cloned().ok_or_else(|| {
-        Error::unsupported(
+        Err(Error::unsupported(
             caller,
             ErrorPhase::Execution,
-            "the prepared graph has no execution engine to run",
-        )
-    })
+            "the prepared graph spans multiple engines; Runtime::run_prepared_in runs one engine on \
+             a caller-borrowed session, so use Runtime::run_prepared outside a session",
+        ))
+    }
+
+    // The root location always names one engine witness, so there is no
+    // "no engine" case to report: every other scheduled location must match it.
+    let first = schedule.root_location().witness().executor();
+    for location in schedule.input_locations() {
+        require_same(first, location.witness(), caller)?;
+    }
+    for location in schedule.operation_locations() {
+        require_same(first, location.witness(), caller)?;
+    }
+    for node in schedule.nodes() {
+        require_same(first, node.event_domain_witness(), caller)?;
+    }
+    Ok(Arc::clone(first))
 }
 
-/// Reject every prepared operation that cannot execute on a borrowed session.
-fn ensure_operations_support_session(
+/// Reject any prepared instruction that cannot execute on a borrowed session.
+///
+/// This is the instruction-level projection of the scheduler's own
+/// [`crate::exec::is_session_compatible_instruction`] predicate, so a
+/// metadata-only extension plan (a plan with no executor bridge) is rejected
+/// before any launch instead of failing after an earlier node has already run.
+fn ensure_instructions_support_session(
+    program: &ExecProgram,
     operations: &[PreparedOperationPlan],
+    caches: &mut ExtensionCacheStore,
     caller: &'static str,
 ) -> Result<()> {
-    for (index, plan) in operations.iter().enumerate() {
-        if let Some(executor) = plan.executor()
-            && !executor.supports_session()
-        {
+    let dispatch = ExtensionExecutionDispatch { operations, caches };
+    for (index, instruction) in program.instructions.iter().enumerate() {
+        if !crate::exec::is_session_compatible_instruction(instruction, Some(&dispatch)) {
             return Err(Error::unsupported(
                 caller,
                 ErrorPhase::Execution,
                 format!(
-                    "prepared operation {index} does not support a caller-borrowed session; use \
+                    "prepared instruction {index} does not support a caller-borrowed session; use \
                      Runtime::run_prepared outside a session"
                 ),
             ));
@@ -2208,7 +2196,7 @@ impl ScheduledRunner<'_> {
     ) -> Result<Tensor> {
         match self {
             Self::Leased => executor.materialize_slot(slot),
-            Self::Borrowed { session, .. } => materialize_slot_in_session(&mut **session, slot),
+            Self::Borrowed { session, .. } => slot.into_tensor(&mut **session),
         }
     }
 
@@ -2219,10 +2207,44 @@ impl ScheduledRunner<'_> {
     ) -> Result<TensorValue> {
         match self {
             Self::Leased => executor.materialize_slot_value(slot),
-            Self::Borrowed { session, .. } => {
-                materialize_slot_value_in_session(&mut **session, slot)
-            }
+            Self::Borrowed { session, .. } => slot.into_value(&mut **session),
         }
+    }
+}
+
+/// Output slots produced by a scheduled run whose event domains have not yet
+/// been retired.
+///
+/// The caller materializes the outputs (which can launch a device copy for a
+/// borrowed device tensor) and then calls [`drain_after_collection`], so output
+/// materialization happens inside the run's retirement lifetime.
+struct ScheduledExecution<'input> {
+    outputs: Vec<Option<LocatedExecSlot<'input>>>,
+    event_domains: ScheduledEventDomains,
+}
+
+/// Retire a scheduled run after its outputs were materialized.
+///
+/// Preserves a collection error, a drain error, or both, so a failed
+/// materialization cannot skip retirement and a failed retirement cannot hide
+/// the collection failure.
+fn drain_after_collection<T>(
+    collection: Result<T>,
+    mut event_domains: ScheduledEventDomains,
+) -> Result<T> {
+    let drain = event_domains.drain();
+    match (collection, drain) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(primary), Err(cleanup)) => Err(scheduled_execution_cleanup_error(primary, cleanup)),
+    }
+}
+
+/// Retire a scheduled run that failed before its outputs could be materialized.
+fn drain_scheduled_error<T>(primary: Error, mut event_domains: ScheduledEventDomains) -> Result<T> {
+    match event_domains.drain() {
+        Ok(()) => Err(primary),
+        Err(cleanup) => Err(scheduled_execution_cleanup_error(primary, cleanup)),
     }
 }
 
@@ -2238,7 +2260,10 @@ fn execute_scheduled_reads(
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
     let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    let mut slots = execute_scheduled_slots(
+    let ScheduledExecution {
+        mut outputs,
+        event_domains,
+    } = execute_scheduled_slots(
         program,
         schedule,
         regions,
@@ -2248,9 +2273,10 @@ fn execute_scheduled_reads(
         RuntimeOutputMode::Tensor,
         runner,
     )?;
-    collect_tensor_outputs_with(program, &mut slots, |location, slot| {
+    let collection = collect_tensor_outputs_with(program, &mut outputs, |location, slot| {
         runner.materialize_slot(location.witness().executor(), slot)
-    })
+    });
+    drain_after_collection(collection, event_domains)
 }
 
 fn execute_scheduled_value_reads(
@@ -2263,7 +2289,10 @@ fn execute_scheduled_value_reads(
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled value executor")?;
     let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    let mut slots = execute_scheduled_slots(
+    let ScheduledExecution {
+        mut outputs,
+        event_domains,
+    } = execute_scheduled_slots(
         program,
         schedule,
         &[],
@@ -2273,9 +2302,10 @@ fn execute_scheduled_value_reads(
         RuntimeOutputMode::Value,
         runner,
     )?;
-    collect_value_outputs_with(program, &mut slots, |location, slot| {
+    let collection = collect_value_outputs_with(program, &mut outputs, |location, slot| {
         runner.materialize_slot_value(location.witness().executor(), slot)
-    })
+    });
+    drain_after_collection(collection, event_domains)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2288,7 +2318,7 @@ fn execute_scheduled_slots<'input>(
     inputs: Vec<ExecSlot<'input>>,
     output_mode: RuntimeOutputMode,
     runner: &mut ScheduledRunner<'_>,
-) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
+) -> Result<ScheduledExecution<'input>> {
     let terminal_slots = if matches!(output_mode, RuntimeOutputMode::Value) {
         crate::exec::terminal_output_slots(program)
     } else {
@@ -2551,18 +2581,21 @@ fn execute_scheduled_slots<'input>(
         }
         Ok(())
     })();
-    let drain = event_domains.drain();
-    match (result, drain) {
-        (Ok(()), Ok(())) => collect_located_outputs(program, &mut located),
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => {
+    match result {
+        Ok(()) => match collect_located_outputs(program, &mut located) {
+            Ok(outputs) => Ok(ScheduledExecution {
+                outputs,
+                event_domains,
+            }),
+            Err(error) => {
+                staged.clear();
+                drain_scheduled_error(error, event_domains)
+            }
+        },
+        Err(error) => {
             staged.clear();
             located.clear();
-            Err(error)
-        }
-        (Err(primary), Err(cleanup)) => {
-            staged.clear();
-            located.clear();
-            Err(scheduled_execution_cleanup_error(primary, cleanup))
+            drain_scheduled_error(error, event_domains)
         }
     }
 }
@@ -2594,16 +2627,53 @@ impl ScheduledEventDomains {
         schedule.preflight().map_err(|source| {
             Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
         })?;
+        fn add_domain(
+            drivers: &mut Vec<(super::EventDomainId, Arc<dyn super::EventDomainDriver>)>,
+            seen_domains: &mut HashSet<super::EventDomainId>,
+            domain: super::EventDomainId,
+            witness: &Arc<super::snapshot::ExecutableEngineSnapshot>,
+        ) {
+            if seen_domains.insert(domain) {
+                debug_assert_eq!(witness.event_domain_id(), domain);
+                drivers.push((domain, witness.event_domain_driver().clone()));
+            }
+        }
         let mut drivers = Vec::new();
         let mut seen_domains = HashSet::new();
+        // Seed a run for every scheduled location, not only for scheduled nodes.
+        // Output materialization launches work on the output location's stream
+        // after the nodes have run, and a zero-instruction graph (an identity
+        // graph) has no node to seed a run at all; without the location runs
+        // there would be nothing to retire that launch.
+        add_domain(
+            &mut drivers,
+            &mut seen_domains,
+            schedule.root_location().event_domain_id(),
+            schedule.root_location().witness(),
+        );
+        for location in schedule.input_locations() {
+            add_domain(
+                &mut drivers,
+                &mut seen_domains,
+                location.event_domain_id(),
+                location.witness(),
+            );
+        }
+        for location in schedule.operation_locations() {
+            add_domain(
+                &mut drivers,
+                &mut seen_domains,
+                location.event_domain_id(),
+                location.witness(),
+            );
+        }
         for node in schedule.nodes() {
-            let domain = node.completion().domain();
-            if !seen_domains.insert(domain) {
-                continue;
-            }
-            let witness = node.event_domain_witness();
-            debug_assert_eq!(witness.event_domain_id(), domain);
-            drivers.push((domain, witness.event_domain_driver().clone()));
+            add_domain(
+                &mut drivers,
+                &mut seen_domains,
+                node.completion().domain(),
+                node.event_domain_witness(),
+            );
         }
         let mut runs = Vec::with_capacity(drivers.len());
         for (domain, driver) in drivers {
@@ -4331,6 +4401,40 @@ mod tests {
         executor
             .try_lease_state("test.after")
             .expect("try-lease succeeds after the holder releases");
+    }
+
+    #[test]
+    fn session_preflight_rejects_a_metadata_only_extension_plan() {
+        // A registered extension can hand the runtime a metadata-only plan (no
+        // executor bridge). The instruction-level preflight must reject it
+        // before an earlier node runs, not fail later at dispatch.
+        let prepared = Arc::new(SessionProbePreparedOperation {
+            binding: probe_binding(),
+            specialization: probe_specialization(),
+            observed_session: Arc::new(AtomicBool::new(false)),
+        });
+        let mut caches = ExtensionCacheStore::new();
+        let metadata_only = vec![PreparedOperationPlan::metadata(prepared.clone())];
+        let error = super::ensure_instructions_support_session(
+            &lock_probe_program(),
+            &metadata_only,
+            &mut caches,
+            "test",
+        )
+        .expect_err("a metadata-only extension plan must be rejected");
+        assert!(matches!(error, Error::Unsupported { .. }), "{error}");
+
+        let executable = vec![PreparedOperationPlan::executable(
+            prepared.clone(),
+            prepared,
+        )];
+        super::ensure_instructions_support_session(
+            &lock_probe_program(),
+            &executable,
+            &mut caches,
+            "test",
+        )
+        .expect("a session-capable extension plan passes preflight");
     }
 
     #[test]
