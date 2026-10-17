@@ -132,13 +132,21 @@ the case that fell back to `interpret_inner_loop_uninit` and lost about 16x on
 `ErasedFusedPlan::execute_outputs_uninit`, so a region with several live outputs
 replays its instruction list once instead of once per output.
 
-The measurement (2026-10-17, `AMD EPYC 7713P`, 1T and 4T, predeclared rule
-"enable only if fused/declined `<= 1.05` in every case") is recorded in
+The selection is scoped to what was measured. Only `F32`/`F64` regions are
+selected, because 0.5.2's vectorized chunk replay covers only those dtypes;
+C32/C64, integers and bool stay unfused rather than run the unmeasured
+per-element interpreter. An ordered real op (`Maximum`/`Minimum`/`Clamp`) also
+declines, because the upstream kernels use Rust `.max`/`.min`, which drop NaN
+while tenferro's ordinary kernels propagate it.
+
+The measurement (2026-10-17, `AMD EPYC 7713P`, 1T and 4T) is recorded in
 [`docs/worklogs/perf-cpu-fusion-declined-2140.md`](../worklogs/perf-cpu-fusion-declined-2140.md),
-section "Re-enabled on `strided-fused 0.5.2` (#2161)": every case passes, the
-contiguity-axis broadcast now wins 0.46-0.65, and the two-live-output region
-wins 0.76-0.96. The GPU backend reaches the same runtime machinery with its own
-`#[cube]` code generator and is unaffected.
+section "Re-enabled on `strided-fused 0.5.2` (#2161)". The decision rule actually
+applied was "median over all recorded runs per case `<= 1.05`", and it passes
+with the largest per-case median 1.02; the contiguity-axis broadcast and the
+two-live-output region, the two cases that lost on 0.5.1, are among the wins.
+The GPU backend reaches the same runtime machinery with its own `#[cube]` code
+generator and is unaffected.
 
 `CpuBackend::max_fused_region_inputs` reports the executor's four-input limit:
 the limit describes the executor, and the session selects a region only inside

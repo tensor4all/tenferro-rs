@@ -72,7 +72,7 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
 }
 
 #[test]
-fn elementwise_fusion_executes_i32_add_multiply_plan() {
+fn elementwise_fusion_declines_i32_add_multiply_plan() {
     use tenferro_tensor::backend::ElementwiseFusionInst;
 
     let mut buffers = BufferPool::default();
@@ -99,21 +99,12 @@ fn elementwise_fusion_executes_i32_add_multiply_plan() {
         ],
     );
 
-    let outputs =
+    assert!(
         elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &[&lhs, &rhs], &plan)
             .unwrap()
-            .expect("I32 add/multiply fusion should be delegated to strided-kernel");
-
-    assert_eq!(outputs.len(), 1);
-    let actual = outputs[0].as_slice::<i32>().unwrap();
-    for &index in &[0usize, 1, n / 2, n - 1] {
-        assert_eq!(
-            actual[index],
-            lhs_data[index]
-                .wrapping_add(rhs_data[index])
-                .wrapping_mul(lhs_data[index])
-        );
-    }
+            .is_none(),
+        "I32 has no measured vectorized replay and must stay unfused"
+    );
 }
 
 #[test]
@@ -153,7 +144,7 @@ fn elementwise_fusion_executes_reversed_first_input_plan() {
 }
 
 #[test]
-fn elementwise_fusion_executes_f32_and_i64_erased_dtype_arms() {
+fn elementwise_fusion_executes_f32_plan_and_declines_i64() {
     use tenferro_tensor::backend::ElementwiseFusionInst;
 
     let mut buffers = BufferPool::default();
@@ -207,20 +198,21 @@ fn elementwise_fusion_executes_f32_and_i64_erased_dtype_arms() {
         )],
     );
 
-    let i64_outputs = elementwise_fusion_with_pool(
-        &mut buffers,
-        &ExecContext::serial(),
-        &[&i64_lhs, &i64_rhs],
-        &i64_plan,
-    )
-    .unwrap()
-    .expect("I64 add fusion should be delegated to strided-kernel");
-    let i64_actual = i64_outputs[0].as_slice::<i64>().unwrap();
-    assert_eq!(i64_actual[n - 1], i64_lhs_data[n - 1] + i64_rhs_data[n - 1]);
+    assert!(
+        elementwise_fusion_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &[&i64_lhs, &i64_rhs],
+            &i64_plan,
+        )
+        .unwrap()
+        .is_none(),
+        "I64 has no measured vectorized replay and must stay unfused"
+    );
 }
 
 #[test]
-fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
+fn elementwise_fusion_declines_bool_and_complex_dtypes() {
     use tenferro_tensor::backend::ElementwiseFusionInst;
 
     let mut buffers = BufferPool::default();
@@ -239,17 +231,16 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
         )],
     );
 
-    let bool_outputs = elementwise_fusion_with_pool(
-        &mut buffers,
-        &ExecContext::serial(),
-        &[&bool_input],
-        &bool_plan,
-    )
-    .unwrap()
-    .expect("Bool conj fusion should use the zeroed erased destination path");
-    assert_eq!(
-        bool_outputs[0].as_slice::<bool>().unwrap(),
-        bool_data.as_slice()
+    assert!(
+        elementwise_fusion_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &[&bool_input],
+            &bool_plan,
+        )
+        .unwrap()
+        .is_none(),
+        "Bool has no measured vectorized replay and must stay unfused"
     );
 
     let c32_lhs_data = (0..n)
@@ -276,22 +267,16 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
         ],
     );
 
-    let c32_outputs = elementwise_fusion_with_pool(
-        &mut buffers,
-        &ExecContext::serial(),
-        &[&c32_lhs, &c32_rhs],
-        &c32_plan,
-    )
-    .unwrap()
-    .expect("C32 multi-output fusion should be delegated to one strided replay");
-    assert_eq!(c32_outputs.len(), 2);
-    assert_eq!(
-        c32_outputs[0].as_slice::<num_complex::Complex32>().unwrap()[5],
-        c32_lhs_data[5] + c32_rhs_data[5]
-    );
-    assert_eq!(
-        c32_outputs[1].as_slice::<num_complex::Complex32>().unwrap()[5],
-        (c32_lhs_data[5] + c32_rhs_data[5]) * c32_rhs_data[5]
+    assert!(
+        elementwise_fusion_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &[&c32_lhs, &c32_rhs],
+            &c32_plan,
+        )
+        .unwrap()
+        .is_none(),
+        "C32 has no measured vectorized replay and must stay unfused"
     );
 
     let c64_lhs_data = (0..n)
@@ -318,18 +303,63 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
         )],
     );
 
-    let c64_outputs = elementwise_fusion_with_pool(
-        &mut buffers,
-        &ExecContext::serial(),
-        &[&c64_lhs, &c64_rhs],
-        &c64_plan,
-    )
-    .unwrap()
-    .expect("C64 add fusion should be delegated to strided-kernel");
-    assert_eq!(
-        c64_outputs[0].as_slice::<num_complex::Complex64>().unwrap()[7],
-        c64_lhs_data[7] + c64_rhs_data[7]
+    assert!(
+        elementwise_fusion_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &[&c64_lhs, &c64_rhs],
+            &c64_plan,
+        )
+        .unwrap()
+        .is_none(),
+        "C64 has no measured vectorized replay and must stay unfused"
     );
+}
+
+#[test]
+fn elementwise_fusion_declines_ordered_real_dtypes_for_nan_propagation() {
+    use tenferro_tensor::backend::ElementwiseFusionInst;
+
+    let mut buffers = BufferPool::default();
+    let n = ELEMENTWISE_FUSION_MIN_ELEMENTS;
+    for (dtype, tensor) in [
+        (
+            DType::F32,
+            Tensor::from_typed::<f32>(
+                TypedTensor::<f32>::from_vec_col_major(vec![n], vec![1.0_f32; n]).unwrap(),
+            ),
+        ),
+        (
+            DType::F64,
+            Tensor::from_typed::<f64>(
+                TypedTensor::<f64>::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
+            ),
+        ),
+    ] {
+        for op in [
+            ElementwiseFusionOp::Maximum,
+            ElementwiseFusionOp::Minimum,
+            ElementwiseFusionOp::Clamp,
+        ] {
+            let plan = ElementwiseFusionPlan::new(
+                dtype,
+                2,
+                vec![2],
+                vec![ElementwiseFusionInst::new(op, vec![0, 1])],
+            );
+            assert!(
+                elementwise_fusion_with_pool(
+                    &mut buffers,
+                    &ExecContext::serial(),
+                    &[&tensor, &tensor],
+                    &plan,
+                )
+                .unwrap()
+                .is_none(),
+                "{dtype:?} {op:?} must stay unfused: upstream `.max`/`.min` drop NaN"
+            );
+        }
+    }
 }
 
 #[test]

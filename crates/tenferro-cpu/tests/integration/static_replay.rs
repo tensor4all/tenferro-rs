@@ -162,8 +162,6 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
 #[test]
 fn ordinary_cpu_retains_supported_fusion_hook() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    // Small inputs deliberately use the unfused path; exercise the existing
-    // minimum fusion size rather than requiring fusion for every tensor.
     const N: usize = 16 * 1024;
     let x = Tensor::from_vec_col_major([N], vec![1.0_f64; N]).unwrap();
     let y = Tensor::from_vec_col_major([N], vec![2.0_f64; N]).unwrap();

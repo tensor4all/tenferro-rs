@@ -354,30 +354,20 @@ pub fn elementwise_fusion_with_pool(
     execute_erased_fused_outputs(buffers, exec_context, dtype, &input_refs, &shape, plan).map(Some)
 }
 
+/// Whether the CPU fused replay can be selected for this dtype and plan.
+///
+/// Only `F32` and `F64` are selected. `strided-fused 0.5.2`'s vectorized chunk
+/// replay covers only those dtypes; every other preset dtype would run the
+/// per-element interpreter, which is unmeasured and slower than the
+/// per-instruction path, so it stays unfused.
+///
+/// An ordered op (`Maximum`/`Minimum`/`Clamp`) also declines for a real dtype:
+/// the upstream kernels use Rust `.max`/`.min`, which do not propagate NaN,
+/// while tenferro's ordinary kernels do (`R-numerics-01`).
 fn dtype_supports_erased_fusion(dtype: DType, plan: &ElementwiseFusionPlan) -> bool {
     match dtype {
-        DType::F32 | DType::F64 => true,
-        DType::C32 | DType::C64 => !plan_uses_ordered_op(plan),
-        DType::I32 | DType::I64 => plan.ops().iter().all(|inst| {
-            matches!(
-                inst.op(),
-                ElementwiseFusionOp::Add
-                    | ElementwiseFusionOp::Multiply
-                    | ElementwiseFusionOp::Negate
-                    | ElementwiseFusionOp::Conj
-                    | ElementwiseFusionOp::Abs
-                    | ElementwiseFusionOp::Maximum
-                    | ElementwiseFusionOp::Minimum
-                    | ElementwiseFusionOp::Clamp
-            )
-        }),
-        DType::Bool => plan
-            .ops()
-            .iter()
-            .all(|inst| inst.op() == ElementwiseFusionOp::Conj),
-        // An externally defined scalar has no fused kernel, so the fixed-dtype
-        // fused path rejects it rather than guessing a representation.
-        DType::External(_) => false,
+        DType::F32 | DType::F64 => !plan_uses_ordered_op(plan),
+        _ => false,
     }
 }
 
@@ -394,73 +384,16 @@ fn execute_erased_fused_outputs(
         .map(ErasedRawStridedPtr::from_ref)
         .collect();
     match dtype {
-        KernelDType::F32 => execute_erased_fused_plan::<f32>(
-            buffers,
-            exec_context,
-            dtype,
-            &input_ptrs,
-            shape,
-            plan,
-            Tensor::from_typed::<f32>,
-        ),
-        KernelDType::F64 => execute_erased_fused_plan::<f64>(
-            buffers,
-            exec_context,
-            dtype,
-            &input_ptrs,
-            shape,
-            plan,
-            Tensor::from_typed::<f64>,
-        ),
-        KernelDType::I32 => execute_erased_fused_plan::<i32>(
-            buffers,
-            exec_context,
-            dtype,
-            &input_ptrs,
-            shape,
-            plan,
-            Tensor::from_typed::<i32>,
-        ),
-        KernelDType::I64 => execute_erased_fused_plan::<i64>(
-            buffers,
-            exec_context,
-            dtype,
-            &input_ptrs,
-            shape,
-            plan,
-            Tensor::from_typed::<i64>,
-        ),
-        KernelDType::Bool => execute_erased_fused_plan::<bool>(
-            buffers,
-            exec_context,
-            dtype,
-            &input_ptrs,
-            shape,
-            plan,
-            Tensor::from_typed::<bool>,
-        ),
-        KernelDType::C32 => execute_erased_fused_plan::<num_complex::Complex32>(
-            buffers,
-            exec_context,
-            dtype,
-            &input_ptrs,
-            shape,
-            plan,
-            Tensor::from_typed::<tenferro_tensor::Complex32>,
-        ),
-        KernelDType::C64 => execute_erased_fused_plan::<num_complex::Complex64>(
-            buffers,
-            exec_context,
-            dtype,
-            &input_ptrs,
-            shape,
-            plan,
-            Tensor::from_typed::<tenferro_tensor::Complex64>,
-        ),
+        KernelDType::F32 => {
+            execute_erased_fused_plan::<f32>(buffers, exec_context, dtype, &input_ptrs, shape, plan)
+        }
+        KernelDType::F64 => {
+            execute_erased_fused_plan::<f64>(buffers, exec_context, dtype, &input_ptrs, shape, plan)
+        }
         _ => Err(crate::Error::unsupported(
             ELEMENTWISE_FUSION_OP,
             format!(
-                "unsupported dtype {}; supported dtypes: F32/F64/I32/I64/Bool/C32/C64",
+                "unsupported dtype {}; the CPU fused replay covers F32/F64",
                 dtype.label()
             ),
         )),
@@ -473,7 +406,6 @@ fn execute_erased_fused_outputs(
 /// [`ErasedFusedPlan::execute_outputs_uninit`], so a region with several live
 /// outputs replays its instruction list a single time instead of once per
 /// output.
-#[allow(clippy::too_many_arguments)]
 fn execute_erased_fused_plan<T>(
     buffers: &mut BufferPool,
     exec_context: &ExecContext,
@@ -481,7 +413,6 @@ fn execute_erased_fused_plan<T>(
     input_ptrs: &[ErasedRawStridedPtr<'_>],
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
-    wrap: fn(TypedTensor<T>) -> Tensor,
 ) -> crate::Result<Vec<Tensor>>
 where
     T: Clone + PoolScalar,
@@ -525,7 +456,7 @@ where
             // SAFETY: the fused replay wrote every logical destination element
             // and retains no destination view.
             let tensor = unsafe { output.assume_init_recycled()? };
-            Ok(wrap(tensor))
+            Ok(Tensor::from_typed::<T>(tensor))
         })
         .collect()
 }

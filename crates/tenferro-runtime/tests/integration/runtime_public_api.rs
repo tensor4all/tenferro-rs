@@ -822,6 +822,123 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
     );
 }
 
+/// An ordered op (`maximum`/`minimum`/`clamp`) stays unfused above the floor and
+/// keeps tenferro's NaN propagation.
+///
+/// `strided-fused 0.5.2` implements the ordered ops with Rust `.max`/`.min`,
+/// which drop NaN, while the per-instruction kernels propagate it. The region is
+/// therefore declined (`R-numerics-01`), and the fallback must return NaN for a
+/// NaN operand.
+#[test]
+fn prepared_ordered_region_declines_and_propagates_nan() {
+    for dtype in [DType::F32, DType::F64] {
+        let runtime = cpu_runtime();
+        let n = 16 * 1024usize;
+
+        let x = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
+        let y = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
+        let one = match dtype {
+            DType::F32 => Tensor::from_vec_col_major(vec![n], vec![1.0_f32; n]).unwrap(),
+            DType::F64 => Tensor::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
+            _ => unreachable!(),
+        };
+        let one = TracedTensor::from_tensor_concrete_shape(one).unwrap();
+        let out = (&x.maximum(&y).unwrap() + &one).unwrap();
+        let program = GraphCompiler::new()
+            .compile_with_input_specs(&out, &[(&x, dtype, &[n]), (&y, dtype, &[n])])
+            .unwrap();
+
+        let nan_input = match dtype {
+            DType::F32 => Tensor::from_vec_col_major(vec![n], vec![f32::NAN; n]).unwrap(),
+            DType::F64 => Tensor::from_vec_col_major(vec![n], vec![f64::NAN; n]).unwrap(),
+            _ => unreachable!(),
+        };
+        let finite_input = match dtype {
+            DType::F32 => Tensor::from_vec_col_major(vec![n], vec![1.0_f32; n]).unwrap(),
+            DType::F64 => Tensor::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
+            _ => unreachable!(),
+        };
+
+        let prepared = runtime
+            .prepare_compiled(&program, &[&nan_input, &finite_input])
+            .unwrap();
+        assert!(
+            prepared.elementwise_region_summary().0 >= 1,
+            "{dtype:?}: the ordered chain should still plan a region"
+        );
+
+        let mut out = runtime
+            .run_prepared(&prepared, &[&nan_input, &finite_input])
+            .unwrap();
+        assert_eq!(
+            prepared.elementwise_region_execution_counts(),
+            (0, 1),
+            "{dtype:?}: the NaN-unsafe ordered region must be declined"
+        );
+        let out = out.pop().unwrap();
+        match dtype {
+            DType::F32 => assert!(
+                out.as_slice::<f32>()
+                    .unwrap()
+                    .iter()
+                    .all(|value| value.is_nan()),
+                "f32 NaN must propagate through the fallback"
+            ),
+            DType::F64 => assert!(
+                out.as_slice::<f64>()
+                    .unwrap()
+                    .iter()
+                    .all(|value| value.is_nan()),
+                "f64 NaN must propagate through the fallback"
+            ),
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// A region whose dtype is not F32/F64 stays unfused above the floor.
+///
+/// `strided-fused 0.5.2`'s vectorized chunk replay covers only F32/F64; every
+/// other dtype would run the unmeasured per-element interpreter, so the region
+/// is declined and the per-instruction path is compared against a host
+/// reference.
+#[test]
+fn prepared_non_f32_f64_region_is_declined() {
+    let runtime = cpu_runtime();
+    let n = 16 * 1024usize;
+
+    let x = TracedTensor::input_concrete_shape(DType::I64, &[n]).unwrap();
+    let doubled = (&x + &x).unwrap();
+    let chain = (&doubled * &doubled).unwrap();
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&chain, &[(&x, DType::I64, &[n])])
+        .unwrap();
+    let data: Vec<i64> = (0..n).map(|i| (i % 100) as i64 + 1).collect();
+    let input = Tensor::from_vec_col_major(vec![n], data.clone()).unwrap();
+    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    assert!(
+        prepared.elementwise_region_summary().0 >= 1,
+        "the I64 chain should still plan a region"
+    );
+
+    let mut out = runtime.run_prepared(&prepared, &[&input]).unwrap();
+    assert_eq!(
+        prepared.elementwise_region_execution_counts(),
+        (0, 1),
+        "I64 has no measured vectorized replay and must run per instruction"
+    );
+    let out = out.pop().unwrap();
+    let out = out.as_slice::<i64>().unwrap();
+    for (index, &value) in out.iter().enumerate() {
+        let doubled = data[index] + data[index];
+        assert_eq!(
+            value,
+            doubled * doubled,
+            "I64 fallback diverged from the host reference at {index}"
+        );
+    }
+}
+
 /// Stage 1 evidence: when the backend declines the fusion the region falls back
 /// to its instructions and still matches the unprepared path. A tiny element
 /// count is below the CPU fused kernel's floor, so this exercises the fallback.
