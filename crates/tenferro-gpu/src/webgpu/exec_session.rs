@@ -615,4 +615,11 @@ impl BackendSessionHost for WebGpuBackend {
         // the WebGPU runtime must never re-enter a session closure.
         with_session_entry_guard("WebGpuBackend", || f(&mut session))
     }
+
+    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+        with_webgpu_exec_session(session, |session| {
+            session.runtime_identity() == self.runtime_identity()
+        })
+        .unwrap_or(false)
+    }
 }

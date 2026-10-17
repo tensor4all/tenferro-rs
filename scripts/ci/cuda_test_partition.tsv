@@ -175,6 +175,7 @@ gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_reductions_column_m
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_sum_squares_does_not_contract_multiply_and_add
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_split_reduction_large_axis_matches_cpu
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_run_dispatches_cubecl_launches_before_recording_retirement
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_backend_add_matches_cpu_reference
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_cached_scalar_read_observes_queued_writes
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_complex_sign_is_scale_safe
@@ -236,6 +237,11 @@ gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cuda_explicit_cast_matrix
 gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cuda_read_entry_points_accept_borrowed_views
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::caller_may_overwrite_the_source_as_soon_as_upload_returns
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_observes_queued_device_writes_on_this_and_other_streams
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_grows_a_short_buffer_and_handles_empty
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_rejects_bool_destination
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_rejects_dtype_mismatch_and_returns_the_buffer
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_rejects_host_and_foreign_runtime_tensors
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_round_trips_and_reuses_one_allocation
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::owned_upload_and_offset_allocations_round_trip
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::transfers_round_trip_every_dtype_and_size_class_bit_exactly
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_a_non_contiguous_read
@@ -264,6 +270,11 @@ gpu	tenferro-gpu::held_cuda_session	held_session_rejects_a_second_root_on_the_sa
 gpu	tenferro-gpu::held_cuda_session	held_session_releases_the_reservation_for_reuse
 gpu	tenferro-gpu::held_cuda_session	held_session_runs_a_chain_with_cpu_parity
 gpu	tenferro-gpu::held_cuda_session	held_session_uses_the_captured_stream_when_the_ambient_stream_changes
+gpu	tenferro-gpu::held_cuda_session	held_session_rejects_a_foreign_prepared_session_before_launch
+gpu	tenferro-gpu::held_cuda_session	held_session_retires_after_a_prepared_ingress_error
+gpu	tenferro-gpu::held_cuda_session	held_session_runs_fused_prepared_graph_in_caller_session
+gpu	tenferro-gpu::held_cuda_session	held_session_runs_identity_prepared_graph_from_a_device_input
+gpu	tenferro-gpu::held_cuda_session	held_session_runs_prepared_graph_in_caller_session
 gpu	tenferro-gpu::pending_download	a_rejected_transfer_returns_the_submitted_package
 gpu	tenferro-gpu::pending_download	an_unserved_dtype_is_rejected_and_returns_the_package
 gpu	tenferro-gpu::pending_download	dropping_a_pending_download_detaches_into_the_retirement_queue

@@ -540,3 +540,49 @@ gpu_test!(test_trim_memory_returns_dropped_blocks_to_the_driver, {
          ({free_before} before, {free_after_trim} after)"
     );
 });
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn prepared_run_dispatches_cubecl_launches_before_recording_retirement() {
+    use crate::cubecl::runtime::{blocking_flush_handoffs, reset_blocking_flush_handoffs};
+    use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            crate::cubecl::cuda_runtime_engine_registration(
+                &backend,
+                EngineId::new("tenferro-cuda.test.event-flush.v1").expect("engine id"),
+            )
+            .expect("cuda registration"),
+        )
+        .expect("register engine");
+    let runtime = builder.build().expect("runtime");
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let y = (&x * &x).expect("square");
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .expect("compile");
+    let host = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0]).expect("host");
+    let gpu_input = upload_tensor(backend.runtime(), &host).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&gpu_input])
+        .expect("prepare");
+
+    // The CUDA event-domain run must dispatch queued CubeCL launches before it
+    // records the completion event; otherwise `retire_cuda_run` could
+    // synchronize a stream the launched kernels never reached (#2182 B3). This
+    // counter is raised only by `CudaRuntime::flush_cubecl`, and the dispatch
+    // helpers the run uses do not raise it.
+    reset_blocking_flush_handoffs();
+    let _output = runtime
+        .run_prepared(&prepared, &[&gpu_input])
+        .expect("prepared run");
+    assert!(
+        blocking_flush_handoffs() >= 1,
+        "the CUDA event-domain run did not dispatch its queued CubeCL launch before recording the retirement event"
+    );
+}

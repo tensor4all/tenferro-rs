@@ -43,6 +43,42 @@ only when the backend is entered. `submit` dispatches pending work at a boundary
 `synchronize` adds an explicit host barrier, and `close` performs a final submission and returns the
 counters.
 
+### Prepared graphs inside a held session
+
+`CudaHeldSession::with_session` can run a `PreparedCompiledGraph` directly through
+`Runtime::run_prepared_in`, so a steady-state loop keeps one held session instead of paying a scoped
+entry per `Runtime::run_prepared` call:
+
+<!-- snippet-source: crates/tenferro-gpu/examples/cuda_session_transfer.rs#cuda_prepared_in_held -->
+```rust
+    let mut prepared_builder = tenferro_runtime::Runtime::builder();
+    prepared_builder.register_engine(tenferro_gpu::cuda::cuda_runtime_engine_registration(
+        &backend,
+        tenferro_runtime::EngineId::new("tenferro.example.held-prepared.v1")?,
+    )?)?;
+    let prepared_runtime = prepared_builder.build()?;
+    let x = tenferro_runtime::TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 1)?;
+    let y = (&x * &x)?;
+    let program = tenferro_runtime::GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, tenferro_runtime::DType::F64, &[4])])?;
+    let prepared = prepared_runtime.prepare_compiled(&program, &[&seed])?;
+    let prepared_inputs: [&Tensor; 1] = [&seed];
+    let mut prepared_session = backend.open_session()?;
+    let outputs = prepared_session.with_session(|view| {
+        prepared_runtime.run_prepared_in(view, &prepared, &prepared_inputs)
+    })??;
+    prepared_session.close()?;
+    assert_eq!(outputs[0].shape(), &[4]);
+```
+<!-- end-snippet-source -->
+
+`run_prepared_in` runs every graph node on the borrowed session, leases the runtime executor state
+once without waiting, and retires its device work before returning. Before any launch it rejects a
+multi-engine graph, a session that belongs to a different backend state, and a prepared operation
+that does not support a borrowed session, each with a typed error that names `Runtime::run_prepared`
+as the alternative. The scoped form `with_backend_session(|view| runtime.run_prepared_in(view, ...))`
+works on CPU and CUDA; the eager/AD adapter is still not part of this route.
+
 ## Rules the session keeps
 
 - **One owner, one thread.** The session is `!Send + !Sync` and captures the logical CubeCL stream of
@@ -126,6 +162,18 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
   the reference machine, so they pay off above a few kilobytes or when the caller can wait later; the
   measured comparison with the blocking routes is in
   [the transfer record](../design/asynchronous-transfer-1945-u4.md#3-measured-the-pending-routes-against-the-existing-blocking-paths-2009).
+
+### Blocking readback into a reused buffer
+
+`download_tensor_into` is the blocking readback for a caller that reads the same size back
+repeatedly. It takes a caller-owned `Vec<T>`, resizes it to the tensor's element count without
+reallocating when the capacity already suffices, and returns it filled and ready to pass in again, so
+the loop does not allocate and first-touch a fresh pageable buffer on every iteration. It uses the
+same driver copy into host memory as the large `download_tensor` path; the saving is the allocation
+and its page faults, not a different transport. Prefer it for repeated readback of same-size results,
+keep `download_tensor` for a one-off download, and use the pending routes when the caller wants to
+decide *when* to wait. A `bool` destination is rejected with a typed error because raw device bytes
+are not guaranteed to be 0/1; `download_tensor` decodes them.
 
 ## What is not supported
 

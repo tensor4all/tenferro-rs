@@ -171,6 +171,7 @@ protocol, `transfer_large` group, 32 Mi `f64` elements = 256 MiB:
 | case | 256 MiB | effective |
 | --- | ---: | ---: |
 | download `pageable` (`download_tensor`) | 176.9 ms | 1.41 GiB/s |
+| download `into_reused` (`download_tensor_into`, reused pageable buffer) | 18.53 ms | 13.5 GiB/s |
 | download `pinned` (`download_pending` + `wait`) | 10.46 ms | 23.9 GiB/s |
 | upload `staging` (`upload_tensor`) | 166.7 ms | 1.50 GiB/s |
 | upload `pinned` (`upload_pending` + `wait`) | 10.08 ms | 24.8 GiB/s |
@@ -184,11 +185,16 @@ protocol, `transfer_large` group, 32 Mi `f64` elements = 256 MiB:
   account is withdrawn.** Neither route takes that branch: the numeric download above 16 bytes never calls
   `reserve_cpu` (it allocates its result vector and copies into it), and the borrowed upload is pageable at
   every size rather than only above 100 MB.
-- **Which share of the 166-177 ms is pageable DMA, host page population, queue dispatch, or staging
-  retirement is not attributed here.** The measurements above are observations; the causal split is
-  something the implementation of `docs/design/large-transfer-staging-1945-u4.md` has to measure on this
-  same group rather than inherit. What the numbers do fix is the size of the prize: a pinned DMA of this
-  payload is ~10 ms and a host-side payload copy is ~8.3 ms.
+- **The pageable download's 166-177 ms is mostly first-touch page population, not the DMA.**
+  `download_tensor_into` performs the same driver copy as `download_tensor` but into a pageable buffer
+  reused across iterations, so its steady state excludes allocation and first touch: measured in the
+  same run as the fresh pageable route, 18.53 ms against 176.7 ms, about 9.5x. That puts the allocation
+  and page-population share at ~158 ms and the pageable-vs-pinned transport gap at ~8 ms (18.53 ms
+  against the pinned route's 10.46 ms). What the earlier revision of this bullet could not attribute is
+  therefore the page population, which is the dominant term; a host-side payload copy of this size is
+  ~8.3 ms. The 8 MiB `transfer_download/into_reused` case is within noise of `pageable` (516 us against
+  510 us), so the reuse win is a function of payload size: at 8 MiB the fresh pageable allocation is
+  small next to the copy.
 
 - **The copy is not below the reference**: 8 MiB in 323 us is ~26 GB/s, above #2009's 5-13 GB/s cudarc
   reference. An earlier revision of this record claimed the opposite because the payload labels were

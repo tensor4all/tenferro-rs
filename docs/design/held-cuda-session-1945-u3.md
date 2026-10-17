@@ -273,6 +273,14 @@ reported, and everything else belongs to the substrate.
 - **The optional AD adapter** for the CUDA held session. Concrete execution needs no AD owner, while
   an eager adapter must reconcile runtime-owner borrowing, the registration clones `tenferro-ad`
   installs, and admission ordering.
+- **Prepared execution inside a held session.** `Runtime::run_prepared_in(session, prepared, inputs)`
+  now runs a single-engine prepared graph on the caller's session: every node executes on the borrowed
+  session, the runtime executor state is leased once without waiting, and preflight rejects a
+  multi-engine graph, a foreign-backend session, and a non-session-capable prepared operation before
+  the first launch. **Stage 1** keeps the current contract that the run still retires its device work
+  (the CUDA event run drains) before `run_prepared_in` returns, success or error. **Stage 2** - handing
+  completion to the held session so retirement is deferred to its `synchronize`/`close` - depends on
+  the non-blocking-submission change above and is an open maintainer decision, not implemented here.
 - **A waiting admission policy** (a CUDA arbiter with the CPU's queueing semantics), multi-device P2P,
   and the WebGPU held session.
 

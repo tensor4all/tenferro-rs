@@ -144,6 +144,11 @@ name = "householder_qr_small_appends"
 harness = false
 required-features = ["autodiff"]
 
+[[bench]]
+name = "cuda_svd_driver"
+harness = false
+required-features = ["cuda"]
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"

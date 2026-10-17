@@ -122,6 +122,15 @@ impl CudaEventDomainRun {
         if let Err(launch_error) = launch() {
             return Err(cleanup.finish_with_error(launch_error));
         }
+        // CubeCL hands `#[cube]` launches to its own device thread instead of
+        // this raw stream, so without this dispatch fence the event below would
+        // be recorded before the launched kernels reach the stream and
+        // `retire_cuda_run` would synchronize an empty stream (#2182 B3). This
+        // is a dispatch fence, not a device barrier: it only makes the event
+        // (and therefore the run's retirement) cover the queued launches.
+        if let Err(flush_error) = self.runtime.flush_cubecl(EVENT_OP) {
+            return Err(cleanup.finish_with_error(RuntimeError::from(flush_error)));
+        }
         if let Err(record_error) = event.record(stream) {
             return Err(cleanup.finish_with_error(RuntimeError::from(record_error)));
         }
@@ -291,6 +300,11 @@ fn raw_stream(runtime: &CudaRuntime) -> crate::Result<CUstream> {
 }
 
 fn synchronize_stream(runtime: &CudaRuntime, stream: CUstream) -> crate::Result<()> {
+    // Dispatch CubeCL's host queue before the raw barrier, so the barrier covers
+    // the launches it still holds (#2182 B3). The barrier is attempted even when
+    // the dispatch fails, and the dispatch result is folded into the barrier
+    // result instead of replacing it.
+    let dispatch = runtime.flush_cubecl(EVENT_OP);
     let activation = runtime.set_current_cuda_context(EVENT_OP);
     // `cuStreamSynchronize` is the retirement barrier even when it reports an
     // asynchronous launch failure discovered while waiting. Invalid
@@ -298,7 +312,7 @@ fn synchronize_stream(runtime: &CudaRuntime, stream: CUstream) -> crate::Result<
     // barrier is still attempted when context selection reports an error so
     // cleanup never returns before trying either retirement path.
     let barrier = unsafe { cuda_result::stream::synchronize(stream) };
-    match (activation, barrier) {
+    let barrier = match (activation, barrier) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(activation), Ok(())) => Err(crate::Error::backend_source(
             EVENT_OP,
@@ -312,6 +326,18 @@ fn synchronize_stream(runtime: &CudaRuntime, stream: CUstream) -> crate::Result<
                 barrier,
             },
         )),
+    };
+    match (dispatch, barrier) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(dispatch), Ok(())) => Err(crate::Error::backend_source(
+            EVENT_OP,
+            CudaStreamDispatchError { dispatch },
+        )),
+        (Ok(()), Err(barrier)) => Err(barrier),
+        (Err(dispatch), Err(barrier)) => Err(crate::Error::backend_source(
+            EVENT_OP,
+            CudaStreamDispatchAndRetirementError { dispatch, barrier },
+        )),
     }
 }
 
@@ -320,34 +346,46 @@ fn retire_cuda_run(runtime: &CudaRuntime) -> crate::Result<()> {
         Ok(stream) => return synchronize_stream(runtime, stream),
         Err(primary) => primary,
     };
-    // Stream lookup can fail after work was admitted. A context-wide barrier is
-    // the retirement fallback; returning the lookup error after it succeeds
-    // preserves the operational failure without releasing live storage.
+    // Stream lookup can fail after work was admitted. Dispatch the queued CubeCL
+    // launches first so the context-wide fallback barrier can cover them; a
+    // dispatch failure is then kept as the primary error with the barrier
+    // outcome preserved.
+    let dispatch = runtime.flush_cubecl(EVENT_OP);
+    // A context-wide barrier is the retirement fallback; returning the lookup
+    // error after it succeeds preserves the operational failure without
+    // releasing live storage.
     let activation = runtime.set_current_cuda_context(EVENT_OP);
     let fallback = cuda_result::ctx::synchronize();
-    match (activation, fallback) {
-        (Ok(()), Ok(())) => Err(stream),
-        (Err(activation), Ok(())) => Err(crate::Error::backend_source(
+    let barrier = match (activation, fallback) {
+        (Ok(()), Ok(())) => stream,
+        (Err(activation), Ok(())) => crate::Error::backend_source(
             EVENT_OP,
             CudaContextActivationFallbackError {
                 primary: stream,
                 activation,
             },
-        )),
-        (Ok(()), Err(fallback)) => Err(crate::Error::backend_source(
+        ),
+        (Ok(()), Err(fallback)) => crate::Error::backend_source(
             EVENT_OP,
             CudaRetirementFallbackError {
                 primary: stream,
                 fallback,
             },
-        )),
-        (Err(activation), Err(fallback)) => Err(crate::Error::backend_source(
+        ),
+        (Err(activation), Err(fallback)) => crate::Error::backend_source(
             EVENT_OP,
             CudaRetirementFallbackCombinedError {
                 primary: stream,
                 activation,
                 fallback,
             },
+        ),
+    };
+    match dispatch {
+        Ok(()) => Err(barrier),
+        Err(dispatch) => Err(crate::Error::backend_source(
+            EVENT_OP,
+            CudaRetirementDispatchError { dispatch, barrier },
         )),
     }
 }
@@ -409,4 +447,30 @@ struct CudaSubmissionCleanupError {
     primary: RuntimeError,
     #[source]
     cleanup: crate::Error,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("CUDA CubeCL dispatch before stream retirement failed")]
+struct CudaStreamDispatchError {
+    #[source]
+    dispatch: crate::Error,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("CUDA CubeCL dispatch failed ({dispatch}); the stream retirement barrier also failed ({barrier})")]
+struct CudaStreamDispatchAndRetirementError {
+    dispatch: crate::Error,
+    #[source]
+    barrier: crate::Error,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "CUDA CubeCL dispatch before the context retirement fallback failed ({dispatch}); \
+     the fallback barrier also reported {barrier}"
+)]
+struct CudaRetirementDispatchError {
+    dispatch: crate::Error,
+    #[source]
+    barrier: crate::Error,
 }

@@ -425,6 +425,9 @@ struct ExtensionCounters {
     tracked_output_drops: Mutex<Option<Arc<AtomicUsize>>>,
     tracked_output_drop_events: Mutex<Option<Arc<Mutex<Vec<String>>>>>,
     foreign_output_domain: Mutex<Option<AllocationDomainId>>,
+    /// When set, the prepared operation advertises the caller-borrowed session
+    /// route, so `run_prepared_in` exercises the session-capable extension path.
+    session_capable: bool,
 }
 
 #[derive(Debug)]
@@ -926,6 +929,7 @@ struct CountingExtensionEngine {
     family_id: &'static str,
     engine_id: EngineId,
     counters: Arc<ExtensionCounters>,
+    session_capable: bool,
 }
 
 impl ExtensionEngine for CountingExtensionEngine {
@@ -952,6 +956,7 @@ impl ExtensionEngine for CountingExtensionEngine {
             binding: request.binding().clone(),
             specialization: request.specialization().clone(),
             counters: Arc::clone(&self.counters),
+            session_capable: self.session_capable,
         });
         Ok(PrepareCapability::Prepared(
             PreparedOperationPlan::executable(prepared.clone(), prepared),
@@ -964,6 +969,7 @@ struct CountingPreparedOperation {
     binding: PreparedOperationBinding,
     specialization: SpecializationProjection,
     counters: Arc<ExtensionCounters>,
+    session_capable: bool,
 }
 
 impl PreparedOperation for CountingPreparedOperation {
@@ -1110,6 +1116,20 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             .with_backend_session(|session| session.to_contiguous_read(inputs[0].clone()))
             .unwrap()?])
     }
+
+    fn supports_session(&self) -> bool {
+        self.session_capable
+    }
+
+    fn execute_in_session(
+        &self,
+        session: &mut dyn tenferro_tensor::BackendSession,
+        _extension_caches: &mut ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> tenferro_runtime::Result<Vec<Tensor>> {
+        self.counters.execute.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![session.to_contiguous_read(inputs[0].clone())?])
+    }
 }
 
 #[derive(Debug)]
@@ -1133,6 +1153,7 @@ impl ExtensionModule for CountingExtensionModule {
             family_id: self.family_id,
             engine_id: self.engine_id.clone(),
             counters: Arc::clone(&self.counters),
+            session_capable: self.counters.session_capable,
         }))?;
         registrar.register_planning_config(
             self.engine_id.clone(),
@@ -2082,6 +2103,172 @@ fn runtime_run_prepared_reports_rejected_physical_input_residency() -> Result<()
             ..
         } if *actual == foreign_domain
     ));
+    Ok(())
+}
+
+#[test]
+fn runtime_run_prepared_in_matches_run_prepared_for_op_graph() -> Result<(), Box<dyn StdError>> {
+    let mut backend = CpuBackend::new();
+    let runtime = runtime_with_cpu(&backend)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = (&x * &x)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    let expected = runtime.run_prepared(&prepared, &[&input])?;
+    let actual = backend
+        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
+    assert_eq!(actual[0].as_slice::<f64>()?, expected[0].as_slice::<f64>()?);
+    assert_eq!(actual[0].as_slice::<f64>()?, &[9.0, 25.0]);
+    Ok(())
+}
+
+#[test]
+fn runtime_run_prepared_in_matches_run_prepared_for_fused_elementwise_graph(
+) -> Result<(), Box<dyn StdError>> {
+    let mut backend = CpuBackend::new();
+    let runtime = runtime_with_cpu(&backend)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    // A long elementwise chain gives the region planner something to fuse.
+    let squared = (&x * &x)?;
+    let cubed = (&squared * &x)?;
+    let shifted = (&cubed + &x)?;
+    let y = (&shifted * &x)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    let expected = runtime.run_prepared(&prepared, &[&input])?;
+    let actual = backend
+        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
+    assert_eq!(actual[0].as_slice::<f64>()?, expected[0].as_slice::<f64>()?);
+    Ok(())
+}
+
+#[test]
+fn runtime_run_prepared_in_matches_run_prepared_for_identity_graph() -> Result<(), Box<dyn StdError>>
+{
+    let mut backend = CpuBackend::new();
+    let runtime = runtime_with_cpu(&backend)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    // The compiled output is the input placeholder itself: no instruction writes
+    // the output slot, so it is collected from the borrowed input directly.
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 7.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    let expected = runtime.run_prepared(&prepared, &[&input])?;
+    assert_eq!(expected[0].as_slice::<f64>()?, &[4.0, 7.0]);
+    let actual = backend
+        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
+    assert_eq!(actual[0].as_slice::<f64>()?, &[4.0, 7.0]);
+    Ok(())
+}
+
+#[test]
+fn runtime_run_prepared_in_matches_run_prepared_for_extension_graph(
+) -> Result<(), Box<dyn StdError>> {
+    let counters = Arc::new(ExtensionCounters {
+        session_capable: true,
+        ..ExtensionCounters::default()
+    });
+    let mut backend = CpuBackend::new();
+    let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    let expected = runtime.run_prepared(&prepared, &[&input])?;
+    let actual = backend
+        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
+    assert_eq!(actual[0].as_slice::<f64>()?, expected[0].as_slice::<f64>()?);
+    assert_eq!(actual[0].as_slice::<f64>()?, &[3.0, 5.0]);
+    Ok(())
+}
+
+#[test]
+fn runtime_run_prepared_in_rejects_wrong_backend_session_before_launch(
+) -> Result<(), Box<dyn StdError>> {
+    let mut backend = CpuBackend::new();
+    let runtime = runtime_with_cpu(&backend)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = (&x + &x)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    // A second independent backend has a different runtime witness identity, so
+    // its session must be refused before the first instruction launches.
+    let mut foreign_backend = CpuBackend::new();
+    let error = foreign_backend
+        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))
+        .expect("session admission succeeds")
+        .expect_err("a foreign session must be rejected");
+    assert!(matches!(error, Error::Unsupported { .. }), "{error}");
+    assert!(
+        error.to_string().contains("different backend state"),
+        "{error}"
+    );
+
+    // The owning session still works, proving the graph itself was runnable.
+    let output = backend
+        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
+    assert_eq!(output[0].as_slice::<f64>()?, &[2.0, 4.0]);
+    Ok(())
+}
+
+#[test]
+fn runtime_run_prepared_in_rejects_non_session_capable_operation_before_launch(
+) -> Result<(), Box<dyn StdError>> {
+    let counters = Arc::new(ExtensionCounters::default());
+    let backend = CpuBackend::new();
+    let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    let mut backend = backend;
+    let error = backend
+        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))
+        .expect("session admission succeeds")
+        .expect_err("a non-session operation must be rejected before launch");
+    assert!(matches!(error, Error::Unsupported { .. }), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support a caller-borrowed session"),
+        "{error}"
+    );
+    assert_eq!(
+        counters.execute.load(Ordering::SeqCst),
+        0,
+        "preflight must reject before any prepared operation executes"
+    );
     Ok(())
 }
 
