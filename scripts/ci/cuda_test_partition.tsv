@@ -237,6 +237,11 @@ gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cuda_explicit_cast_matrix
 gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cuda_read_entry_points_accept_borrowed_views
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::caller_may_overwrite_the_source_as_soon_as_upload_returns
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_observes_queued_device_writes_on_this_and_other_streams
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_grows_a_short_buffer_and_handles_empty
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_rejects_bool_destination
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_rejects_dtype_mismatch_and_returns_the_buffer
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_rejects_host_and_foreign_runtime_tensors
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_round_trips_and_reuses_one_allocation
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::owned_upload_and_offset_allocations_round_trip
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::transfers_round_trip_every_dtype_and_size_class_bit_exactly
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_a_non_contiguous_read

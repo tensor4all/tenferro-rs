@@ -144,6 +144,18 @@ the data in memory it controls, or to decide *when* to wait, use the pending rou
   measured comparison with the blocking routes is in
   [the transfer record](../design/asynchronous-transfer-1945-u4.md#3-measured-the-pending-routes-against-the-existing-blocking-paths-2009).
 
+### Blocking readback into a reused buffer
+
+`download_tensor_into` is the blocking readback for a caller that reads the same size back
+repeatedly. It takes a caller-owned `Vec<T>`, resizes it to the tensor's element count without
+reallocating when the capacity already suffices, and returns it filled and ready to pass in again, so
+the loop does not allocate and first-touch a fresh pageable buffer on every iteration. It uses the
+same driver copy into host memory as the large `download_tensor` path; the saving is the allocation
+and its page faults, not a different transport. Prefer it for repeated readback of same-size results,
+keep `download_tensor` for a one-off download, and use the pending routes when the caller wants to
+decide *when* to wait. A `bool` destination is rejected with a typed error because raw device bytes
+are not guaranteed to be 0/1; `download_tensor` decodes them.
+
 ## What is not supported
 
 - **No dependent-device-consumer handoff.** A device consumer cannot yet receive authorized access to

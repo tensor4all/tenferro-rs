@@ -116,6 +116,192 @@ pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tenso
     }
 }
 
+/// A [`download_tensor_into`] that did not return a filled buffer.
+///
+/// Mirrors [`TransferSubmitError`](super::transfer::TransferSubmitError)'s ownership-on-failure
+/// split, but owns a plain `Vec<T>` destination rather than a `Tensor` plus a
+/// [`PinnedHostBuffer`](super::transfer::PinnedHostBuffer), so the existing type cannot carry it.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::DownloadIntoError;
+///
+/// fn describe(error: DownloadIntoError<f64>) -> String {
+///     match error {
+///         DownloadIntoError::Rejected { error, buffer } => {
+///             format!("{} after {} rejected elements", error, buffer.len())
+///         }
+///         DownloadIntoError::Unproven { error } => error.to_string(),
+///     }
+/// }
+/// let _ = describe;
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum DownloadIntoError<T> {
+    /// Nothing was enqueued, so the submitted buffer is handed back unchanged.
+    #[error("download rejected: {error}")]
+    Rejected {
+        /// Why the download was refused.
+        error: crate::Error,
+        /// The submitted destination buffer, returned unchanged.
+        buffer: Vec<T>,
+    },
+    /// The copy may have been enqueued, so the destination buffer is deliberately leaked after
+    /// the device may still write it.
+    #[error("download completion could not be proven: {error}")]
+    Unproven {
+        /// The failure that prevented completion from being proven.
+        error: crate::Error,
+    },
+}
+
+/// Copy a device tensor into a caller-owned `Vec<T>`, reusing the vector's allocation.
+///
+/// This is the blocking readback for a caller that reads the same size back repeatedly: unlike
+/// [`download_tensor`], it does not allocate a fresh result vector per call. The caller passes a
+/// `Vec<T>` in and gets it back filled (and ready to pass in again), so a 256 MiB readback reuses
+/// one pageable buffer instead of allocating and first-touching a new one every time. The copy
+/// itself is the same driver copy into host memory that [`download_tensor`] performs for the large
+/// path; the saving is the allocation and its page faults, not a different transport.
+///
+/// The buffer is only adopted after a completed copy: on an unproven failure the device may still
+/// be writing it, so the vector is leaked rather than freed or returned.
+///
+/// # Errors
+///
+/// Returns [`DownloadIntoError::Rejected`] before any copy is enqueued, with the submitted buffer:
+/// [`crate::Error::RuntimeState`] for a host-backed or foreign tensor, [`crate::Error::Validation`]
+/// when the dtype does not match `T`, [`crate::Error::Unsupported`] when `T` is `bool` (raw bytes
+/// are not a valid `bool`; use [`download_tensor`]), and [`crate::Error::InvalidArgument`] when the
+/// byte length overflows. Returns [`DownloadIntoError::Unproven`] when the copy may have been
+/// enqueued but completion could not be proven; the destination vector is then leaked.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::{cuda::download_tensor_into, cuda::CudaRuntime};
+/// use tenferro_tensor::Tensor;
+///
+/// let _download: fn(&CudaRuntime, &Tensor, Vec<f64>)
+///     -> Result<Vec<f64>, tenferro_gpu::cuda::DownloadIntoError<f64>> = download_tensor_into;
+/// ```
+///
+/// ```no_run
+/// use tenferro_gpu::{cuda::download_tensor_into, cuda::CudaRuntime, cuda::upload_tensor};
+/// use tenferro_tensor::Tensor;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime: CudaRuntime = unimplemented!();
+/// let device = upload_tensor(&runtime, &Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+/// // Reuse one allocation across readbacks; `buffer` is handed back on success.
+/// let mut buffer: Vec<f64> = Vec::new();
+/// for _ in 0..3 {
+///     buffer = download_tensor_into(&runtime, &device, buffer)
+///         .map_err(|err| err.to_string())?;
+///     assert_eq!(buffer, [1.0, 2.0]);
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub fn download_tensor_into<T>(
+    rt: &CudaRuntime,
+    tensor: &Tensor,
+    mut buffer: Vec<T>,
+) -> Result<Vec<T>, DownloadIntoError<T>>
+where
+    T: TensorScalar,
+{
+    const OP: &str = "download_tensor_into";
+
+    // A device `bool` tensor's bytes are not guaranteed to be 0/1 (the upload route writes one
+    // byte per element, but nothing maintains that invariant across arbitrary kernels), and
+    // publishing an out-of-range byte as a `bool` is immediate UB. Point at the decoding route.
+    if T::dtype() == DType::Bool {
+        return Err(DownloadIntoError::Rejected {
+            error: crate::Error::unsupported(
+                OP,
+                "a bool destination cannot be filled by a raw copy; use `download_tensor`, which decodes bytes into bool",
+            ),
+            buffer,
+        });
+    }
+
+    if let Err(error) = ensure_tensor_resident_on_runtime(rt, tensor, OP) {
+        return Err(DownloadIntoError::Rejected { error, buffer });
+    }
+
+    // A `Tensor` is compact, so its storage holds exactly `n_elements` elements of one dtype;
+    // there is no view handling here.
+    if tensor.dtype() != T::dtype() {
+        return Err(DownloadIntoError::Rejected {
+            error: crate::Error::dtype_mismatch(OP, T::dtype(), tensor.dtype()),
+            buffer,
+        });
+    }
+    let typed = match tensor.as_typed::<T>() {
+        Some(typed) => typed,
+        None => {
+            return Err(DownloadIntoError::Rejected {
+                error: crate::Error::runtime_state(
+                    OP,
+                    "the tensor dtype disagrees with its storage tag",
+                ),
+                buffer,
+            });
+        }
+    };
+    let handle = match typed.buffer() {
+        StorageBuffer::Host(_) => {
+            return Err(DownloadIntoError::Rejected {
+                error: crate::Error::runtime_state(OP, "expected CubeCL buffer"),
+                buffer,
+            });
+        }
+        StorageBuffer::Backend(storage) => match cubecl_handle_from_backend(storage.as_ref(), OP) {
+            Ok(handle) => handle,
+            Err(error) => return Err(DownloadIntoError::Rejected { error, buffer }),
+        },
+    };
+
+    let len = typed.n_elements();
+    if len == 0 {
+        buffer.clear();
+        return Ok(buffer);
+    }
+    let byte_len = match len.checked_mul(size_of::<T>()) {
+        Some(byte_len) => byte_len,
+        None => {
+            return Err(DownloadIntoError::Rejected {
+                error: crate::Error::invalid_argument(OP, "shape", "byte length overflows"),
+                buffer,
+            });
+        }
+    };
+
+    // `clear` keeps the allocation and `reserve` allocates only when the capacity is short, so a
+    // reused buffer is not zero-filled and does not shrink. `as_mut_ptr` then points at `len`
+    // elements of spare capacity; `set_len` publishes them only after the copy completed.
+    buffer.clear();
+    buffer.reserve(len);
+    // SAFETY: `buffer` has capacity for `len` elements (`byte_len` bytes) and outlives the call.
+    // `bool` was rejected above and `TensorScalar` is sealed to the numeric, complex and bool
+    // scalars, so every remaining `T` accepts any byte pattern, making `set_len` sound on success.
+    // On error the device may still write the destination, so it is leaked below rather than freed.
+    let copied = unsafe { rt.download_into_host(handle, buffer.as_mut_ptr().cast(), byte_len, OP) };
+    match copied {
+        Ok(()) => {
+            // SAFETY: the completed copy initialized all `len` elements.
+            unsafe { buffer.set_len(len) };
+            Ok(buffer)
+        }
+        Err(error) => {
+            std::mem::forget(buffer);
+            Err(DownloadIntoError::Unproven { error })
+        }
+    }
+}
+
 fn upload_typed<T: CubeElement + TensorScalar + Scalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     client: &Client,
