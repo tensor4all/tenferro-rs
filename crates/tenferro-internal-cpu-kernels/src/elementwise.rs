@@ -1,6 +1,5 @@
 use num_complex::Complex;
 use num_traits::Zero;
-use smallvec::SmallVec;
 use strided_kernel::{
     erased_broadcast_mul_into_uninit, erased_clamp_into_uninit, erased_compare_into_uninit,
     erased_map_into_uninit, erased_select_into_uninit, erased_zip_into_uninit,
@@ -8,6 +7,7 @@ use strided_kernel::{
     ErasedRawStridedUninitMut, ErasedZipOp, ExecContext, KernelStorageElement, StridedError,
     StridedView,
 };
+use tinyvec::TinyVec;
 
 use tenferro_cpu_basic::{BufferPool, PoolScalar, PooledUninitOutput};
 use tenferro_tensor::{
@@ -175,7 +175,7 @@ impl<T: Copy + 'static, R: TensorRank> HostOperand<T> for TypedTensorView<'_, T,
     }
 }
 
-type AxisVec<T> = SmallVec<[T; 8]>;
+type AxisVec<T> = TinyVec<[T; 8]>;
 
 /// The layout of one erased input descriptor.
 ///

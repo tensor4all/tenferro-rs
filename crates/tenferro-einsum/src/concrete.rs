@@ -1,10 +1,10 @@
 //! Public concrete tensor einsum extension API.
 
-use smallvec::SmallVec;
 use tenferro_tensor::{
     BackendSession, DType, DotGeneralAccumulation, Tensor, TensorRead, TensorScalar, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorWrite,
 };
+use tinyvec::TinyVec;
 
 use crate::binary_dot::BinaryDotOperandOrder;
 use crate::eager::{
@@ -2193,7 +2193,7 @@ fn parse_fast_ascii_binary_labels(notation: &str) -> Option<(&[u8], &[u8], &[u8]
         .then_some((lhs.as_bytes(), rhs.as_bytes(), output.as_bytes()))
 }
 
-fn borrowed_notation_labels(notation: &EinsumNotation) -> Option<[SmallVec<[u32; 8]>; 3]> {
+fn borrowed_notation_labels(notation: &EinsumNotation) -> Option<[TinyVec<[u32; 8]>; 3]> {
     let [lhs, rhs] = notation.inputs.as_slice() else {
         return None;
     };
@@ -2203,7 +2203,7 @@ fn borrowed_notation_labels(notation: &EinsumNotation) -> Option<[SmallVec<[u32;
                 crate::EinsumAxis::Label(label) => Some(*label),
                 crate::EinsumAxis::Ellipsis => None,
             })
-            .collect::<Option<SmallVec<[u32; 8]>>>()
+            .collect::<Option<TinyVec<[u32; 8]>>>()
     };
     Some([labels(lhs)?, labels(rhs)?, labels(&notation.output)?])
 }

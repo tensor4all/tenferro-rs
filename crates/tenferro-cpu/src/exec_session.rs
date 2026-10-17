@@ -1217,7 +1217,7 @@ impl BackendSession for CpuExecSession<'_> {
             let rank = lhs.shape().len();
             (lhs, rhs, rank)
         };
-        let axes = (0..rank).collect::<smallvec::SmallVec<[usize; 4]>>();
+        let axes = (0..rank).collect::<tinyvec::TinyVec<[usize; 4]>>();
         let config = DotGeneralConfig {
             lhs_contracting_dims: axes.clone(),
             rhs_contracting_dims: axes,

@@ -3,9 +3,9 @@ use std::marker::PhantomData;
 use std::mem::{align_of, size_of};
 use std::ptr::NonNull;
 
-use crate::types::{tensor_from_group, tensor_view_from_group};
+use crate::types::{shape_vec, stride_vec, tensor_from_group, tensor_view_from_group};
 use crate::{DType, DynRank, Placement, TensorLayout, TensorRank, TensorRead, TensorScalar};
-use smallvec::SmallVec;
+use tinyvec::TinyVec;
 
 use super::identity::RootResourceId;
 use super::prepared::{
@@ -267,8 +267,8 @@ pub struct AllocationGroup {
     // common case inline so the ownership boundary does not add a per-result
     // metadata allocation to CPU hot paths; the vectors still grow for
     // explicit multi-descriptor groups.
-    allocations: SmallVec<[Option<OwnedStorage>; 1]>,
-    descriptors: SmallVec<[Option<DescriptorRecord>; 1]>,
+    allocations: TinyVec<[Option<OwnedStorage>; 1]>,
+    descriptors: TinyVec<[Option<DescriptorRecord>; 1]>,
 }
 
 /// A shared descriptor child bounded by the group's shared borrow.
@@ -1104,8 +1104,8 @@ impl AllocationGroup {
             ));
         }
         let layout = match TensorLayout::<DynRank>::from_parts(
-            shape.into(),
-            strides.into(),
+            shape_vec(&shape),
+            stride_vec(&strides),
             offset,
             span.byte_len() / target_element_size,
         ) {

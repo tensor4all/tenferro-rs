@@ -317,10 +317,10 @@ fn cuda_cutensor_shrinking_retention_cap_releases_scratch_and_keeps_plans() {
 
 fn matmul_config() -> DotGeneralConfig {
     DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
+        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [].as_slice().iter().copied().collect(),
     }
 }
 
@@ -377,10 +377,10 @@ fn test_dot_general_batched_matmul_f32() {
             ],
         ),
         DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [2].as_slice().into(),
-            rhs_batch_dims: [2].as_slice().into(),
+            lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+            rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+            lhs_batch_dims: [2].as_slice().iter().copied().collect(),
+            rhs_batch_dims: [2].as_slice().iter().copied().collect(),
         },
         1e-4,
     );

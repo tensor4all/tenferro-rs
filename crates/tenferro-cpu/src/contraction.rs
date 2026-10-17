@@ -13,7 +13,6 @@ use cpueinsum::tcontract::{
     PlanConfig,
 };
 use cpueinsum::{ArenaProvider, Exec, Pool, SliceAccumulationSource};
-use smallvec::SmallVec;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -22,6 +21,7 @@ use tenferro_tensor::{
     ContractionScalar, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorRead, TensorView,
     TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
+use tinyvec::TinyVec;
 
 #[cfg(feature = "native")]
 use cpueinsum::BinaryPlan;
@@ -175,8 +175,8 @@ impl Drop for WorkspaceRetention<'_> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Layout {
-    dims: SmallVec<[usize; 8]>,
-    strides: SmallVec<[isize; 8]>,
+    dims: TinyVec<[usize; 8]>,
+    strides: TinyVec<[isize; 8]>,
     offset: isize,
 }
 impl Layout {
@@ -249,12 +249,12 @@ impl BinaryCache {
                 .retained_bytes
                 .saturating_add(std::mem::size_of_val(entry.plan.as_ref()));
             for layout in [&entry.key.lhs, &entry.key.rhs, &entry.key.out] {
-                if layout.dims.spilled() {
+                if layout.dims.is_heap() {
                     stats.retained_bytes = stats
                         .retained_bytes
                         .saturating_add(layout.dims.capacity() * std::mem::size_of::<usize>());
                 }
-                if layout.strides.spilled() {
+                if layout.strides.is_heap() {
                     stats.retained_bytes = stats
                         .retained_bytes
                         .saturating_add(layout.strides.capacity() * std::mem::size_of::<isize>());
@@ -266,7 +266,7 @@ impl BinaryCache {
                 &entry.config.lhs_batch_dims,
                 &entry.config.rhs_batch_dims,
             ] {
-                if axes.spilled() {
+                if axes.is_heap() {
                     stats.retained_bytes = stats
                         .retained_bytes
                         .saturating_add(axes.capacity() * std::mem::size_of::<usize>());

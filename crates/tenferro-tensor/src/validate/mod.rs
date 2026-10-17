@@ -269,18 +269,18 @@ pub fn matmul_config_for_shapes(
         return Err(Error::validation(
             op,
             ShapeMismatch::IncompatibleShapes {
-                lhs: lhs_shape.to_vec().into(),
-                rhs: rhs_shape.to_vec().into(),
+                lhs: lhs_shape.iter().copied().collect(),
+                rhs: rhs_shape.iter().copied().collect(),
             }
             .into(),
         ));
     }
 
     Ok(DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
+        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [].as_slice().iter().copied().collect(),
     })
 }
 

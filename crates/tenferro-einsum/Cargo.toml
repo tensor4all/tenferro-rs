@@ -82,7 +82,7 @@ tenferro-gpu = { path = "../tenferro-gpu", version = "0.7.1", default-features =
 computegraph.workspace = true
 lru.workspace = true
 omeco.workspace = true
-smallvec.workspace = true
+tinyvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -60,6 +60,7 @@ num-complex.workspace = true
 num-traits.workspace = true
 rayon.workspace = true
 smallvec.workspace = true
+tinyvec.workspace = true
 strided-kernel.workspace = true
 thiserror.workspace = true
 faer = { workspace = true, optional = true }

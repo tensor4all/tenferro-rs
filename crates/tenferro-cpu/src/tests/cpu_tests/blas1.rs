@@ -629,10 +629,10 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
                     TensorRead::from_tensor(&a),
                     TensorRead::from_tensor(&ap),
                     &DotGeneralConfig {
-                        lhs_contracting_dims: [1].as_slice().into(),
-                        rhs_contracting_dims: [0].as_slice().into(),
-                        lhs_batch_dims: [].as_slice().into(),
-                        rhs_batch_dims: [].as_slice().into(),
+                        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+                        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+                        rhs_batch_dims: [].as_slice().iter().copied().collect(),
                     },
                 )
             })

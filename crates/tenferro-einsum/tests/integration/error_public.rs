@@ -23,8 +23,8 @@ fn shared_einsum_validation_promotes_directly_to_tensor_validation() {
     let err = Error::validation(
         "einsum",
         ShapeMismatch::ExpectedActual {
-            expected: ShapeVec::from_vec(vec![2, 3]),
-            actual: ShapeVec::from_vec(vec![2, 4]),
+            expected: vec![2, 3].into_iter().collect::<ShapeVec>(),
+            actual: vec![2, 4].into_iter().collect::<ShapeVec>(),
         }
         .into(),
     );

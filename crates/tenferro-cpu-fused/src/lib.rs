@@ -224,7 +224,7 @@ fn erased_fusion_input<'a>(
     let ElementwiseFusionInputView::BroadcastInDim { shape, dims } = view else {
         return Ok(ErasedFusionInput {
             data,
-            dims: ShapeVec::from_slice(base_shape),
+            dims: ShapeVec::from(base_shape),
             strides: base_strides,
         });
     };
@@ -241,7 +241,7 @@ fn erased_fusion_input<'a>(
         ));
     }
 
-    let mut strides = StrideVec::from_elem(0, shape.len());
+    let mut strides: StrideVec = std::iter::repeat_n(0isize, shape.len()).collect();
     let mut seen = vec![false; shape.len()];
     for (source_axis, &target_axis) in dims.iter().enumerate() {
         if target_axis >= shape.len() {
@@ -275,7 +275,7 @@ fn erased_fusion_input<'a>(
 
     Ok(ErasedFusionInput {
         data,
-        dims: ShapeVec::from_slice(shape),
+        dims: ShapeVec::from(shape.as_slice()),
         strides,
     })
 }

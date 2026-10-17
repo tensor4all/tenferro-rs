@@ -2,12 +2,12 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use lru::LruCache;
-use smallvec::{Array, SmallVec};
 use strided_kernel::{
     ErasedDynamicSlicePlan, ErasedDynamicUpdateSlicePlan, ErasedGatherPlan, ErasedScatterPlan,
     KernelDType,
 };
 use tenferro_tensor::CacheStats;
+use tinyvec::{Array, TinyVec};
 
 /// Limits for the CPU indexed-plan cache.
 ///
@@ -93,9 +93,9 @@ pub(crate) struct IndexedPlanKey {
     family: IndexedPlanFamily,
     dtype: KernelDType,
     index_dtype: KernelDType,
-    dims: SmallVec<[SmallVec<[usize; 8]>; 4]>,
-    strides: SmallVec<[SmallVec<[isize; 8]>; 4]>,
-    config: SmallVec<[SmallVec<[usize; 8]>; 5]>,
+    dims: TinyVec<[TinyVec<[usize; 8]>; 4]>,
+    strides: TinyVec<[TinyVec<[isize; 8]>; 4]>,
+    config: TinyVec<[TinyVec<[usize; 8]>; 5]>,
 }
 
 impl IndexedPlanKey {
@@ -127,42 +127,42 @@ impl IndexedPlanKey {
     }
 
     fn retained_bytes(&self) -> usize {
-        nested_smallvec_retained_bytes(&self.dims)
-            .saturating_add(nested_smallvec_retained_bytes(&self.strides))
-            .saturating_add(nested_smallvec_retained_bytes(&self.config))
+        nested_inline_vec_retained_bytes(&self.dims)
+            .saturating_add(nested_inline_vec_retained_bytes(&self.strides))
+            .saturating_add(nested_inline_vec_retained_bytes(&self.config))
     }
 
     fn logical_payload_bytes(&self) -> usize {
-        nested_smallvec_logical_bytes(&self.dims)
-            .saturating_add(nested_smallvec_logical_bytes(&self.strides))
-            .saturating_add(nested_smallvec_logical_bytes(&self.config))
+        nested_inline_vec_logical_bytes(&self.dims)
+            .saturating_add(nested_inline_vec_logical_bytes(&self.strides))
+            .saturating_add(nested_inline_vec_logical_bytes(&self.config))
     }
 }
 
-fn smallvec_retained_bytes<A: Array>(values: &SmallVec<A>) -> usize {
-    if values.spilled() {
+fn inline_vec_retained_bytes<A: Array>(values: &TinyVec<A>) -> usize {
+    if values.is_heap() {
         values.capacity().saturating_mul(size_of::<A::Item>())
     } else {
         0
     }
 }
 
-fn nested_smallvec_retained_bytes<A, B>(values: &SmallVec<A>) -> usize
+fn nested_inline_vec_retained_bytes<A, B>(values: &TinyVec<A>) -> usize
 where
-    A: Array<Item = SmallVec<B>>,
+    A: Array<Item = TinyVec<B>>,
     B: Array,
 {
-    smallvec_retained_bytes(values).saturating_add(
+    inline_vec_retained_bytes(values).saturating_add(
         values
             .iter()
-            .map(smallvec_retained_bytes)
+            .map(inline_vec_retained_bytes)
             .fold(0usize, usize::saturating_add),
     )
 }
 
-fn nested_smallvec_logical_bytes<A, B>(values: &SmallVec<A>) -> usize
+fn nested_inline_vec_logical_bytes<A, B>(values: &TinyVec<A>) -> usize
 where
-    A: Array<Item = SmallVec<B>>,
+    A: Array<Item = TinyVec<B>>,
     B: Array,
 {
     values.iter().fold(0usize, |total, inner| {

@@ -58,8 +58,10 @@ fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
         source.contains("type RuntimeInputReads<'a> = SmallVec"),
         "Runtime::run_prepared should keep short input reference lists inline"
     );
+    // `TensorRead` has no `Default`, so `tinyvec::Array` cannot hold the input
+    // read list; the shape list has no such constraint and moved to `TinyVec`.
     assert!(
-        source.contains("type RuntimeInputShapes<'a> = SmallVec"),
+        source.contains("type RuntimeInputShapes<'a> = TinyVec"),
         "Runtime::run_prepared should keep short input shape lists inline"
     );
     assert!(
@@ -399,10 +401,10 @@ fn runtime_runs_dot_general_with_ordered_inputs() {
         .dot_general(
             &rhs,
             DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
+                lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+                rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                lhs_batch_dims: [].as_slice().iter().copied().collect(),
+                rhs_batch_dims: [].as_slice().iter().copied().collect(),
             },
         )
         .unwrap();

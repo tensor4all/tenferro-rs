@@ -11,17 +11,17 @@ fn dot_general_exec_instr(
 ) -> ExecInstruction {
     ExecInstruction {
         op: ExecOp::DotGeneral(DotGeneralConfig {
-            lhs_contracting_dims: lhs_contracting_dims.into(),
-            rhs_contracting_dims: rhs_contracting_dims.into(),
-            lhs_batch_dims: lhs_batch_dims.into(),
-            rhs_batch_dims: rhs_batch_dims.into(),
+            lhs_contracting_dims: lhs_contracting_dims.iter().copied().collect(),
+            rhs_contracting_dims: rhs_contracting_dims.iter().copied().collect(),
+            lhs_batch_dims: lhs_batch_dims.iter().copied().collect(),
+            rhs_batch_dims: rhs_batch_dims.iter().copied().collect(),
         }),
         semantic_operation_index: None,
         input_slots,
         output_slots: vec![output_slot],
         dtype: DType::F64,
-        output_extents: vec![exact_extents(&output_shape)].into(),
-        output_shapes: vec![output_shape].into(),
+        output_extents: vec![exact_extents(&output_shape)].into_iter().collect(),
+        output_shapes: vec![output_shape].into_iter().collect(),
         last_use: Vec::new(),
     }
 }
@@ -203,13 +203,14 @@ fn test_dot_decomposer_preserves_upper_bound_extents_in_merge_reshape() {
         input_slots: vec![0, 1],
         output_slots: vec![2],
         dtype: DType::F64,
-        output_shapes: vec![truncate_shape.clone()].into(),
+        output_shapes: vec![truncate_shape.clone()].into_iter().collect(),
         output_extents: vec![vec![
             ShapeExtent::upper_bound(DimExpr::Const(5)),
             ShapeExtent::exact(DimExpr::Const(3)),
             ShapeExtent::exact(DimExpr::Const(4)),
         ]]
-        .into(),
+        .into_iter()
+        .collect(),
         last_use: Vec::new(),
     };
     let dot = dot_general_exec_instr(

@@ -20,8 +20,8 @@ fn validation(err: Error) -> ValidationError {
 #[test]
 fn shape_mismatch_keeps_machine_readable_payload() {
     let err: ValidationError = ShapeMismatch::IncompatibleShapes {
-        lhs: tenferro_tensor_core::ShapeVec::from_vec(vec![2, 3]),
-        rhs: tenferro_tensor_core::ShapeVec::from_vec(vec![2, 4]),
+        lhs: vec![2, 3].into_iter().collect::<ShapeVec>(),
+        rhs: vec![2, 4].into_iter().collect::<ShapeVec>(),
     }
     .into();
 
@@ -59,7 +59,7 @@ fn tensor_core_does_not_expose_row_major_compatibility_apis() {
 
 #[test]
 fn dynamic_rank_shape_roundtrips_vec() {
-    let shape = <DynRank as TensorRank>::shape_from_vec(vec![2, 3].into()).unwrap();
+    let shape = <DynRank as TensorRank>::shape_from_vec(vec![2, 3].into_iter().collect()).unwrap();
     assert_eq!(shape.as_ref(), &[2, 3]);
     assert_eq!(
         <DynRank as TensorRank>::shape_into_vec(shape).as_slice(),
@@ -69,7 +69,8 @@ fn dynamic_rank_shape_roundtrips_vec() {
 
 #[test]
 fn dynamic_rank_strides_roundtrip_vec() {
-    let strides = <DynRank as TensorRank>::strides_from_vec(vec![1, 2, -1].into()).unwrap();
+    let strides =
+        <DynRank as TensorRank>::strides_from_vec(vec![1, 2, -1].into_iter().collect()).unwrap();
     assert_eq!(strides.as_ref(), &[1, 2, -1]);
     assert_eq!(
         <DynRank as TensorRank>::strides_into_vec(strides).as_slice(),
@@ -79,13 +80,14 @@ fn dynamic_rank_strides_roundtrip_vec() {
 
 #[test]
 fn static_rank_shape_and_strides_roundtrip_vecs() {
-    let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into()).unwrap();
+    let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into_iter().collect()).unwrap();
     assert_eq!(
         <Rank<2> as TensorRank>::shape_into_vec(shape).as_slice(),
         &[2, 3]
     );
 
-    let strides = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into()).unwrap();
+    let strides =
+        <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into_iter().collect()).unwrap();
     assert_eq!(
         <Rank<2> as TensorRank>::strides_into_vec(strides).as_slice(),
         &[1, 2]
@@ -94,7 +96,8 @@ fn static_rank_shape_and_strides_roundtrip_vecs() {
 
 #[test]
 fn static_rank_rejects_wrong_shape_length() {
-    let err = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into()).unwrap_err();
+    let err =
+        <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into_iter().collect()).unwrap_err();
     assert!(matches!(
         err,
         ValidationError::RankMismatch {
@@ -119,9 +122,10 @@ fn rank_shape_conversion_accepts_static_and_runtime_inputs() {
     let slice = <&[usize] as IntoRankShape<Rank<2>>>::into_rank_shape(&[8, 9][..]).unwrap();
     assert_eq!(slice, [8, 9]);
 
-    let shape_vec =
-        <ShapeVec as IntoRankShape<Rank<2>>>::into_rank_shape(ShapeVec::from_vec(vec![10, 11]))
-            .unwrap();
+    let shape_vec = <ShapeVec as IntoRankShape<Rank<2>>>::into_rank_shape(
+        vec![10, 11].into_iter().collect::<ShapeVec>(),
+    )
+    .unwrap();
     assert_eq!(shape_vec, [10, 11]);
 
     let dynamic = <[usize; 9] as IntoRankShape<DynRank>>::into_rank_shape([0; 9]).unwrap();
@@ -148,9 +152,10 @@ fn rank_shape_conversion_rejects_wrong_runtime_rank() {
         }
     ));
 
-    let shape_vec =
-        <ShapeVec as IntoRankShape<Rank<2>>>::into_rank_shape(ShapeVec::from_vec(vec![]))
-            .unwrap_err();
+    let shape_vec = <ShapeVec as IntoRankShape<Rank<2>>>::into_rank_shape(
+        vec![].into_iter().collect::<ShapeVec>(),
+    )
+    .unwrap_err();
     assert!(matches!(
         shape_vec,
         ValidationError::RankMismatch {
@@ -162,7 +167,8 @@ fn rank_shape_conversion_rejects_wrong_runtime_rank() {
 
 #[test]
 fn static_rank_rejects_wrong_stride_length() {
-    let err = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2, 3].into()).unwrap_err();
+    let err =
+        <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2, 3].into_iter().collect()).unwrap_err();
     assert!(matches!(
         err,
         ValidationError::RankMismatch {
@@ -294,8 +300,13 @@ fn broadcast_in_dim_view_uses_zero_strides_for_broadcast_axes() {
 
 #[test]
 fn dynamic_layout_rejects_shape_stride_rank_mismatch() {
-    let err =
-        TensorLayout::<DynRank>::from_parts(vec![2, 3].into(), vec![1].into(), 0, 6).unwrap_err();
+    let err = TensorLayout::<DynRank>::from_parts(
+        vec![2, 3].into_iter().collect(),
+        vec![1].into_iter().collect(),
+        0,
+        6,
+    )
+    .unwrap_err();
     assert!(matches!(
         err,
         ValidationError::RankMismatch {
@@ -332,8 +343,8 @@ fn compact_layout_reports_stride_overflow() {
 fn layout_rejects_non_empty_broadcast_shape_product_overflow() {
     let huge_extent = usize::MAX / 2 + 1;
     let err = TensorLayout::<DynRank>::from_parts(
-        vec![huge_extent, huge_extent].into(),
-        vec![0, 0].into(),
+        vec![huge_extent, huge_extent].into_iter().collect(),
+        vec![0, 0].into_iter().collect(),
         0,
         1,
     )
@@ -343,8 +354,13 @@ fn layout_rejects_non_empty_broadcast_shape_product_overflow() {
 
 #[test]
 fn layout_from_parts_preserves_offset() {
-    let layout =
-        TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 7, 10).unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![3].into_iter().collect(),
+        vec![1].into_iter().collect(),
+        7,
+        10,
+    )
+    .unwrap();
     assert_eq!(layout.shape(), &[3]);
     assert_eq!(layout.strides(), &[1]);
     assert_eq!(layout.offset(), 7);
@@ -352,8 +368,13 @@ fn layout_from_parts_preserves_offset() {
 
 #[test]
 fn layout_accepts_negative_stride_when_reachable_range_is_in_bounds() {
-    let layout =
-        TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![-1].into(), 2, 3).unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![3].into_iter().collect(),
+        vec![-1].into_iter().collect(),
+        2,
+        3,
+    )
+    .unwrap();
     assert_eq!(layout.shape(), &[3]);
     assert_eq!(layout.strides(), &[-1]);
     assert_eq!(layout.offset(), 2);
@@ -361,38 +382,78 @@ fn layout_accepts_negative_stride_when_reachable_range_is_in_bounds() {
 
 #[test]
 fn layout_rejects_negative_stride_when_reachable_range_is_out_of_bounds() {
-    assert!(TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![-1].into(), 1, 3).is_err());
+    assert!(TensorLayout::<DynRank>::from_parts(
+        vec![3].into_iter().collect(),
+        vec![-1].into_iter().collect(),
+        1,
+        3
+    )
+    .is_err());
 }
 
 #[test]
 fn layout_rejects_positive_stride_when_max_offset_exceeds_buffer_len() {
-    assert!(TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![2].into(), 0, 3).is_err());
+    assert!(TensorLayout::<DynRank>::from_parts(
+        vec![3].into_iter().collect(),
+        vec![2].into_iter().collect(),
+        0,
+        3
+    )
+    .is_err());
 }
 
 #[test]
 fn layout_accepts_empty_shape_offsets_at_buffer_boundaries() {
-    let at_start =
-        TensorLayout::<DynRank>::from_parts(vec![0].into(), vec![1].into(), 0, 3).unwrap();
+    let at_start = TensorLayout::<DynRank>::from_parts(
+        vec![0].into_iter().collect(),
+        vec![1].into_iter().collect(),
+        0,
+        3,
+    )
+    .unwrap();
     assert_eq!(at_start.offset(), 0);
 
-    let at_end = TensorLayout::<DynRank>::from_parts(vec![0].into(), vec![1].into(), 3, 3).unwrap();
+    let at_end = TensorLayout::<DynRank>::from_parts(
+        vec![0].into_iter().collect(),
+        vec![1].into_iter().collect(),
+        3,
+        3,
+    )
+    .unwrap();
     assert_eq!(at_end.offset(), 3);
 
-    assert!(TensorLayout::<DynRank>::from_parts(vec![0].into(), vec![1].into(), 4, 3).is_err());
+    assert!(TensorLayout::<DynRank>::from_parts(
+        vec![0].into_iter().collect(),
+        vec![1].into_iter().collect(),
+        4,
+        3
+    )
+    .is_err());
 }
 
 #[test]
 fn layout_reports_overflow_for_unreachable_offset_arithmetic() {
     assert!(matches!(
-        TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![isize::MAX].into(), 0, 3)
-            .unwrap_err(),
+        TensorLayout::<DynRank>::from_parts(
+            vec![3].into_iter().collect(),
+            vec![isize::MAX].into_iter().collect(),
+            0,
+            3
+        )
+        .unwrap_err(),
         ValidationError::IntegerOverflow
     ));
 }
 
 #[test]
 fn mutable_layout_rejects_zero_stride_broadcast() {
-    let layout = TensorLayout::<DynRank>::from_parts(vec![2].into(), vec![0].into(), 0, 1).unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![2].into_iter().collect(),
+        vec![0].into_iter().collect(),
+        0,
+        1,
+    )
+    .unwrap();
     let err = layout.validate_mutable_no_overlap().unwrap_err();
     assert!(matches!(err, ValidationError::OverlappingMutableLayout));
     assert_eq!(
@@ -403,8 +464,13 @@ fn mutable_layout_rejects_zero_stride_broadcast() {
 
 #[test]
 fn mutable_layout_rejects_overlapping_strides() {
-    let layout =
-        TensorLayout::<DynRank>::from_parts(vec![2, 2].into(), vec![1, 1].into(), 0, 4).unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![2, 2].into_iter().collect(),
+        vec![1, 1].into_iter().collect(),
+        0,
+        4,
+    )
+    .unwrap();
     assert!(matches!(
         layout.validate_mutable_no_overlap(),
         Err(ValidationError::OverlappingMutableLayout)
@@ -413,16 +479,21 @@ fn mutable_layout_rejects_overlapping_strides() {
 
 #[test]
 fn mutable_layout_accepts_reversed_non_overlapping_vector() {
-    let layout =
-        TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![-1].into(), 2, 3).unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![3].into_iter().collect(),
+        vec![-1].into_iter().collect(),
+        2,
+        3,
+    )
+    .unwrap();
     layout.validate_mutable_no_overlap().unwrap();
 }
 
 #[test]
 fn mutable_layout_accepts_empty_view_before_product_overflow() {
     let layout = TensorLayout::<DynRank>::from_parts(
-        vec![2, usize::MAX, 0].into(),
-        vec![1, 1, 1].into(),
+        vec![2, usize::MAX, 0].into_iter().collect(),
+        vec![1, 1, 1].into_iter().collect(),
         0,
         0,
     )
@@ -432,16 +503,25 @@ fn mutable_layout_accepts_empty_view_before_product_overflow() {
 
 #[test]
 fn mutable_layout_exact_fallback_accepts_small_ambiguous_non_overlapping_layout() {
-    let layout =
-        TensorLayout::<DynRank>::from_parts(vec![3, 2].into(), vec![2, 3].into(), 0, 8).unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![3, 2].into_iter().collect(),
+        vec![2, 3].into_iter().collect(),
+        0,
+        8,
+    )
+    .unwrap();
     layout.validate_mutable_no_overlap().unwrap();
 }
 
 #[test]
 fn mutable_layout_rejects_large_ambiguous_layout_without_exact_fallback() {
-    let layout =
-        TensorLayout::<DynRank>::from_parts(vec![4097, 2].into(), vec![2, 4097].into(), 0, 12_290)
-            .unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![4097, 2].into_iter().collect(),
+        vec![2, 4097].into_iter().collect(),
+        0,
+        12_290,
+    )
+    .unwrap();
     assert!(matches!(
         layout.validate_mutable_no_overlap(),
         Err(ValidationError::OverlappingMutableLayout)
@@ -452,7 +532,12 @@ fn mutable_layout_rejects_large_ambiguous_layout_without_exact_fallback() {
 fn layout_rejects_huge_non_empty_zero_stride_before_product_overflow() {
     let huge_extent = isize::MAX as usize + 1;
     assert!(matches!(
-        TensorLayout::<DynRank>::from_parts(vec![huge_extent, 3].into(), vec![0, 1].into(), 0, 3),
+        TensorLayout::<DynRank>::from_parts(
+            vec![huge_extent, 3].into_iter().collect(),
+            vec![0, 1].into_iter().collect(),
+            0,
+            3
+        ),
         Err(ValidationError::IntegerOverflow)
     ));
 }
@@ -493,16 +578,25 @@ fn owned_view_has_expected_shape_stride_offset() {
 #[test]
 fn reshape_view_requires_compact_col_major_but_allows_nonzero_offset() {
     let data = [10_i32, 11, 12, 13, 14, 15];
-    let compact_nonzero =
-        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![4], vec![1], 1, &data).unwrap();
+    let compact_nonzero = TypedTensorView::<_, DynRank, Host>::from_host_slice(
+        vec![4].as_slice(),
+        vec![1].as_slice(),
+        1,
+        &data,
+    )
+    .unwrap();
     let reshaped = compact_nonzero.reshape_view(&[2, 2]).unwrap();
     assert_eq!(reshaped.shape(), &[2, 2]);
     assert_eq!(reshaped.offset(), 1);
     assert_eq!(reshaped.as_slice().unwrap(), &[11, 12, 13, 14]);
 
-    let non_contiguous =
-        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![2, 2], vec![1, 3], 0, &data)
-            .unwrap();
+    let non_contiguous = TypedTensorView::<_, DynRank, Host>::from_host_slice(
+        vec![2, 2].as_slice(),
+        vec![1, 3].as_slice(),
+        0,
+        &data,
+    )
+    .unwrap();
     let err = non_contiguous.reshape_view(&[4]).unwrap_err();
     assert!(matches!(
         validation(err),
@@ -599,16 +693,21 @@ fn view_bounds_are_validated_eagerly_with_checked_arithmetic() {
     let data = [1_i32, 2, 3];
     assert!(matches!(
         validation(
-            TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![4], vec![1], 0, &data)
-                .unwrap_err()
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(
+                vec![4].as_slice(),
+                vec![1].as_slice(),
+                0,
+                &data
+            )
+            .unwrap_err()
         ),
         ValidationError::ViewOutOfBounds
     ));
     assert!(matches!(
         validation(
             TypedTensorView::<_, DynRank, Host>::from_host_slice(
-                vec![usize::MAX, 2],
-                vec![1, 2],
+                vec![usize::MAX, 2].as_slice(),
+                vec![1, 2].as_slice(),
                 0,
                 &data
             )
@@ -617,15 +716,25 @@ fn view_bounds_are_validated_eagerly_with_checked_arithmetic() {
         ValidationError::IntegerOverflow
     ));
 
-    let reversed =
-        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![3], vec![-1], 2, &data).unwrap();
+    let reversed = TypedTensorView::<_, DynRank, Host>::from_host_slice(
+        vec![3].as_slice(),
+        vec![-1].as_slice(),
+        2,
+        &data,
+    )
+    .unwrap();
     assert_eq!(reversed.shape(), &[3]);
     assert_eq!(reversed.strides(), &[-1]);
     assert_eq!(reversed.offset(), 2);
     assert!(matches!(
         validation(
-            TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![3], vec![-1], 1, &data)
-                .unwrap_err()
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(
+                vec![3].as_slice(),
+                vec![-1].as_slice(),
+                1,
+                &data
+            )
+            .unwrap_err()
         ),
         ValidationError::ViewOutOfBounds
     ));
@@ -634,15 +743,25 @@ fn view_bounds_are_validated_eagerly_with_checked_arithmetic() {
 #[test]
 fn empty_view_offsets_may_point_one_past_the_borrowed_slice() {
     let data = [1_i32, 2, 3];
-    let empty =
-        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![0], vec![-1], 3, &data).unwrap();
+    let empty = TypedTensorView::<_, DynRank, Host>::from_host_slice(
+        vec![0].as_slice(),
+        vec![-1].as_slice(),
+        3,
+        &data,
+    )
+    .unwrap();
     assert!(empty.shape().contains(&0));
     assert_eq!(empty.as_slice().unwrap(), &[] as &[i32]);
 
     assert!(matches!(
         validation(
-            TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![0], vec![1], 4, &data)
-                .unwrap_err()
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(
+                vec![0].as_slice(),
+                vec![1].as_slice(),
+                4,
+                &data
+            )
+            .unwrap_err()
         ),
         ValidationError::ViewOutOfBounds
     ));
@@ -651,20 +770,28 @@ fn empty_view_offsets_may_point_one_past_the_borrowed_slice() {
 #[test]
 fn empty_views_are_contiguous_even_with_degenerate_strides() {
     let data = [1_i32, 2, 3];
-    let empty =
-        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![0, 3], vec![1, 0], 3, &data)
-            .unwrap();
+    let empty = TypedTensorView::<_, DynRank, Host>::from_host_slice(
+        vec![0, 3].as_slice(),
+        vec![1, 0].as_slice(),
+        3,
+        &data,
+    )
+    .unwrap();
     assert!(empty.shape().contains(&0));
     assert_eq!(empty.as_slice().unwrap(), &[] as &[i32]);
     assert_eq!(empty.reshape_view(&[0]).unwrap().shape(), &[0]);
 
-    let layout =
-        TensorLayout::<DynRank>::from_parts(vec![0, 3].into(), vec![99, -7].into(), 3, data.len())
-            .unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![0, 3].into_iter().collect(),
+        vec![99, -7].into_iter().collect(),
+        3,
+        data.len(),
+    )
+    .unwrap();
     assert!(layout.is_compact_col_major().unwrap());
     assert_eq!(
         layout
-            .reshape_view_as::<DynRank>(vec![0], data.len())
+            .reshape_view_as::<DynRank>(vec![0].as_slice(), data.len())
             .unwrap()
             .shape(),
         &[0]
@@ -673,7 +800,13 @@ fn empty_views_are_contiguous_even_with_degenerate_strides() {
 
 #[test]
 fn empty_axis_allows_negative_step_slices() {
-    let layout = TensorLayout::<DynRank>::from_parts(vec![0].into(), vec![1].into(), 0, 0).unwrap();
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![0].into_iter().collect(),
+        vec![1].into_iter().collect(),
+        0,
+        0,
+    )
+    .unwrap();
     let reversed = layout
         .slice_view(
             [SliceSpec {
@@ -692,12 +825,22 @@ fn empty_axis_allows_negative_step_slices() {
 #[test]
 fn as_slice_accepts_nonzero_offset_and_rejects_non_contiguous_views() {
     let data = [1_i32, 2, 3, 4, 5];
-    let contiguous =
-        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![3], vec![1], 1, &data).unwrap();
+    let contiguous = TypedTensorView::<_, DynRank, Host>::from_host_slice(
+        vec![3].as_slice(),
+        vec![1].as_slice(),
+        1,
+        &data,
+    )
+    .unwrap();
     assert_eq!(contiguous.as_slice().unwrap(), &[2, 3, 4]);
 
-    let non_contiguous =
-        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![2], vec![2], 0, &data).unwrap();
+    let non_contiguous = TypedTensorView::<_, DynRank, Host>::from_host_slice(
+        vec![2].as_slice(),
+        vec![2].as_slice(),
+        0,
+        &data,
+    )
+    .unwrap();
     // The canonical view reports a non-contiguous layout with the same variant as
     // `reshape_view_as`.
     assert!(matches!(
@@ -889,8 +1032,13 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
     let data = [1_i32, 2, 3, 4];
     assert!(matches!(
         validation(
-            TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![2], vec![1, 2], 0, &data)
-                .unwrap_err()
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(
+                vec![2].as_slice(),
+                vec![1, 2].as_slice(),
+                0,
+                &data
+            )
+            .unwrap_err()
         ),
         ValidationError::RankMismatch {
             expected: 1,

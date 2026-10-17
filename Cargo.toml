@@ -55,6 +55,7 @@ libm = "0.2.16"
 elem-simd-math = "=0.1.0"
 thiserror = "2"
 smallvec = { version = "1", features = ["union"] }
+tinyvec = { version = "1", features = ["alloc"] }
 rayon = "1"
 criterion = "0.5"
 trybuild = "1"

@@ -1,4 +1,4 @@
-use smallvec::SmallVec;
+use tinyvec::TinyVec;
 
 use crate::{Error, Result, ValidationError};
 
@@ -36,18 +36,18 @@ fn invalid_dot_general_config(message: impl Into<String>) -> Error {
 /// use tenferro_tensor::DotGeneralConfig;
 ///
 /// let config = DotGeneralConfig {
-///     lhs_contracting_dims: [1].as_slice().into(),
-///     rhs_contracting_dims: [0].as_slice().into(),
-///     lhs_batch_dims: [].as_slice().into(),
-///     rhs_batch_dims: [].as_slice().into(),
+///     lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+///     rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+///     lhs_batch_dims: [].as_slice().iter().copied().collect(),
+///     rhs_batch_dims: [].as_slice().iter().copied().collect(),
 /// };
 /// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct DotGeneralConfig {
-    pub lhs_contracting_dims: SmallVec<[usize; 4]>,
-    pub rhs_contracting_dims: SmallVec<[usize; 4]>,
-    pub lhs_batch_dims: SmallVec<[usize; 4]>,
-    pub rhs_batch_dims: SmallVec<[usize; 4]>,
+    pub lhs_contracting_dims: TinyVec<[usize; 4]>,
+    pub rhs_contracting_dims: TinyVec<[usize; 4]>,
+    pub lhs_batch_dims: TinyVec<[usize; 4]>,
+    pub rhs_batch_dims: TinyVec<[usize; 4]>,
 }
 
 /// The degenerate algebra a `DotGeneral` actually is when it is not a
@@ -162,10 +162,10 @@ impl DotGeneralConfig {
     /// use tenferro_tensor::DotGeneralConfig;
     ///
     /// let config = DotGeneralConfig {
-    ///     lhs_contracting_dims: [1].as_slice().into(),
-    ///     rhs_contracting_dims: [0].as_slice().into(),
-    ///     lhs_batch_dims: [].as_slice().into(),
-    ///     rhs_batch_dims: [].as_slice().into(),
+    ///     lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+    ///     rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+    ///     lhs_batch_dims: [].as_slice().iter().copied().collect(),
+    ///     rhs_batch_dims: [].as_slice().iter().copied().collect(),
     /// };
     /// config.validate_dims_with_ranks(2, 2).unwrap();
     /// ```

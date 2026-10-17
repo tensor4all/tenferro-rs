@@ -138,13 +138,15 @@ fn exec_instruction_single_output_metadata_stays_inline() {
         input_slots: vec![0],
         output_slots: vec![1],
         dtype: DType::F64,
-        output_shapes: vec![vec![DimExpr::Const(2)]].into(),
-        output_extents: vec![vec![ShapeExtent::exact(DimExpr::Const(2))]].into(),
+        output_shapes: vec![vec![DimExpr::Const(2)]].into_iter().collect(),
+        output_extents: vec![vec![ShapeExtent::exact(DimExpr::Const(2))]]
+            .into_iter()
+            .collect(),
         last_use: vec![true],
     };
 
-    assert!(!instr.output_shapes.spilled());
-    assert!(!instr.output_extents.spilled());
+    assert!(!instr.output_shapes.is_heap());
+    assert!(!instr.output_extents.is_heap());
 }
 
 #[test]
@@ -321,8 +323,8 @@ fn validate_exec_program_rejects_empty_instruction_outputs() {
         input_slots: vec![0],
         output_slots: vec![],
         dtype: DType::F64,
-        output_shapes: Vec::new().into(),
-        output_extents: Vec::new().into(),
+        output_shapes: Vec::new().into_iter().collect(),
+        output_extents: Vec::new().into_iter().collect(),
         last_use: vec![true],
     });
 
@@ -344,8 +346,10 @@ fn validate_exec_program_rejects_terminal_value_instruction_input_arity() {
         input_slots: vec![],
         output_slots: vec![0],
         dtype: DType::F64,
-        output_shapes: vec![vec![DimExpr::Const(1)]].into(),
-        output_extents: vec![vec![ShapeExtent::exact(DimExpr::Const(1))]].into(),
+        output_shapes: vec![vec![DimExpr::Const(1)]].into_iter().collect(),
+        output_extents: vec![vec![ShapeExtent::exact(DimExpr::Const(1))]]
+            .into_iter()
+            .collect(),
         last_use: vec![],
     });
 
@@ -377,12 +381,14 @@ fn validate_exec_program_accepts_symbolic_shape_reference_inputs() {
             input_idx: 1,
             axis: 0,
         }]]
-        .into(),
+        .into_iter()
+        .collect(),
         output_extents: vec![vec![ShapeExtent::exact(DimExpr::InputDim {
             input_idx: 1,
             axis: 0,
         })]]
-        .into(),
+        .into_iter()
+        .collect(),
         last_use: vec![true],
     });
 
@@ -607,10 +613,10 @@ fn non_host_dispatch_cases() -> Vec<ExecOp> {
 
 fn dot_config() -> DotGeneralConfig {
     DotGeneralConfig {
-        lhs_contracting_dims: [0].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
+        lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [].as_slice().iter().copied().collect(),
     }
 }
 
@@ -747,8 +753,8 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
         input_slots: Vec::new(),
         output_slots: Vec::new(),
         dtype: DType::F64,
-        output_shapes: Vec::new().into(),
-        output_extents: Vec::new().into(),
+        output_shapes: Vec::new().into_iter().collect(),
+        output_extents: Vec::new().into_iter().collect(),
         last_use: Vec::new(),
     };
     let operations = vec![PreparedOperationPlan::metadata(

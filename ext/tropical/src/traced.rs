@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use tenferro_einsum::Subscripts;
 use tenferro_runtime::{extension, DType, Error, ErrorPhase, Result, TracedTensor};
-use tenferro_tensor::{ShapeMismatch, ShapeVec, ValidationError};
+use tenferro_tensor::{ShapeMismatch, ValidationError};
 
 use crate::extension::TropicalEinsumOp;
 use crate::TropicalKind;
@@ -493,8 +493,8 @@ fn validate_tropical_einsum_inputs(
                             "tropical_einsum_subscripts",
                             ErrorPhase::GraphBuild,
                             ShapeMismatch::ExpectedActual {
-                                expected: ShapeVec::from_vec(vec![previous]),
-                                actual: ShapeVec::from_vec(vec![extent]),
+                                expected: vec![previous].into_iter().collect(),
+                                actual: vec![extent].into_iter().collect(),
                             }
                             .into(),
                         ));

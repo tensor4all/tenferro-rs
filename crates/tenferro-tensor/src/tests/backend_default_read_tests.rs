@@ -462,8 +462,8 @@ impl TensorStructural for DefaultReadBackend {
             return Err(crate::Error::validation(
                 "copy_read_into",
                 crate::ShapeMismatch::IncompatibleShapes {
-                    lhs: src.shape().to_vec().into(),
-                    rhs: dst.shape().to_vec().into(),
+                    lhs: src.shape().iter().copied().collect(),
+                    rhs: dst.shape().iter().copied().collect(),
                 }
                 .into(),
             ));
@@ -931,10 +931,10 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
         .unwrap();
 
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [0].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
+        lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [].as_slice().iter().copied().collect(),
     };
     backend
         .dot_general_read(
@@ -1177,10 +1177,10 @@ fn contraction_scalar_helpers_cover_supported_and_rejected_dtypes() {
 
 fn vector_contract_config() -> DotGeneralConfig {
     DotGeneralConfig {
-        lhs_contracting_dims: [0].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
+        lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [].as_slice().iter().copied().collect(),
     }
 }
 

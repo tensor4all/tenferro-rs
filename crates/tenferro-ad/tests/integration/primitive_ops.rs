@@ -172,10 +172,10 @@ fn test_dot_general() {
     let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
+        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [].as_slice().iter().copied().collect(),
     };
     let tc = ta.dot_general(&tb, config).unwrap();
     let engine = cpu_runtime();
@@ -264,10 +264,10 @@ fn traced_stack_trailing_axis_and_index_select_feed_batched_dot_general() {
         .dot_general(
             &b,
             DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [2].as_slice().into(),
-                rhs_batch_dims: [2].as_slice().into(),
+                lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+                rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                lhs_batch_dims: [2].as_slice().iter().copied().collect(),
+                rhs_batch_dims: [2].as_slice().iter().copied().collect(),
             },
         )
         .unwrap();

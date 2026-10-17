@@ -1,10 +1,10 @@
 use crate::{
     checked_logical_element_count, checked_product, col_major_strides, validate_permutation,
     DynRank, Rank, Result, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRank,
-    ValidationError,
+    ValidationError, INLINE_RANK,
 };
-use smallvec::SmallVec;
 use std::collections::HashSet;
+use tinyvec::TinyVec;
 
 /// Maximum logical elements for exact mutable-overlap validation.
 ///
@@ -234,8 +234,8 @@ impl<R: TensorRank> TensorLayout<R> {
     /// use tenferro_tensor_core::{DynRank, TensorLayout};
     ///
     /// let layout = TensorLayout::<DynRank>::from_parts(
-    ///     vec![2, 3].into(),
-    ///     vec![1, 2].into(),
+    ///     vec![2, 3].into_iter().collect(),
+    ///     vec![1, 2].into_iter().collect(),
     ///     0,
     ///     6,
     /// )?;
@@ -301,7 +301,7 @@ impl<R: TensorRank> TensorLayout<R> {
     /// ```rust
     /// use tenferro_tensor_core::{DynRank, TensorLayout};
     ///
-    /// let layout = TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 2, 5)?;
+    /// let layout = TensorLayout::<DynRank>::from_parts(vec![3].into_iter().collect(), vec![1].into_iter().collect(), 2, 5)?;
     /// assert_eq!(layout.offset(), 2);
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
@@ -345,7 +345,7 @@ impl<R: TensorRank> TensorLayout<R> {
     /// ```rust
     /// use tenferro_tensor_core::{DynRank, TensorLayout};
     ///
-    /// let layout = TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![-1].into(), 2, 3)?;
+    /// let layout = TensorLayout::<DynRank>::from_parts(vec![3].into_iter().collect(), vec![-1].into_iter().collect(), 2, 3)?;
     /// layout.validate_mutable_no_overlap()?;
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
@@ -374,7 +374,7 @@ impl<R: TensorRank> TensorLayout<R> {
             .zip(self.strides())
             .filter(|&(&extent, _)| extent > 1)
             .map(|(&extent, &stride)| (extent, stride.unsigned_abs()))
-            .collect::<SmallVec<[(usize, usize); 8]>>();
+            .collect::<TinyVec<[(usize, usize); INLINE_RANK]>>();
         axes.sort_by_key(|&(_, stride)| stride);
 
         let mut span = 0usize;

@@ -170,10 +170,10 @@ fn try_build_binary_dot_plan_with_order(
         return None;
     }
 
-    let mut lhs_contracting_dims = smallvec::SmallVec::<[usize; 4]>::new();
-    let mut rhs_contracting_dims = smallvec::SmallVec::<[usize; 4]>::new();
-    let mut lhs_batch_dims = smallvec::SmallVec::<[usize; 4]>::new();
-    let mut rhs_batch_dims = smallvec::SmallVec::<[usize; 4]>::new();
+    let mut lhs_contracting_dims = tinyvec::TinyVec::<[usize; 4]>::new();
+    let mut rhs_contracting_dims = tinyvec::TinyVec::<[usize; 4]>::new();
+    let mut lhs_batch_dims = tinyvec::TinyVec::<[usize; 4]>::new();
+    let mut rhs_batch_dims = tinyvec::TinyVec::<[usize; 4]>::new();
     let mut lhs_free_labels = Vec::new();
     let mut rhs_free_labels = Vec::new();
     let mut batch_labels = Vec::new();

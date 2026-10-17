@@ -249,8 +249,8 @@ fn output_shape_matches(
     Err(Error::validation(
         OP,
         ShapeMismatch::ExpectedActual {
-            expected: expected_output_shape(lhs, rhs, axes).into(),
-            actual: output.shape().to_vec().into(),
+            expected: expected_output_shape(lhs, rhs, axes).into_iter().collect(),
+            actual: output.shape().iter().copied().collect(),
         }
         .into(),
     ))

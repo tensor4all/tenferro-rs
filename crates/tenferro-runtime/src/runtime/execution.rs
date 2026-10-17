@@ -17,6 +17,7 @@ use tenferro_tensor::{
     AllocationGroup, BackendSession, DType, DescriptorSlot, GroupError, MemoryKind, Tensor,
     TensorBackend, TensorRead, TensorValue, TensorView,
 };
+use tinyvec::TinyVec;
 
 use crate::error::ErrorPhase;
 use crate::exec::{ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch};
@@ -34,9 +35,12 @@ use crate::runtime::{
 };
 use crate::{Error, Result};
 
+// `TensorRead` has no `Default`, so `tinyvec::Array` cannot hold it inline.
+// Keep the short input-read list in a `SmallVec`, which does not require
+// `Default` and stays inline for the common case.
 type RuntimeInputReads<'a> = SmallVec<[TensorRead<'a>; 8]>;
-type RuntimeInputShapes<'a> = SmallVec<[&'a [usize]; 8]>;
-type RuntimeShapeScratch = SmallVec<[usize; 8]>;
+type RuntimeInputShapes<'a> = TinyVec<[&'a [usize]; 8]>;
+type RuntimeShapeScratch = TinyVec<[usize; 8]>;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum RuntimeOutputMode {
@@ -2802,6 +2806,7 @@ impl ScheduledEventDomains {
         node: &ScheduledNode,
         destination: super::EventDomainId,
     ) -> Result<SmallVec<[Arc<dyn EventToken>; 4]>> {
+        // `Arc<dyn EventToken>` has no `Default`; `tinyvec::Array` cannot hold it.
         let mut admitted = SmallVec::with_capacity(node.dependencies().len());
         for dependency in node.dependencies() {
             let dependency_completion =
@@ -4051,8 +4056,9 @@ mod tests {
                     input_idx: 0,
                     axis: 0,
                 }]]
-                .into(),
-                output_extents: vec![vec![]].into(),
+                .into_iter()
+                .collect(),
+                output_extents: vec![vec![]].into_iter().collect(),
                 last_use: vec![false],
             }],
             input_slots: vec![0],
@@ -4077,8 +4083,8 @@ mod tests {
                     input_slots: vec![0],
                     output_slots: vec![1],
                     dtype: DType::F64,
-                    output_shapes: vec![output_shape()].into(),
-                    output_extents: vec![vec![]].into(),
+                    output_shapes: vec![output_shape()].into_iter().collect(),
+                    output_extents: vec![vec![]].into_iter().collect(),
                     last_use: vec![false],
                 },
                 ExecInstruction {
@@ -4087,8 +4093,8 @@ mod tests {
                     input_slots: vec![1],
                     output_slots: vec![2],
                     dtype: DType::F64,
-                    output_shapes: vec![output_shape()].into(),
-                    output_extents: vec![vec![]].into(),
+                    output_shapes: vec![output_shape()].into_iter().collect(),
+                    output_extents: vec![vec![]].into_iter().collect(),
                     last_use: vec![false],
                 },
             ],
@@ -4111,8 +4117,9 @@ mod tests {
                     input_idx: 0,
                     axis: 0,
                 }]]
-                .into(),
-                output_extents: vec![vec![]].into(),
+                .into_iter()
+                .collect(),
+                output_extents: vec![vec![]].into_iter().collect(),
                 last_use: vec![false],
             }],
             input_slots: vec![0],

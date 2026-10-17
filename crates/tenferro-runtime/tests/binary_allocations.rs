@@ -240,10 +240,10 @@ fn canonical_fallback_contraction_does_not_copy_operands() {
     let b =
         Tensor::from_vec_col_major([N, N], (0..N * N).map(|i| (i % 7) as f64).collect()).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1].into(),
-        rhs_contracting_dims: vec![0].into(),
-        lhs_batch_dims: vec![].into(),
-        rhs_batch_dims: vec![].into(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend = CpuBackend::with_threads(1).unwrap();
     backend

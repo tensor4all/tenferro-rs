@@ -10,10 +10,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::SliceConfig;
 use crate::error::ReinterpretError;
-use smallvec::SmallVec;
 pub use tenferro_tensor_core::{DType, DynRank, Rank, TensorLayout, TensorRank};
 use tenferro_tensor_core::{ShapeVec, StrideVec};
 use tenferro_tensor_core::{SliceSpec as CoreSliceSpec, ValidationError};
+use tinyvec::TinyVec;
 
 use crate::storage::{
     AllocationGroup, AllocationSlot, BackendAllocation, DescriptorSlot, GroupError, GroupReadView,
@@ -30,12 +30,16 @@ mod tests;
 pub use col_major::{ColMajorView, ColMajorViewMut};
 pub use strided_view::StridedSliceSpec;
 
-fn shape_vec(shape: &[usize]) -> ShapeVec {
+pub(crate) fn shape_vec(shape: &[usize]) -> ShapeVec {
     shape.iter().copied().collect()
 }
 
-fn stride_vec(strides: &[isize]) -> StrideVec {
+pub(crate) fn stride_vec(strides: &[isize]) -> StrideVec {
     strides.iter().copied().collect()
+}
+
+pub(crate) fn shape_vec_zeros(len: usize) -> ShapeVec {
+    std::iter::repeat_n(0, len).collect()
 }
 
 fn representation_pair_error(
@@ -1253,7 +1257,7 @@ fn row_major_reorder<T: Clone, R: TensorRank>(
     tenferro_tensor_core::col_major_strides(shape.as_ref())
         .map_err(|err| tensor_layout_error(op, err))?;
     try_checked_shape_len(shape.as_ref(), data.len(), op)?;
-    let mut row_strides = ShapeVec::from_elem(0, shape.as_ref().len());
+    let mut row_strides = shape_vec_zeros(shape.as_ref().len());
     let mut stride = 1usize;
     for axis in (0..row_strides.len()).rev() {
         row_strides[axis] = stride;
@@ -1261,7 +1265,7 @@ fn row_major_reorder<T: Clone, R: TensorRank>(
             .checked_mul(shape.as_ref()[axis])
             .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
     }
-    let mut coordinates = ShapeVec::from_elem(0, row_strides.len());
+    let mut coordinates = shape_vec_zeros(row_strides.len());
     let mut source_offset = 0usize;
     let mut reordered = Vec::with_capacity(data.len());
     for _ in 0..data.len() {
@@ -2066,9 +2070,9 @@ fn group_physical_layout<R: TensorRank>(core: &OwnedTensorGroup<R>) -> TensorLay
         .group
         .descriptor_layout(core.slot)
         .unwrap_or_else(|| unreachable!("a live group carries its descriptor layout"));
-    let shape = R::shape_from_vec(descriptor.shape().to_vec().into())
+    let shape = R::shape_from_vec(shape_vec(descriptor.shape()))
         .unwrap_or_else(|err| unreachable!("validated descriptor shape: {err:?}"));
-    let strides = R::strides_from_vec(descriptor.strides().to_vec().into())
+    let strides = R::strides_from_vec(stride_vec(descriptor.strides()))
         .unwrap_or_else(|err| unreachable!("validated descriptor strides: {err:?}"));
     let buffer_len = core
         .group
@@ -2997,7 +3001,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R, Host> {
     ///
     /// let data = [1_i32, 2, 3, 4];
     /// let view: TypedTensorView<'_, i32, DynRank, Host> =
-    ///     TypedTensorView::from_host_slice(vec![2, 2], vec![1, 2], 0, &data)?;
+    ///     TypedTensorView::from_host_slice(vec![2, 2].as_slice(), vec![1, 2].as_slice(), 0, &data)?;
     /// assert_eq!(view.as_host_slice(), &[1, 2, 3, 4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -3039,7 +3043,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R, Host> {
     ///
     /// let data = [1_i32, 2];
     /// let view: TypedTensorView<'_, i32, DynRank, Host> =
-    ///     TypedTensorView::from_host_slice(vec![2], vec![1], 0, &data)?;
+    ///     TypedTensorView::from_host_slice(vec![2].as_slice(), vec![1].as_slice(), 0, &data)?;
     /// assert_eq!(view.as_host_slice(), &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -3616,7 +3620,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
         T: Clone,
     {
         let data = self.host_storage()?;
-        let mut coordinates = ShapeVec::from_elem(0, self.shape().len());
+        let mut coordinates = shape_vec_zeros(self.shape().len());
         let element_count = self.n_elements();
         let mut copied = Vec::with_capacity(element_count);
         for _ in 0..element_count {
@@ -4217,7 +4221,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Host> {
     ///
     /// let mut data = [1_i32, 2];
     /// let mut view: TypedTensorViewMut<'_, i32, DynRank, Host> =
-    ///     TypedTensorViewMut::from_host_slice(vec![2], vec![1], 0, &mut data)?;
+    ///     TypedTensorViewMut::from_host_slice(vec![2].as_slice(), vec![1].as_slice(), 0, &mut data)?;
     /// view.slice_view(&[tenferro_tensor::StridedSliceSpec::all()])?;
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -4264,7 +4268,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Host> {
     ///
     /// let mut data = [1_i32, 2];
     /// let mut view: TypedTensorViewMut<'_, i32, DynRank, Host> =
-    ///     TypedTensorViewMut::from_host_slice(vec![2], vec![1], 0, &mut data)?;
+    ///     TypedTensorViewMut::from_host_slice(vec![2].as_slice(), vec![1].as_slice(), 0, &mut data)?;
     /// view.as_host_slice_mut()[0] = 5;
     /// assert_eq!(data, [5, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -6376,8 +6380,8 @@ impl TensorValue {
         offset: isize,
     ) -> crate::Result<Self> {
         let layout = TensorLayout::from_parts(
-            shape.into(),
-            strides.into(),
+            shape_vec(&shape),
+            stride_vec(&strides),
             offset,
             tensor_buffer_len(&tensor),
         )
@@ -6704,7 +6708,7 @@ impl TensorValue {
         }
         // The per-axis specs stay inline: a metadata-only slice must not
         // allocate its own scratch at rank <= 8 (#2040).
-        let mut specs = SmallVec::<[CoreSliceSpec; 8]>::with_capacity(self.shape().len());
+        let mut specs = TinyVec::<[CoreSliceSpec; 8]>::with_capacity(self.shape().len());
         for (((&start, &limit), &stride), &axis_len) in config
             .starts
             .iter()
@@ -6809,7 +6813,7 @@ fn duplicate_backing_storage(tensor: &Tensor) -> crate::Result<Tensor> {
         let root = tensor.as_view().host_storage()?.to_vec();
         let op = "TensorValue::duplicate";
         let (group, slot) =
-            AllocationGroup::from_host_vec::<T, DynRank>(ShapeVec::from_slice(&[root.len()]), root)
+            AllocationGroup::from_host_vec::<T, DynRank>(shape_vec(&[root.len()]), root)
                 .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         let group = group
             .update_descriptor_layout(
@@ -6849,8 +6853,8 @@ fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
         // A caller-owned payload carries its own view layout, so strides and offset
         // come from the payload rather than from a compact assumption.
         TensorPayload::External(payload, _) => TensorLayout::<DynRank>::from_parts(
-            tenferro_tensor_core::ShapeVec::from_slice(payload.shape()),
-            tenferro_tensor_core::StrideVec::from_slice(payload.strides()),
+            shape_vec(payload.shape()),
+            stride_vec(payload.strides()),
             payload.offset(),
             payload.payload_element_count(),
         )
@@ -6926,7 +6930,7 @@ fn broadcast_typed_view<'a, T: 'static, R: TensorRank>(
     shape: &[usize],
     dims: &[usize],
 ) -> crate::Result<TypedTensorView<'a, T, R>> {
-    let shape = R::shape_from_vec(ShapeVec::from_slice(shape))
+    let shape = R::shape_from_vec(shape_vec(shape))
         .map_err(|err| tensor_layout_error("TensorRead::broadcast_in_dim_view", err))?;
     let layout = view
         .layout()
@@ -9075,7 +9079,7 @@ fn core_slice_specs(
     slices: &[StridedSliceSpec],
     shape: &[usize],
     op: &'static str,
-) -> crate::Result<SmallVec<[CoreSliceSpec; 8]>> {
+) -> crate::Result<TinyVec<[CoreSliceSpec; 8]>> {
     if slices.len() != shape.len() {
         return Err(crate::Error::validation(
             op,
@@ -9086,7 +9090,7 @@ fn core_slice_specs(
         ));
     }
 
-    let mut specs = SmallVec::<[CoreSliceSpec; 8]>::with_capacity(slices.len());
+    let mut specs = TinyVec::<[CoreSliceSpec; 8]>::with_capacity(slices.len());
     for (slice, &axis_len) in slices.iter().zip(shape) {
         specs.push(core_slice_spec(*slice, axis_len, op)?);
     }
@@ -10198,8 +10202,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             .byte_len()
             .checked_div(size_of::<T>())
             .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
-        let layout = TensorLayout::from_parts(shape.into(), strides.into(), offset, element_len)
-            .map_err(|err| tensor_layout_error(op, err))?;
+        let layout =
+            TensorLayout::from_parts(shape_vec(&shape), stride_vec(&strides), offset, element_len)
+                .map_err(|err| tensor_layout_error(op, err))?;
         Ok(TypedTensorView {
             buffer: TensorStorageRef::Root(allocation),
             root: Some(root),
@@ -10268,8 +10273,13 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                  TypedTensorViewMut host constructors or try_multi_slice_mut",
             ));
         };
-        let layout = TensorLayout::from_parts(shape.into(), strides.into(), offset, buffer.len())
-            .map_err(|err| tensor_layout_error(op, err))?;
+        let layout = TensorLayout::from_parts(
+            shape_vec(&shape),
+            stride_vec(&strides),
+            offset,
+            buffer.len(),
+        )
+        .map_err(|err| tensor_layout_error(op, err))?;
         layout
             .validate_mutable_no_overlap()
             .map_err(|err| tensor_layout_error(op, err))?;
@@ -10317,7 +10327,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     {
         let placement = self.placement().clone();
         let layout = TensorLayout::<R>::compact(
-            R::shape_from_vec(self.shape().to_vec().into())
+            R::shape_from_vec(shape_vec(self.shape()))
                 .unwrap_or_else(|err| unreachable!("validated owned shape: {err:?}")),
         )
         .unwrap_or_else(|err| unreachable!("validated owned shape: {err}"));

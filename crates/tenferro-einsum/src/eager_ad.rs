@@ -668,7 +668,7 @@ fn std_tensor_op_retained_bytes(op: &StdTensorOp) -> usize {
                 &config.rhs_batch_dims,
             ]
             .into_iter()
-            .filter(|axes| axes.spilled())
+            .filter(|axes| axes.is_heap())
             .map(|axes| axes.capacity().saturating_mul(size_of::<usize>())),
         ),
         StdTensorOp::Transpose { perm } => vec_retained_bytes(perm),
@@ -872,8 +872,8 @@ fn infer_eager_output_shape(
                     return Err(Error::validation(
                         "einsum",
                         ShapeMismatch::ExpectedActual {
-                            expected: tenferro_tensor::ShapeVec::from_vec(vec![*existing]),
-                            actual: tenferro_tensor::ShapeVec::from_vec(vec![dim]),
+                            expected: vec![*existing].into_iter().collect(),
+                            actual: vec![dim].into_iter().collect(),
                         }
                         .into(),
                     ));

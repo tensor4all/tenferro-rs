@@ -162,10 +162,10 @@ fn structural_family_matches_the_session_form() {
 #[test]
 fn dot_family_matches_the_session_form() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [2].as_slice().into(),
-        rhs_batch_dims: [2].as_slice().into(),
+        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [2].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [2].as_slice().iter().copied().collect(),
     };
     let lhs = t(&[2, 3, 2], (0..12).map(f64::from).collect());
     let rhs = t(&[3, 2, 2], (0..12).map(|v| f64::from(v) * 0.5).collect());
@@ -188,10 +188,10 @@ fn dot_family_matches_the_session_form() {
     )
     .unwrap();
     let matrix = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
+        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [].as_slice().iter().copied().collect(),
     };
     in_session(|s| {
         let expected = s

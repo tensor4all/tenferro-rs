@@ -38,7 +38,7 @@ use std::collections::{HashMap, HashSet};
 
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
-use smallvec::SmallVec;
+use tinyvec::TinyVec;
 
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -48,7 +48,7 @@ use crate::planning::tree::ContractionTree;
 use crate::util::map_label_occurrences;
 use crate::{Error, Result};
 
-pub(crate) type AxisVec = SmallVec<[usize; 4]>;
+pub(crate) type AxisVec = TinyVec<[usize; 4]>;
 
 #[derive(Clone, Debug)]
 struct LabeledVal {

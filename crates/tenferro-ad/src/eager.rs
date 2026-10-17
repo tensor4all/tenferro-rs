@@ -2517,10 +2517,10 @@ impl EagerSession<'_> {
     ///     let lhs = session.variable_from(Tensor::from_vec_col_major(vec![1, 2], vec![2.0_f64, 3.0])?)?;
     ///     let rhs = session.constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 5.0])?)?;
     ///     session.dot_general(&lhs, &rhs, DotGeneralConfig {
-    ///         lhs_contracting_dims: [1].as_slice().into(),
-    ///         rhs_contracting_dims: [0].as_slice().into(),
-    ///         lhs_batch_dims: [].as_slice().into(),
-    ///         rhs_batch_dims: [].as_slice().into(),
+    ///         lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+    ///         rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+    ///         lhs_batch_dims: [].as_slice().iter().copied().collect(),
+    ///         rhs_batch_dims: [].as_slice().iter().copied().collect(),
     ///     })
     /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[23.0]);
@@ -2639,10 +2639,10 @@ impl EagerSession<'_> {
             lhs,
             rhs,
             DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
+                lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+                rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                lhs_batch_dims: [].as_slice().iter().copied().collect(),
+                rhs_batch_dims: [].as_slice().iter().copied().collect(),
             },
         )
     }
@@ -2661,10 +2661,10 @@ impl EagerSession<'_> {
     ///     let lhs = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64])?)?;
     ///     let rhs = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64])?)?;
     ///     session.dot_general_with_conj(&lhs, &rhs, DotGeneralConfig {
-    ///         lhs_contracting_dims: [1].as_slice().into(),
-    ///         rhs_contracting_dims: [0].as_slice().into(),
-    ///         lhs_batch_dims: [].as_slice().into(),
-    ///         rhs_batch_dims: [].as_slice().into(),
+    ///         lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+    ///         rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+    ///         lhs_batch_dims: [].as_slice().iter().copied().collect(),
+    ///         rhs_batch_dims: [].as_slice().iter().copied().collect(),
     ///     }, true, false)
     /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[6.0]);

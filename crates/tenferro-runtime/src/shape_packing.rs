@@ -5,7 +5,7 @@ use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
-    GatherConfig, ShapeMismatch, ShapeVec, SliceConfig, Tensor, TypedTensor, ValidationError,
+    GatherConfig, ShapeMismatch, SliceConfig, Tensor, TypedTensor, ValidationError,
 };
 
 use crate::checkpoint::CheckpointNode;
@@ -165,8 +165,8 @@ fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
                 op,
                 ErrorPhase::GraphBuild,
                 ShapeMismatch::IncompatibleShapes {
-                    lhs: ShapeVec::from_vec(first.to_vec()),
-                    rhs: ShapeVec::from_vec(shape.to_vec()),
+                    lhs: first.iter().copied().collect(),
+                    rhs: shape.iter().copied().collect(),
                 }
                 .into(),
             ));

@@ -176,15 +176,15 @@ impl NativeStridedCopyPlan {
         }
 
         let source = TensorLayout::<DynRank>::from_parts(
-            dims.to_vec().into(),
-            src_strides.to_vec().into(),
+            dims.iter().copied().collect(),
+            src_strides.iter().copied().collect(),
             src_offset,
             src_allocation_len,
         )
         .map_err(|source| crate::Error::validation(op, source))?;
         let destination = TensorLayout::<DynRank>::from_parts(
-            dims.to_vec().into(),
-            dst_strides.to_vec().into(),
+            dims.iter().copied().collect(),
+            dst_strides.iter().copied().collect(),
             dst_offset,
             dst_allocation_len,
         )

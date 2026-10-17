@@ -19,10 +19,10 @@ fn compact_configs_inline_four_axes_and_spill_larger_lists() {
         assert_eq!(config.rhs_contracting_dims.len(), contracting);
         assert_eq!(config.lhs_batch_dims.len(), batch);
         assert_eq!(config.rhs_batch_dims.len(), batch);
-        assert_eq!(config.lhs_contracting_dims.spilled(), contracting > 4);
-        assert_eq!(config.rhs_contracting_dims.spilled(), contracting > 4);
-        assert_eq!(config.lhs_batch_dims.spilled(), batch > 4);
-        assert_eq!(config.rhs_batch_dims.spilled(), batch > 4);
+        assert_eq!(config.lhs_contracting_dims.is_heap(), contracting > 4);
+        assert_eq!(config.rhs_contracting_dims.is_heap(), contracting > 4);
+        assert_eq!(config.lhs_batch_dims.is_heap(), batch > 4);
+        assert_eq!(config.rhs_batch_dims.is_heap(), batch > 4);
         let labels = [lhs, rhs, output].map(|s| s.bytes().map(u32::from).collect::<Vec<_>>());
         let full =
             try_build_exact_output_binary_dot_plan(&labels[0], &labels[1], &labels[2]).unwrap();
@@ -72,10 +72,10 @@ fn exact_binary_dot_plan_accepts_original_output_order() {
     assert_eq!(
         plan.config,
         DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
+            lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+            rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+            lhs_batch_dims: [].as_slice().iter().copied().collect(),
+            rhs_batch_dims: [].as_slice().iter().copied().collect(),
         }
     );
 }
@@ -93,10 +93,10 @@ fn exact_binary_dot_plan_accepts_swapped_col_major_matmul() {
     assert_eq!(
         plan.config,
         DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
+            lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+            rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+            lhs_batch_dims: [].as_slice().iter().copied().collect(),
+            rhs_batch_dims: [].as_slice().iter().copied().collect(),
         }
     );
 }
@@ -114,10 +114,10 @@ fn exact_binary_dot_plan_accepts_swapped_col_major_batched_matmul() {
     assert_eq!(
         plan.config,
         DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [2].as_slice().into(),
-            rhs_batch_dims: [2].as_slice().into(),
+            lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+            rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+            lhs_batch_dims: [2].as_slice().iter().copied().collect(),
+            rhs_batch_dims: [2].as_slice().iter().copied().collect(),
         }
     );
 }

@@ -55,8 +55,8 @@ pub enum ErrorKind {
 /// use tenferro_tensor_core::{ShapeMismatch, ShapeVec};
 ///
 /// let mismatch = ShapeMismatch::IncompatibleShapes {
-///     lhs: ShapeVec::from_vec(vec![2, 3]),
-///     rhs: ShapeVec::from_vec(vec![2, 4]),
+///     lhs: vec![2, 3].into_iter().collect::<ShapeVec>(),
+///     rhs: vec![2, 4].into_iter().collect::<ShapeVec>(),
 /// };
 /// assert!(mismatch.to_string().contains("incompatible shapes"));
 /// ```
@@ -91,8 +91,8 @@ pub enum ShapeMismatch {
 /// use tenferro_tensor_core::{ShapeMismatch, ShapeVec, ValidationError};
 ///
 /// let error: ValidationError = ShapeMismatch::ExpectedActual {
-///     expected: ShapeVec::from_vec(vec![2, 3]),
-///     actual: ShapeVec::from_vec(vec![6]),
+///     expected: vec![2, 3].into_iter().collect::<ShapeVec>(),
+///     actual: vec![6].into_iter().collect::<ShapeVec>(),
 /// }
 /// .into();
 /// assert!(error.to_string().contains("shape mismatch"));

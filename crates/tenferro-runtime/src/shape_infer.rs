@@ -10,7 +10,7 @@ use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, PadConfig,
-    ShapeMismatch, ShapeVec, SliceConfig, ValidationError,
+    ShapeMismatch, SliceConfig, ValidationError,
 };
 
 use crate::error::ErrorPhase;
@@ -695,8 +695,8 @@ fn broadcast_dim(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
         (_, DimExpr::Const(1)) => Ok(lhs),
         (DimExpr::Const(lhs_value), DimExpr::Const(rhs_value)) => {
             Err(shape_infer_validation(ShapeMismatch::IncompatibleShapes {
-                lhs: ShapeVec::from_vec(vec![*lhs_value]),
-                rhs: ShapeVec::from_vec(vec![*rhs_value]),
+                lhs: vec![*lhs_value].into_iter().collect(),
+                rhs: vec![*rhs_value].into_iter().collect(),
             }))
         }
         _ => Ok(dim_max(lhs, rhs)),
@@ -961,8 +961,8 @@ fn validate_slice_sizes_within_operand(
             && slice_size > dim_size
         {
             return Err(shape_infer_validation(ShapeMismatch::ExpectedActual {
-                expected: ShapeVec::from_vec(vec![*dim_size]),
-                actual: ShapeVec::from_vec(vec![*slice_size]),
+                expected: vec![*dim_size].into_iter().collect(),
+                actual: vec![*slice_size].into_iter().collect(),
             }));
         }
     }

@@ -189,10 +189,10 @@ fn provider_inject_dot_general_uses_registered_blas() {
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
                 &DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().into(),
-                    rhs_contracting_dims: [0].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
+                    lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
                 },
             )
         })
@@ -230,10 +230,10 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
                 &DotGeneralConfig {
-                    lhs_contracting_dims: [0].as_slice().into(),
-                    rhs_contracting_dims: [0].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
+                    lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
                 },
             )
         })
@@ -269,10 +269,10 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
                 &DotGeneralConfig {
-                    lhs_contracting_dims: [0].as_slice().into(),
-                    rhs_contracting_dims: [1].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
+                    lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                    rhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
                 },
             )
         })

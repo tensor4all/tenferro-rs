@@ -20,7 +20,7 @@
 //! ```
 
 use num_complex::{Complex32, Complex64};
-use smallvec::SmallVec;
+use tinyvec::TinyVec;
 
 mod error;
 mod layout;
@@ -35,6 +35,23 @@ pub use rank::{DynRank, IntoRankShape, Rank, TensorRank};
 pub use scalar::{ad_admission, AdAdmissionError, Scalar, ScalarArithmetic, ScalarDomain};
 pub use scalar_set::{promote_in_set, promote_specs, MemberKind, MemberSpec};
 
+/// Maximum rank whose shape/stride metadata stays inline without a heap
+/// allocation.
+///
+/// Mirrors `strided_view::INLINE_RANK`; `tenferro-cpu-basic` carries a
+/// compile-time assertion that the two values agree. At rank `<= INLINE_RANK`
+/// [`ShapeVec`] and [`StrideVec`] keep their elements inline; a higher rank
+/// spills to the heap gracefully.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor_core::INLINE_RANK;
+///
+/// assert_eq!(INLINE_RANK, 8);
+/// ```
+pub const INLINE_RANK: usize = 8;
+
 /// Small tensor shape vector with inline capacity for common dynamic ranks.
 ///
 /// # Examples
@@ -42,10 +59,10 @@ pub use scalar_set::{promote_in_set, promote_specs, MemberKind, MemberSpec};
 /// ```rust
 /// use tenferro_tensor_core::ShapeVec;
 ///
-/// let shape = ShapeVec::from_vec(vec![2, 3]);
+/// let shape: ShapeVec = vec![2, 3].into_iter().collect();
 /// assert_eq!(shape.as_slice(), &[2, 3]);
 /// ```
-pub type ShapeVec = SmallVec<[usize; 8]>;
+pub type ShapeVec = TinyVec<[usize; INLINE_RANK]>;
 
 /// Convert a common shape container into the dynamic owned shape type.
 ///
@@ -72,10 +89,10 @@ where
 /// ```rust
 /// use tenferro_tensor_core::StrideVec;
 ///
-/// let strides = StrideVec::from_vec(vec![1, 2]);
+/// let strides: StrideVec = vec![1, 2].into_iter().collect();
 /// assert_eq!(strides.as_slice(), &[1, 2]);
 /// ```
-pub type StrideVec = SmallVec<[isize; 8]>;
+pub type StrideVec = TinyVec<[isize; INLINE_RANK]>;
 
 /// Result type for tensor data-model operations.
 ///
@@ -292,6 +309,19 @@ pub struct SliceSpec {
     pub start: isize,
     pub end: isize,
     pub step: isize,
+}
+
+// A valid empty slice. `tinyvec`'s storage (`Array::Item: Default`) needs a
+// default value to initialize unused inline slots; unlike a derived default,
+// `step` stays nonzero so the value is a legal `SliceSpec`.
+impl Default for SliceSpec {
+    fn default() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            step: 1,
+        }
+    }
 }
 
 fn checked_product(shape: &[usize]) -> Result<usize> {

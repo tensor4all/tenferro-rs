@@ -25,10 +25,10 @@ fn runtime() -> Runtime {
 
 fn config(lhs_batch: &[usize], rhs_batch: &[usize]) -> DotGeneralConfig {
     DotGeneralConfig {
-        lhs_contracting_dims: [].as_slice().into(),
-        rhs_contracting_dims: [].as_slice().into(),
-        lhs_batch_dims: lhs_batch.into(),
-        rhs_batch_dims: rhs_batch.into(),
+        lhs_contracting_dims: [].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [].as_slice().iter().copied().collect(),
+        lhs_batch_dims: lhs_batch.iter().copied().collect(),
+        rhs_batch_dims: rhs_batch.iter().copied().collect(),
     }
 }
 

@@ -186,8 +186,8 @@ fn descriptor<T: crate::TensorScalar>(
         allocation,
         DescriptorInput::new(
             ByteRange::new(offset, byte_len),
-            shape.into(),
-            strides.into(),
+            shape.iter().copied().collect(),
+            strides.iter().copied().collect(),
             0,
             require_injective,
         ),
@@ -237,8 +237,8 @@ fn construction_retains_checked_metadata_and_rejects_bad_inputs() {
             AllocationSlot::test_raw(u32::MAX),
             DescriptorInput::new(
                 ByteRange::new(0, 4),
-                vec![1].into(),
-                vec![1].into(),
+                vec![1].into_iter().collect(),
+                vec![1].into_iter().collect(),
                 0,
                 true
             ),
@@ -373,8 +373,8 @@ fn split_mut_handles_empty_and_reverse_layouts() {
             allocation,
             DescriptorInput::new(
                 ByteRange::new(0, 12),
-                vec![3].into(),
-                vec![-1].into(),
+                vec![3].into_iter().collect(),
+                vec![-1].into_iter().collect(),
                 2,
                 false,
             ),
@@ -469,8 +469,13 @@ fn checked_group_helpers_report_overflow_without_panicking() {
     let extent = super::super::RootResourceExtent::try_new(key, 0, usize::MAX, 1)
         .expect("maximum non-overflowing root extent");
     let identity = super::super::RootResourceIdentity::try_new(extent).expect("valid identity");
-    let layout = crate::TensorLayout::<DynRank>::from_parts(vec![2].into(), vec![1].into(), 0, 2)
-        .expect("small layout");
+    let layout = crate::TensorLayout::<DynRank>::from_parts(
+        vec![2].into_iter().collect(),
+        vec![1].into_iter().collect(),
+        0,
+        2,
+    )
+    .expect("small layout");
     assert!(matches!(
         super::super::group::test_reachable_envelope(identity.root_span(), layout, usize::MAX),
         Err(GroupError::InvalidDescriptor { .. })
@@ -488,8 +493,13 @@ fn checked_group_helpers_report_overflow_without_panicking() {
     .expect("zero-length maximum-offset extent");
     let end_identity = super::super::RootResourceIdentity::try_new(end_overflow)
         .expect("valid maximum-offset identity");
-    let one = crate::TensorLayout::<DynRank>::from_parts(vec![1].into(), vec![1].into(), 0, 1)
-        .expect("one-element layout");
+    let one = crate::TensorLayout::<DynRank>::from_parts(
+        vec![1].into_iter().collect(),
+        vec![1].into_iter().collect(),
+        0,
+        1,
+    )
+    .expect("one-element layout");
     assert!(matches!(
         super::super::group::test_reachable_envelope(end_identity.root_span(), one, 1),
         Err(GroupError::InvalidDescriptor { .. })
@@ -521,9 +531,11 @@ fn vacant_allocation_entries_are_rejected_without_panicking() {
 
 #[test]
 fn host_group_constructor_retains_typed_layout_and_prepared_access() {
-    let (group, slot) =
-        AllocationGroup::from_host_vec::<i32, DynRank>(vec![2, 2].into(), vec![1, 2, 3, 4])
-            .expect("host group");
+    let (group, slot) = AllocationGroup::from_host_vec::<i32, DynRank>(
+        vec![2, 2].into_iter().collect(),
+        vec![1, 2, 3, 4],
+    )
+    .expect("host group");
     let view = group.view::<i32, DynRank>(slot).expect("read view");
     assert_eq!(view.descriptor().layout().shape(), &[2, 2]);
     let prepared = view.prepare_host_read().expect("prepared read");
@@ -672,8 +684,8 @@ fn descriptor_plan_allocation_count_separates_contiguous_and_strided() {
 
     // Both metadata sets are built outside the counted region, and both fit the
     // inline `SmallVec` capacity, so only the descriptor plan itself is counted.
-    let compact_shape = ShapeVec::from_slice(&[2, 3]);
-    let compact_strides = StrideVec::from_slice(&[1, 2]);
+    let compact_shape = vec![2, 3].into_iter().collect::<ShapeVec>();
+    let compact_strides = vec![1, 2].into_iter().collect::<StrideVec>();
     let compact = count_descriptor_allocations(|| {
         let (checked, _) = validate_descriptor::<f64, DynRank>(
             root,
@@ -687,8 +699,8 @@ fn descriptor_plan_allocation_count_separates_contiguous_and_strided() {
         assert!(matches!(checked.layout(), CheckedLayout::Contiguous { .. }));
     });
 
-    let strided_shape = ShapeVec::from_slice(&[2, 3]);
-    let strided_strides = StrideVec::from_slice(&[1, 3]);
+    let strided_shape = vec![2, 3].into_iter().collect::<ShapeVec>();
+    let strided_strides = vec![1, 3].into_iter().collect::<StrideVec>();
     let strided = count_descriptor_allocations(|| {
         let (checked, _) = validate_descriptor::<f64, DynRank>(
             root,

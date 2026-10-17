@@ -6,10 +6,10 @@ fn integer_dot_is_rejected_without_mutating_output() {
     let lhs = Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![5_i64, 7]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [].as_slice().into(),
-        rhs_contracting_dims: [].as_slice().into(),
-        lhs_batch_dims: [0].as_slice().into(),
-        rhs_batch_dims: [0].as_slice().into(),
+        lhs_contracting_dims: [].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [0].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [0].as_slice().iter().copied().collect(),
     };
     let mut backend = crate::CpuBackend::with_threads(1).unwrap();
     assert!(backend

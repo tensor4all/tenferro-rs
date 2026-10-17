@@ -521,7 +521,7 @@ fn checked_specialization_heap_retained_bytes(
 
 fn input_projection_retained_bytes(projection: &InputSpecializationProjection) -> Option<usize> {
     size_of_val(projection.concrete_dimensions()).checked_add(match projection.layout() {
-        Some(LayoutProjection::ExactStrides(strides)) if strides.spilled() => {
+        Some(LayoutProjection::ExactStrides(strides)) if strides.is_heap() => {
             size_of_val(strides.as_slice())
         }
         _ => 0,

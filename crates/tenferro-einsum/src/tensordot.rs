@@ -80,8 +80,8 @@ pub(crate) fn dot_general_config(
     };
 
     let config = DotGeneralConfig {
-        lhs_contracting_dims: lhs_contracting_dims.into(),
-        rhs_contracting_dims: rhs_contracting_dims.into(),
+        lhs_contracting_dims: lhs_contracting_dims.iter().copied().collect(),
+        rhs_contracting_dims: rhs_contracting_dims.iter().copied().collect(),
         lhs_batch_dims: Default::default(),
         rhs_batch_dims: Default::default(),
     };

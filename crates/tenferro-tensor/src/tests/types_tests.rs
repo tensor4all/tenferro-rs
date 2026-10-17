@@ -170,8 +170,8 @@ fn tensor_error_preserves_shared_validation_source() {
     let err = Error::validation(
         "add",
         ShapeMismatch::IncompatibleShapes {
-            lhs: ShapeVec::from_vec(vec![2]),
-            rhs: ShapeVec::from_vec(vec![3]),
+            lhs: vec![2].into_iter().collect::<ShapeVec>(),
+            rhs: vec![3].into_iter().collect::<ShapeVec>(),
         }
         .into(),
     );
@@ -666,7 +666,7 @@ fn typed_tensor_owned_layout_is_always_compact() {
     let tensor = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![1, 2, 3]).unwrap();
     assert_eq!(
         tensor.layout(),
-        TensorLayout::compact(vec![3].into()).unwrap()
+        TensorLayout::compact(vec![3].into_iter().collect()).unwrap()
     );
 }
 
@@ -691,7 +691,8 @@ fn typed_tensor_backend_buffer_layout_length_mismatch_returns_error() {
 
 #[test]
 fn typed_tensor_static_rank_shape_conversion_reports_rank_mismatch() {
-    let err = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into()).unwrap_err();
+    let err =
+        <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into_iter().collect()).unwrap_err();
 
     assert!(matches!(
         err,

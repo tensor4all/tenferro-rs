@@ -1,9 +1,9 @@
 use computegraph::compile::CompiledProgram;
-use smallvec::SmallVec;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig};
+use tinyvec::TinyVec;
 
 use crate::shape_constraint::{discharge, LocalShapeConstraint, SlotScopedShapeConstraint};
 use crate::shape_infer::{
@@ -329,8 +329,8 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
                 dtype: instruction_dtype,
-                output_shapes: output_shapes.into(),
-                output_extents: output_extents.into(),
+                output_shapes: output_shapes.into_iter().collect(),
+                output_extents: output_extents.into_iter().collect(),
                 last_use: Vec::new(),
             })
         })
@@ -699,7 +699,7 @@ struct ProducerInfo {
 }
 
 type ProducerMap = Vec<Option<ProducerInfo>>;
-type AxisVec = SmallVec<[usize; 4]>;
+type AxisVec = TinyVec<[usize; 4]>;
 
 // ============================================================================
 // Pass 0: ConjSinking
@@ -932,8 +932,8 @@ impl ConjSinkingState<'_> {
             input_slots: vec![slot],
             output_slots: vec![output_slot],
             dtype: meta.dtype,
-            output_shapes: vec![meta.shape].into(),
-            output_extents: vec![meta.extents].into(),
+            output_shapes: vec![meta.shape].into_iter().collect(),
+            output_extents: vec![meta.extents].into_iter().collect(),
             last_use: Vec::new(),
         };
         record_producer(self.producer_by_slot, &instr)?;
@@ -1089,12 +1089,12 @@ fn sort_contracting_dims(config: &mut DotGeneralConfig) {
 
     if consecutive_if_sorted(lhs) && !is_sorted(lhs) {
         let perm = argsort(lhs);
-        config.lhs_contracting_dims = apply_perm(lhs, &perm).into();
-        config.rhs_contracting_dims = apply_perm(rhs, &perm).into();
+        config.lhs_contracting_dims = apply_perm(lhs, &perm).into_iter().collect();
+        config.rhs_contracting_dims = apply_perm(rhs, &perm).into_iter().collect();
     } else if consecutive_if_sorted(rhs) && !is_sorted(rhs) {
         let perm = argsort(rhs);
-        config.lhs_contracting_dims = apply_perm(lhs, &perm).into();
-        config.rhs_contracting_dims = apply_perm(rhs, &perm).into();
+        config.lhs_contracting_dims = apply_perm(lhs, &perm).into_iter().collect();
+        config.rhs_contracting_dims = apply_perm(rhs, &perm).into_iter().collect();
     }
 }
 

@@ -258,7 +258,7 @@ pub fn validate_dot_general_read_into(
             op,
             ShapeMismatch::ExpectedActual {
                 expected: expected.clone(),
-                actual: out.shape().to_vec().into(),
+                actual: out.shape().iter().copied().collect(),
             }
             .into(),
         ));
@@ -824,8 +824,8 @@ fn grouped_gemm_default_config() -> DotGeneralConfig {
     // DotGeneralConfig owns Vec fields, so this rank-2 fallback config follows
     // that API boundary rather than introducing SmallVec locally.
     DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
         lhs_batch_dims: Default::default(),
         rhs_batch_dims: Default::default(),
     }

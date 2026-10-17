@@ -705,7 +705,9 @@ Tests follow implementation ownership.
   `TensorLayout` metadata views may use signed strides and negative slice
   steps when reachable-range validation succeeds; zero step remains invalid.
   Do not implement `PartialEq` for views.
-- `ShapeVec` and `StrideVec` use `SmallVec` with inline rank capacity 8.
+- `ShapeVec` and `StrideVec` use `TinyVec` with inline rank capacity
+  `INLINE_RANK = 8`; `ShapeVec::from_vec` / `StrideVec::from_vec` do not exist,
+  so build them with `collect()` or `From<&[T]>`.
 
 ## GPU Backend Contract
 

@@ -101,10 +101,10 @@ fn shared_scope_is_admission_only_and_reuses_resources_across_operations() {
                     let wrong = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
                     let mut cache = gemm::GemmAnalysisCache::default();
                     let config = DotGeneralConfig {
-                        lhs_contracting_dims: [1].as_slice().into(),
-                        rhs_contracting_dims: [0].as_slice().into(),
-                        lhs_batch_dims: [].as_slice().into(),
-                        rhs_batch_dims: [].as_slice().into(),
+                        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+                        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+                        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+                        rhs_batch_dims: [].as_slice().iter().copied().collect(),
                     };
                     for iteration in 0..16 {
                         assert!(backend

@@ -8,18 +8,18 @@
 //!
 //! Same-shape and same-rank ops are covered at zero. A stride-0 broadcast is
 //! also zero: `strided-fused 0.6.0` builds its plan with inline vectors, so the
-//! `strided-basic` fused-plan scratch this arm used to record is gone.
+//! `strided-basic` fused-plan scratch this arm used to record is gone. The
+//! budgets count *Rust* heap allocations only; provider C allocations
+//! (LAPACK/BLAS scratch) are outside the counting allocator and out of scope
+//! here.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use smallvec::smallvec;
 use tenferro_cpu::{scalar_binary_into, AddOp, CpuBackend};
 use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::backend::dot_general_output_shape;
 use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, DynRank, Host};
-
-/// The `strided-basic` fused-plan scratch a stride-0 operand costs today.
-const BROADCAST_FUSED_PLAN_ALLOCATIONS: usize = 0;
+use tinyvec::tiny_vec;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -86,7 +86,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
                 ($label:literal, $expected:expr, $call:expr) => {{
                     // Warm the output pool so the pooled checkout is a hit, then
                     // measure one public call: only the op's own metadata counts.
-                    for _ in 0..4 {
+                    for _ in 0..16 {
                         drop($call(session).unwrap());
                     }
                     let (out, allocations, bytes) = measure(|| $call(session).unwrap());
@@ -126,13 +126,16 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             budget!("exp rank-2", 0, |s| matrix.exp(s));
             // strided-fused 0.6 stores the fused plan inline, so a broadcast
             // add is now metadata-allocation free like the same-shape arms.
-            budget!(
-                "mul row-into-matrix broadcast",
-                BROADCAST_FUSED_PLAN_ALLOCATIONS,
-                |s| matrix.mul(&row, s)
-            );
-            budget!("add rank-0 scalar", BROADCAST_FUSED_PLAN_ALLOCATIONS, |s| a
-                .add(&scalar, s));
+            budget!("mul row-into-matrix broadcast", 0, |s| matrix.mul(&row, s));
+            budget!("add rank-0 scalar", 0, |s| a.add(&scalar, s));
+            // A rank-4 transpose materializes into a pooled output; the output
+            // and metadata are allocation free, but `strided-perm`'s blocked
+            // permutation planner still takes one small provider scratch
+            // allocation per call at this rank. Pinned as a provider reading
+            // (#2178 item 7); it is not a tenferro metadata allocation.
+            let rank4 =
+                TypedTensor::<f64>::from_vec_col_major(vec![2, 2, 2, 2], vec![1.0; 16]).unwrap();
+            budget!("transpose rank-4", 1, |s| rank4.transpose(&[3, 2, 1, 0], s));
 
             // #2139 item 1: the eager `dot_general` path's own shape and axis
             // validation. Only tenferro's allocations are counted here, so the
@@ -140,10 +143,10 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             // `tcontract` plan builder: neither the four rank-sized `Vec<bool>`
             // duplicate-axis scratches nor the output shape itself reach the heap.
             let config = DotGeneralConfig {
-                lhs_contracting_dims: smallvec![1],
-                rhs_contracting_dims: smallvec![0],
-                lhs_batch_dims: smallvec![],
-                rhs_batch_dims: smallvec![],
+                lhs_contracting_dims: tiny_vec!([usize; 4] => 1),
+                rhs_contracting_dims: tiny_vec!([usize; 4] => 0),
+                lhs_batch_dims: tiny_vec!([usize; 4]),
+                rhs_batch_dims: tiny_vec!([usize; 4]),
             };
             let (shape, allocations, bytes) =
                 measure(|| dot_general_output_shape(&[2, 2], &[2, 2], &config, "matmul").unwrap());
@@ -193,4 +196,44 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             "scalar_binary_into rank {rank} numeric result"
         );
     }
+
+    // The same zero-metadata budget under a two-worker backend, where the
+    // strided kernels take their parallel branch (#2178 item 7). This lives in
+    // the same test as the one-worker arms because the counting allocator is
+    // process-wide: a second test running in parallel would pollute it. Provider
+    // scratch is pooled, so the steady-state counts match the one-thread arms;
+    // C allocations are out of scope.
+    let two_thread_a = TypedTensor::<f64>::from_vec_col_major(vec![2, 8], vec![2.0; 16]).unwrap();
+    let two_thread_b = TypedTensor::<f64>::from_vec_col_major(vec![2, 8], vec![3.0; 16]).unwrap();
+    let mut two_thread_backend = CpuBackend::with_threads(2).unwrap();
+    assert_eq!(two_thread_backend.num_threads(), 2);
+    two_thread_backend
+        .with_backend_session(|session| {
+            let mut budget =
+                |call: &dyn Fn(&mut dyn tenferro_tensor::BackendSession) -> TypedTensor<f64>| {
+                    for _ in 0..16 {
+                        drop(call(session));
+                    }
+                    let (_, allocations, bytes) = measure(|| call(session));
+                    (allocations, bytes)
+                };
+            let (add_allocations, add_bytes) =
+                budget(&|s| two_thread_a.add(&two_thread_b, s).unwrap());
+            eprintln!("2T add: {add_allocations} allocations, {add_bytes} bytes");
+            assert_eq!(add_allocations, 0, "2T add allocated {add_bytes} bytes");
+            // The one-axis reduction compiles a bounded `strided-basic` plan; on
+            // 0.6 it still makes three small provider scratch allocations at
+            // this size. Pinned as a provider reading, not a tenferro allocation.
+            let (reduce_allocations, reduce_bytes) =
+                budget(&|s| two_thread_a.reduce_sum(Some(&[1]), s).unwrap());
+            eprintln!("2T reduce_sum: {reduce_allocations} allocations, {reduce_bytes} bytes");
+            assert_eq!(
+                reduce_allocations, 3,
+                "2T reduce_sum allocated {reduce_bytes} bytes"
+            );
+            let (exp_allocations, exp_bytes) = budget(&|s| two_thread_a.exp(s).unwrap());
+            eprintln!("2T exp: {exp_allocations} allocations, {exp_bytes} bytes");
+            assert_eq!(exp_allocations, 0, "2T exp allocated {exp_bytes} bytes");
+        })
+        .unwrap();
 }

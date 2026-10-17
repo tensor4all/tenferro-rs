@@ -40,6 +40,7 @@ pub(crate) fn admit_event_tokens<'a, T: 'static, R>(
     token_type: &'static str,
     launch: impl FnOnce(&[&'a T]) -> Result<R>,
 ) -> Result<R> {
+    // `&T` has no `Default` impl, so `tinyvec::Array` cannot hold it inline.
     let mut admitted = SmallVec::<[&'a T; 4]>::new();
     for dependency in dependencies {
         admitted.push(admit_event_token::<T>(

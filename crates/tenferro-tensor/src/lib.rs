@@ -73,7 +73,7 @@ pub type Complex64 = Complex<f64>;
 
 pub use tenferro_tensor_core::{
     ErrorKind, IntoRankShape, IntoShapeVec, ShapeMismatch, ShapeVec, SliceSpec, StrideVec,
-    ValidationError, ValidationKind,
+    ValidationError, ValidationKind, INLINE_RANK,
 };
 
 mod default_scalars;

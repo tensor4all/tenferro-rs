@@ -245,10 +245,10 @@ fn raw_session_entry_is_not_a_host_barrier() {
     let rhs = crate::cuda::upload_tensor(&runtime, &tensor_f32(vec![n, n], vec![1.0f32; n * n]))
         .expect("upload rhs");
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
+        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [].as_slice().iter().copied().collect(),
+        rhs_batch_dims: [].as_slice().iter().copied().collect(),
     };
     // Queue several tens of milliseconds of device work.
     let mut queued = Vec::new();

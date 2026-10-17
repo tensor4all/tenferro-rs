@@ -1474,7 +1474,7 @@ impl CudaBackend {
         // retained one.
         let buffer =
             dispatch::alloc_output_bytes(self.runtime(), shape, core::mem::size_of::<T>(), op)?;
-        let shape = R::shape_from_vec(shape.to_vec().into())
+        let shape = R::shape_from_vec(shape.iter().copied().collect())
             .map_err(|err| crate::Error::validation(op, err))?;
         TypedTensor::from_buffer_col_major(
             shape,
