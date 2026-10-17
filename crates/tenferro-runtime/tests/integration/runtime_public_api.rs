@@ -761,9 +761,11 @@ fn prepared_elementwise_regions_are_planned_at_prepare_time() {
 /// by one and still matches the unprepared path, and a run containing a
 /// reduction plans and executes no region at all.
 ///
-/// The CPU engine declines every region while `strided-fused`'s replay is a
-/// scalar interpreter; `tenferro-cpu`'s `SELECTS_FUSED_ELEMENTWISE_REGION` owns
-/// that policy and carries the measurement behind it (#2140 item 3).
+/// The CPU engine declines every region because `strided-fused 0.5.1`'s chunked
+/// replay still falls back to the scalar interpreter for a non-unit-stride
+/// operand and the adapter recompiles per live output; `tenferro-cpu`'s
+/// `SELECTS_FUSED_ELEMENTWISE_REGION` owns that policy and carries the measured
+/// table behind it (#2161).
 #[test]
 fn prepared_elementwise_region_is_declined_by_the_cpu_engine() {
     let runtime = cpu_runtime();

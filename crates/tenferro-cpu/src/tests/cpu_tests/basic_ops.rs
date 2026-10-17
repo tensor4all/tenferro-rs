@@ -905,9 +905,10 @@ fn test_reduce_prod() {
 
 #[test]
 fn test_reduce_prod_matches_a_sequential_product_within_range() {
-    // #2150: the CPU product kernel reassociates across lanes, so what holds today
-    // is the shape where each lane's partial product stays inside the dtype range.
-    // `{1.0, 2.0, 0.5}` repeating is product 1.0 with no lane running away.
+    // The CPU product kernel may reassociate across lanes. `{1.0, 2.0, 0.5}`
+    // repeating has product 1.0, and with the kernel's 8/16-lane splits (coprime
+    // with the period 3) every lane cycles through all three values, so no lane
+    // runs away. This is not safe under an arbitrary grouping.
     let values: Vec<f32> = (0..1_000_000usize)
         .map(|i| match i % 3 {
             0 => 1.0,
@@ -936,40 +937,17 @@ fn test_reduce_prod_matches_a_sequential_product_within_range() {
     assert!(r.as_slice::<f32>().unwrap()[0].is_infinite());
 }
 
-/// #2150: `reduce_prod` must not turn a representable product into `NaN`.
-///
-/// The product kernel used to fold each run into lane-vectors and multiply those
-/// partials at the end, so an alternating `2.0, 0.5` axis gave one lane `inf` and
-/// another `0`, and the combine was `inf * 0 = NaN` while the sequential product is
-/// exactly `1.0`. `strided-basic 0.5.2` (strided-rs#302) reduces a product in
-/// source order with one accumulator through every run, which is why this test no
-/// longer carries an `ignore`.
+/// Reassociation is allowed, so no route is compared against a source-order
+/// product bit-for-bit. Every representable case uses near-one alternating
+/// factors, whose partial products stay inside the dtype range under any
+/// lane/chunk/thread split, and is checked against a sequential fold within a
+/// relative tolerance. A fold of `n` multiplies carries at most about `n`
+/// roundings, so two association orders differ by at most about `n * eps`
+/// relative; `2 * n * eps` covers that while still rejecting a wrong value such
+/// as `1.0` for the 40,000-factor f32 fixture (reference about 0.981). The
+/// tolerance scales with the finite reference only, so an `inf` result fails.
 #[test]
-fn test_reduce_prod_survives_lane_reassociation() {
-    for len in [1000usize, 1_000_000] {
-        let values: Vec<f32> = (0..len)
-            .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
-            .collect();
-        let t =
-            Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![len], values).unwrap());
-        let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
-        assert_eq!(r.as_slice::<f32>().unwrap(), &[1.0], "f32 len {len}");
-    }
-
-    let len = 1_000_000usize;
-    let values: Vec<f64> = (0..len)
-        .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
-        .collect();
-    let t = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![len], values).unwrap());
-    let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
-    assert_eq!(r.as_slice::<f64>().unwrap(), &[1.0], "f64 len {len}");
-}
-
-/// #2150: the engine's product reduction follows source order on every route,
-/// so a representable product is not lost to a lane that ran away. Every case is
-/// compared against a sequential fold of the same factors.
-#[test]
-fn test_reduce_prod_follows_source_order_across_routes() {
+fn test_reduce_prod_matches_sequential_across_routes() {
     use tenferro_tensor::StridedSliceSpec;
 
     fn tensor_of<T: tenferro_tensor::TensorScalar>(shape: Vec<usize>, values: Vec<T>) -> Tensor {
@@ -1007,64 +985,130 @@ fn test_reduce_prod_follows_source_order_across_routes() {
             .unwrap()
             .to_vec()
     }
+    fn fold_f64(values: impl IntoIterator<Item = f64>) -> f64 {
+        values.into_iter().fold(1.0_f64, |acc, value| acc * value)
+    }
+    fn fold_f32(values: impl IntoIterator<Item = f32>) -> f32 {
+        values.into_iter().fold(1.0_f32, |acc, value| acc * value)
+    }
+    fn close_f64(got: f64, reference: f64, n: usize) -> bool {
+        let tol = (n as f64) * f64::EPSILON * 2.0;
+        got.is_finite() && (got - reference).abs() <= tol * reference.abs().max(1.0)
+    }
+    fn close_f32(got: f32, reference: f32, n: usize) -> bool {
+        let tol = (n as f32) * f32::EPSILON * 2.0;
+        got.is_finite() && (got - reference).abs() <= tol * reference.abs().max(1.0)
+    }
+    // Alternating factors just above and below one: every partial product stays
+    // within `exp(0.001 * len)` of one, far inside the f32 range even when a lane
+    // or a parallel chunk collects only one of the two values.
+    fn near_one_f64(len: usize) -> Vec<f64> {
+        (0..len)
+            .map(|i| if i % 2 == 0 { 1.001 } else { 0.999 })
+            .collect()
+    }
+    fn near_one_f32(len: usize) -> Vec<f32> {
+        (0..len)
+            .map(|i| if i % 2 == 0 { 1.001 } else { 0.999 })
+            .collect()
+    }
 
-    // The alternating factors whose true product is exactly 1.0 while a lane's
-    // partial product can run away.
-    let alternating_f64: Vec<f64> = (0..1000)
-        .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
-        .collect();
-    let alternating_f32: Vec<f32> = (0..1000)
-        .map(|i| if i % 2 == 0 { 2.0 } else { 0.5 })
-        .collect();
+    // Contiguous one-axis reduction, f64 and f32, one and four threads. `len =
+    // 40000` exceeds MINTHREADLENGTH (2^15), so the full reduction really splits
+    // across parallel workers.
+    for len in [1000usize, 40000] {
+        let factors = near_one_f64(len);
+        let reference = fold_f64(factors.iter().copied());
+        let t = tensor_of::<f64>(vec![len], factors);
+        for threads in [1, 4] {
+            let got = engine_product::<f64>(&t, &[0], threads);
+            assert!(
+                close_f64(got[0], reference, len),
+                "f64 len {len} threads {threads}: {} vs {reference}",
+                got[0]
+            );
+        }
 
-    // A strided read of those factors: step 2 behind a zero-padded root.
-    let padded: Vec<f64> = alternating_f64.iter().flat_map(|v| [*v, 0.0]).collect();
+        let factors = near_one_f32(len);
+        let reference = fold_f32(factors.iter().copied());
+        let t = tensor_of::<f32>(vec![len], factors);
+        for threads in [1, 4] {
+            let got = engine_product::<f32>(&t, &[0], threads);
+            assert!(
+                close_f32(got[0], reference, len),
+                "f32 len {len} threads {threads}: {} vs {reference}",
+                got[0]
+            );
+        }
+    }
+
+    // A strided read: step 2 behind a zero-padded root.
+    let factors = near_one_f64(1000);
+    let padded: Vec<f64> = factors.iter().flat_map(|v| [*v, 0.0]).collect();
     let root = tensor_of::<f64>(vec![padded.len()], padded);
     let typed = root.as_typed::<f64>().unwrap();
-    let strided = typed
-        .as_view()
-        .slice_axis_view(0, StridedSliceSpec::new(0, Some(2 * 1000), 2))
-        .unwrap();
-    assert_eq!(engine_product_view(strided, &[0], 1), vec![1.0]);
-    let strided = typed
-        .as_view()
-        .slice_axis_view(0, StridedSliceSpec::new(0, Some(2 * 1000), 2))
-        .unwrap();
-    assert_eq!(engine_product_view(strided, &[0], 4), vec![1.0]);
+    let reference = fold_f64(factors.iter().copied());
+    for threads in [1, 4] {
+        let strided = typed
+            .as_view()
+            .slice_axis_view(0, StridedSliceSpec::new(0, Some(2 * 1000), 2))
+            .unwrap();
+        let got = engine_product_view(strided, &[0], threads);
+        assert!(
+            close_f64(got[0], reference, 1000),
+            "strided threads {threads}: {} vs {reference}",
+            got[0]
+        );
+    }
 
-    // Contiguous, one axis, serial and multi-threaded.
-    let contiguous = tensor_of::<f64>(vec![alternating_f64.len()], alternating_f64.clone());
-    assert_eq!(engine_product::<f64>(&contiguous, &[0], 1), vec![1.0]);
-    assert_eq!(engine_product::<f64>(&contiguous, &[0], 4), vec![1.0]);
-    let contiguous_f32 = tensor_of::<f32>(vec![alternating_f32.len()], alternating_f32.clone());
-    assert_eq!(engine_product::<f32>(&contiguous_f32, &[0], 1), vec![1.0]);
-    assert_eq!(engine_product::<f32>(&contiguous_f32, &[0], 4), vec![1.0]);
-
-    // Batch and multi-axis: [3, 1000] in column-major order, so each of the three
-    // outputs of an axis-1 reduction is the alternating pattern and the full
-    // reduction multiplies the three outputs.
-    // The axis is longer than the kernel's thread-split threshold (2^15), so the
-    // parallel axis route really splits one output over several runs.
+    // Multi-axis: [3, 40000] in column-major order, with `axis_len` above the
+    // kernel's thread-split threshold; the full reduction splits across workers.
     let axis_len = 40_000;
+    let factors = near_one_f64(axis_len);
     let mut batch_values = vec![0.0_f64; 3 * axis_len];
-    for (j, value) in alternating_f64.iter().cycle().take(axis_len).enumerate() {
+    for (j, value) in factors.iter().enumerate() {
         for i in 0..3 {
             batch_values[i + 3 * j] = *value;
         }
     }
     let batch = tensor_of::<f64>(vec![3, axis_len], batch_values);
-    assert_eq!(engine_product::<f64>(&batch, &[1], 1), vec![1.0, 1.0, 1.0]);
-    assert_eq!(engine_product::<f64>(&batch, &[1], 4), vec![1.0, 1.0, 1.0]);
-    // Axis 0 multiplies the three equal copies of each factor, so every output
-    // alternates 8.0 / 0.125 and their own product is again 1.0.
-    let column_products: Vec<f64> = (0..axis_len)
-        .map(|j| if j % 2 == 0 { 8.0 } else { 0.125 })
-        .collect();
-    assert_eq!(engine_product::<f64>(&batch, &[0], 1), column_products);
-    assert_eq!(engine_product::<f64>(&batch, &[0, 1], 1), vec![1.0]);
-    assert_eq!(engine_product::<f64>(&batch, &[0, 1], 4), vec![1.0]);
+    // Axis 1: one factor per output, so reduce the same values three times.
+    let axis1_reference = fold_f64(factors.iter().copied());
+    for threads in [1, 4] {
+        let got = engine_product::<f64>(&batch, &[1], threads);
+        assert_eq!(got.len(), 3);
+        for value in got {
+            assert!(
+                close_f64(value, axis1_reference, axis_len),
+                "batch axis1 threads {threads}: {value} vs {axis1_reference}"
+            );
+        }
+    }
+    // Axis 0: each output is the product of the three copies of one factor.
+    let axis0_reference: Vec<f64> = factors.iter().map(|value| value * value * value).collect();
+    for threads in [1, 4] {
+        let got = engine_product::<f64>(&batch, &[0], threads);
+        assert_eq!(got.len(), axis0_reference.len());
+        for (value, reference) in got.iter().zip(&axis0_reference) {
+            assert!(
+                close_f64(*value, *reference, 3),
+                "batch axis0 threads {threads}: {value} vs {reference}"
+            );
+        }
+    }
+    // Both axes: the sequential fold over the whole buffer.
+    let both_reference = fold_f64(batch.as_slice::<f64>().unwrap().iter().copied());
+    for threads in [1, 4] {
+        let got = engine_product::<f64>(&batch, &[0, 1], threads);
+        assert!(
+            close_f64(got[0], both_reference, 3 * axis_len),
+            "batch both threads {threads}: {} vs {both_reference}",
+            got[0]
+        );
+    }
 
-    // Zero, sign and genuine range exits.
+    // Zero, sign and genuine range exits. These fixtures do not mix an overflow
+    // with a zero, so the result is independent of reassociation.
     let zero = tensor_of::<f64>(vec![3], vec![2f64.powi(600), 0.0, 2f64.powi(-600)]);
     assert_eq!(engine_product::<f64>(&zero, &[0], 1), vec![0.0]);
     let signs = tensor_of::<f64>(vec![2], vec![-2.0, 3.0]);

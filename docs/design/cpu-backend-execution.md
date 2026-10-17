@@ -121,23 +121,32 @@ session to execute it as one command. **The CPU session declines every such
 region** (`SELECTS_FUSED_ELEMENTWISE_REGION`), and the runtime dispatches the
 region's instructions one by one.
 
-It declines because the CPU replay is a scalar interpreter. `strided-fused`
-walks the region's register machine with `interpret_inner_loop_uninit`: one
-iteration per element, every operand and every intermediate addressed through
-runtime strides. That costs 9-35 ns per element per instruction, against 0.1-3
-ns for the same instruction dispatched on its own through the vector kernels
-`tenferro-cpu` reaches. On a `1024x64` `f32` chain of ten instructions, one
-worker thread, release, a fused region costs 23.4 ms against 1.68 ms for the
-declined path when the chain is ten `tanh`, and 6.0 ms against 0.11 ms when it is
-ten multiplies.
+It declines because `strided-fused 0.5.1`'s vectorized chunked replay only covers
+contiguous blocks, and because the CPU adapter compiles a separate plan per live
+output.
 
-A region's whole upside is the traffic of one intermediate, about 17 us at that
-size. No element count closes a 13x to 70x gap, so the decline is not a
-threshold. `tenferro-cpu-fused` keeps the executor, implemented and covered by
-its own tests, so re-enabling CPU fusion is one constant once the replay is
-vectorized ([#2140](https://github.com/tensor4all/tenferro-rs/issues/2140) item
-3 owns that work). The GPU backend reaches the same runtime machinery with its
-own `#[cube]` code generator and is unaffected.
+The chunked replay runs the region's register machine over chunk-sized buffers
+with the `elem-simd-math` slice kernels, but only when every operand is
+unit-stride along the block's contiguous axis; any non-unit stride, in
+particular the `0` of a broadcast, falls back to the old
+`interpret_inner_loop_uninit`, one scalar iteration per element with runtime
+stride addressing. Separately, `tenferro-cpu-fused` builds one `strided-fused`
+plan per live output (`single_output_strided_fused_plan`, `lib.rs`), so a region
+with several live outputs replays its whole instruction list once per output.
+
+The measurement (2026-10-16, `AMD EPYC 7713P`, 1T and 4T, predeclared rule
+"enable only if fused/declined `<= 1.05` in every case") is recorded in
+[`docs/worklogs/perf-cpu-fusion-declined-2140.md`](../worklogs/perf-cpu-fusion-declined-2140.md),
+section "Reassessment after `strided-fused 0.5.1` (#2161)": fusion wins
+0.34-0.93 on chains, loses 16x on a contiguity-axis broadcast and 1.5-1.9x on
+two live outputs.
+
+`tenferro-cpu-fused` keeps the executor, implemented and covered by its own
+tests, so re-enabling CPU fusion is one constant once upstream vectorizes the
+non-contiguous broadcast block and the adapter stops recompiling per output
+([#2161](https://github.com/tensor4all/tenferro-rs/issues/2161)). The GPU backend
+reaches the same runtime machinery with its own `#[cube]` code generator and is
+unaffected.
 
 This is why `CpuBackend::max_fused_region_inputs` still reports the executor's
 four-input limit even though no region is ever selected: the limit describes the

@@ -572,8 +572,10 @@ fn test_broadcast_multiply_fusion_computes_outer_product_without_materialized_in
 
 #[test]
 fn test_cpu_elementwise_fusion_executes_add_mul_plan() {
-    // The session declines every region while `strided-fused`'s replay is a scalar
-    // interpreter (#2140 item 3), so this drives the executor directly.
+    // The session declines every region because `strided-fused 0.5.1`'s chunked
+    // replay still falls back to the scalar interpreter for a non-unit-stride
+    // operand and the adapter recompiles per live output (#2161), so this drives
+    // the executor directly.
     let n = 65_536usize;
     let lhs_data = (0..n).map(|i| i as f64 + 1.0).collect::<Vec<_>>();
     let rhs_data = (0..n).map(|i| (i as f64 + 1.0) * 10.0).collect::<Vec<_>>();

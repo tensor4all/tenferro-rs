@@ -3054,14 +3054,16 @@ pub trait TensorReduction {
     ///
     /// # Overflow policy
     ///
-    /// The product is reassociated across reduction lanes by the pinned
-    /// `strided-kernel` product kernel, so a partial product that leaves the
-    /// dtype's range makes the result `inf` or `NaN` even when the mathematical
-    /// product is representable (#2150). A `NaN` result therefore does not mean an
-    /// input was `NaN`: for `f32` an alternating `2.0, 0.5` axis of length 1000
-    /// returns `NaN` where the sequential product is exactly `1.0`. The faithful
-    /// sequential product is being fixed in the `strided-rs` kernel that this
-    /// crate pins.
+    /// Backends may reassociate a floating-point or complex product across
+    /// lanes, chunks and threads, and the CPU and CUDA kernels do so
+    /// differently. Rounding and range behaviour therefore depend on the
+    /// backend, the layout and the thread count: a partial product can overflow
+    /// to `inf` or underflow to `0`, and combining the partials can then give
+    /// `inf`, `0` or `NaN` even where the sequential product is representable.
+    /// The `#2150` alternating `2.0, 0.5` axis is one example: an `f32`
+    /// sequential product is exactly `1.0`, while a reassociated one may return
+    /// `NaN`. This is the same trade-off `torch.prod` makes. Integer products
+    /// are exact and wrap on overflow.
     ///
     /// # Examples
     ///
