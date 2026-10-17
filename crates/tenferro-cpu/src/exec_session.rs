@@ -595,12 +595,6 @@ impl TensorAnalytic for CpuExecSession<'_> {
     delegate_with_pool!(erf_read(input: TensorRead<'_>) => analytic::erf_read_with_pool);
 }
 
-/// Owned `reshape_read` element count at or below which the copy keeps the
-/// serial host path. Mirrors `strided-kernel`'s `MINTHREADLENGTH`, so a copy the
-/// strided scheduler would keep sequential also skips the engine entry and does
-/// not take a pool buffer.
-const SERIAL_RESHAPE_MAX_ELEMS: usize = strided_kernel::execution::MINTHREADLENGTH;
-
 impl TensorStructural for CpuExecSession<'_> {
     // Structural
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -642,17 +636,12 @@ impl TensorStructural for CpuExecSession<'_> {
             // above the strided scheduler's parallel threshold. Such a copy
             // materializes on the pool; `run_native` (not `run_native_fresh`)
             // keeps the input placement that the copy puts on the output, as the
-            // metadata-only reshape contract requires.
-            let elements = tenferro_tensor::validate::checked_shape_product(
-                "reshape",
-                "input shape",
-                tensor.shape(),
-            )?;
+            // reshape contract requires.
             let parallel = match self.entered {
                 Some(context) => context.uses_inner_parallelism(),
                 None => self.entry.preferred_engine_mode() == ParallelMode::Inner,
             };
-            if !parallel || elements <= SERIAL_RESHAPE_MAX_ELEMS {
+            if !structural::reshape_uses_pool(tensor, parallel)? {
                 return structural::reshape(tensor, shape);
             }
             return self

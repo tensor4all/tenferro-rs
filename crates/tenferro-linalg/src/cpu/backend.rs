@@ -1237,7 +1237,7 @@ fn solve_entered(
 
     let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
         (
-            context.reshape_tensor(b, &matrix_rhs_shape)?,
+            context.reshape_tensor(buffers, b, &matrix_rhs_shape)?,
             Some(b.shape().to_vec()),
         )
     } else {
@@ -1273,7 +1273,7 @@ fn solve_entered(
     }?;
 
     if let Some(shape) = restore_shape {
-        context.reshape_tensor(&result, &shape)
+        context.reshape_tensor(buffers, &result, &shape)
     } else {
         Ok(result)
     }
