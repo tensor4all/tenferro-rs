@@ -104,6 +104,8 @@ impl CpuBackendLinalgAffinityExt for CpuExecSession<'_> {
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
     ) -> tenferro_tensor::Result<R> {
         self.with_linalg_pool(move |context, buffers| {
+            #[cfg(feature = "blas")]
+            super::tlinalg_blas::reject_forced_batch_strategy(context)?;
             let mut output = op(context, buffers)?;
             output.tag_fresh(context.domain_id());
             Ok(output)

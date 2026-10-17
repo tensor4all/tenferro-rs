@@ -26,6 +26,32 @@ pub(crate) fn workspace(pool: &mut BufferPool) -> TlinalgWorkspace<'_> {
     TlinalgWorkspace::new(pool)
 }
 
+/// Refuse a forced batch strategy this lane cannot honor, before any write.
+///
+/// `tlinalg-blas` takes no `tcontract_exec::Exec` and has no tenferro lanes:
+/// the vendor call owns its own threading. `Auto` and `Sequential` are what the
+/// lane already does; every other forced route is a typed unsupported request
+/// resolved ahead of every empty, zero or single-item shortcut in the linalg
+/// entry points.
+pub(crate) fn reject_forced_batch_strategy(
+    ctx: &CpuExecutionContext<'_>,
+) -> tenferro_tensor::Result<()> {
+    let strategy = ctx.batch_policy().strategy;
+    if matches!(
+        strategy,
+        tenferro_cpu::CpuBatchStrategy::Auto | tenferro_cpu::CpuBatchStrategy::Sequential
+    ) {
+        return Ok(());
+    }
+    Err(tenferro_tensor::Error::unsupported(
+        "linalg",
+        format!(
+            "batch strategy {strategy:?} is unavailable on the BLAS linalg lane; it has no \
+             tenferro fan-out and the vendor call owns its threading"
+        ),
+    ))
+}
+
 /// Factor `batch` compact `m x n` matrices in place.
 pub(crate) fn factor_batch<T: LapackScalar>(
     _ctx: &CpuExecutionContext<'_>,

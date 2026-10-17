@@ -86,11 +86,15 @@ thread count, or placement; `threads(1)` on a tenferro backend does not imply a
 one-thread vendor call.
 
 The token is not uniform across the two linalg providers, by design: the
-faer-backed `tlinalg` owns batch lanes and takes `Parallel` (pool plus budget),
-while `tlinalg-blas` is deliberately token-free because LAPACK/BLAS own their
-own threading, its batch loop is serial, and a Rayon fan-out around a vendor
-call would fight the vendor's own pool. The host places the vendor call instead;
-its scratch still comes from tenferro's buffer pool through the workspace seam.
+faer-backed `tlinalg` owns batch lanes and takes a `tcontract_exec::Exec` (pool
+plus budget plus the resolved batch policy), while `tlinalg-blas` is
+deliberately token-free because LAPACK/BLAS own their own threading, its batch
+loop is serial, and a Rayon fan-out around a vendor call would fight the
+vendor's own pool. The host places the vendor call instead; its scratch still
+comes from tenferro's buffer pool through the workspace seam. Because the
+BLAS linalg lane has no `Exec` and no tenferro lanes, tenferro refuses a forced
+batch strategy there before any write with a typed unsupported error; see the
+[CPU-execution guide's Batched Operation Strategy](../guides/cpu-execution.md#batched-operation-strategy).
 
 ## Data Path
 

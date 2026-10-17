@@ -109,8 +109,32 @@ Lane selection, vendor batching, and the per-item route for batched work
 (strided-batched and grouped GEMM, packed LU factor/solve, and the batched
 linalg families) belong to the lower numerical libraries: cpueinsum, tlinalg,
 and tlinalg-blas. tenferro passes one parallelism token - the selected pool with
-a thread budget, or `Sequential` - and the lower library decides its own lanes
-within that budget. There is no host batch-policy setting.
+a thread budget, or `Sequential` - together with a batch policy, and the lower
+library decides its own lanes within that budget.
+
+The policy vocabulary is re-exported from `tcontract-exec`: `CpuBatchPolicy` is
+`tcontract_exec::BatchPolicy`, `CpuBatchStrategy` is `BatchStrategy`, and
+`CpuBatchThresholds` is `WorkModel`. The old `OuterParallel`/`ProviderItems`
+spellings are now `Outer`/`Inner`; `Sequential`, `Auto`, and `WholeBatchVendor`
+are unchanged (the old vendor-dimension cutoff is not restored).
+
+Precedence is the innermost scope, then the backend default:
+
+1. `tenferro_cpu::with_batch_policy(session, policy, |session| ...)` scopes an
+   override to the callback and restores the previous policy on return, error
+   and unwind. Wrapping a single operation expresses a per-operation choice; a
+   non-CPU session is rejected with a typed unsupported error.
+2. `CpuBackend::with_batch_policy(policy)` sets the backend default; clones and
+   placement handles follow it. The default is `Auto`.
+
+`Auto` is resolved inside the lower library and keeps that library's route rule
+until the shared work model lands (tcontract-rs#123 step 3): `tlinalg`'s
+64-extent RHS cutoff in the linalg lane and `cpueinsum`'s width rule in the
+contraction lane. A forced strategy is honored or refused, never silently
+downgraded to `Auto`. `tlinalg-blas` takes no `Exec` and has no tenferro lanes,
+so the BLAS linalg lane refuses a forced `Outer`, `Inner`, `Split`, or
+`WholeBatchVendor` before any write with a typed unsupported error; `Auto` and
+`Sequential` are accepted.
 
 A contraction whose axes are all batch axes is an elementwise product and never
 lowers to per-element GEMMs.

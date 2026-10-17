@@ -169,6 +169,7 @@ pub mod affinity;
 mod analytic;
 mod arbiter;
 pub mod backend;
+mod batch_policy;
 mod blas1;
 pub(crate) mod buffer_pool {
     pub use tenferro_cpu_basic::buffer_pool::*;
@@ -250,6 +251,7 @@ pub use backend::held_session::{
     CpuHeldSession, CpuHeldSessionError, CpuPhase, CpuPhaseError, PhaseLane, PhaseRunError,
 };
 pub use backend::{CpuBackend, CpuBackendError, CpuRuntimeIdentity};
+pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
 
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;

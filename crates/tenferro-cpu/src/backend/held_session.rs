@@ -288,7 +288,8 @@ impl CpuHeldSession<'_> {
             permit,
             ..
         } = &mut self.state;
-        let entry = CpuOperationEntry::new(backend.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(backend.engine.domain(), permit)
+            .with_batch_policy(backend.batch_policy());
         let owner = permit.owner();
         entry.enter_owned(|context| {
             let resources = checkout.resources_mut();
