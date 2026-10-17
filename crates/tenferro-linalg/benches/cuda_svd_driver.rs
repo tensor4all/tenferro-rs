@@ -123,42 +123,65 @@ fn case_label(dtype: DType, n: usize, driver: SvdDriver) -> String {
     format!("{}/n{n}/{}", dtype_label(dtype), driver_label(driver))
 }
 
-/// Deterministic entry `(re, im)` for `A[row, col]` in column-major order.
+/// Fixed-seed splitmix64 stream (public-domain algorithm) for a dense matrix.
 ///
-/// A dominant diagonal keeps the spectrum well separated so the comparison is
-/// not dominated by near-degenerate singular vectors; the off-diagonal terms
-/// differ row to row so no driver sees a rank-deficient or symmetric special
-/// case.
-fn entry(row: usize, col: usize) -> (f64, f64) {
-    let real = ((row * 13 + col * 17 + 3) % 31) as f64 / 31.0 - 0.5;
-    let imag = ((row * 7 + col * 11 + 5) % 23) as f64 / 23.0 - 0.5;
-    let diagonal = if row == col { 2.0 } else { 0.0 };
-    (real + diagonal, imag)
+/// A small deterministic PRNG avoids an external crate while giving a matrix
+/// with no low-rank structure: the previous generator keyed every entry off
+/// `(13*row + 17*col) mod 31`, so it had rank at most 31 and, with the `2I`
+/// shift, a spectrum clustered about 2 for large `n`. Jacobi, QR and polar
+/// drivers behave differently on that cluster, which biases the comparison.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    /// Start the stream at `seed`.
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    /// Next 64-bit state (splitmix64).
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform draw in `[-1, 1)` from the top 53 bits.
+    fn next_uniform(&mut self) -> f64 {
+        let bits = self.next_u64() >> 11;
+        (bits as f64) / (1_u64 << 52) as f64 - 1.0
+    }
 }
 
 /// The deterministic `n x n` input for `dtype`, in column-major order.
+///
+/// Every entry is an independent uniform draw in `[-1, 1)` (real and imaginary
+/// parts independently for complex), so the matrix is dense and full rank with
+/// probability one and its singular values follow the usual random-matrix
+/// spread rather than concentrating at one value. Real dtypes share one draw
+/// stream and complex dtypes share another, so `f32`/`f64` sample the same
+/// underlying matrix and `c32`/`c64` sample a common one.
 fn host_matrix(dtype: DType, n: usize) -> Tensor {
     let shape = vec![n, n];
+    // Fixed seed: every run and every dtype observes the same input.
+    let mut rng = SplitMix64::new(0x5EED_2182_0000_0001);
     match dtype {
         DType::F32 => Tensor::from_vec_col_major(
             shape,
-            (0..n * n)
-                .map(|index| entry(index % n, index / n).0 as f32)
-                .collect(),
+            (0..n * n).map(|_| rng.next_uniform() as f32).collect(),
         )
         .expect("host f32 matrix"),
-        DType::F64 => Tensor::from_vec_col_major(
-            shape,
-            (0..n * n)
-                .map(|index| entry(index % n, index / n).0)
-                .collect(),
-        )
-        .expect("host f64 matrix"),
+        DType::F64 => {
+            Tensor::from_vec_col_major(shape, (0..n * n).map(|_| rng.next_uniform()).collect())
+                .expect("host f64 matrix")
+        }
         DType::C32 => Tensor::from_vec_col_major(
             shape,
             (0..n * n)
-                .map(|index| {
-                    let (real, imag) = entry(index % n, index / n);
+                .map(|_| {
+                    let real = rng.next_uniform();
+                    let imag = rng.next_uniform();
                     Complex32::new(real as f32, imag as f32)
                 })
                 .collect(),
@@ -167,8 +190,9 @@ fn host_matrix(dtype: DType, n: usize) -> Tensor {
         DType::C64 => Tensor::from_vec_col_major(
             shape,
             (0..n * n)
-                .map(|index| {
-                    let (real, imag) = entry(index % n, index / n);
+                .map(|_| {
+                    let real = rng.next_uniform();
+                    let imag = rng.next_uniform();
                     Complex64::new(real, imag)
                 })
                 .collect(),
