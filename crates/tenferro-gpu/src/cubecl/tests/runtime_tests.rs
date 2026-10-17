@@ -540,3 +540,364 @@ gpu_test!(test_trim_memory_returns_dropped_blocks_to_the_driver, {
          ({free_before} before, {free_after_trim} after)"
     );
 });
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn prepared_run_dispatches_cubecl_launches_before_recording_retirement() {
+    use crate::cubecl::runtime::{blocking_flush_handoffs, reset_blocking_flush_handoffs};
+    use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            crate::cubecl::cuda_runtime_engine_registration(
+                &backend,
+                EngineId::new("tenferro-cuda.test.event-flush.v1").expect("engine id"),
+            )
+            .expect("cuda registration"),
+        )
+        .expect("register engine");
+    let runtime = builder.build().expect("runtime");
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let y = (&x * &x).expect("square");
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .expect("compile");
+    let host = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0]).expect("host");
+    let gpu_input = upload_tensor(backend.runtime(), &host).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&gpu_input])
+        .expect("prepare");
+
+    // The CUDA event-domain run must dispatch queued CubeCL launches before it
+    // records the completion event; otherwise `retire_cuda_run` could
+    // synchronize a stream the launched kernels never reached (#2182 B3). This
+    // counter is raised only by `CudaRuntime::flush_cubecl`, and the dispatch
+    // helpers the run uses do not raise it.
+    reset_blocking_flush_handoffs();
+    let _output = runtime
+        .run_prepared(&prepared, &[&gpu_input])
+        .expect("prepared run");
+    assert!(
+        blocking_flush_handoffs() >= 1,
+        "the CUDA event-domain run did not dispatch its queued CubeCL launch before recording the retirement event"
+    );
+}
+
+fn prepared_matmul_config() -> tenferro_tensor::DotGeneralConfig {
+    tenferro_tensor::DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    }
+}
+
+fn prepared_matmul_chain_input() -> Tensor {
+    const SIZE: usize = 16;
+    Tensor::from_vec_col_major(
+        vec![SIZE, SIZE],
+        (0..SIZE * SIZE)
+            .map(|index| ((index % 17) as f64 + 1.0) * 0.01)
+            .collect(),
+    )
+    .expect("host input")
+}
+
+fn cpu_matmul_chain_reference(matmuls: usize) -> Tensor {
+    let config = prepared_matmul_config();
+    let source = prepared_matmul_chain_input();
+    let rhs = prepared_matmul_chain_input();
+    let mut cpu = tenferro_cpu::CpuBackend::new();
+    cpu.with_backend_session(|session| {
+        let mut accumulator = source;
+        for _ in 0..matmuls {
+            accumulator = session.dot_general_read(
+                TensorRead::from_tensor(&accumulator),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )?;
+        }
+        Ok::<_, tenferro_tensor::Error>(accumulator)
+    })
+    .expect("cpu host session")
+    .expect("cpu matmul chain")
+}
+
+fn assert_tensors_close(actual: &Tensor, expected: &Tensor) {
+    assert_eq!(actual.shape(), expected.shape());
+    let actual = actual.as_slice::<f64>().expect("actual f64");
+    let expected = expected.as_slice::<f64>().expect("expected f64");
+    let max_difference = actual
+        .iter()
+        .zip(expected)
+        .map(|(a, e)| (a - e).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_difference < 1e-8,
+        "CUDA prepared chain differs from CPU by {max_difference}"
+    );
+}
+
+/// Build a runtime that owns a prepared eight-node CUDA matmul chain.
+fn prepared_matmul_chain(
+    backend: &CudaBackend,
+    engine: &str,
+) -> (
+    tenferro_runtime::Runtime,
+    tenferro_runtime::PreparedCompiledGraph,
+    Tensor,
+) {
+    use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
+
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            crate::cubecl::cuda_runtime_engine_registration(
+                backend,
+                EngineId::new(engine).expect("engine id"),
+            )
+            .expect("cuda registration"),
+        )
+        .expect("register engine");
+    let runtime = builder.build().expect("runtime");
+
+    const SIZE: usize = 16;
+    const MATMULS: usize = 8;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).expect("input");
+    let mut y = x.matmul(&x).expect("first matmul");
+    for _ in 1..MATMULS {
+        y = y.matmul(&x).expect("chained matmul");
+    }
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[SIZE, SIZE])])
+        .expect("compile");
+    let input = upload_tensor(backend.runtime(), &prepared_matmul_chain_input()).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&input])
+        .expect("prepare");
+    (runtime, prepared, input)
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn prepared_single_domain_run_coalesces_scheduler_events() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let counters = backend.runtime();
+    let (runtime, prepared, input) =
+        prepared_matmul_chain(&backend, "tenferro-cuda.test.coalesce.v1");
+
+    counters.reset_scheduler_counters();
+    let output = runtime
+        .run_prepared(&prepared, &[&input])
+        .expect("prepared run");
+    let events = counters.scheduler_event_records();
+    let fences = counters.scheduler_fences();
+    let retirements = counters.scheduler_retirements();
+    assert_eq!(
+        events, 0,
+        "a single-domain run must not record per-node scheduler events ({events})"
+    );
+    assert_eq!(
+        fences, 1,
+        "a single-domain run must issue exactly one scheduler fence per call ({fences})"
+    );
+    assert_eq!(
+        retirements, 1,
+        "the retirement barrier must run before the run returns ({retirements})"
+    );
+
+    let actual = download_tensor(backend.runtime(), &output[0]).expect("download");
+    let expected = cpu_matmul_chain_reference(8);
+    assert_tensors_close(&actual, &expected);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn prepared_in_held_single_domain_run_coalesces_scheduler_events() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let counters = backend.runtime().clone();
+    let (runtime, prepared, input) =
+        prepared_matmul_chain(&backend, "tenferro-cuda.test.coalesce-held.v1");
+
+    let mut session = backend.open_session().expect("held session");
+    counters.reset_scheduler_counters();
+    let output = session
+        .with_session(|view| runtime.run_prepared_in(view, &prepared, &[&input]))
+        .expect("held callback")
+        .expect("prepared run");
+    let events = counters.scheduler_event_records();
+    let fences = counters.scheduler_fences();
+    let retirements = counters.scheduler_retirements();
+    assert_eq!(
+        events, 0,
+        "a held single-domain run must not record per-node scheduler events ({events})"
+    );
+    assert_eq!(
+        fences, 1,
+        "a held single-domain run must issue exactly one scheduler fence per call ({fences})"
+    );
+    assert_eq!(
+        retirements, 1,
+        "the held single-domain retirement barrier must run before the run returns ({retirements})"
+    );
+    session.close().expect("close");
+
+    let actual = download_tensor(backend.runtime(), &output[0]).expect("download");
+    let expected = cpu_matmul_chain_reference(8);
+    assert_tensors_close(&actual, &expected);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn prepared_identity_run_retires_collection_before_returning() {
+    use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let counters = backend.runtime();
+    let engine = EngineId::new("tenferro-cuda.test.coalesce-identity.v1").expect("engine id");
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            crate::cubecl::cuda_runtime_engine_registration(&backend, engine)
+                .expect("cuda registration"),
+        )
+        .expect("register engine");
+    let runtime = builder.build().expect("runtime");
+
+    // Output placeholder is the input: no instruction writes the output slot,
+    // so collection copies the borrowed device input before the run retires.
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&x, &[(&x, DType::F64, &[3])])
+        .expect("compile");
+    let host = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 7.0, 9.0]).expect("host");
+    let input = upload_tensor(backend.runtime(), &host).expect("upload");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&input])
+        .expect("prepare");
+
+    counters.reset_scheduler_counters();
+    let output = runtime
+        .run_prepared(&prepared, &[&input])
+        .expect("identity run");
+    assert_eq!(counters.scheduler_event_records(), 0);
+    assert_eq!(counters.scheduler_fences(), 1);
+    assert_eq!(
+        counters.scheduler_retirements(),
+        1,
+        "identity output collection must be covered by the retirement barrier"
+    );
+    let actual = download_tensor(backend.runtime(), &output[0]).expect("download");
+    assert_eq!(
+        actual.as_slice::<f64>().expect("host values"),
+        &[4.0, 7.0, 9.0]
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn prepared_coalesced_error_retires_before_returning() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("owner backend");
+    let counters = backend.runtime();
+    let (runtime, prepared, owner_input) =
+        prepared_matmul_chain(&backend, "tenferro-cuda.test.coalesce-error.v1");
+
+    // A tensor resident on a different CUDA runtime is rejected by ingress
+    // after the run's coalesced event domains were created, so the run must
+    // still retire before the error returns.
+    let foreign_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("foreign backend");
+    let foreign_input = upload_tensor(foreign_backend.runtime(), &prepared_matmul_chain_input())
+        .expect("foreign upload");
+
+    counters.reset_scheduler_counters();
+    let error = runtime
+        .run_prepared(&prepared, &[&foreign_input])
+        .expect_err("a foreign allocation domain must fail ingress");
+    assert!(
+        error.to_string().contains("residency")
+            || error.to_string().contains("allocation")
+            || error.to_string().contains("ingress"),
+        "unexpected ingress error: {error}"
+    );
+    assert_eq!(
+        counters.scheduler_event_records(),
+        0,
+        "no coalesced node may run before the ingress rejection"
+    );
+    assert_eq!(
+        counters.scheduler_retirements(),
+        1,
+        "the coalesced error path must retire before returning"
+    );
+
+    // The runtime and prepared handle stay usable after the retired error.
+    let recovered = runtime
+        .run_prepared(&prepared, &[&owner_input])
+        .expect("owner run after the retired error");
+    let actual = download_tensor(backend.runtime(), &recovered[0]).expect("download");
+    assert_tensors_close(&actual, &cpu_matmul_chain_reference(8));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_event_domain_keeps_per_node_events_until_coalescing_is_enabled() {
+    use crate::cubecl::event_domain::CudaEventDomainDriver;
+    use tenferro_runtime::{EngineId, EventDomainDriver, Runtime};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let counters = backend.runtime();
+    let engine = EngineId::new("tenferro-cuda.test.ineligible.v1").expect("engine id");
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            crate::cubecl::cuda_runtime_engine_registration(&backend, engine.clone())
+                .expect("cuda registration"),
+        )
+        .expect("register engine");
+    let runtime = builder.build().expect("runtime");
+    let domain = runtime
+        .snapshot()
+        .expect("snapshot")
+        .engine(&engine)
+        .expect("engine snapshot")
+        .event_domain_id();
+
+    let driver = CudaEventDomainDriver::new(backend.runtime().clone());
+    let mut launch = || Ok(());
+
+    // Without the scheduler's eligibility proof the run keeps the per-node path:
+    // one completion event and one dispatch fence per node, plus retirement.
+    let mut per_node = driver.begin_run(domain).expect("run");
+    counters.reset_scheduler_counters();
+    per_node.enqueue(&[], &mut launch).expect("first enqueue");
+    per_node.enqueue(&[], &mut launch).expect("second enqueue");
+    assert_eq!(counters.scheduler_event_records(), 2);
+    assert_eq!(counters.scheduler_fences(), 2);
+    assert_eq!(counters.scheduler_retirements(), 0);
+    per_node.drain().expect("drain");
+    assert_eq!(counters.scheduler_fences(), 3);
+    assert_eq!(counters.scheduler_retirements(), 1);
+
+    // After the scheduler enables coalescing, the same two nodes add no events
+    // and the single retirement dispatch is the only fence and retirement.
+    let mut coalesced = driver.begin_run(domain).expect("run");
+    coalesced.enable_single_domain_coalescing();
+    counters.reset_scheduler_counters();
+    coalesced.enqueue(&[], &mut launch).expect("first enqueue");
+    coalesced.enqueue(&[], &mut launch).expect("second enqueue");
+    assert_eq!(counters.scheduler_event_records(), 0);
+    assert_eq!(counters.scheduler_fences(), 0);
+    assert_eq!(counters.scheduler_retirements(), 0);
+    coalesced.drain().expect("drain");
+    assert_eq!(counters.scheduler_fences(), 1);
+    assert_eq!(counters.scheduler_retirements(), 1);
+}

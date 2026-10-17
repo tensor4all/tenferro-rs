@@ -586,6 +586,12 @@ pub trait TensorLinalgExt {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn eigvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// Compute the Moore-Penrose pseudoinverse with the dtype-default cutoff.
+    ///
+    /// The cutoff thresholds an SVD whose default driver is accuracy-preserving
+    /// (`SvdDriver::Auto`), so a rank-deficient rank is retained or dropped the
+    /// same way as on CPU. CPU providers and CUDA share this contract.
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, unsupported-backend, numerical, or SVD contract errors.
@@ -602,6 +608,12 @@ pub trait TensorLinalgExt {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn pinv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// Compute the Moore-Penrose pseudoinverse with an explicit relative cutoff.
+    ///
+    /// Like [`Self::pinv`], the threshold is applied to an accuracy-preserving
+    /// default SVD (`SvdDriver::Auto`), so the retained rank matches the CPU
+    /// reference.
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns a validation error for invalid `rtol`, plus errors from [`Self::pinv`].
@@ -1162,6 +1174,12 @@ pub trait TensorReadLinalgExt {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// Compute the Moore-Penrose pseudoinverse with the dtype-default cutoff.
+    ///
+    /// The threshold is applied to an accuracy-preserving default SVD
+    /// (`SvdDriver::Auto`), so a rank-deficient rank is retained or dropped the
+    /// same way as on CPU.
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, read/materialization, backend, numerical, or SVD contract errors.

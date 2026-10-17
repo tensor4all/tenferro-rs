@@ -514,8 +514,7 @@ define_unary_analytic_dispatch!(
     tanh_elem,
     VectorKernel::Tanh
 );
-// `sqrt`/`rsqrt`/`erf` have no kernel here: the hardware square root is already vectorized by LLVM
-// and `erf` needs SLEEF's `u15` tier, which is not worth the code size for this dtype set.
+// `sqrt`/`rsqrt` have no kernel here: the hardware square root is already vectorized by LLVM.
 define_unary_analytic_dispatch!(
     sqrt,
     sqrt_read_with_pool,
@@ -550,7 +549,7 @@ define_unary_analytic_dispatch!(
     Erf,
     RealAnalyticElem::erf_elem,
     float_only,
-    VectorKernel::None
+    VectorKernel::Erf
 );
 
 #[cfg(test)]

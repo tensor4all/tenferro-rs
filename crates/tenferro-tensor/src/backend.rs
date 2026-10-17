@@ -3945,6 +3945,27 @@ pub trait BackendSessionHost: BackendRuntimeCache {
     ) -> Result<R, SessionEntryError> {
         self.with_backend_session(f)
     }
+
+    /// Report whether `session` is a session entered on this exact backend state.
+    ///
+    /// `Runtime::run_prepared_in` calls this before any launch so a session that
+    /// belongs to a different backend state (a different runtime or device, not
+    /// merely a different backend type) is refused instead of running the graph
+    /// against foreign allocations. The default is `false`: a backend that cannot
+    /// prove ownership of a session is never handed a foreign one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{BackendSession, BackendSessionHost};
+    ///
+    /// fn owns<H: BackendSessionHost>(host: &H, session: &mut dyn BackendSession) -> bool {
+    ///     host.owns_session(session)
+    /// }
+    /// ```
+    fn owns_session(&self, _session: &mut dyn BackendSession) -> bool {
+        false
+    }
 }
 
 /// Operation capabilities shared by backends and backend sessions.

@@ -8,6 +8,7 @@
 //! | case | host copies | destination memory |
 //! | --- | --- | --- |
 //! | `download_pageable` (`download_tensor`, large payload) | 1 (device straight into the result `Vec`) | pageable |
+//! | `download_into_reused` (`download_tensor_into`, reused buffer) | 1 (device straight into the caller's `Vec`) | pageable, reused |
 //! | `download_pinned` (`download_pending` + `wait`) | 1 (device → pinned buffer owned by the handle) | pinned |
 //! | `download_small` (`download_tensor`, ≤ `PINNED_SCALAR_BYTES`) | 2 (device → pinned staging, staging → `Vec`) | pageable result |
 //! | `upload_staging` (`upload_tensor`) | 2 (borrowed host → owned copy; then the write itself) | — |
@@ -34,8 +35,8 @@ use std::cell::RefCell;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use tenferro_gpu::cuda::{
-    download_pending, download_tensor, gpu_available, upload_pending, upload_tensor, CudaBackend,
-    CudaDeviceId, PinnedHostBuffer,
+    download_pending, download_tensor, download_tensor_into, gpu_available, upload_pending,
+    upload_tensor, CudaBackend, CudaDeviceId, PinnedHostBuffer,
 };
 use tenferro_tensor::Tensor;
 
@@ -89,6 +90,22 @@ fn bench_download(c: &mut Criterion) {
             |bencher, device| {
                 black_box(download_tensor(&runtime, device).expect("download"));
                 bencher.iter(|| black_box(download_tensor(&runtime, device).expect("download")));
+            },
+        );
+
+        // The caller owns the destination and hands it back each iteration, so this measures the
+        // copy into a reused pageable buffer without the fresh allocation `pageable` pays.
+        let reused_buffer = RefCell::new(Vec::<f64>::new());
+        group.bench_with_input(
+            BenchmarkId::new("into_reused", label),
+            &device,
+            |bencher, device| {
+                bencher.iter(|| {
+                    let buffer = std::mem::take(&mut *reused_buffer.borrow_mut());
+                    let filled = download_tensor_into(&runtime, device, buffer).expect("download");
+                    black_box(filled.len());
+                    *reused_buffer.borrow_mut() = filled;
+                });
             },
         );
 
@@ -267,6 +284,19 @@ fn bench_large(c: &mut Criterion) {
         &device,
         |bencher, device| {
             bencher.iter(|| black_box(download_tensor(&runtime, device).expect("download")));
+        },
+    );
+
+    let into_buffer = RefCell::new(Vec::<f64>::new());
+    group.bench_function(
+        BenchmarkId::new("download_into_reused", "256MiB"),
+        |bencher| {
+            bencher.iter(|| {
+                let buffer = std::mem::take(&mut *into_buffer.borrow_mut());
+                let filled = download_tensor_into(&runtime, &device, buffer).expect("download");
+                black_box(filled.len());
+                *into_buffer.borrow_mut() = filled;
+            });
         },
     );
 

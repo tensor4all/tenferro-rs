@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::TensorSessionOpsExt;
 use tenferro_tensor::TensorRead;
-use tenferro_tensor::{BackendSession, BackendSessionHost, CompareDir, Tensor};
+use tenferro_tensor::{BackendSession, BackendSessionHost, CompareDir, DotGeneralConfig, Tensor};
 
 const LEN: usize = 4096;
 const INPUT_BYTES: usize = LEN * size_of::<f64>();
@@ -221,5 +221,67 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
                 "select: public={actual}, backend={baseline}"
             );
         })
+        .unwrap();
+}
+
+/// #2141 item 3: the canonical-fallback contraction must not copy its operands.
+///
+/// A permuted right operand makes the provider take its canonical path. The operand
+/// copies that path once made were removed with the plan work
+/// (`perf-1938-cpu-followups`: 25 → 15 allocations per call); what remains is the
+/// provider's own view and plan metadata (strided-rs `Arc` dims, an HPTT plan rebuild),
+/// which is not payload-sized. This pins the payload half: no input-sized temporary
+/// with either operand layout.
+#[test]
+fn canonical_fallback_contraction_does_not_copy_operands() {
+    const N: usize = 95;
+    let a =
+        Tensor::from_vec_col_major([N, N], (0..N * N).map(|i| i as f64 * 0.5).collect()).unwrap();
+    let b =
+        Tensor::from_vec_col_major([N, N], (0..N * N).map(|i| (i % 7) as f64).collect()).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1].into(),
+        rhs_contracting_dims: vec![0].into(),
+        lhs_batch_dims: vec![].into(),
+        rhs_batch_dims: vec![].into(),
+    };
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    backend
+        .with_backend_session(|session: &mut dyn BackendSession| {
+            let plain = TensorRead::from_tensor(&a);
+            let typed_b = b.as_typed::<f64>().expect("an f64 tensor");
+            let view = typed_b.as_view();
+            let transposed = view
+                .transpose_view([1, 0])
+                .unwrap()
+                .into_tensor_read()
+                .unwrap();
+            // Warm the pool on both routes before counting.
+            drop(
+                session
+                    .dot_general_read(plain.clone(), TensorRead::from_tensor(&b), &config)
+                    .unwrap(),
+            );
+            drop(
+                session
+                    .dot_general_read(plain.clone(), transposed.clone(), &config)
+                    .unwrap(),
+            );
+
+            let baseline = count_large_allocations(|| {
+                session
+                    .dot_general_read(plain.clone(), TensorRead::from_tensor(&b), &config)
+                    .unwrap()
+            });
+            let fallback = count_large_allocations(|| {
+                session
+                    .dot_general_read(plain.clone(), transposed.clone(), &config)
+                    .unwrap()
+            });
+            assert_eq!(baseline, 0, "the canonical route copied an operand");
+            assert_eq!(fallback, 0, "the canonical fallback copied an operand");
+            Ok::<_, tenferro_tensor::Error>(())
+        })
+        .unwrap()
         .unwrap();
 }

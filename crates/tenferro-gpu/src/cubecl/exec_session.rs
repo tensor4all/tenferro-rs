@@ -785,6 +785,13 @@ impl BackendSessionHost for CudaBackend {
         // the CUDA runtime must never re-enter a session closure.
         with_session_entry_guard("CudaBackend", || f(&mut session))
     }
+
+    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+        with_cuda_exec_session(session, |session| {
+            session.runtime_identity() == self.runtime_identity()
+        })
+        .unwrap_or(false)
+    }
 }
 
 /// Backend name used by this module's session-entry vocabulary.

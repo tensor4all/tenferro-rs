@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use super::super::execution::ScheduledEventDomains;
 use super::super::schedule::{
-    EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledCollective,
-    ScheduledGraph, ScheduledNode, ScheduledNodeKind, ScheduledOperation, ScheduledTransfer,
-    UnsupportedScheduledNodeError,
+    EventCompletion, EventDependency, EventDomainId, EventSlotId, ExecutionLocation,
+    ScheduledCollective, ScheduledGraph, ScheduledNode, ScheduledNodeKind, ScheduledOperation,
+    ScheduledTransfer, UnsupportedScheduledNodeError,
 };
 use super::super::{
-    EngineId, EventDomainDriver, EventDomainRun, FrozenTransferRegistry,
+    EngineId, EventDomainDriver, EventDomainRun, EventToken, FrozenTransferRegistry,
     ImmediateEventDomainDriver, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
     ResolvedTransferRoute, RuntimeEpoch, RuntimeId, StorageClass, TransferProvider,
     TransferRequest,
@@ -437,4 +437,115 @@ fn mock_transfer_does_not_reuse_source_event_domain_as_destination_completion() 
         transfer.completion().domain()
     );
     assert!(graph.validate().is_ok());
+}
+
+/// Driver whose run records every single-domain coalescing request.
+#[derive(Debug)]
+struct CoalescingProbe {
+    enabled: Arc<AtomicUsize>,
+}
+
+impl EventDomainDriver for CoalescingProbe {
+    fn begin_run(&self, domain: EventDomainId) -> crate::Result<Box<dyn EventDomainRun>> {
+        Ok(Box::new(CoalescingProbeRun {
+            domain,
+            enabled: Arc::clone(&self.enabled),
+            inner: ImmediateEventDomainDriver::new().begin_run(domain)?,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct CoalescingProbeRun {
+    domain: EventDomainId,
+    enabled: Arc<AtomicUsize>,
+    inner: Box<dyn EventDomainRun>,
+}
+
+impl EventDomainRun for CoalescingProbeRun {
+    fn domain(&self) -> EventDomainId {
+        self.domain
+    }
+
+    fn enable_single_domain_coalescing(&mut self) {
+        self.enabled.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn enqueue(
+        &mut self,
+        dependencies: &[Arc<dyn EventToken>],
+        launch: &mut dyn FnMut() -> crate::Result<()>,
+    ) -> crate::Result<Arc<dyn EventToken>> {
+        self.inner.enqueue(dependencies, launch)
+    }
+
+    fn drain(&mut self) -> crate::Result<()> {
+        self.inner.drain()
+    }
+}
+
+fn probe_operation(
+    instruction_index: usize,
+    domain: EventDomainId,
+    driver: Arc<dyn EventDomainDriver>,
+    dependencies: impl Into<Box<[EventDependency]>>,
+    slot: u32,
+) -> ScheduledNode {
+    ScheduledNode::Operation(ScheduledOperation::new(
+        instruction_index,
+        ExecutionLocation::for_test_with_driver(domain, test_identity("coalescing-probe"), driver),
+        [],
+        [],
+        dependencies,
+        EventCompletion::new(domain, EventSlotId::new(slot), u64::from(slot)),
+    ))
+}
+
+#[test]
+fn single_domain_schedule_requests_coalescing_once() {
+    let enabled = Arc::new(AtomicUsize::new(0));
+    let driver: Arc<dyn EventDomainDriver> = Arc::new(CoalescingProbe {
+        enabled: Arc::clone(&enabled),
+    });
+    let domain = qualified_domain(1, 1, 1, 1);
+    let graph = ScheduledGraph::for_test(vec![
+        probe_operation(0, domain, Arc::clone(&driver), [], 0),
+        probe_operation(
+            1,
+            domain,
+            driver,
+            [EventDependency::new(domain, EventSlotId::new(0), 0)],
+            1,
+        ),
+    ]);
+    assert!(graph.validate().is_ok());
+
+    let _domains = ScheduledEventDomains::new(&graph).expect("single-domain runs");
+    assert_eq!(
+        enabled.load(Ordering::SeqCst),
+        1,
+        "one run must be asked to accept the coalescing mode"
+    );
+}
+
+#[test]
+fn multi_domain_schedule_never_requests_coalescing() {
+    let enabled = Arc::new(AtomicUsize::new(0));
+    let driver: Arc<dyn EventDomainDriver> = Arc::new(CoalescingProbe {
+        enabled: Arc::clone(&enabled),
+    });
+    let first_domain = qualified_domain(1, 1, 1, 1);
+    let second_domain = qualified_domain(1, 1, 1, 2);
+    let graph = ScheduledGraph::for_test(vec![
+        probe_operation(0, first_domain, Arc::clone(&driver), [], 0),
+        probe_operation(1, second_domain, driver, [], 1),
+    ]);
+    assert!(graph.validate().is_ok());
+
+    let _domains = ScheduledEventDomains::new(&graph).expect("multi-domain runs");
+    assert_eq!(
+        enabled.load(Ordering::SeqCst),
+        0,
+        "a multi-domain schedule must keep the per-node completion path"
+    );
 }
