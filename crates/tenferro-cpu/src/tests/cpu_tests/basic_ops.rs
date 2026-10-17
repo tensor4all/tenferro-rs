@@ -905,9 +905,10 @@ fn test_reduce_prod() {
 
 #[test]
 fn test_reduce_prod_matches_a_sequential_product_within_range() {
-    // The CPU product kernel may reassociate across lanes, so keep the fixture's
-    // partial products inside the f32 range under any grouping: `{1.0, 2.0, 0.5}`
-    // repeating has product 1.0 and no lane runs away.
+    // The CPU product kernel may reassociate across lanes. `{1.0, 2.0, 0.5}`
+    // repeating has product 1.0, and with the kernel's 8/16-lane splits (coprime
+    // with the period 3) every lane cycles through all three values, so no lane
+    // runs away. This is not safe under an arbitrary grouping.
     let values: Vec<f32> = (0..1_000_000usize)
         .map(|i| match i % 3 {
             0 => 1.0,
@@ -941,8 +942,10 @@ fn test_reduce_prod_matches_a_sequential_product_within_range() {
 /// factors, whose partial products stay inside the dtype range under any
 /// lane/chunk/thread split, and is checked against a sequential fold within a
 /// relative tolerance. A fold of `n` multiplies carries at most about `n`
-/// roundings, so two association orders differ by at most `n * eps` relative;
-/// `8 * n * eps` leaves a generous margin.
+/// roundings, so two association orders differ by at most about `n * eps`
+/// relative; `2 * n * eps` covers that while still rejecting a wrong value such
+/// as `1.0` for the 40,000-factor f32 fixture (reference about 0.981). The
+/// tolerance scales with the finite reference only, so an `inf` result fails.
 #[test]
 fn test_reduce_prod_matches_sequential_across_routes() {
     use tenferro_tensor::StridedSliceSpec;
@@ -989,12 +992,12 @@ fn test_reduce_prod_matches_sequential_across_routes() {
         values.into_iter().fold(1.0_f32, |acc, value| acc * value)
     }
     fn close_f64(got: f64, reference: f64, n: usize) -> bool {
-        let tol = (n as f64) * f64::EPSILON * 8.0;
-        (got - reference).abs() <= tol * got.abs().max(reference.abs()).max(1.0)
+        let tol = (n as f64) * f64::EPSILON * 2.0;
+        got.is_finite() && (got - reference).abs() <= tol * reference.abs().max(1.0)
     }
     fn close_f32(got: f32, reference: f32, n: usize) -> bool {
-        let tol = (n as f32) * f32::EPSILON * 8.0;
-        (got - reference).abs() <= tol * got.abs().max(reference.abs()).max(1.0)
+        let tol = (n as f32) * f32::EPSILON * 2.0;
+        got.is_finite() && (got - reference).abs() <= tol * reference.abs().max(1.0)
     }
     // Alternating factors just above and below one: every partial product stays
     // within `exp(0.001 * len)` of one, far inside the f32 range even when a lane
@@ -1085,6 +1088,7 @@ fn test_reduce_prod_matches_sequential_across_routes() {
     let axis0_reference: Vec<f64> = factors.iter().map(|value| value * value * value).collect();
     for threads in [1, 4] {
         let got = engine_product::<f64>(&batch, &[0], threads);
+        assert_eq!(got.len(), axis0_reference.len());
         for (value, reference) in got.iter().zip(&axis0_reference) {
             assert!(
                 close_f64(*value, *reference, 3),

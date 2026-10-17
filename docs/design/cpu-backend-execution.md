@@ -134,28 +134,12 @@ stride addressing. Separately, `tenferro-cpu-fused` builds one `strided-fused`
 plan per live output (`single_output_strided_fused_plan`, `lib.rs`), so a region
 with several live outputs replays its whole instruction list once per output.
 
-Measured 2026-10-16 on an `AMD EPYC 7713P`, release, the prepared program's first
-five runs plus 300 timed runs per round, median of three interleaved rounds,
-pinned to idle cores 56-63, one worker thread:
-
-| case | declined | fused | ratio |
-|---|---:|---:|---:|
-| ten `tanh` f32 `1024x64` | 2.33 ms | 2.11 ms | 0.90 |
-| ten `mul` f32 `1024x64` | 0.176 ms | 0.109 ms | 0.62 |
-| ten `tanh` f64 `1024x64` | 5.15 ms | 5.16 ms | 1.00 |
-| ten `mul` f64 `1024x64` | 0.381 ms | 0.266 ms | 0.70 |
-| broadcast on the contiguity axis f32 | 0.276 ms | 4.59 ms | **16.6** |
-| broadcast on the outer axis f32 | 0.249 ms | 0.208 ms | 0.83 |
-| two live outputs f32 | 0.221 ms | 0.410 ms | **1.85** |
-| ten `tanh` f32 `16384` (region floor) | 0.412 ms | 0.364 ms | 0.89 |
-| ten `tanh` f32 `1<<20` | 37.3 ms | 33.3 ms | 0.89 |
-
-At four worker threads the same cases give ratios 0.34-0.93 except the
-contiguity-axis broadcast (**16.4**), the outer-axis broadcast (1.07) and the two
-live outputs (**1.54**). The acceptance rule was "enable only if fused/declined
-`<= 1.05` in every case", so the decline stays: the contiguity-axis broadcast
-(like `b[1, 64]` added to `x[1024, 64]`) forces the scalar interpreter, and the
-two-live-output region pays the per-output replay.
+The measurement (2026-10-16, `AMD EPYC 7713P`, 1T and 4T, predeclared rule
+"enable only if fused/declined `<= 1.05` in every case") is recorded in
+[`docs/worklogs/perf-cpu-fusion-declined-2140.md`](../worklogs/perf-cpu-fusion-declined-2140.md),
+section "Reassessment after `strided-fused 0.5.1` (#2161)": fusion wins
+0.34-0.93 on chains, loses 16x on a contiguity-axis broadcast and 1.5-1.9x on
+two live outputs.
 
 `tenferro-cpu-fused` keeps the executor, implemented and covered by its own
 tests, so re-enabling CPU fusion is one constant once upstream vectorizes the

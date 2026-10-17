@@ -53,13 +53,15 @@
 - `strided-fused 0.5.1` vectorized the replay for **contiguous** blocks (a chunked
   register machine over `elem-simd-math`), so CPU fusion was re-measured rather
   than re-enabled. The decline stays: on the predeclared rule "enable only if
-  fused/declined `<= 1.05` in every case", two reachable cases lose.
+  fused/declined `<= 1.05` in every case", three cases fail — two clear
+  regressions (below) and the outer-axis broadcast at 4T (1.07, marginal).
 - The chunked replay is not taken when any operand is not unit-stride along the
   block's contiguous axis. A broadcast on the column-major innermost axis
   (`b[1, 64]` added to `x[1024, 64]`, reduced by the shared input-view path to a
   rank-1 operand) has stride `0` there, so `chunk::block_is_contiguous` fails and
   `strided-fused` runs `interpret_inner_loop_uninit`; fusion loses 16x at both 1T
-  and 4T. A broadcast on the outer axis is fine (0.83 at 1T, 1.07 at 4T).
+  and 4T. A broadcast on the outer axis takes the chunked replay (0.83 at 1T)
+  but sits just above the gate at 4T (1.07).
 - The CPU adapter still compiles one `strided-fused` plan per live output
   (`single_output_strided_fused_plan`), so a two-live-output region replays its
   whole instruction list twice; fusion loses 1.85x at 1T and 1.54x at 4T.
@@ -69,6 +71,29 @@
   two upstream blockers are fixed, not that the constant should be dropped.
 - Measured 2026-10-16, `AMD EPYC 7713P`, release, commit `47dc94c98`, pinned with
   `taskset` to idle cores 56-63, 5 warm runs plus 300 timed runs per round, median
-  of three interleaved rounds, 1 and 4 worker threads. The per-case table is in
-  the `SELECTS_FUSED_ELEMENTWISE_REGION` doc comment and in
-  `docs/design/cpu-backend-execution.md`.
+  of three interleaved rounds, 1 and 4 worker threads. The per-case table is
+  below (and in the `SELECTS_FUSED_ELEMENTWISE_REGION` doc comment);
+  `docs/design/cpu-backend-execution.md` links here.
+
+Measured 2026-10-16 on an `AMD EPYC 7713P`, release, the prepared program's first
+five runs plus 300 timed runs per round, median of three interleaved rounds,
+pinned to idle cores 56-63, one worker thread:
+
+| case | declined | fused | ratio |
+|---|---:|---:|---:|
+| ten `tanh` f32 `1024x64` | 2.33 ms | 2.11 ms | 0.90 |
+| ten `mul` f32 `1024x64` | 0.176 ms | 0.109 ms | 0.62 |
+| ten `tanh` f64 `1024x64` | 5.15 ms | 5.16 ms | 1.00 |
+| ten `mul` f64 `1024x64` | 0.381 ms | 0.266 ms | 0.70 |
+| broadcast on the contiguity axis f32 | 0.276 ms | 4.59 ms | **16.6** |
+| broadcast on the outer axis f32 | 0.249 ms | 0.208 ms | 0.83 |
+| two live outputs f32 | 0.221 ms | 0.410 ms | **1.85** |
+| ten `tanh` f32 `16384` (region floor) | 0.412 ms | 0.364 ms | 0.89 |
+| ten `tanh` f32 `1<<20` | 37.3 ms | 33.3 ms | 0.89 |
+
+At four worker threads the same cases give ratios 0.34-0.93 except the
+contiguity-axis broadcast (**16.4**), the outer-axis broadcast (1.07) and the two
+live outputs (**1.54**). The acceptance rule was "enable only if fused/declined
+`<= 1.05` in every case", so the decline stays: the contiguity-axis broadcast
+(like `b[1, 64]` added to `x[1024, 64]`) forces the scalar interpreter, and the
+two-live-output region pays the per-output replay.
