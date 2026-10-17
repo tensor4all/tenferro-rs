@@ -43,6 +43,23 @@ only when the backend is entered. `submit` dispatches pending work at a boundary
 `synchronize` adds an explicit host barrier, and `close` performs a final submission and returns the
 counters.
 
+### Prepared graphs inside a held session
+
+`CudaHeldSession::with_session` can run a `PreparedCompiledGraph` directly through
+`Runtime::run_prepared_in`, so a steady-state loop keeps one held session instead of paying a scoped
+entry per `Runtime::run_prepared` call:
+
+```rust
+let outputs = session.with_session(|view| runtime.run_prepared_in(view, &prepared, &inputs))?;
+```
+
+`run_prepared_in` runs every graph node on the borrowed session, leases the runtime executor state
+once without waiting, and retires its device work before returning. Before any launch it rejects a
+multi-engine graph, a session that belongs to a different backend state, and a prepared operation
+that does not support a borrowed session, each with a typed error that names `Runtime::run_prepared`
+as the alternative. The scoped form `with_backend_session(|view| runtime.run_prepared_in(view, ...))`
+works on CPU and CUDA; the eager/AD adapter is still not part of this route.
+
 ## Rules the session keeps
 
 - **One owner, one thread.** The session is `!Send + !Sync` and captures the logical CubeCL stream of

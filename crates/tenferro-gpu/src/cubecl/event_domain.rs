@@ -122,6 +122,15 @@ impl CudaEventDomainRun {
         if let Err(launch_error) = launch() {
             return Err(cleanup.finish_with_error(launch_error));
         }
+        // CubeCL hands `#[cube]` launches to its own device thread instead of
+        // this raw stream, so without this dispatch fence the event below would
+        // be recorded before the launched kernels reach the stream and
+        // `retire_cuda_run` would synchronize an empty stream (#2182 B3). This
+        // is a dispatch fence, not a device barrier: it only makes the event
+        // (and therefore the run's retirement) cover the queued launches.
+        if let Err(flush_error) = self.runtime.flush_cubecl(EVENT_OP) {
+            return Err(cleanup.finish_with_error(RuntimeError::from(flush_error)));
+        }
         if let Err(record_error) = event.record(stream) {
             return Err(cleanup.finish_with_error(RuntimeError::from(record_error)));
         }

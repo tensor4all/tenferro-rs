@@ -15,8 +15,9 @@ use tenferro_tensor::{
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
 use crate::runtime::execution::{
     collect_scoped_outputs, collect_tensor_outputs_with, retain_instruction_results,
-    spawn_in_flight, submit_with_spawner, ErasedTensorBackendExecutor, InFlightSubmission,
-    LocatedExecSlot, OsThreadSpawner, RuntimeOutputMode, SubmissionSpawner,
+    spawn_in_flight, submit_with_spawner, BorrowedExecutorSessionState,
+    ErasedTensorBackendExecutor, InFlightSubmission, LocatedExecSlot, OsThreadSpawner,
+    RuntimeOutputMode, SubmissionSpawner,
 };
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
@@ -137,6 +138,17 @@ struct AdmissionTestExecutor {
 impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
     fn backend_type_name(&self) -> &'static str {
         "AdmissionTestExecutor"
+    }
+
+    fn try_lease_session_state<'a>(
+        &'a self,
+        caller: &'static str,
+    ) -> Result<Box<dyn BorrowedExecutorSessionState + 'a>, Error> {
+        Err(Error::unsupported(
+            caller,
+            ErrorPhase::Execution,
+            "AdmissionTestExecutor does not lease a session state",
+        ))
     }
 
     fn extension_cache_stats(&self) -> Result<CacheStats, CacheOwnerError> {

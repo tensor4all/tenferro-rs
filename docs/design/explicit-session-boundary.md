@@ -140,7 +140,11 @@ region boundaries remain valid top-level boundaries. They create *compatible
 execution regions*, which is a scheduler decision at an explicit entry, not a
 nested per-op entry. The same holds for the eager boundaries
 (`with_eager_session`, `with_execution_session`,
-`with_extension_execution_context`).
+`with_extension_execution_context`). The compiled path also has a
+caller-session spelling, `Runtime::run_prepared_in(session, prepared, inputs)`: it runs a
+prepared single-engine graph on a `&mut dyn BackendSession` the caller already
+entered, without opening a scoped session on that path, so it borrows an
+existing execution boundary rather than creating one.
 
 ## Inventory at `a45833d4f`
 
@@ -161,6 +165,7 @@ one), or `decide` (needs an explicit recorded decision).
 | `EagerRuntime::with_execution_session` | `tenferro-ad/src/eager.rs:1863` | forwards to `with_backend_session` | all |
 | `EagerRuntime::with_extension_execution_context` | `tenferro-ad/src/eager.rs:1934` | session + extension cache, one lifetime | all |
 | `Runtime::run_compiled` / `run_compiled_values` | `tenferro-runtime/src/runtime/snapshot.rs:1004`, `:1145` | scheduler-owned regions (`exec.rs`, `segment.rs`) | all |
+| `Runtime::run_prepared_in` | `tenferro-runtime/src/runtime/snapshot.rs` (`run_prepared_in`) | caller-borrowed `&mut dyn BackendSession`; no scoped entry on the path | all (single-engine graphs) |
 
 `with_backend_session_cached` is the runtime-cache-aware entry used by the
 scheduler and eager paths; `with_backend_session` is the canonical user entry.
