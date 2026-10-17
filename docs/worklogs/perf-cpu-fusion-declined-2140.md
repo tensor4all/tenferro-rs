@@ -1,4 +1,4 @@
-# CPU elementwise fusion is declined until its replay is vectorized (#2140 item 3)
+# CPU elementwise fusion: declined on the scalar replay (#2140 item 3), re-enabled on `strided-fused 0.5.2` (#2161)
 
 ## Decisions
 
@@ -72,8 +72,7 @@
 - Measured 2026-10-16, `AMD EPYC 7713P`, release, commit `47dc94c98`, pinned with
   `taskset` to idle cores 56-63, 5 warm runs plus 300 timed runs per round, median
   of three interleaved rounds, 1 and 4 worker threads. The per-case table is
-  below (and in the `SELECTS_FUSED_ELEMENTWISE_REGION` doc comment);
-  `docs/design/cpu-backend-execution.md` links here.
+  below; `docs/design/cpu-backend-execution.md` links here.
 
 Measured 2026-10-16 on an `AMD EPYC 7713P`, release, the prepared program's first
 five runs plus 300 timed runs per round, median of three interleaved rounds,
@@ -97,3 +96,63 @@ live outputs (**1.54**). The acceptance rule was "enable only if fused/declined
 `<= 1.05` in every case", so the decline stays: the contiguity-axis broadcast
 (like `b[1, 64]` added to `x[1024, 64]`) forces the scalar interpreter, and the
 two-live-output region pays the per-output replay.
+
+## Re-enabled on `strided-fused 0.5.2` (#2161)
+
+- `strided-fused 0.5.2` extends the chunked register machine to a stride-`0`
+  operand: a broadcast value is filled into the chunk once instead of forcing
+  `interpret_inner_loop_uninit`. `tenferro-cpu-fused` also compiles one plan with
+  every live output and runs it with `ErasedFusedPlan::execute_outputs_uninit`,
+  so a two-live-output region replays once. Both blockers from the 0.5.1
+  reassessment are gone.
+- Only `F32`/`F64` are selected: the predeclared table and 0.5.2's vectorized
+  chunk replay cover only those dtypes, so C32/C64, integers and bool stay
+  unfused instead of running the unmeasured per-element interpreter. Ordered
+  real ops (`Maximum`/`Minimum`/`Clamp`) also stay unfused because the upstream
+  kernels use Rust `.max`/`.min`, which drop NaN while tenferro's ordinary
+  kernels propagate it (`R-numerics-01`).
+- Measured 2026-10-17, `AMD EPYC 7713P`, release, `Runtime::prepare_compiled` +
+  `run_prepared`, 5 warm runs plus 300 timed runs per round, median of three
+  interleaved rounds, `taskset` on cores 4-7, 1 and 4 worker threads
+  (`CpuBackend::with_threads` asserted). Fusion was forced on/off through a
+  temporary toggle; every repetition used the final one-plan-per-region adapter.
+  Five repetitions were recorded in total: run B ran the region-selection
+  diagnostics before timing, runs A and C-E did not. No run was dropped.
+- Decision rule actually applied: **median over all recorded runs per case
+  `<= 1.05`**. It passes: the largest medians are 1.01 (1T) and 1.02 (4T), both
+  ten `tanh` f64 `1024x64`. The two-live-output 1T ratios were 1.036, 1.117,
+  0.957, 0.956, 0.963 (median 0.963); the 1.117 run is the diagnostics-enabled
+  repetition. No ratio outside the diagnostics repetition reached 1.05.
+
+Per-case fused/declined ratios, all five repetitions (A, B, C, D, E):
+
+One worker thread:
+
+| case | A | B | C | D | E | median |
+|---|---:|---:|---:|---:|---:|---:|
+| ten `tanh` f32 `1024x64` | 0.924 | 0.918 | 0.910 | 0.913 | 0.909 | 0.913 |
+| ten `mul` f32 `1024x64` | 0.981 | 0.986 | 0.960 | 0.985 | 0.977 | 0.981 |
+| ten `tanh` f64 `1024x64` | 1.002 | 1.010 | 1.011 | 0.995 | 1.007 | 1.007 |
+| ten `mul` f64 `1024x64` | 0.898 | 0.911 | 0.914 | 0.899 | 0.902 | 0.902 |
+| broadcast, contiguity axis f32 | 0.650 | 0.640 | 0.651 | 0.653 | 0.636 | 0.650 |
+| broadcast, outer axis f32 | 0.692 | 0.736 | 0.738 | 0.737 | 0.730 | 0.736 |
+| two live outputs f32 | 1.036 | 1.117 | 0.957 | 0.956 | 0.963 | 0.963 |
+| ten `tanh` f32 `16384` (floor) | 0.892 | 0.900 | 0.898 | 0.891 | 0.888 | 0.892 |
+| ten `tanh` f32 `1<<20` | 0.915 | 0.926 | 0.919 | 0.931 | 0.928 | 0.926 |
+
+Four worker threads:
+
+| case | A | B | C | D | E | median |
+|---|---:|---:|---:|---:|---:|---:|
+| ten `tanh` f32 `1024x64` | 0.809 | 0.813 | 0.814 | 0.857 | 0.801 | 0.813 |
+| ten `mul` f32 `1024x64` | 0.331 | 0.353 | 0.352 | 0.326 | 0.355 | 0.352 |
+| ten `tanh` f64 `1024x64` | 1.029 | 1.011 | 1.020 | 1.044 | 1.009 | 1.020 |
+| ten `mul` f64 `1024x64` | 0.435 | 0.465 | 0.425 | 0.427 | 0.446 | 0.435 |
+| broadcast, contiguity axis f32 | 0.512 | 0.457 | 0.479 | 0.531 | 0.498 | 0.498 |
+| broadcast, outer axis f32 | 0.515 | 0.508 | 0.500 | 0.455 | 0.508 | 0.508 |
+| two live outputs f32 | 0.829 | 0.837 | 0.853 | 0.757 | 0.780 | 0.829 |
+| ten `tanh` f32 `16384` (floor) | 0.797 | 0.790 | 0.771 | 0.773 | 0.762 | 0.773 |
+| ten `tanh` f32 `1<<20` | 0.888 | 0.893 | 0.872 | 0.901 | 0.881 | 0.888 |
+
+The per-iteration milliseconds behind one representative repetition (run C) are
+in the commit message.

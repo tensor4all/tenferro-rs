@@ -114,43 +114,43 @@ allocation ownership or evidence of NUMA page placement, worker pinning, or
 memory residency. Storage-sharing views and metadata-only reshapes preserve the
 source metadata; caller-owned `_into` outputs preserve the caller's metadata.
 
-## A Fused Elementwise Region Is Planned But Declined
+## A Fused Elementwise Region Is Planned And Selected
 
 The runtime plans a fused elementwise region for a prepared program and asks the
-session to execute it as one command. **The CPU session declines every such
-region** (`SELECTS_FUSED_ELEMENTWISE_REGION`), and the runtime dispatches the
-region's instructions one by one.
+session to execute it as one command. The CPU session selects the region and
+replays it through `tenferro_cpu_fused::elementwise_fusion_with_pool`; the
+executor still declines (returns `None`, so the runtime dispatches the region's
+instructions one by one) below its 16,384-element floor, above its four-input
+limit, and for dtypes or ops without a fused kernel.
 
-It declines because `strided-fused 0.5.1`'s vectorized chunked replay only covers
-contiguous blocks, and because the CPU adapter compiles a separate plan per live
-output.
+`strided-fused 0.5.2` made the selection viable. Its chunked register machine
+runs the `elem-simd-math` slice kernels over chunk-sized buffers and now treats a
+stride-`0` operand as a broadcast value, so a broadcast on the contiguity axis —
+the case that fell back to `interpret_inner_loop_uninit` and lost about 16x on
+0.5.1 — stays on the vectorized replay. `tenferro-cpu-fused` also compiles one
+`strided-fused` plan carrying every live output and executes it with
+`ErasedFusedPlan::execute_outputs_uninit`, so a region with several live outputs
+replays its instruction list once instead of once per output.
 
-The chunked replay runs the region's register machine over chunk-sized buffers
-with the `elem-simd-math` slice kernels, but only when every operand is
-unit-stride along the block's contiguous axis; any non-unit stride, in
-particular the `0` of a broadcast, falls back to the old
-`interpret_inner_loop_uninit`, one scalar iteration per element with runtime
-stride addressing. Separately, `tenferro-cpu-fused` builds one `strided-fused`
-plan per live output (`single_output_strided_fused_plan`, `lib.rs`), so a region
-with several live outputs replays its whole instruction list once per output.
+The selection is scoped to what was measured. Only `F32`/`F64` regions are
+selected, because 0.5.2's vectorized chunk replay covers only those dtypes;
+C32/C64, integers and bool stay unfused rather than run the unmeasured
+per-element interpreter. An ordered real op (`Maximum`/`Minimum`/`Clamp`) also
+declines, because the upstream kernels use Rust `.max`/`.min`, which drop NaN
+while tenferro's ordinary kernels propagate it.
 
-The measurement (2026-10-16, `AMD EPYC 7713P`, 1T and 4T, predeclared rule
-"enable only if fused/declined `<= 1.05` in every case") is recorded in
+The measurement (2026-10-17, `AMD EPYC 7713P`, 1T and 4T) is recorded in
 [`docs/worklogs/perf-cpu-fusion-declined-2140.md`](../worklogs/perf-cpu-fusion-declined-2140.md),
-section "Reassessment after `strided-fused 0.5.1` (#2161)": fusion wins
-0.34-0.93 on chains, loses 16x on a contiguity-axis broadcast and 1.5-1.9x on
-two live outputs.
+section "Re-enabled on `strided-fused 0.5.2` (#2161)". The decision rule actually
+applied was "median over all recorded runs per case `<= 1.05`", and it passes
+with the largest per-case median 1.02; the contiguity-axis broadcast and the
+two-live-output region, the two cases that lost on 0.5.1, are among the wins.
+The GPU backend reaches the same runtime machinery with its own `#[cube]` code
+generator and is unaffected.
 
-`tenferro-cpu-fused` keeps the executor, implemented and covered by its own
-tests, so re-enabling CPU fusion is one constant once upstream vectorizes the
-non-contiguous broadcast block and the adapter stops recompiling per output
-([#2161](https://github.com/tensor4all/tenferro-rs/issues/2161)). The GPU backend
-reaches the same runtime machinery with its own `#[cube]` code generator and is
-unaffected.
-
-This is why `CpuBackend::max_fused_region_inputs` still reports the executor's
-four-input limit even though no region is ever selected: the limit describes the
-executor, and the selection policy is the session's.
+`CpuBackend::max_fused_region_inputs` reports the executor's four-input limit:
+the limit describes the executor, and the session selects a region only inside
+it.
 
 ## Diagnostics
 

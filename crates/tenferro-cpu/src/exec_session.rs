@@ -1100,73 +1100,12 @@ impl TensorBuffer for CpuExecSession<'_> {
     }
 }
 
-/// Whether this backend executes a planned elementwise region as one fused command.
-///
-/// It does not. `strided-fused 0.5.1` added a vectorized chunked replay for
-/// contiguous blocks, but that replay is taken only when every operand is
-/// unit-stride along the block's contiguous axis; a non-unit stride (in
-/// particular the `0` of a broadcast) falls back to `interpret_inner_loop_uninit`,
-/// one scalar iteration per element with runtime-stride addressing. And the CPU
-/// adapter compiles a separate `strided-fused` plan per live output, so a region
-/// with several live outputs replays its whole instruction list once per output.
-/// Both keep fusion behind the per-instruction dispatch that reaches the vector
-/// kernels this crate already uses. Measured 2026-10-16 on an `AMD EPYC 7713P`,
-/// release, with a throwaway harness that toggled the gate per round: the
-/// prepared program's first five runs plus 300 timed runs per round, median of
-/// three interleaved rounds, pinned with `taskset` to idle cores 56-63.
-/// Per-iteration ms; `ratio` is fused/declined, and the acceptance rule is
-/// "enable only if `ratio <= 1.05` everywhere".
-///
-/// One worker thread:
-///
-/// | case | declined | fused | ratio |
-/// |---|---:|---:|---:|
-/// | ten `tanh` f32 `1024x64` | 2.33 | 2.11 | 0.90 |
-/// | ten `mul` f32 `1024x64` | 0.176 | 0.109 | 0.62 |
-/// | ten `tanh` f64 `1024x64` | 5.15 | 5.16 | 1.00 |
-/// | ten `mul` f64 `1024x64` | 0.381 | 0.266 | 0.70 |
-/// | broadcast, contiguity axis f32 | 0.276 | 4.59 | **16.6** |
-/// | broadcast, outer axis f32 | 0.249 | 0.208 | 0.83 |
-/// | two live outputs f32 | 0.221 | 0.410 | **1.85** |
-/// | ten `tanh` f32 `16384` (floor) | 0.412 | 0.364 | 0.89 |
-/// | ten `tanh` f32 `1<<20` | 37.3 | 33.3 | 0.89 |
-///
-/// Four worker threads:
-///
-/// | case | declined | fused | ratio |
-/// |---|---:|---:|---:|
-/// | ten `tanh` f32 `1024x64` | 2.49 | 1.35 | 0.54 |
-/// | ten `mul` f32 `1024x64` | 0.369 | 0.126 | 0.34 |
-/// | ten `tanh` f64 `1024x64` | 3.13 | 2.92 | 0.93 |
-/// | ten `mul` f64 `1024x64` | 0.403 | 0.185 | 0.46 |
-/// | broadcast, contiguity axis f32 | 0.447 | 7.32 | **16.4** |
-/// | broadcast, outer axis f32 | 0.332 | 0.355 | 1.07 |
-/// | two live outputs f32 | 0.230 | 0.354 | **1.54** |
-/// | ten `tanh` f32 `16384` (floor) | 0.731 | 0.552 | 0.75 |
-/// | ten `tanh` f32 `1<<20` | 10.3 | 9.19 | 0.89 |
-///
-/// The regressions decide it: a broadcast on the column-major innermost axis
-/// (`b[1, 64]` added to `x[1024, 64]`, which the shared input-view path reduces
-/// to a rank-1 operand) loses 16x because its stride `0` forces the scalar
-/// interpreter, and a two-live-output region loses 1.5-1.9x to the per-output
-/// plan replay. `tenferro_cpu_fused` keeps the executor, implemented and covered
-/// by its own tests, and `CpuBackend::max_fused_region_inputs` stays reachable, so
-/// re-enabling CPU fusion is one constant once upstream vectorizes the
-/// non-contiguous broadcast block and the adapter stops recompiling per output
-/// ([#2161](https://github.com/tensor4all/tenferro-rs/issues/2161)).
-const SELECTS_FUSED_ELEMENTWISE_REGION: bool = false;
-
 impl TensorFusion for CpuExecSession<'_> {
     fn execute_elementwise_fusion(
         &mut self,
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
-        if !SELECTS_FUSED_ELEMENTWISE_REGION {
-            // `Ok(None)` is the runtime's documented decline: it dispatches the
-            // region's instructions one by one, which is the faster path.
-            return Ok(None);
-        }
         self.run_native_fresh_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             tenferro_cpu_fused::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)

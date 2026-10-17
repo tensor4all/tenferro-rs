@@ -87,20 +87,14 @@ fn dot_and_fusion_vec_outputs_use_the_selected_domain() {
             __s.execute_elementwise_fusion(&[&fusion_lhs, &fusion_rhs], &fusion)
         })
         .unwrap()
+        .unwrap()
         .unwrap();
 
     assert_eq!(dot.placement().cpu_affinity, Some(selected));
-    // A fused region's outputs used to carry the selected domain as well. The
-    // session declines every region because `strided-fused 0.5.1`'s chunked
-    // replay still falls back to the scalar interpreter for a non-unit-stride
-    // operand and the adapter recompiles per live output (#2161), so the fused
-    // executor is reached only through its own tests, which do not tag placements.
-    // The decline is the observable behaviour here; restore the placement
-    // assertions with the fusion.
-    assert!(
-        outputs.is_none(),
-        "the CPU session should decline a fused region"
-    );
+    assert_eq!(outputs.len(), 2);
+    assert!(outputs
+        .iter()
+        .all(|output| output.placement().cpu_affinity == Some(selected)));
 }
 
 #[test]

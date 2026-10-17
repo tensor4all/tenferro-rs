@@ -14,7 +14,6 @@
 pub type Result<T> = tenferro_tensor::Result<T>;
 pub use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 
-use num_complex::{Complex32, Complex64};
 use std::mem::size_of_val;
 use strided_basic::{ErasedRawStridedPtr, ErasedRawStridedRef, ExecContext, KernelDType};
 use strided_fused::{ErasedFusedPlan, FusedInst, FusedOp, FusedPlan};
@@ -60,17 +59,6 @@ fn validate_elementwise_fusion_inputs(
             ),
         ));
     }
-    if plan.input_views().len() != plan.input_count() {
-        return Err(crate::Error::invalid_argument(
-            ELEMENTWISE_FUSION_OP,
-            "input_views",
-            format!(
-                "plan has {} input views for {} inputs",
-                plan.input_views().len(),
-                plan.input_count()
-            ),
-        ));
-    }
     if plan.outputs().is_empty() {
         return Ok(false);
     }
@@ -94,9 +82,6 @@ fn strided_fused_op(op: ElementwiseFusionOp) -> FusedOp {
         ElementwiseFusionOp::Conj => FusedOp::Conj,
         ElementwiseFusionOp::Divide => FusedOp::Divide,
         ElementwiseFusionOp::Abs => FusedOp::Abs,
-        ElementwiseFusionOp::Maximum => FusedOp::Maximum,
-        ElementwiseFusionOp::Minimum => FusedOp::Minimum,
-        ElementwiseFusionOp::Clamp => FusedOp::Clamp,
         ElementwiseFusionOp::Exp => FusedOp::Exp,
         ElementwiseFusionOp::Log => FusedOp::Log,
         ElementwiseFusionOp::Sin => FusedOp::Sin,
@@ -107,11 +92,18 @@ fn strided_fused_op(op: ElementwiseFusionOp) -> FusedOp {
         ElementwiseFusionOp::Pow => FusedOp::Pow,
         ElementwiseFusionOp::Expm1 => FusedOp::Expm1,
         ElementwiseFusionOp::Log1p => FusedOp::Log1p,
-        // INVARIANT: `plan_uses_unfused_op` declines every plan containing
-        // these ops before a strided plan is built; strided_fused has no
-        // remainder or `erf` instruction.
-        ElementwiseFusionOp::Remainder | ElementwiseFusionOp::Erf => {
-            unreachable!("ops without a strided_fused instruction are declined before CPU fusion")
+        // INVARIANT: `plan_uses_unfused_op` declines remainder/`erf` (which
+        // have no `strided_fused` instruction) and `plan_uses_ordered_op`
+        // declines the ordered ops for their NaN semantics before a strided
+        // plan is built.
+        ElementwiseFusionOp::Maximum
+        | ElementwiseFusionOp::Minimum
+        | ElementwiseFusionOp::Clamp
+        | ElementwiseFusionOp::Remainder
+        | ElementwiseFusionOp::Erf => {
+            unreachable!(
+                "ops without a selected strided_fused instruction are declined before CPU fusion"
+            )
         }
     }
 }
@@ -147,10 +139,10 @@ fn should_defer_to_broadcast_multiply_special_case(plan: &ElementwiseFusionPlan)
         && plan.ops()[0].op() == ElementwiseFusionOp::Multiply
 }
 
-fn single_output_strided_fused_plan(plan: &ElementwiseFusionPlan, output: usize) -> FusedPlan {
+fn strided_fused_plan(plan: &ElementwiseFusionPlan) -> FusedPlan {
     FusedPlan {
         input_count: plan.input_count(),
-        outputs: vec![output],
+        outputs: plan.outputs().to_vec(),
         ops: plan
             .ops()
             .iter()
@@ -162,19 +154,39 @@ fn single_output_strided_fused_plan(plan: &ElementwiseFusionPlan, output: usize)
     }
 }
 
-fn kernel_dtype(dtype: DType) -> KernelDType {
-    match dtype {
-        DType::F32 => KernelDType::F32,
-        DType::F64 => KernelDType::F64,
-        DType::I32 => KernelDType::I32,
-        DType::I64 => KernelDType::I64,
-        DType::Bool => KernelDType::Bool,
-        DType::C32 => KernelDType::C32,
-        DType::C64 => KernelDType::C64,
-        // INVARIANT: `KernelDType` is the fixed compiled-kernel vocabulary used by
-        // the fused path; an externally defined scalar has no entry in it and is
-        // rejected by `dtype_supports_erased_fusion` before this point.
-        DType::External(_) => unreachable!("KernelDType covers the preset scalars"),
+/// The two dtypes the CPU fused replay covers.
+#[derive(Clone, Copy)]
+enum FusedDType {
+    F32,
+    F64,
+}
+
+impl FusedDType {
+    /// The erased kernel tag for this dtype.
+    fn kernel(self) -> KernelDType {
+        match self {
+            FusedDType::F32 => KernelDType::F32,
+            FusedDType::F64 => KernelDType::F64,
+        }
+    }
+}
+
+/// The fused dtype a plan selects, or `None` when the region stays unfused.
+///
+/// Only `F32`/`F64` are selected: `strided-fused 0.5.2`'s vectorized chunk
+/// replay covers only those dtypes, and every other preset dtype would run the
+/// unmeasured per-element interpreter. An ordered op (`Maximum`/`Minimum`/
+/// `Clamp`) also declines for a real dtype: the upstream kernels use Rust
+/// `.max`/`.min`, which do not propagate NaN, while tenferro's ordinary kernels
+/// do (`R-numerics-01`).
+fn select_fused_dtype(plan: &ElementwiseFusionPlan) -> Option<FusedDType> {
+    if plan_uses_ordered_op(plan) {
+        return None;
+    }
+    match plan.dtype() {
+        DType::F32 => Some(FusedDType::F32),
+        DType::F64 => Some(FusedDType::F64),
+        _ => None,
     }
 }
 
@@ -190,34 +202,23 @@ struct ErasedFusionInput<'a> {
     strides: StrideVec,
 }
 
-fn tensor_host_bytes<'a>(op: &'static str, input: &'a Tensor) -> crate::Result<&'a [u8]> {
+fn tensor_host_bytes(dtype: FusedDType, input: &Tensor) -> crate::Result<&[u8]> {
+    let op = ELEMENTWISE_FUSION_OP;
     macro_rules! bytes {
         ($tensor:expr) => {
             typed_host_data(op, $tensor).map(typed_bytes)
         };
     }
 
-    match input.dtype() {
-        DType::F32 => bytes!(fused_host::<f32>(op, input)?),
-        DType::F64 => bytes!(fused_host::<f64>(op, input)?),
-        DType::I32 => bytes!(fused_host::<i32>(op, input)?),
-        DType::I64 => bytes!(fused_host::<i64>(op, input)?),
-        DType::Bool => bytes!(fused_host::<bool>(op, input)?),
-        DType::C32 => bytes!(fused_host::<Complex32>(op, input)?),
-        DType::C64 => bytes!(fused_host::<Complex64>(op, input)?),
-        // A caller-owned payload is opaque here, so the fused path rejects it
-        // instead of reading bytes it cannot interpret.
-        DType::External(_) => Err(crate::Error::unsupported_dtype(
-            op,
-            input.dtype(),
-            "an externally defined payload is not a fused input",
-        )),
+    match dtype {
+        FusedDType::F32 => bytes!(fused_host::<f32>(op, input)?),
+        FusedDType::F64 => bytes!(fused_host::<f64>(op, input)?),
     }
 }
 /// The typed tensor behind `input`, or the refusal this path produces for one.
 ///
-/// Callers reach this from a match on `input.dtype()`, so `None` means the tag table
-/// and the runtime dtype disagree rather than a caller mistake.
+/// Callers select `T` from the plan's fused dtype, so `None` means the tensor's
+/// runtime dtype disagrees with that selection rather than a caller mistake.
 fn fused_host<'a, T: tenferro_tensor::TensorScalar>(
     op: &'static str,
     input: &'a Tensor,
@@ -232,10 +233,11 @@ fn fused_host<'a, T: tenferro_tensor::TensorScalar>(
 }
 
 fn erased_fusion_input<'a>(
+    dtype: FusedDType,
     input: &'a Tensor,
     view: &ElementwiseFusionInputView,
 ) -> crate::Result<ErasedFusionInput<'a>> {
-    let data = tensor_host_bytes(ELEMENTWISE_FUSION_OP, input)?;
+    let data = tensor_host_bytes(dtype, input)?;
     let base_shape = input.shape();
     let base_strides = col_major_strides(base_shape)?;
     let ElementwiseFusionInputView::BroadcastInDim { shape, dims } = view else {
@@ -316,14 +318,14 @@ pub fn elementwise_fusion_with_pool(
     if should_defer_to_broadcast_multiply_special_case(plan) {
         return Ok(None);
     }
-    if !dtype_supports_erased_fusion(plan.dtype(), plan) {
+    let Some(dtype) = select_fused_dtype(plan) else {
         return Ok(None);
-    }
+    };
 
     let input_layouts = inputs
         .iter()
         .zip(plan.input_views())
-        .map(|(input, view)| erased_fusion_input(input, view))
+        .map(|(input, view)| erased_fusion_input(dtype, input, view))
         .collect::<crate::Result<Vec<_>>>()?;
     let shape = input_layouts[0].dims.clone();
     if input_layouts
@@ -339,52 +341,26 @@ pub fn elementwise_fusion_with_pool(
         return Ok(None);
     }
 
-    let dtype = kernel_dtype(plan.dtype());
     let input_refs = input_layouts
         .iter()
         .map(|input| {
             // SAFETY: fusion inputs are initialized typed storage with matching
             // dtype and alignment; validated layouts bound every reachable read
             // for the retained input borrow.
-            unsafe { erased_raw_strided_ref(dtype, input.data, &input.dims, &input.strides, 0) }
-                .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
+            unsafe {
+                erased_raw_strided_ref(dtype.kernel(), input.data, &input.dims, &input.strides, 0)
+            }
+            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
     execute_erased_fused_outputs(buffers, exec_context, dtype, &input_refs, &shape, plan).map(Some)
 }
 
-fn dtype_supports_erased_fusion(dtype: DType, plan: &ElementwiseFusionPlan) -> bool {
-    match dtype {
-        DType::F32 | DType::F64 => true,
-        DType::C32 | DType::C64 => !plan_uses_ordered_op(plan),
-        DType::I32 | DType::I64 => plan.ops().iter().all(|inst| {
-            matches!(
-                inst.op(),
-                ElementwiseFusionOp::Add
-                    | ElementwiseFusionOp::Multiply
-                    | ElementwiseFusionOp::Negate
-                    | ElementwiseFusionOp::Conj
-                    | ElementwiseFusionOp::Abs
-                    | ElementwiseFusionOp::Maximum
-                    | ElementwiseFusionOp::Minimum
-                    | ElementwiseFusionOp::Clamp
-            )
-        }),
-        DType::Bool => plan
-            .ops()
-            .iter()
-            .all(|inst| inst.op() == ElementwiseFusionOp::Conj),
-        // An externally defined scalar has no fused kernel, so the fixed-dtype
-        // fused path rejects it rather than guessing a representation.
-        DType::External(_) => false,
-    }
-}
-
 fn execute_erased_fused_outputs(
     buffers: &mut BufferPool,
     exec_context: &ExecContext,
-    dtype: KernelDType,
+    dtype: FusedDType,
     input_refs: &[ErasedRawStridedRef<'_>],
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
@@ -393,160 +369,86 @@ fn execute_erased_fused_outputs(
         .iter()
         .map(ErasedRawStridedPtr::from_ref)
         .collect();
+    let kernel = dtype.kernel();
     match dtype {
-        KernelDType::F32 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<f32>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::from_typed::<f32>,
-                )
-            })
-            .collect(),
-        KernelDType::F64 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<f64>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::from_typed::<f64>,
-                )
-            })
-            .collect(),
-        KernelDType::I32 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<i32>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::from_typed::<i32>,
-                )
-            })
-            .collect(),
-        KernelDType::I64 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<i64>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::from_typed::<i64>,
-                )
-            })
-            .collect(),
-        KernelDType::Bool => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<bool>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::from_typed::<bool>,
-                )
-            })
-            .collect(),
-        KernelDType::C32 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<num_complex::Complex32>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::from_typed::<tenferro_tensor::Complex32>,
-                )
-            })
-            .collect(),
-        KernelDType::C64 => plan
-            .outputs()
-            .iter()
-            .map(|&output| {
-                execute_erased_fused_output::<num_complex::Complex64>(
-                    buffers,
-                    exec_context,
-                    dtype,
-                    &input_ptrs,
-                    shape,
-                    plan,
-                    output,
-                    Tensor::from_typed::<tenferro_tensor::Complex64>,
-                )
-            })
-            .collect(),
-        _ => Err(crate::Error::unsupported(
-            ELEMENTWISE_FUSION_OP,
-            format!(
-                "unsupported dtype {}; supported dtypes: F32/F64/I32/I64/Bool/C32/C64",
-                dtype.label()
-            ),
-        )),
+        FusedDType::F32 => execute_erased_fused_plan::<f32>(
+            buffers,
+            exec_context,
+            kernel,
+            &input_ptrs,
+            shape,
+            plan,
+        ),
+        FusedDType::F64 => execute_erased_fused_plan::<f64>(
+            buffers,
+            exec_context,
+            kernel,
+            &input_ptrs,
+            shape,
+            plan,
+        ),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn execute_erased_fused_output<T>(
+/// Compile one strided plan for every live output and replay it once.
+///
+/// The plan's `outputs` are executed in order by
+/// [`ErasedFusedPlan::execute_outputs_uninit`], so a region with several live
+/// outputs replays its instruction list a single time instead of once per
+/// output.
+fn execute_erased_fused_plan<T>(
     buffers: &mut BufferPool,
     exec_context: &ExecContext,
     dtype: KernelDType,
     input_ptrs: &[ErasedRawStridedPtr<'_>],
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
-    output: usize,
-    wrap: fn(TypedTensor<T>) -> Tensor,
-) -> crate::Result<Tensor>
+) -> crate::Result<Vec<Tensor>>
 where
     T: Clone + PoolScalar,
 {
-    let fused_plan = single_output_strided_fused_plan(plan, output);
-    let erased_plan = ErasedFusedPlan::compile(dtype, fused_plan)
+    let erased_plan = ErasedFusedPlan::compile(dtype, strided_fused_plan(plan))
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, shape)?;
     let output_strides = col_major_strides(shape)?;
-    // SAFETY: `out` exclusively owns the output allocation with matching
-    // dtype/alignment and the fused plan overwrites every reachable element
-    // before `assume_init` exposes typed storage.
-    let mut dest = unsafe {
-        erased_raw_strided_uninit_mut(dtype, out.as_uninit_bytes_mut(), shape, &output_strides, 0)
-    }
-    .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+    let mut outputs = plan
+        .outputs()
+        .iter()
+        .map(|_| PooledUninitOutput::<T>::new(buffers, shape))
+        .collect::<crate::Result<Vec<_>>>()?;
+    // SAFETY: every pooled output exclusively owns its allocation with matching
+    // dtype/alignment, the destination descriptors borrow each output mutably
+    // for the exclusive lifetime of `dests`, and the fused plan overwrites
+    // every reachable element before `assume_init_recycled` exposes typed
+    // storage.
+    let mut dests = outputs
+        .iter_mut()
+        .map(|output| {
+            // SAFETY: as above.
+            unsafe {
+                erased_raw_strided_uninit_mut(
+                    dtype,
+                    output.as_uninit_bytes_mut(),
+                    shape,
+                    &output_strides,
+                    0,
+                )
+            }
+            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
     erased_plan
-        .execute_uninit(exec_context, &mut dest, input_ptrs)
+        .execute_outputs_uninit(exec_context, &mut dests, input_ptrs)
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    // SAFETY: the fused replay writes every logical destination element and retains no destination view.
-    Ok(wrap(unsafe { out.assume_init_recycled()? }))
+    drop(dests);
+    outputs
+        .drain(..)
+        .map(|output| {
+            // SAFETY: the fused replay wrote every logical destination element
+            // and retains no destination view.
+            let tensor = unsafe { output.assume_init_recycled()? };
+            Ok(Tensor::from_typed::<T>(tensor))
+        })
+        .collect()
 }
 
 #[cfg(test)]

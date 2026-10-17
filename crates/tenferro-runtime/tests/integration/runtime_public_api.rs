@@ -757,17 +757,11 @@ fn prepared_elementwise_regions_are_planned_at_prepare_time() {
     );
 }
 
-/// Stage 1 evidence: a region the CPU engine declines runs its instructions one
-/// by one and still matches the unprepared path, and a run containing a
-/// reduction plans and executes no region at all.
-///
-/// The CPU engine declines every region because `strided-fused 0.5.1`'s chunked
-/// replay still falls back to the scalar interpreter for a non-unit-stride
-/// operand and the adapter recompiles per live output; `tenferro-cpu`'s
-/// `SELECTS_FUSED_ELEMENTWISE_REGION` owns that policy and carries the measured
-/// table behind it (#2161).
+/// Stage 1 evidence: the planned region executes as one fused command (the
+/// runtime counter records it), the results match a host reference, and a run
+/// containing a reduction plans and executes no region at all.
 #[test]
-fn prepared_elementwise_region_is_declined_by_the_cpu_engine() {
+fn prepared_elementwise_region_executes_as_one_fused_command() {
     let runtime = cpu_runtime();
     let n = 16 * 1024usize;
 
@@ -785,28 +779,24 @@ fn prepared_elementwise_region_is_declined_by_the_cpu_engine() {
         .compile_with_input_specs(&chain, &[(&x, DType::F64, &[n])])
         .unwrap();
     let data: Vec<f64> = (0..n).map(|i| 0.25 + (i % 17) as f64 * 0.125).collect();
-    let input = Tensor::from_vec_col_major(vec![n], data).unwrap();
+    let input = Tensor::from_vec_col_major(vec![n], data.clone()).unwrap();
     let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
 
-    // `run_compiled` shares the runtime's prepared-entry cache, so the reference
-    // run uses a second runtime to keep this runtime's counters meaningful.
-    let reference_runtime = cpu_runtime();
-    let mut compiled = reference_runtime.run_compiled(&program, &[&input]).unwrap();
     let mut fused = runtime.run_prepared(&prepared, &[&input]).unwrap();
     assert_eq!(
         prepared.elementwise_region_execution_counts(),
-        (0, 1),
-        "the CPU engine declines the chain region"
+        (1, 0),
+        "the CPU engine should execute the chain region fused"
     );
 
-    let compiled = compiled.pop().unwrap();
     let fused = fused.pop().unwrap();
-    let compiled = compiled.as_slice::<f64>().unwrap();
     let fused = fused.as_slice::<f64>().unwrap();
-    for (left, right) in compiled.iter().zip(fused) {
+    for (index, value) in fused.iter().enumerate() {
+        let doubled = data[index] + data[index];
+        let expected = (doubled * doubled).exp().tanh();
         assert!(
-            (left - right).abs() <= 1e-12,
-            "fused region diverged from the unprepared path: {left} != {right}"
+            (value - expected).abs() <= 1e-12,
+            "fused region diverged from the host reference at {index}: {value} != {expected}"
         );
     }
 
@@ -830,6 +820,123 @@ fn prepared_elementwise_region_is_declined_by_the_cpu_engine() {
         (0, 0),
         "a run containing a reduction plans no region"
     );
+}
+
+/// An ordered op (`maximum`/`minimum`/`clamp`) stays unfused above the floor and
+/// keeps tenferro's NaN propagation.
+///
+/// `strided-fused 0.5.2` implements the ordered ops with Rust `.max`/`.min`,
+/// which drop NaN, while the per-instruction kernels propagate it. The region is
+/// therefore declined (`R-numerics-01`), and the fallback must return NaN for a
+/// NaN operand.
+#[test]
+fn prepared_ordered_region_declines_and_propagates_nan() {
+    for dtype in [DType::F32, DType::F64] {
+        let runtime = cpu_runtime();
+        let n = 16 * 1024usize;
+
+        let x = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
+        let y = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
+        let one = match dtype {
+            DType::F32 => Tensor::from_vec_col_major(vec![n], vec![1.0_f32; n]).unwrap(),
+            DType::F64 => Tensor::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
+            _ => unreachable!(),
+        };
+        let one = TracedTensor::from_tensor_concrete_shape(one).unwrap();
+        let out = (&x.maximum(&y).unwrap() + &one).unwrap();
+        let program = GraphCompiler::new()
+            .compile_with_input_specs(&out, &[(&x, dtype, &[n]), (&y, dtype, &[n])])
+            .unwrap();
+
+        let nan_input = match dtype {
+            DType::F32 => Tensor::from_vec_col_major(vec![n], vec![f32::NAN; n]).unwrap(),
+            DType::F64 => Tensor::from_vec_col_major(vec![n], vec![f64::NAN; n]).unwrap(),
+            _ => unreachable!(),
+        };
+        let finite_input = match dtype {
+            DType::F32 => Tensor::from_vec_col_major(vec![n], vec![1.0_f32; n]).unwrap(),
+            DType::F64 => Tensor::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
+            _ => unreachable!(),
+        };
+
+        let prepared = runtime
+            .prepare_compiled(&program, &[&nan_input, &finite_input])
+            .unwrap();
+        assert!(
+            prepared.elementwise_region_summary().0 >= 1,
+            "{dtype:?}: the ordered chain should still plan a region"
+        );
+
+        let mut out = runtime
+            .run_prepared(&prepared, &[&nan_input, &finite_input])
+            .unwrap();
+        assert_eq!(
+            prepared.elementwise_region_execution_counts(),
+            (0, 1),
+            "{dtype:?}: the NaN-unsafe ordered region must be declined"
+        );
+        let out = out.pop().unwrap();
+        match dtype {
+            DType::F32 => assert!(
+                out.as_slice::<f32>()
+                    .unwrap()
+                    .iter()
+                    .all(|value| value.is_nan()),
+                "f32 NaN must propagate through the fallback"
+            ),
+            DType::F64 => assert!(
+                out.as_slice::<f64>()
+                    .unwrap()
+                    .iter()
+                    .all(|value| value.is_nan()),
+                "f64 NaN must propagate through the fallback"
+            ),
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// A region whose dtype is not F32/F64 stays unfused above the floor.
+///
+/// `strided-fused 0.5.2`'s vectorized chunk replay covers only F32/F64; every
+/// other dtype would run the unmeasured per-element interpreter, so the region
+/// is declined and the per-instruction path is compared against a host
+/// reference.
+#[test]
+fn prepared_non_f32_f64_region_is_declined() {
+    let runtime = cpu_runtime();
+    let n = 16 * 1024usize;
+
+    let x = TracedTensor::input_concrete_shape(DType::I64, &[n]).unwrap();
+    let doubled = (&x + &x).unwrap();
+    let chain = (&doubled * &doubled).unwrap();
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&chain, &[(&x, DType::I64, &[n])])
+        .unwrap();
+    let data: Vec<i64> = (0..n).map(|i| (i % 100) as i64 + 1).collect();
+    let input = Tensor::from_vec_col_major(vec![n], data.clone()).unwrap();
+    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    assert!(
+        prepared.elementwise_region_summary().0 >= 1,
+        "the I64 chain should still plan a region"
+    );
+
+    let mut out = runtime.run_prepared(&prepared, &[&input]).unwrap();
+    assert_eq!(
+        prepared.elementwise_region_execution_counts(),
+        (0, 1),
+        "I64 has no measured vectorized replay and must run per instruction"
+    );
+    let out = out.pop().unwrap();
+    let out = out.as_slice::<i64>().unwrap();
+    for (index, &value) in out.iter().enumerate() {
+        let doubled = data[index] + data[index];
+        assert_eq!(
+            value,
+            doubled * doubled,
+            "I64 fallback diverged from the host reference at {index}"
+        );
+    }
 }
 
 /// Stage 1 evidence: when the backend declines the fusion the region falls back
@@ -935,7 +1042,7 @@ fn prepared_elementwise_region_publishes_multiple_live_outs() {
 
     let data: Vec<f64> = (0..n).map(|i| 0.25 + (i % 13) as f64 * 0.125).collect();
     let x = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![n], data).unwrap(),
+        Tensor::from_vec_col_major(vec![n], data.clone()).unwrap(),
     )
     .unwrap();
     let shared = (&x + &x).unwrap();
@@ -953,25 +1060,29 @@ fn prepared_elementwise_region_publishes_multiple_live_outs() {
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
     assert_eq!(
         (fused, fallbacks),
-        (0, 1),
-        "the planned region runs unfused"
+        (1, 0),
+        "the two-live-output region should fuse once"
     );
 
-    let reference_runtime = cpu_runtime();
-    let mut compiled = reference_runtime.run_compiled(&program, &[]).unwrap();
     assert_eq!(prepared_out.len(), 2);
-    assert_eq!(compiled.len(), 2);
-    while let Some(expected) = compiled.pop() {
-        let actual = prepared_out.pop().unwrap();
-        assert_eq!(actual.shape(), expected.shape());
-        let actual = actual.as_slice::<f64>().unwrap();
-        let expected = expected.as_slice::<f64>().unwrap();
-        for (left, right) in actual.iter().zip(expected) {
-            assert!(
-                (left - right).abs() <= 1e-12,
-                "live-out diverged: {left} != {right}"
-            );
-        }
+    let z_out = prepared_out.pop().unwrap();
+    let y_out = prepared_out.pop().unwrap();
+    let y_out = y_out.as_slice::<f64>().unwrap();
+    let z_out = z_out.as_slice::<f64>().unwrap();
+    for (index, &value) in data.iter().enumerate() {
+        let doubled = value + value;
+        let expected_y = doubled.exp().tanh();
+        let expected_z = doubled * doubled;
+        assert!(
+            (y_out[index] - expected_y).abs() <= 1e-12,
+            "live-out y diverged from the host reference at {index}: {} != {expected_y}",
+            y_out[index]
+        );
+        assert!(
+            (z_out[index] - expected_z).abs() <= 1e-12,
+            "live-out z diverged from the host reference at {index}: {} != {expected_z}",
+            z_out[index]
+        );
     }
 }
 
@@ -1018,7 +1129,7 @@ fn runtime_compiled_values_matches_prepared_for_elementwise_chain() {
 /// Stage 1: an elementwise region next to an FFI operation.
 ///
 /// The region covers only the elementwise chain; the matrix multiply stays its
-/// own command, and both outputs match the unprepared path.
+/// own command, and both outputs match a host reference.
 #[test]
 fn prepared_elementwise_region_stays_separate_from_ffi_op() {
     let runtime = cpu_runtime();
@@ -1027,23 +1138,16 @@ fn prepared_elementwise_region_stays_separate_from_ffi_op() {
     let n = 8usize;
     let chain_len = 16 * 1024usize;
 
-    let matrix = |seed: f64| {
-        Tensor::from_vec_col_major(
-            vec![n, n],
-            (0..n * n).map(|i| seed + (i % 7) as f64 * 0.125).collect(),
-        )
-        .unwrap()
-    };
-    let a = TracedTensor::from_tensor_concrete_shape(matrix(0.5)).unwrap();
-    let b = TracedTensor::from_tensor_concrete_shape(matrix(0.25)).unwrap();
+    let matrix = |data: &[f64]| Tensor::from_vec_col_major(vec![n, n], data.to_vec()).unwrap();
+    let a_data: Vec<f64> = (0..n * n).map(|i| 0.5 + (i % 7) as f64 * 0.125).collect();
+    let b_data: Vec<f64> = (0..n * n).map(|i| 0.25 + (i % 7) as f64 * 0.125).collect();
+    let a = TracedTensor::from_tensor_concrete_shape(matrix(&a_data)).unwrap();
+    let b = TracedTensor::from_tensor_concrete_shape(matrix(&b_data)).unwrap();
+    let chain_data: Vec<f64> = (0..chain_len)
+        .map(|i| 0.5 + (i % 5) as f64 * 0.25)
+        .collect();
     let x = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(
-            vec![chain_len],
-            (0..chain_len)
-                .map(|i| 0.5 + (i % 5) as f64 * 0.25)
-                .collect(),
-        )
-        .unwrap(),
+        Tensor::from_vec_col_major(vec![chain_len], chain_data.clone()).unwrap(),
     )
     .unwrap();
 
@@ -1065,23 +1169,30 @@ fn prepared_elementwise_region_stays_separate_from_ffi_op() {
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
     assert_eq!(
         (fused, fallbacks),
-        (0, 1),
-        "the CPU engine runs the chain region unfused"
+        (1, 0),
+        "the CPU engine should fuse the chain region"
     );
 
-    let reference_runtime = cpu_runtime();
-    let mut compiled = reference_runtime.run_compiled(&program, &[]).unwrap();
     assert_eq!(prepared_out.len(), 2);
-    assert_eq!(compiled.len(), 2);
-    while let Some(expected) = compiled.pop() {
-        let actual = prepared_out.pop().unwrap();
-        assert_eq!(actual.shape(), expected.shape());
-        let actual = actual.as_slice::<f64>().unwrap();
-        let expected = expected.as_slice::<f64>().unwrap();
-        for (left, right) in actual.iter().zip(expected) {
+    let chain_out = prepared_out.pop().unwrap();
+    let m_out = prepared_out.pop().unwrap();
+    let chain_out = chain_out.as_slice::<f64>().unwrap();
+    let m_out = m_out.as_slice::<f64>().unwrap();
+    for (index, &value) in chain_data.iter().enumerate() {
+        let expected = (value * value).exp().tanh();
+        assert!(
+            (chain_out[index] - expected).abs() <= 1e-12,
+            "chain output diverged from the host reference at {index}: {} != {expected}",
+            chain_out[index]
+        );
+    }
+    for j in 0..n {
+        for i in 0..n {
+            let expected: f64 = (0..n).map(|k| a_data[i + k * n] * b_data[k + j * n]).sum();
             assert!(
-                (left - right).abs() <= 1e-12,
-                "mixed-graph output diverged: {left} != {right}"
+                (m_out[i + j * n] - expected).abs() <= 1e-12,
+                "matmul output diverged from the host reference at ({i}, {j}): {} != {expected}",
+                m_out[i + j * n]
             );
         }
     }
@@ -1127,43 +1238,39 @@ fn prepared_elementwise_region_is_stable_across_repeated_runs() {
             }
         }
         let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
-        assert_eq!(
-            (fused, fallbacks),
-            (0, run),
-            "run {run} should decline once"
-        );
+        assert_eq!((fused, fallbacks), (run, 0), "run {run} should fuse once");
     }
 }
 
 /// Stage 1: a chain, an FFI operation, and another chain in one program.
 ///
 /// The large chain fuses, the small chain after the matrix multiply falls back
-/// below the CPU fused kernel's element floor, and both outputs match the
-/// unprepared path, so interleaving regions with FFI work keeps its contract.
+/// below the CPU fused kernel's element floor, and both outputs match a host
+/// reference, so interleaving regions with FFI work keeps its contract.
 #[test]
 fn prepared_regions_interleave_with_ffi_work() {
     let runtime = cpu_runtime();
     let chain_len = 16 * 1024usize;
     let n = 8usize;
 
-    let vector = |len: usize, seed: f64| {
-        Tensor::from_vec_col_major(
-            vec![len],
-            (0..len).map(|i| seed + (i % 11) as f64 * 0.125).collect(),
-        )
-        .unwrap()
-    };
-    let matrix = |seed: f64| {
-        Tensor::from_vec_col_major(
-            vec![n, n],
-            (0..n * n).map(|i| seed + (i % 7) as f64 * 0.125).collect(),
-        )
-        .unwrap()
-    };
+    let x_data: Vec<f64> = (0..chain_len)
+        .map(|i| 0.5 + (i % 11) as f64 * 0.125)
+        .collect();
+    let a_data: Vec<f64> = (0..n * n).map(|i| 0.5 + (i % 7) as f64 * 0.125).collect();
+    let b_data: Vec<f64> = (0..n * n).map(|i| 0.25 + (i % 7) as f64 * 0.125).collect();
 
-    let x = TracedTensor::from_tensor_concrete_shape(vector(chain_len, 0.5)).unwrap();
-    let a = TracedTensor::from_tensor_concrete_shape(matrix(0.5)).unwrap();
-    let b = TracedTensor::from_tensor_concrete_shape(matrix(0.25)).unwrap();
+    let x = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![chain_len], x_data.clone()).unwrap(),
+    )
+    .unwrap();
+    let a = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![n, n], a_data.clone()).unwrap(),
+    )
+    .unwrap();
+    let b = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![n, n], b_data.clone()).unwrap(),
+    )
+    .unwrap();
 
     let before = (&x * &x).unwrap().exp().unwrap().tanh().unwrap();
     let product = a.matmul(&b).unwrap();
@@ -1183,27 +1290,38 @@ fn prepared_regions_interleave_with_ffi_work() {
 
     let mut prepared_out = runtime.run_prepared(&prepared, &[]).unwrap();
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
-    assert_eq!(fused, 0, "the CPU engine declines every planned region");
+    assert!(fused >= 1, "the large chain should fuse: {fused} fused");
     assert!(
         fallbacks >= 1,
-        "each planned region should fall back once: {fallbacks} fallbacks"
+        "the chain below the element floor should fall back: {fallbacks} fallbacks"
     );
 
-    let reference_runtime = cpu_runtime();
-    let mut compiled = reference_runtime.run_compiled(&program, &[]).unwrap();
     assert_eq!(prepared_out.len(), 2);
-    assert_eq!(compiled.len(), 2);
-    while let Some(expected) = compiled.pop() {
-        let actual = prepared_out.pop().unwrap();
-        assert_eq!(actual.shape(), expected.shape());
-        let actual = actual.as_slice::<f64>().unwrap();
-        let expected = expected.as_slice::<f64>().unwrap();
-        for (left, right) in actual.iter().zip(expected) {
-            assert!(
-                (left - right).abs() <= 1e-12,
-                "interleaved output diverged: {left} != {right}"
-            );
+    let after_out = prepared_out.pop().unwrap();
+    let before_out = prepared_out.pop().unwrap();
+    let after_out = after_out.as_slice::<f64>().unwrap();
+    let before_out = before_out.as_slice::<f64>().unwrap();
+    for (index, &value) in x_data.iter().enumerate() {
+        let expected = (value * value).exp().tanh();
+        assert!(
+            (before_out[index] - expected).abs() <= 1e-12,
+            "fused chain output diverged from the host reference at {index}: {} != {expected}",
+            before_out[index]
+        );
+    }
+    let mut product_data = vec![0.0_f64; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            product_data[i + j * n] = (0..n).map(|k| a_data[i + k * n] * b_data[k + j * n]).sum();
         }
+    }
+    for (index, &value) in product_data.iter().enumerate() {
+        let expected = (value * value).exp().tanh();
+        assert!(
+            (after_out[index] - expected).abs() <= 1e-12,
+            "fallback chain output diverged from the host reference at {index}: {} != {expected}",
+            after_out[index]
+        );
     }
 }
 
