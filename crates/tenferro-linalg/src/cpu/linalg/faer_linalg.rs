@@ -10,15 +10,16 @@ use faer::{MatMut, MatRef};
 use num_complex::{Complex32, Complex64};
 use strided_view::{RawStridedMut, RawStridedRef};
 
+use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
 use tenferro_tensor::{
     DType, Tensor, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
-use tlinalg::{Op, Parallel};
+use tlinalg::Op;
 
 use super::raw_view;
-use crate::cpu::tlinalg::parallel_from;
+use crate::cpu::tlinalg::exec_from;
 use crate::cpu::tlinalg_error::map_error;
 
 /// The host-side scalar vocabulary of the faer route.
@@ -52,13 +53,13 @@ pub(crate) trait FaerLinalg:
     fn svd_values_into(
         input: RawStridedRef<'_, Self>,
         values: &mut Vec<Self::RealScalar>,
-        par: Parallel<'_>,
+        exec: Exec<'_>,
     ) -> tlinalg::Result<()>;
     /// Batched Hermitian eigenvalues in the real scalar.
     fn eigh_values_into(
         input: RawStridedRef<'_, Self>,
         values: &mut Vec<Self::RealScalar>,
-        par: Parallel<'_>,
+        exec: Exec<'_>,
     ) -> tlinalg::Result<()>;
 }
 
@@ -145,17 +146,17 @@ macro_rules! impl_faer_linalg {
             fn svd_values_into(
                 input: RawStridedRef<'_, Self>,
                 values: &mut Vec<$real>,
-                par: Parallel<'_>,
+                exec: Exec<'_>,
             ) -> tlinalg::Result<()> {
-                tlinalg::svd::svd_values(Op::SvdValues, input, values, par)
+                tlinalg::svd::svd_values(Op::SvdValues, input, values, exec)
             }
 
             fn eigh_values_into(
                 input: RawStridedRef<'_, Self>,
                 values: &mut Vec<$real>,
-                par: Parallel<'_>,
+                exec: Exec<'_>,
             ) -> tlinalg::Result<()> {
-                tlinalg::eigh::eigh_values(Op::EighValues, input, values, par)
+                tlinalg::eigh::eigh_values(Op::EighValues, input, values, exec)
             }
         }
     };
@@ -290,7 +291,7 @@ pub(crate) trait FaerEig: FaerLinalg {
         input: RawStridedRef<'_, Self>,
         values: &mut Vec<Self::ComplexScalar>,
         vectors: Option<&mut Vec<Self::ComplexScalar>>,
-        par: Parallel<'_>,
+        exec: Exec<'_>,
     ) -> tlinalg::Result<()>;
 
     /// Put the provider's eigenvectors into the public contract's gauge.
@@ -318,11 +319,11 @@ macro_rules! impl_faer_eig {
                 input: RawStridedRef<'_, Self>,
                 values: &mut Vec<$complex>,
                 vectors: Option<&mut Vec<$complex>>,
-                par: Parallel<'_>,
+                exec: Exec<'_>,
             ) -> tlinalg::Result<()> {
                 match vectors {
-                    Some(vectors) => tlinalg::eig::eig(Op::Eig, input, values, vectors, par),
-                    None => tlinalg::eig::eig_values(Op::EigValues, input, values, par),
+                    Some(vectors) => tlinalg::eig::eig(Op::Eig, input, values, vectors, exec),
+                    None => tlinalg::eig::eig_values(Op::EigValues, input, values, exec),
                 }
             }
 
@@ -538,7 +539,7 @@ fn cholesky_impl<T: FaerLinalg>(
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut l = pooled_output::<T>(buffers, OP, "matrix", &shape)?;
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::cholesky::cholesky(Op::Cholesky, raw_view(OP, view)?, &mut l, par)
         .map_err(provider(Op::Cholesky))?;
     tensor_from_vec_with_template(shape, l, view.placement())
@@ -585,7 +586,7 @@ pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
     let descriptor = RawStridedRef::new(input, &dims, &strides, 0).map_err(|error| {
         tenferro_tensor::Error::invalid_argument("cholesky", "layout", error.to_string())
     })?;
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::cholesky::cholesky(Op::Cholesky, descriptor, &mut l, par)
         .map_err(provider(Op::Cholesky))?;
     Ok(l)
@@ -624,7 +625,7 @@ fn lu_impl<T: FaerLinalg>(
     let mut l = pooled_output::<T>(buffers, OP, "L", &l_shape)?;
     let mut u = pooled_output::<T>(buffers, OP, "U", &u_shape)?;
     let mut parity = buffers.acquire_with_capacity::<T>(batch);
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::lu::lu(
         Op::Lu,
         raw_view(OP, view)?,
@@ -747,7 +748,7 @@ fn full_piv_lu_impl<T: FaerLinalg>(
     let mut u = pooled_output::<T>(buffers, OP, "U", &shape)?;
     let mut q = pooled_output::<T>(buffers, OP, "permutation matrix", &shape)?;
     let mut parity = buffers.acquire_with_capacity::<T>(batch);
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::full_piv_lu::full_piv_lu(
         Op::FullPivLu,
         raw_view(OP, view)?,
@@ -835,7 +836,7 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     }
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
     let (a_view, b_view) = (a.as_view(), b.as_view());
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::full_piv_lu::full_piv_lu_solve(
         Op::FullPivLuSolve,
         raw_view(OP, &a_view)?,
@@ -870,7 +871,7 @@ pub(crate) fn solve<T: FaerLinalg>(
     output.extend_from_slice(b.host_data()?);
     let a_view = a.as_view();
     let b_view = b.as_view();
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     {
         // INVARIANT: `output` is a compact copy of `b`, so `b`'s own compact layout describes it.
         let out = RawStridedMut::new(&mut output, b_view.shape(), b_view.strides(), 0).map_err(
@@ -967,7 +968,7 @@ fn solve_in_place_view<T: FaerLinalg>(
     } else {
         None
     };
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     let out = RawStridedMut::new(out.host_storage_mut()?, &out_dims, &out_strides, out_offset)
         .map_err(|error| tenferro_tensor::Error::invalid_argument(op, "out", error.to_string()))?;
     tlinalg::lu::solve(Op::Solve, a_descriptor, rhs, out, transpose_a, par).map_err(|error| {
@@ -1035,7 +1036,7 @@ fn triangular_solve_impl<T: FaerLinalg>(
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), placement);
     }
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::triangular_solve::triangular_solve(
         Op::TriangularSolve,
         raw_view(OP, a)?,
@@ -1151,7 +1152,7 @@ fn svd_impl<T: FaerLinalg>(
     let mut u = pooled_output::<T>(buffers, "svd", "left singular vectors", &u_shape)?;
     let mut s = pooled_output::<T>(buffers, "svd", "singular values", &s_shape)?;
     let mut vt = pooled_output::<T>(buffers, "svd", "right singular vectors", &vt_shape)?;
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::svd::svd(
         Op::Svd,
         raw_view(op, view)?,
@@ -1265,7 +1266,7 @@ fn svd_values_impl<T: FaerLinalg>(
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut s = pooled_output::<T::RealScalar>(buffers, OP, "singular values", &shape)?;
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     T::svd_values_into(raw_view(OP, view)?, &mut s, par).map_err(provider(Op::SvdValues))?;
     tensor_from_vec_with_template(shape, s, view.placement())
 }
@@ -1310,7 +1311,7 @@ fn qr_impl<T: FaerLinalg>(
     }
     let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::qr::qr(Op::Qr, raw_view(OP, view)?, &mut q, &mut r, par).map_err(provider(Op::Qr))?;
     Ok(vec![
         tensor_from_vec_with_template(q_shape, q, placement)?,
@@ -1363,7 +1364,7 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
     let mut permutation = Vec::with_capacity(checked_product(OP, "permutation", &p_shape)?);
     if batch > 0 {
-        let par = parallel_from(ctx);
+        let par = exec_from(ctx)?;
         tlinalg::qr::rank_revealing_qr(
             Op::RankRevealingQr,
             raw_view(OP, view)?,
@@ -1428,7 +1429,7 @@ fn eigh_impl<T: FaerLinalg>(
     }
     let mut values = pooled_output::<T>(buffers, OP, "eigenvalues", &values_shape)?;
     let mut vectors = pooled_output::<T>(buffers, OP, "eigenvectors", &vectors_shape)?;
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::eigh::eigh(
         Op::Eigh,
         raw_view(OP, view)?,
@@ -1472,7 +1473,7 @@ fn eigh_values_impl<T: FaerLinalg>(
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut values = pooled_output::<T::RealScalar>(buffers, OP, "eigenvalues", &shape)?;
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     T::eigh_values_into(raw_view(OP, view)?, &mut values, par).map_err(provider(Op::EighValues))?;
     tensor_from_vec_with_template(shape, values, view.placement())
 }
@@ -1539,7 +1540,7 @@ fn eig_impl<T: FaerEig>(
     } else {
         Vec::new()
     };
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     T::eig_batch(
         raw_view(op, view)?,
         &mut values,
@@ -1702,7 +1703,7 @@ fn compact_factor_data<T: FaerLinalg>(
     cols: usize,
 ) -> tenferro_tensor::Result<Vec<T>> {
     let mut coeff = Vec::new();
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::householder::compact_factor(Op::HouseholderQr, rows, cols, 1, data, &mut coeff, par)
         .map_err(provider(Op::HouseholderQr))?;
     Ok(coeff)
@@ -1722,7 +1723,7 @@ fn apply_reflectors_data<T: FaerLinalg>(
     k: usize,
     transpose: bool,
 ) -> tenferro_tensor::Result<()> {
-    let par = parallel_from(ctx);
+    let par = exec_from(ctx)?;
     tlinalg::householder::apply_reflectors(
         Op::HouseholderQr,
         tlinalg::householder::ReflectorShape {

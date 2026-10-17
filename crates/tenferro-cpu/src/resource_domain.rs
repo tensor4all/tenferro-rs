@@ -68,6 +68,15 @@ impl CpuResourceDomain {
         self.context.rayon_pool()
     }
 
+    /// Borrow the retained lower-library execution resources for one call.
+    ///
+    /// The returned `Exec` shares the domain's persisted `Pool` wrapper and
+    /// workspace, so a per-call `Pool::borrow` cannot split the SPMD gate or
+    /// drop the reusable arena.
+    pub(crate) fn contraction_exec(&self, budget: usize) -> crate::Result<cpueinsum::Exec<'_>> {
+        self.context.contraction_exec(budget)
+    }
+
     pub(crate) fn thread_budget(&self) -> NonZeroUsize {
         self.thread_budget
     }

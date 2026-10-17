@@ -129,6 +129,28 @@ impl<'a> CpuExecutionContext<'a> {
         }
     }
 
+    /// Borrow the retained lower-library execution resources for one call.
+    ///
+    /// This is the owner-scoped interop seam for the extracted numerical
+    /// providers (`tlinalg`, `cpueinsum`): they receive one `Exec` that reuses
+    /// the domain's persisted pool wrapper and workspace, instead of a
+    /// per-call `Pool::borrow`. The shared SPMD gate is preserved: a context
+    /// that does not own an inner region lends a serial-with-workspace token.
+    ///
+    /// # Errors
+    ///
+    /// Returns the CPU backend error when the retained execution resources
+    /// cannot produce a token, for example an invalid thread budget.
+    #[doc(hidden)]
+    pub fn contraction_exec(&self) -> crate::Result<cpueinsum::Exec<'a>> {
+        let budget = if self.uses_inner_parallelism() {
+            self.thread_budget().get()
+        } else {
+            1
+        };
+        self.domain.contraction_exec(budget)
+    }
+
     /// Effective native-kernel degree inside this admitted CPU context.
     ///
     /// A sequential context and a context without a pool use one thread.
