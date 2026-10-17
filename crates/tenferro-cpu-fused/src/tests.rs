@@ -283,7 +283,7 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
         &c32_plan,
     )
     .unwrap()
-    .expect("C32 multi-output fusion should be delegated output-by-output");
+    .expect("C32 multi-output fusion should be delegated to one strided replay");
     assert_eq!(c32_outputs.len(), 2);
     assert_eq!(
         c32_outputs[0].as_slice::<num_complex::Complex32>().unwrap()[5],

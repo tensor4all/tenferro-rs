@@ -1,4 +1,4 @@
-# CPU elementwise fusion is declined until its replay is vectorized (#2140 item 3)
+# CPU elementwise fusion: declined on the scalar replay (#2140 item 3), re-enabled on `strided-fused 0.5.2` (#2161)
 
 ## Decisions
 
@@ -72,8 +72,7 @@
 - Measured 2026-10-16, `AMD EPYC 7713P`, release, commit `47dc94c98`, pinned with
   `taskset` to idle cores 56-63, 5 warm runs plus 300 timed runs per round, median
   of three interleaved rounds, 1 and 4 worker threads. The per-case table is
-  below (and in the `SELECTS_FUSED_ELEMENTWISE_REGION` doc comment);
-  `docs/design/cpu-backend-execution.md` links here.
+  below; `docs/design/cpu-backend-execution.md` links here.
 
 Measured 2026-10-16 on an `AMD EPYC 7713P`, release, the prepared program's first
 five runs plus 300 timed runs per round, median of three interleaved rounds,
@@ -97,3 +96,51 @@ live outputs (**1.54**). The acceptance rule was "enable only if fused/declined
 `<= 1.05` in every case", so the decline stays: the contiguity-axis broadcast
 (like `b[1, 64]` added to `x[1024, 64]`) forces the scalar interpreter, and the
 two-live-output region pays the per-output replay.
+
+## Re-enabled on `strided-fused 0.5.2` (#2161)
+
+- `strided-fused 0.5.2` extends the chunked register machine to a stride-`0`
+  operand: a broadcast value is filled into the chunk once instead of forcing
+  `interpret_inner_loop_uninit`. `tenferro-cpu-fused` also compiles one plan with
+  every live output and runs it with `ErasedFusedPlan::execute_outputs_uninit`,
+  so a two-live-output region replays once. Both blockers from the 0.5.1
+  reassessment are gone.
+- Re-measured with the same predeclared rule ("enable only if fused/declined
+  `<= 1.05` in every case") and the same cases: the rule passes. The
+  contiguity-axis broadcast now wins 0.48-0.65 and the two-live-output region
+  0.76-0.96, so the constant was deleted and the executor is always selected
+  (subject to its own floor, arity, dtype and op filters, now the only declines).
+- Measured 2026-10-17, `AMD EPYC 7713P`, release, `Runtime::prepare_compiled` +
+  `run_prepared`, 5 warm runs plus 300 timed runs per round, median of three
+  interleaved rounds, `taskset` on the assigned cores, 1 and 4 worker threads.
+  Per-iteration ms; `ratio` is fused/declined. This is one clean repetition; the
+  maximum ratio over three clean repetitions was 1.01 at 1T and 1.04 at 4T
+  (ten `tanh` f64 `1024x64`).
+
+One worker thread:
+
+| case | declined | fused | ratio |
+|---|---:|---:|---:|
+| ten `tanh` f32 `1024x64` | 1.587 | 1.444 | 0.91 |
+| ten `mul` f32 `1024x64` | 0.107 | 0.103 | 0.96 |
+| ten `tanh` f64 `1024x64` | 3.492 | 3.530 | 1.01 |
+| ten `mul` f64 `1024x64` | 0.187 | 0.171 | 0.91 |
+| broadcast, contiguity axis f32 | 0.0705 | 0.0459 | 0.65 |
+| broadcast, outer axis f32 | 0.0570 | 0.0421 | 0.74 |
+| two live outputs f32 | 0.276 | 0.264 | 0.96 |
+| ten `tanh` f32 `16384` (floor) | 0.413 | 0.371 | 0.90 |
+| ten `tanh` f32 `1<<20` | 25.22 | 23.18 | 0.92 |
+
+Four worker threads:
+
+| case | declined | fused | ratio |
+|---|---:|---:|---:|
+| ten `tanh` f32 `1024x64` | 0.961 | 0.782 | 0.81 |
+| ten `mul` f32 `1024x64` | 0.206 | 0.0727 | 0.35 |
+| ten `tanh` f64 `1024x64` | 1.936 | 1.974 | 1.02 |
+| ten `mul` f64 `1024x64` | 0.275 | 0.117 | 0.43 |
+| broadcast, contiguity axis f32 | 0.100 | 0.0478 | 0.48 |
+| broadcast, outer axis f32 | 0.0920 | 0.0460 | 0.50 |
+| two live outputs f32 | 0.216 | 0.185 | 0.85 |
+| ten `tanh` f32 `16384` (floor) | 0.495 | 0.382 | 0.77 |
+| ten `tanh` f32 `1<<20` | 7.22 | 6.30 | 0.87 |

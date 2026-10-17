@@ -159,20 +159,11 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
         .is_err());
 }
 
-/// The ordinary CPU session declines a fused region by policy, repeatedly and
-/// without an error.
-///
-/// The hook stays reachable and answers `Ok(None)` rather than being absent or
-/// failing; that is what the runtime's per-instruction fallback keys on. It
-/// declines because `strided-fused 0.5.1`'s chunked replay still falls back to
-/// the scalar `interpret_inner_loop_uninit` for a non-unit-stride operand, and
-/// the adapter recompiles per live output; measured fusion loses 16x on a
-/// broadcast on the contiguity axis and 1.5-1.9x on a two-live-output region
-/// (`tenferro-cpu`'s `SELECTS_FUSED_ELEMENTWISE_REGION` carries the table,
-/// #2161).
 #[test]
-fn ordinary_cpu_declines_elementwise_fusion_by_policy() {
+fn ordinary_cpu_retains_supported_fusion_hook() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
+    // Small inputs deliberately use the unfused path; exercise the existing
+    // minimum fusion size rather than requiring fusion for every tensor.
     const N: usize = 16 * 1024;
     let x = Tensor::from_vec_col_major([N], vec![1.0_f64; N]).unwrap();
     let y = Tensor::from_vec_col_major([N], vec![2.0_f64; N]).unwrap();
@@ -190,10 +181,15 @@ fn ordinary_cpu_declines_elementwise_fusion_by_policy() {
         let outputs = backend
             .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&x, &y, &z], &plan))
             .unwrap()
-            .unwrap();
-        assert!(
-            outputs.is_none(),
-            "ordinary CPU must decline a fused region by policy, not by absence"
-        );
+            .unwrap()
+            .expect("ordinary CPU must retain its supported fusion hook");
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].as_slice::<f64>().unwrap(), vec![3.0; N]);
+        assert_eq!(outputs[1].as_slice::<f64>().unwrap(), vec![9.0; N]);
+        for output in outputs {
+            backend
+                .with_backend_session(|__s| __s.reclaim_buffer(output))
+                .unwrap();
+        }
     }
 }
