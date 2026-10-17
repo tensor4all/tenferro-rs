@@ -92,15 +92,14 @@ fn strided_fused_op(op: ElementwiseFusionOp) -> FusedOp {
         ElementwiseFusionOp::Pow => FusedOp::Pow,
         ElementwiseFusionOp::Expm1 => FusedOp::Expm1,
         ElementwiseFusionOp::Log1p => FusedOp::Log1p,
+        // `strided-fused 0.6.0` propagates NaN through the ordered selects; the
+        // unfused kernels use the same `strided_basic` functions.
+        ElementwiseFusionOp::Maximum => FusedOp::Maximum,
+        ElementwiseFusionOp::Minimum => FusedOp::Minimum,
+        ElementwiseFusionOp::Clamp => FusedOp::Clamp,
         // INVARIANT: `plan_uses_unfused_op` declines remainder/`erf` (which
-        // have no `strided_fused` instruction) and `plan_uses_ordered_op`
-        // declines the ordered ops for their NaN semantics before a strided
-        // plan is built.
-        ElementwiseFusionOp::Maximum
-        | ElementwiseFusionOp::Minimum
-        | ElementwiseFusionOp::Clamp
-        | ElementwiseFusionOp::Remainder
-        | ElementwiseFusionOp::Erf => {
+        // have no `strided_fused` instruction) before a strided plan is built.
+        ElementwiseFusionOp::Remainder | ElementwiseFusionOp::Erf => {
             unreachable!(
                 "ops without a selected strided_fused instruction are declined before CPU fusion"
             )
@@ -117,17 +116,6 @@ fn plan_uses_unfused_op(plan: &ElementwiseFusionPlan) -> bool {
         matches!(
             inst.op(),
             ElementwiseFusionOp::Remainder | ElementwiseFusionOp::Erf
-        )
-    })
-}
-
-fn plan_uses_ordered_op(plan: &ElementwiseFusionPlan) -> bool {
-    plan.ops().iter().any(|inst| {
-        matches!(
-            inst.op(),
-            ElementwiseFusionOp::Maximum
-                | ElementwiseFusionOp::Minimum
-                | ElementwiseFusionOp::Clamp
         )
     })
 }
@@ -170,15 +158,12 @@ impl FusedDType {
 ///
 /// Only `F32`/`F64` are selected: `strided-fused 0.6.0`'s vectorized chunk
 /// replay covers only those dtypes, and every other preset dtype would run the
-/// unmeasured per-element interpreter. An ordered op (`Maximum`/`Minimum`/
-/// `Clamp`) also declines for a real dtype: `strided-fused 0.6.0` now
-/// propagates NaN through its ordered kernels, but the decline is retained
-/// until the ordered-op lift (TF5) lands, so tenferro's NaN semantics are
-/// unchanged here (`R-numerics-01`).
+/// unmeasured per-element interpreter. Ordered ops (`Maximum`/`Minimum`/
+/// `Clamp`) are selected: `strided-fused 0.6.0` propagates NaN through them
+/// with the same `strided_basic` select the unfused kernels use, so the fused
+/// route matches the per-instruction route bit for bit (`R-numerics-01`,
+/// strided-rs#315).
 fn select_fused_dtype(plan: &ElementwiseFusionPlan) -> Option<FusedDType> {
-    if plan_uses_ordered_op(plan) {
-        return None;
-    }
     match plan.dtype() {
         DType::F32 => Some(FusedDType::F32),
         DType::F64 => Some(FusedDType::F64),

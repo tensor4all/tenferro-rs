@@ -133,11 +133,13 @@ the case that fell back to `interpret_inner_loop_uninit` and lost about 16x on
 replays its instruction list once instead of once per output.
 
 The selection is scoped to what was measured. Only `F32`/`F64` regions are
-selected, because 0.5.2's vectorized chunk replay covers only those dtypes;
+selected, because 0.6.0's vectorized chunk replay covers only those dtypes;
 C32/C64, integers and bool stay unfused rather than run the unmeasured
-per-element interpreter. An ordered real op (`Maximum`/`Minimum`/`Clamp`) also
-declines, because the upstream kernels use Rust `.max`/`.min`, which drop NaN
-while tenferro's ordinary kernels propagate it.
+per-element interpreter. Ordered real ops (`Maximum`/`Minimum`/`Clamp`) are
+selected: `strided-fused 0.6.0` propagates NaN through the same
+`strided_basic` select the ordinary kernels use (strided-rs#315), so the fused
+route matches the per-instruction route bit for bit. `Remainder` and `Erf`
+remain declined, because they have no `strided_fused` instruction.
 
 The measurement (2026-10-17, `AMD EPYC 7713P`, 1T and 4T) is recorded in
 [`docs/worklogs/perf-cpu-fusion-declined-2140.md`](../worklogs/perf-cpu-fusion-declined-2140.md),
