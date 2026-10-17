@@ -88,6 +88,21 @@ fn checked_shape_product(
 
 fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate::Result<()> {
     validate_rank(op, rank, perm.len())?;
+    // Common ranks track seen axes in a bitmask; only very high ranks allocate.
+    // A materializing transpose is a metadata-only validation path at inline
+    // rank, so it must not take a heap scratch here (#2178 item 7).
+    if rank <= u128::BITS as usize {
+        let mut seen = 0u128;
+        for &axis in perm {
+            validate_axis(op, axis, rank)?;
+            let bit = 1u128 << axis;
+            if seen & bit != 0 {
+                return Err(crate::Error::duplicate_axis(op, axis, "perm"));
+            }
+            seen |= bit;
+        }
+        return Ok(());
+    }
     let mut seen = vec![false; rank];
     for &axis in perm {
         validate_axis(op, axis, rank)?;

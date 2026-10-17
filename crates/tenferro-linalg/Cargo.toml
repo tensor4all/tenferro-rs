@@ -166,6 +166,10 @@ name = "cpu_linalg_allocation"
 path = "tests/cpu_linalg_allocation.rs"
 
 [[test]]
+name = "small_linalg_allocation"
+path = "tests/small_linalg_allocation.rs"
+
+[[test]]
 name = "apple_accelerate"
 path = "tests/apple_accelerate.rs"
 required-features = ["blas-accelerate", "webgpu", "autodiff"]

@@ -33,8 +33,15 @@
   are checked separately. The existing small-op allocation budgets in
   `crates/tenferro-runtime/tests/typed_elementwise_allocations.rs` stay at zero
   for the same-shape and broadcast arms.
-- Two residuals measured on this branch are pinned as provider scratch rather
-  than tenferro metadata: a materializing rank-4 `transpose` (one allocation in
-  `strided-perm`) and a two-worker one-axis `reduce_sum` (three in
-  `strided-basic`). They are recorded here rather than hidden behind a zero
-  budget.
+- The #2178 item 7 arms are zero on both CPU lanes: permuted view add, `exp`
+  over a broadcast view, concatenate, a beta != 1 contraction, a rank-4
+  materializing transpose, and a one-axis reduction at thread budgets 1 and 2.
+  The small batched QR/SVD/packed-LU ceilings are pinned per lane in
+  `crates/tenferro-linalg/tests/small_linalg_allocation.rs`; QR and SVD are
+  batch independent, and BLAS packed-LU grows by one allocation from batch 1
+  to 64 (recorded, not hidden). C allocations stay out of scope.
+- Two residual allocations found during the first pass were tenferro's own
+  pre-execution `Vec` scratch (`structural::validate_permutation`,
+  `reduction::validate_axes` / `reduction_output_shape`,
+  `indexing::collect_typed_inputs` / `typed_concatenate`), not strided 0.6.0.
+  They are fixed rather than pinned.

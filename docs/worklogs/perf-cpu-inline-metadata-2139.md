@@ -36,10 +36,14 @@
   does not budget the total. The stride-0 broadcast arm is no longer a provider
   reading: `strided-fused 0.6.0` builds its plan with inline vectors, so
   `crates/tenferro-runtime/tests/typed_elementwise_allocations.rs` budgets it at
-  zero on both lanes. Two residuals in the same file are pinned as provider
-  scratch, not tenferro metadata: a materializing rank-4 `transpose` still makes
-  one small allocation in `strided-perm`'s blocked planner, and a two-worker
-  one-axis `reduce_sum` makes three in the `strided-basic` plan build.
+  zero on both lanes. The follow-up arms are zero too: a permuted
+  `TypedTensorView` add, `exp` over a broadcast view, concatenate and a
+  beta != 1 contraction at thread budgets 1 and 2. The earlier residuals were
+  tenferro's own pre-execution `Vec` scratch, not provider scratch:
+  `structural::validate_permutation`, `reduction::validate_axes` and
+  `reduction::reduction_output_shape`, and
+  `indexing::collect_typed_inputs` / `indexing::typed_concatenate`. They now use
+  a bitmask, `ShapeVec`, or an inline `SmallVec`.
 - The typed `add` / `mul` / `sub` / rank-3 `mul` / rank-2 `exp` / broadcast arms
   stay at **0 heap allocations** with one and two worker threads.
 - `ext/df64-proof`'s dispatch report asserted that its direct-call body makes at

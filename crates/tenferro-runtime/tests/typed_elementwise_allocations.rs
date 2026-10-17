@@ -16,9 +16,12 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use tenferro_cpu::{scalar_binary_into, AddOp, CpuBackend};
-use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::backend::dot_general_output_shape;
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, DynRank, Host};
+use tenferro_tensor::{
+    BackendSession, BackendSessionHost, ContractionScalar, DotGeneralAccumulation,
+    DotGeneralConfig, DynRank, Host, Tensor, TensorRead, TensorView, TensorWrite,
+};
 use tinyvec::tiny_vec;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -87,10 +90,9 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
                     // Warm the output pool so the pooled checkout is a hit, then
                     // measure one public call: only the op's own metadata counts.
                     for _ in 0..16 {
-                        drop($call(session).unwrap());
+                        let _ = $call(session).unwrap();
                     }
-                    let (out, allocations, bytes) = measure(|| $call(session).unwrap());
-                    drop(out);
+                    let (_out, allocations, bytes) = measure(|| $call(session).unwrap());
                     eprintln!("typed {}: {allocations} allocations, {bytes} bytes", $label);
                     assert_eq!(
                         allocations, $expected,
@@ -128,14 +130,68 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             // add is now metadata-allocation free like the same-shape arms.
             budget!("mul row-into-matrix broadcast", 0, |s| matrix.mul(&row, s));
             budget!("add rank-0 scalar", 0, |s| a.add(&scalar, s));
-            // A rank-4 transpose materializes into a pooled output; the output
-            // and metadata are allocation free, but `strided-perm`'s blocked
-            // permutation planner still takes one small provider scratch
-            // allocation per call at this rank. Pinned as a provider reading
-            // (#2178 item 7); it is not a tenferro metadata allocation.
+            // A rank-4 transpose materializes into a pooled output; the
+            // permutation validation and the output metadata are allocation
+            // free, so the whole call is zero at inline rank (#2178 item 7).
             let rank4 =
                 TypedTensor::<f64>::from_vec_col_major(vec![2, 2, 2, 2], vec![1.0; 16]).unwrap();
-            budget!("transpose rank-4", 1, |s| rank4.transpose(&[3, 2, 1, 0], s));
+            budget!("transpose rank-4", 0, |s| rank4.transpose(&[3, 2, 1, 0], s));
+            // A permuted borrowed view operand materializes through the same
+            // view path and is metadata-allocation free at inline rank.
+            let permuted_view = matrix.as_view().transpose_view([1, 0]).unwrap();
+            let permuted_read = TensorRead::from_view(TensorView::F64(permuted_view));
+            let matrix_read = TensorRead::from_view(TensorView::F64(matrix.as_view()));
+            budget!("add permuted view", 0, |s: &mut dyn BackendSession| s
+                .add_read(permuted_read.clone(), matrix_read.clone()));
+            // An analytic op over a stride-0 broadcast view stays zero: the
+            // view carries its layout inline and the kernel reads through it.
+            let broadcast_read = TensorRead::from_view(TensorView::F64(row.as_view()))
+                .broadcast_in_dim_view(&[4, 4], &[1])
+                .unwrap();
+            budget!("exp broadcast view", 0, |s: &mut dyn BackendSession| s
+                .exp_read(broadcast_read.clone()));
+            // Concatenate and a beta != 1 contraction on the erased session
+            // surface, at inline rank.
+            let concat_a = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![4], vec![1.0; 4]).unwrap(),
+            );
+            let concat_b = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![4], vec![2.0; 4]).unwrap(),
+            );
+            // Concatenate keeps its typed input list and output shape inline and
+            // builds a bounded `ErasedConcatenatePlan` through the plan cache.
+            budget!("concatenate", 0, |s: &mut dyn BackendSession| {
+                Tensor::concatenate(&[&concat_a, &concat_b], 0, s)
+            });
+            let dot_lhs = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0; 4]).unwrap(),
+            );
+            let dot_rhs = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0; 4]).unwrap(),
+            );
+            let mut dot_out = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0; 4]).unwrap(),
+            );
+            let dot_config = DotGeneralConfig {
+                lhs_contracting_dims: tiny_vec!([usize; 4] => 1),
+                rhs_contracting_dims: tiny_vec!([usize; 4] => 0),
+                lhs_batch_dims: tiny_vec!([usize; 4]),
+                rhs_batch_dims: tiny_vec!([usize; 4]),
+            };
+            let beta_half = DotGeneralAccumulation::scaled(
+                ContractionScalar::F64(1.0),
+                ContractionScalar::F64(0.5),
+            )
+            .unwrap();
+            budget!("dot accum beta!=1", 0, |s: &mut dyn BackendSession| {
+                s.dot_general_read_into_accum(
+                    TensorRead::from_tensor(&dot_lhs),
+                    TensorRead::from_tensor(&dot_rhs),
+                    &dot_config,
+                    beta_half,
+                    TensorWrite::from_tensor(&mut dot_out),
+                )
+            });
 
             // #2139 item 1: the eager `dot_general` path's own shape and axis
             // validation. Only tenferro's allocations are counted here, so the
@@ -221,19 +277,83 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
                 budget(&|s| two_thread_a.add(&two_thread_b, s).unwrap());
             eprintln!("2T add: {add_allocations} allocations, {add_bytes} bytes");
             assert_eq!(add_allocations, 0, "2T add allocated {add_bytes} bytes");
-            // The one-axis reduction compiles a bounded `strided-basic` plan; on
-            // 0.6 it still makes three small provider scratch allocations at
-            // this size. Pinned as a provider reading, not a tenferro allocation.
+            // The one-axis reduction validates axes and builds its output shape
+            // without heap scratch at inline rank.
             let (reduce_allocations, reduce_bytes) =
                 budget(&|s| two_thread_a.reduce_sum(Some(&[1]), s).unwrap());
             eprintln!("2T reduce_sum: {reduce_allocations} allocations, {reduce_bytes} bytes");
             assert_eq!(
-                reduce_allocations, 3,
+                reduce_allocations, 0,
                 "2T reduce_sum allocated {reduce_bytes} bytes"
             );
             let (exp_allocations, exp_bytes) = budget(&|s| two_thread_a.exp(s).unwrap());
             eprintln!("2T exp: {exp_allocations} allocations, {exp_bytes} bytes");
             assert_eq!(exp_allocations, 0, "2T exp allocated {exp_bytes} bytes");
+
+            let concat_a = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![4], vec![1.0; 4]).unwrap(),
+            );
+            let concat_b = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![4], vec![2.0; 4]).unwrap(),
+            );
+            for _ in 0..16 {
+                drop(Tensor::concatenate(&[&concat_a, &concat_b], 0, session).unwrap());
+            }
+            let (_, concat_allocations, concat_bytes) =
+                measure(|| Tensor::concatenate(&[&concat_a, &concat_b], 0, session).unwrap());
+            eprintln!("2T concatenate: {concat_allocations} allocations, {concat_bytes} bytes");
+            assert_eq!(
+                concat_allocations, 0,
+                "2T concatenate allocated {concat_bytes} bytes"
+            );
+
+            let dot_lhs = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0; 4]).unwrap(),
+            );
+            let dot_rhs = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0; 4]).unwrap(),
+            );
+            let mut dot_out = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0; 4]).unwrap(),
+            );
+            let dot_config = DotGeneralConfig {
+                lhs_contracting_dims: tiny_vec!([usize; 4] => 1),
+                rhs_contracting_dims: tiny_vec!([usize; 4] => 0),
+                lhs_batch_dims: tiny_vec!([usize; 4]),
+                rhs_batch_dims: tiny_vec!([usize; 4]),
+            };
+            let beta_half = DotGeneralAccumulation::scaled(
+                ContractionScalar::F64(1.0),
+                ContractionScalar::F64(0.5),
+            )
+            .unwrap();
+            for _ in 0..16 {
+                session
+                    .dot_general_read_into_accum(
+                        TensorRead::from_tensor(&dot_lhs),
+                        TensorRead::from_tensor(&dot_rhs),
+                        &dot_config,
+                        beta_half,
+                        TensorWrite::from_tensor(&mut dot_out),
+                    )
+                    .unwrap();
+            }
+            let (_, accum_allocations, accum_bytes) = measure(|| {
+                session
+                    .dot_general_read_into_accum(
+                        TensorRead::from_tensor(&dot_lhs),
+                        TensorRead::from_tensor(&dot_rhs),
+                        &dot_config,
+                        beta_half,
+                        TensorWrite::from_tensor(&mut dot_out),
+                    )
+                    .unwrap()
+            });
+            eprintln!("2T dot accum beta!=1: {accum_allocations} allocations, {accum_bytes} bytes");
+            assert_eq!(
+                accum_allocations, 0,
+                "2T dot accum allocated {accum_bytes} bytes"
+            );
         })
         .unwrap();
 }

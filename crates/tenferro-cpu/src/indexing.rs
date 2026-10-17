@@ -666,7 +666,7 @@ where
 fn collect_typed_inputs<'a, T>(
     first_dtype: crate::DType,
     inputs: &[&'a Tensor],
-) -> crate::Result<Vec<&'a TypedTensor<T>>>
+) -> crate::Result<SmallVec<[&'a TypedTensor<T>; 4]>>
 where
     Tensor: TensorAsTyped<T>,
 {
@@ -699,7 +699,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
         return Err(crate::Error::axis_out_of_bounds("concatenate", axis, rank));
     }
 
-    let mut out_shape = first_shape.to_vec();
+    let mut out_shape = tenferro_tensor::ShapeVec::from(first_shape);
     let mut axis_extent = 0usize;
     for input in inputs {
         let input_shape = input.shape();
