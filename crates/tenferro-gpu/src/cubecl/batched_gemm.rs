@@ -4,9 +4,11 @@
 //! general contraction stays on cuTENSOR. A *standard* batched matmul — one
 //! contraction axis per operand, both matrix axes innermost, and batch axes
 //! trailing in the same ascending order on both sides — is exactly the shape
-//! cuBLAS' strided-batched GEMM addresses without any copy, and a batched GEMM
-//! of that shape is one kernel there instead of the several small launches and
+//! cuBLAS' strided-batched GEMM addresses without any copy, and it reaches
+//! cuBLAS as one batched API call instead of the several small launches and
 //! plan-level synchronizations a cuTENSOR contraction of the same shape issues.
+//! The claim is about API calls: cuBLAS may still subdivide the batch into
+//! several physical kernels internally.
 //!
 //! Scope of this path:
 //!
@@ -17,17 +19,18 @@
 //!   `rows * cols` elements;
 //! - only uncontracted output axes, so the output's own column-major layout is
 //!   the cuBLAS `C` layout (`ldc = m`, batch stride `m * n`);
-//! - no conjugation: `gemmStridedBatchedEx` has no conjugation flag, so a
-//!   conjugated complex operand falls back to cuTENSOR. Real conjugation is the
-//!   identity and stays on this path;
+//! - no conjugation: cuBLAS expresses a conjugate transpose through `OP_C`, but
+//!   this path only maps stored-axis transposition to `OP_T`, so a conjugated
+//!   complex operand keeps the conservative cuTENSOR fallback until `OP_C` is
+//!   plumbed through. Real conjugation is the identity and stays on this path;
 //! - `batch_count > 1`; a single matrix keeps the existing cuTENSOR path.
 //!
 //! Everything else — permuted axes, several contraction axes, a batch axis
 //! inside the matrix axes, a strided borrowed view — returns `None` from
 //! [`BatchedGemmLaunch::detect`] and is served by [`super::gemm`] unchanged.
 //!
-//! Execution contract: one `cublas{S,D,C,Z}gemmStridedBatchedEx` enqueued on the
-//! session stream from the runtime's cached per-stream cuBLAS handle, in host
+//! Execution contract: one `cublasGemmStridedBatchedEx` enqueued on the session
+//! stream from the runtime's cached per-stream cuBLAS handle, in host
 //! pointer mode. Success means the GEMM was enqueued; no host barrier is taken,
 //! and stream ordering and the cross-stream retirement hand-off are the same as
 //! the other vendor calls (`CudaRuntime::with_cublas_handle`).
@@ -46,6 +49,10 @@ use crate::{TensorScalar, TypedTensor};
 use cubecl::frontend::Scalar;
 
 const OP: &str = "dot_general";
+
+/// The dtype-erased cuBLAS symbol every scalar family calls, and the name a
+/// provider error reports.
+const GEMM_NAME: &str = "cublasGemmStridedBatchedEx";
 
 #[cfg(test)]
 thread_local! {
@@ -181,8 +188,6 @@ fn cublas_operation(transposed: bool) -> cublas::cublasOperation_t {
 
 /// Scalar family of the cuBLAS strided-batched GEMM binding.
 pub(super) trait BatchedGemmScalar: TensorScalar + Scalar + Copy + 'static {
-    /// cuBLAS symbol reported in provider errors.
-    const GEMM_NAME: &'static str;
     /// Data type of `A`, `B`, and `C`.
     const DATA_TYPE: cublas::cudaDataType;
     /// Arithmetic precision cuBLAS accumulates the product in.
@@ -247,7 +252,6 @@ unsafe fn launch_gemm_strided_batched_ex(
 }
 
 impl BatchedGemmScalar for f32 {
-    const GEMM_NAME: &'static str = "cublasSgemmStridedBatchedEx";
     const DATA_TYPE: cublas::cudaDataType = cublas::cudaDataType::CUDA_R_32F;
     const COMPUTE_TYPE: cublas::cublasComputeType_t =
         cublas::cublasComputeType_t::CUBLAS_COMPUTE_32F;
@@ -276,7 +280,6 @@ impl BatchedGemmScalar for f32 {
 }
 
 impl BatchedGemmScalar for f64 {
-    const GEMM_NAME: &'static str = "cublasDgemmStridedBatchedEx";
     const DATA_TYPE: cublas::cudaDataType = cublas::cudaDataType::CUDA_R_64F;
     const COMPUTE_TYPE: cublas::cublasComputeType_t =
         cublas::cublasComputeType_t::CUBLAS_COMPUTE_64F;
@@ -305,7 +308,6 @@ impl BatchedGemmScalar for f64 {
 }
 
 impl BatchedGemmScalar for Complex32 {
-    const GEMM_NAME: &'static str = "cublasCgemmStridedBatchedEx";
     const DATA_TYPE: cublas::cudaDataType = cublas::cudaDataType::CUDA_C_32F;
     const COMPUTE_TYPE: cublas::cublasComputeType_t =
         cublas::cublasComputeType_t::CUBLAS_COMPUTE_32F;
@@ -337,7 +339,6 @@ impl BatchedGemmScalar for Complex32 {
 }
 
 impl BatchedGemmScalar for Complex64 {
-    const GEMM_NAME: &'static str = "cublasZgemmStridedBatchedEx";
     const DATA_TYPE: cublas::cudaDataType = cublas::cudaDataType::CUDA_C_64F;
     const COMPUTE_TYPE: cublas::cublasComputeType_t =
         cublas::cublasComputeType_t::CUBLAS_COMPUTE_64F;
@@ -406,7 +407,7 @@ pub(super) fn run_allocating<T: BatchedGemmScalar>(
             // pointers to this runtime's device; `detect` proved the shapes are
             // the strided-batched layout these pointers describe, and the
             // coefficients are stack locals live for the whole call.
-            check_cublas(OP, T::GEMM_NAME, unsafe {
+            check_cublas(OP, GEMM_NAME, unsafe {
                 T::gemm_strided_batched_ex(handle, args, lhs_ptr, rhs_ptr, output_ptr)
             })
         },

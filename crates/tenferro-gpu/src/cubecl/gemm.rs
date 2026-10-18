@@ -1193,11 +1193,12 @@ where
         )?;
         return Ok(output);
     }
-    // A standard batched matmul is one cuBLAS strided-batched GEMM instead of a
-    // cuTENSOR contraction; the general form keeps cuTENSOR. cuBLAS'
-    // strided-batched entry has no conjugation flag, so a conjugated complex
-    // operand stays on cuTENSOR; a real conjugation is the identity and is
-    // still served here.
+    // A standard batched matmul reaches cuBLAS as one strided-batched GEMM call
+    // instead of a cuTENSOR contraction; the general form keeps cuTENSOR. cuBLAS
+    // does express a conjugate transpose through `OP_C`, but this path only
+    // maps stored-axis transposition to `OP_T`, so a conjugated complex operand
+    // keeps the conservative cuTENSOR fallback until `OP_C` is plumbed through.
+    // A real conjugation is the identity and is still served here.
     if !(T::IS_COMPLEX && (lhs_conj || rhs_conj)) {
         if let Some(args) = BatchedGemmLaunch::detect(lhs.shape(), rhs.shape(), config) {
             super::batched_gemm::run_allocating(backend.runtime(), lhs, rhs, &output, &args)?;
