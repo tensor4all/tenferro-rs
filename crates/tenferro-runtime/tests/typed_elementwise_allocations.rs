@@ -253,14 +253,17 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
         );
     }
 
-    // The same zero-metadata budget under a two-worker backend, where the
-    // strided kernels take their parallel branch (#2178 item 7). This lives in
-    // the same test as the one-worker arms because the counting allocator is
-    // process-wide: a second test running in parallel would pollute it. Provider
-    // scratch is pooled, so the steady-state counts match the one-thread arms;
-    // C allocations are out of scope.
-    let two_thread_a = TypedTensor::<f64>::from_vec_col_major(vec![2, 8], vec![2.0; 16]).unwrap();
-    let two_thread_b = TypedTensor::<f64>::from_vec_col_major(vec![2, 8], vec![3.0; 16]).unwrap();
+    // The same budget under a two-worker backend. The length is above
+    // strided-basic's serial floor (lengths <= 32768 stay serial), so these
+    // arms exercise worker execution, not just a two-worker configuration.
+    // This lives in the same test as the one-worker arms because the counting
+    // allocator is process-wide: a second test running in parallel would
+    // pollute it. Provider scratch is pooled; C allocations are out of scope.
+    const WORKER_LEN: usize = 65_536;
+    let two_thread_a =
+        TypedTensor::<f64>::from_vec_col_major(vec![WORKER_LEN], vec![2.0; WORKER_LEN]).unwrap();
+    let two_thread_b =
+        TypedTensor::<f64>::from_vec_col_major(vec![WORKER_LEN], vec![3.0; WORKER_LEN]).unwrap();
     let mut two_thread_backend = CpuBackend::with_threads(2).unwrap();
     assert_eq!(two_thread_backend.num_threads(), 2);
     two_thread_backend
@@ -280,7 +283,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             // The one-axis reduction validates axes and builds its output shape
             // without heap scratch at inline rank.
             let (reduce_allocations, reduce_bytes) =
-                budget(&|s| two_thread_a.reduce_sum(Some(&[1]), s).unwrap());
+                budget(&|s| two_thread_a.reduce_sum(Some(&[0]), s).unwrap());
             eprintln!("2T reduce_sum: {reduce_allocations} allocations, {reduce_bytes} bytes");
             assert_eq!(
                 reduce_allocations, 0,

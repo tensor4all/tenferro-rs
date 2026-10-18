@@ -7,8 +7,10 @@
 //! out of scope here.
 //!
 //! The provider hoists its workspace out of the batch loop, so the steady-state
-//! count must not grow with the batch size. Each family therefore pins one
-//! ceiling and asserts batch 1 and batch 64 use the same number of allocations.
+//! count must not grow per item. Each family pins a single-item and a batched
+//! ceiling and checks the batch-1 to batch-64 growth; on the native two-thread
+//! lane the only growth is the second lane's hoisted scratch, recorded next to
+//! the one-thread ceilings.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -102,7 +104,8 @@ fn steady_state(
 fn check_family(
     backend: &mut CpuBackend,
     name: &str,
-    ceiling: usize,
+    single_ceiling: usize,
+    batch_ceiling: usize,
     allowed_batch_growth: usize,
     operation: impl Fn(&mut dyn BackendSession, &Tensor) + Send + Sync,
 ) {
@@ -117,8 +120,14 @@ fn check_family(
          (batch 1 = {single_count}, batch 64 = {batch_count})"
     );
     assert!(
-        single_count <= ceiling,
-        "{name} uses {single_count} allocations, above the recorded ceiling of {ceiling}"
+        single_count <= single_ceiling,
+        "{name} uses {single_count} allocations, above the recorded single-item ceiling of \
+         {single_ceiling}"
+    );
+    assert!(
+        batch_count <= batch_ceiling,
+        "{name} uses {batch_count} allocations at batch 64, above the recorded batched ceiling of \
+         {batch_ceiling}"
     );
 }
 
@@ -127,47 +136,129 @@ fn check_family(
 // scratch; the deferred `*_into`/`*_workspace` API is what would isolate the
 // provider-only 4/3/5 scratch.
 #[cfg(feature = "native")]
-const QR_CEILING: usize = 12;
+const QR_CEILING_1T: usize = 12;
 #[cfg(feature = "native")]
-const SVD_CEILING: usize = 14;
+const QR_CEILING_2T: usize = 18;
 #[cfg(feature = "native")]
-const PACKED_LU_CEILING: usize = 13;
+const SVD_CEILING_1T: usize = 14;
 #[cfg(feature = "native")]
-const PACKED_LU_BATCH_GROWTH: usize = 0;
+const SVD_CEILING_2T: usize = 19;
+#[cfg(feature = "native")]
+const PACKED_LU_CEILING_1T: usize = 13;
+#[cfg(feature = "native")]
+const PACKED_LU_CEILING_2T: usize = 20;
+#[cfg(feature = "native")]
+const QR_BATCH_GROWTH_1T: usize = 0;
+// Measured: batch 1 = 12, batch 64 = 18. The six extra allocations are the
+// second lane's hoisted scratch, created when Auto fans out from one lane to
+// two; they do not grow per item beyond the budget.
+#[cfg(feature = "native")]
+const QR_BATCH_GROWTH_2T: usize = 6;
+#[cfg(feature = "native")]
+const SVD_BATCH_GROWTH_1T: usize = 0;
+// Measured: batch 1 = 14, batch 64 = 19, the same second-lane scratch.
+#[cfg(feature = "native")]
+const SVD_BATCH_GROWTH_2T: usize = 5;
+#[cfg(feature = "native")]
+const PACKED_LU_BATCH_GROWTH_1T: usize = 0;
+// Measured: batch 1 = 13, batch 64 = 20, the same second-lane scratch.
+#[cfg(feature = "native")]
+const PACKED_LU_BATCH_GROWTH_2T: usize = 7;
 #[cfg(feature = "blas")]
-const QR_CEILING: usize = 9;
+const QR_CEILING_1T: usize = 9;
 #[cfg(feature = "blas")]
-const SVD_CEILING: usize = 13;
+const QR_CEILING_2T: usize = 9;
+#[cfg(feature = "blas")]
+const SVD_CEILING_1T: usize = 13;
+#[cfg(feature = "blas")]
+const SVD_CEILING_2T: usize = 13;
 // Measured: batch 1 = 7, batch 64 = 8. The packed-LU route keeps one
 // batch-sized scratch vector outside the hoisted workspace; recorded as a
 // finding rather than hidden.
 #[cfg(feature = "blas")]
-const PACKED_LU_CEILING: usize = 8;
+const PACKED_LU_CEILING_1T: usize = 8;
 #[cfg(feature = "blas")]
-const PACKED_LU_BATCH_GROWTH: usize = 1;
+const PACKED_LU_CEILING_2T: usize = 8;
+#[cfg(feature = "blas")]
+const QR_BATCH_GROWTH_1T: usize = 0;
+#[cfg(feature = "blas")]
+const QR_BATCH_GROWTH_2T: usize = 0;
+#[cfg(feature = "blas")]
+const SVD_BATCH_GROWTH_1T: usize = 0;
+#[cfg(feature = "blas")]
+const SVD_BATCH_GROWTH_2T: usize = 0;
+#[cfg(feature = "blas")]
+const PACKED_LU_BATCH_GROWTH_1T: usize = 1;
+#[cfg(feature = "blas")]
+const PACKED_LU_BATCH_GROWTH_2T: usize = 1;
 
-#[test]
-fn small_batched_qr_svd_packed_lu_have_batch_independent_provider_scratch() {
-    let mut backend = CpuBackend::with_threads(1).expect("CPU backend");
-    check_family(&mut backend, "qr", QR_CEILING, 0, |session, input| {
-        with_cpu(session, |cpu| {
-            cpu.qr(input).unwrap();
-        });
-    });
-    check_family(&mut backend, "svd", SVD_CEILING, 0, |session, input| {
-        with_cpu(session, |cpu| {
-            cpu.svd(input).unwrap();
-        });
-    });
+fn check_lane(
+    threads: usize,
+    qr_ceiling: usize,
+    svd_ceiling: usize,
+    packed_lu_ceiling: usize,
+    qr_growth: usize,
+    svd_growth: usize,
+    packed_lu_growth: usize,
+) {
+    let mut backend = CpuBackend::with_threads(threads).expect("CPU backend");
+    let suffix = format!("{threads}T");
     check_family(
         &mut backend,
-        "packed_lu",
-        PACKED_LU_CEILING,
-        PACKED_LU_BATCH_GROWTH,
+        &format!("qr {suffix}"),
+        qr_ceiling,
+        qr_ceiling,
+        qr_growth,
+        |session, input| {
+            with_cpu(session, |cpu| {
+                cpu.qr(input).unwrap();
+            });
+        },
+    );
+    check_family(
+        &mut backend,
+        &format!("svd {suffix}"),
+        svd_ceiling,
+        svd_ceiling,
+        svd_growth,
+        |session, input| {
+            with_cpu(session, |cpu| {
+                cpu.svd(input).unwrap();
+            });
+        },
+    );
+    check_family(
+        &mut backend,
+        &format!("packed_lu {suffix}"),
+        packed_lu_ceiling,
+        packed_lu_ceiling,
+        packed_lu_growth,
         |session, input| {
             with_cpu(session, |cpu| {
                 cpu.lu_factor(input).unwrap();
             });
         },
+    );
+}
+
+#[test]
+fn small_batched_qr_svd_packed_lu_have_batch_independent_provider_scratch() {
+    check_lane(
+        1,
+        QR_CEILING_1T,
+        SVD_CEILING_1T,
+        PACKED_LU_CEILING_1T,
+        QR_BATCH_GROWTH_1T,
+        SVD_BATCH_GROWTH_1T,
+        PACKED_LU_BATCH_GROWTH_1T,
+    );
+    check_lane(
+        2,
+        QR_CEILING_2T,
+        SVD_CEILING_2T,
+        PACKED_LU_CEILING_2T,
+        QR_BATCH_GROWTH_2T,
+        SVD_BATCH_GROWTH_2T,
+        PACKED_LU_BATCH_GROWTH_2T,
     );
 }

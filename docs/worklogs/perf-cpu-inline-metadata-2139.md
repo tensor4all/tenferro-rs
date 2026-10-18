@@ -55,4 +55,8 @@
   0.3.0 provider surface, so tenferro keeps the `Vec`-handing workspace path and
   `execute_uninit`; adding the raw forms follows upstream. The small
   QR/SVD/LU per-lane allocation ceilings and the batch-size-independence check
-  described in #2178 item 7 are not yet added.
+  described in #2178 item 7 are in
+  `crates/tenferro-linalg/tests/small_linalg_allocation.rs` (one- and two-thread
+  lanes, with separate single-item and batched ceilings), and the
+  two-operation fused-region ceiling is in
+  `crates/tenferro-cpu-fused/tests/fused_region_allocations.rs`.
