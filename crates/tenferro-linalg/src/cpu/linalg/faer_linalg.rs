@@ -429,6 +429,36 @@ fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
 
+/// Resolve the provider's forced batch route before a host empty/zero shortcut.
+///
+/// `tlinalg` resolves strategy availability before its own empty-batch return.
+/// The host shortcuts below skip the provider entirely, so they resolve the
+/// same forced route here first. `Auto`/`Sequential` never refuse; every other
+/// forced strategy goes through the executor decision the provider uses.
+fn validate_empty_route(
+    ctx: &CpuExecutionContext<'_>,
+    op: Op,
+    batch: usize,
+) -> tenferro_tensor::Result<()> {
+    let exec = exec_from(ctx)?;
+    if matches!(
+        exec.batch_policy().strategy,
+        tenferro_cpu::CpuBatchStrategy::Auto | tenferro_cpu::CpuBatchStrategy::Sequential
+    ) {
+        return Ok(());
+    }
+    exec.batch_decision(&tcontract_exec::BatchQuery::new(batch, 0.0))
+        .map(|_| ())
+        .map_err(|error| match error {
+            tcontract_exec::ExecError::StrategyUnavailable { strategy } => {
+                map_error(op, tlinalg::Error::StrategyUnavailable { op, strategy })
+            }
+            other => {
+                tenferro_tensor::Error::invalid_argument(op.as_str(), "executor", other.to_string())
+            }
+        })
+}
+
 fn matrix_with_batch_shape(rows: usize, cols: usize, batch_shape: &[usize]) -> Vec<usize> {
     let mut shape = vec![rows, cols];
     shape.extend_from_slice(batch_shape);
@@ -536,6 +566,11 @@ fn cholesky_impl<T: FaerLinalg>(
     let (n, batch_shape) = square_core_and_batch(view.shape(), OP)?;
     let shape = matrix_with_batch_shape(n, n, batch_shape);
     if has_zero_dim(view.shape()) {
+        validate_empty_route(
+            ctx,
+            Op::Cholesky,
+            checked_product(OP, "batch shape", batch_shape)?,
+        )?;
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut l = pooled_output::<T>(buffers, OP, "matrix", &shape)?;
@@ -579,6 +614,7 @@ pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
     }
     let mut l = buffers.acquire_with_capacity::<T>(expected_len);
     if n == 0 {
+        validate_empty_route(ctx, Op::Cholesky, 1)?;
         return Ok(l);
     }
     let dims = [n, n];
@@ -610,6 +646,7 @@ fn lu_impl<T: FaerLinalg>(
     let u_shape = matrix_with_batch_shape(k, n, batch_shape);
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     if has_zero_dim(view.shape()) {
+        validate_empty_route(ctx, Op::Lu, batch)?;
         return Ok(vec![
             tensor_from_vec_with_template(p_shape, Vec::new(), placement)?,
             tensor_from_vec_with_template(l_shape, Vec::new(), placement)?,
@@ -673,6 +710,7 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     // An empty batch has no parity entries; an unbatched empty matrix has one.
     let batch_total = checked_product("lu_factor", "batch shape", batch_shape)?;
     if has_zero_dim(input.shape()) {
+        validate_empty_route(ctx, Op::LuFactor, batch_total)?;
         return Ok((
             tensor_from_vec_with_template(input.shape().to_vec(), Vec::new(), input.placement())?,
             tensor_from_vec_with_template(
@@ -730,6 +768,7 @@ fn full_piv_lu_impl<T: FaerLinalg>(
     let shape = matrix_with_batch_shape(n, n, batch_shape);
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     if has_zero_dim(view.shape()) {
+        validate_empty_route(ctx, Op::FullPivLu, batch)?;
         let empty = || tensor_from_vec_with_template(shape.clone(), Vec::new(), placement);
         return Ok(vec![
             empty()?,
@@ -830,8 +869,13 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "full_piv_lu_solve";
-    solve_shapes(OP, a.shape(), b.shape(), true)?;
+    let (_, _, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), true)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
+        validate_empty_route(
+            ctx,
+            Op::FullPivLuSolve,
+            checked_product(OP, "batch shape", batch_shape)?,
+        )?;
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
@@ -861,8 +905,13 @@ pub(crate) fn solve<T: FaerLinalg>(
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "solve";
-    solve_shapes(OP, a.shape(), b.shape(), true)?;
+    let (_, _, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), true)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
+        validate_empty_route(
+            ctx,
+            Op::Solve,
+            checked_product(OP, "batch shape", batch_shape)?,
+        )?;
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
     // The right-hand side is copied once into the output, which the solve then overwrites in
@@ -1030,9 +1079,14 @@ fn triangular_solve_impl<T: FaerLinalg>(
     flags: tlinalg::triangular_solve::TriangularSolveFlags,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "triangular_solve";
-    solve_shapes(OP, a.shape(), b.shape(), flags.left_side)?;
+    let (_, _, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), flags.left_side)?;
     let placement = b.placement();
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
+        validate_empty_route(
+            ctx,
+            Op::TriangularSolve,
+            checked_product(OP, "batch shape", batch_shape)?,
+        )?;
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), placement);
     }
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
@@ -1124,6 +1178,11 @@ fn svd_impl<T: FaerLinalg>(
     let k = m.min(n);
     let placement = view.placement();
     if has_zero_dim(view.shape()) {
+        validate_empty_route(
+            ctx,
+            if full { Op::SvdFull } else { Op::Svd },
+            checked_product(op, "batch shape", batch_shape)?,
+        )?;
         if full {
             return empty_svd_full_outputs(op, m, n, batch_shape, placement);
         }
@@ -1263,6 +1322,11 @@ fn svd_values_impl<T: FaerLinalg>(
     let (m, n, batch_shape) = matrix_core_and_batch(view.shape(), OP)?;
     let shape = vector_with_batch_shape(m.min(n), batch_shape);
     if has_zero_dim(view.shape()) {
+        validate_empty_route(
+            ctx,
+            Op::SvdValues,
+            checked_product(OP, "batch shape", batch_shape)?,
+        )?;
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut s = pooled_output::<T::RealScalar>(buffers, OP, "singular values", &shape)?;
@@ -1304,6 +1368,11 @@ fn qr_impl<T: FaerLinalg>(
     let q_shape = matrix_with_batch_shape(m, k, batch_shape);
     let r_shape = matrix_with_batch_shape(k, n, batch_shape);
     if has_zero_dim(view.shape()) {
+        validate_empty_route(
+            ctx,
+            Op::Qr,
+            checked_product(OP, "batch shape", batch_shape)?,
+        )?;
         return Ok(vec![
             tensor_from_vec_with_template(q_shape, Vec::new(), placement)?,
             tensor_from_vec_with_template(r_shape, Vec::new(), placement)?,
@@ -1358,6 +1427,9 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
     let q_shape = matrix_with_batch_shape(m, k, batch_shape);
     let r_shape = matrix_with_batch_shape(k, n, batch_shape);
     let p_shape = vector_with_batch_shape(n, batch_shape);
+    if has_zero_dim(view.shape()) {
+        validate_empty_route(ctx, Op::RankRevealingQr, batch)?;
+    }
     super::rank_revealing_qr::screen_non_finite(OP, view, batch, |value: T| value.is_finite())?;
 
     let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;
@@ -1422,6 +1494,11 @@ fn eigh_impl<T: FaerLinalg>(
     let values_shape = vector_with_batch_shape(n, batch_shape);
     let vectors_shape = matrix_with_batch_shape(n, n, batch_shape);
     if has_zero_dim(view.shape()) {
+        validate_empty_route(
+            ctx,
+            Op::Eigh,
+            checked_product(OP, "batch shape", batch_shape)?,
+        )?;
         return Ok(vec![
             tensor_from_vec_with_template(values_shape, Vec::new(), placement)?,
             tensor_from_vec_with_template(vectors_shape, Vec::new(), placement)?,
@@ -1470,6 +1547,11 @@ fn eigh_values_impl<T: FaerLinalg>(
     let (n, batch_shape) = square_core_and_batch(view.shape(), OP)?;
     let shape = vector_with_batch_shape(n, batch_shape);
     if has_zero_dim(view.shape()) {
+        validate_empty_route(
+            ctx,
+            Op::EighValues,
+            checked_product(OP, "batch shape", batch_shape)?,
+        )?;
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut values = pooled_output::<T::RealScalar>(buffers, OP, "eigenvalues", &shape)?;
@@ -1522,6 +1604,11 @@ fn eig_impl<T: FaerEig>(
         Vec::new()
     };
     if has_zero_dim(view.shape()) {
+        validate_empty_route(
+            ctx,
+            provider_op,
+            checked_product(op, "batch shape", batch_shape)?,
+        )?;
         let mut outputs = vec![T::wrap(TypedTensor::from_vec_col_major(
             values_shape,
             Vec::new(),

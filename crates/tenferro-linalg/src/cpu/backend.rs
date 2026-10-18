@@ -92,6 +92,13 @@ impl FreshLinalgOutput for CompactQrResult {
 }
 
 trait CpuBackendLinalgAffinityExt {
+    /// Every BLAS linalg entry passes here, including the direct caller-output
+    /// path that does not allocate a fresh result.
+    fn with_linalg_pool_checked<R>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
+    ) -> tenferro_tensor::Result<R>;
+
     fn with_linalg_pool_fresh<R: FreshLinalgOutput + Send>(
         &mut self,
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
@@ -99,13 +106,22 @@ trait CpuBackendLinalgAffinityExt {
 }
 
 impl CpuBackendLinalgAffinityExt for CpuExecSession<'_> {
-    fn with_linalg_pool_fresh<R: FreshLinalgOutput + Send>(
+    fn with_linalg_pool_checked<R>(
         &mut self,
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
     ) -> tenferro_tensor::Result<R> {
         self.with_linalg_pool(move |context, buffers| {
             #[cfg(feature = "blas")]
             super::tlinalg_blas::reject_forced_batch_strategy(context)?;
+            op(context, buffers)
+        })
+    }
+
+    fn with_linalg_pool_fresh<R: FreshLinalgOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
+    ) -> tenferro_tensor::Result<R> {
+        self.with_linalg_pool_checked(move |context, buffers| {
             let mut output = op(context, buffers)?;
             output.tag_fresh(context.domain_id());
             Ok(output)
@@ -802,7 +818,7 @@ impl LinalgBackend for CpuExecSession<'_> {
 
         let a = a.tensor_view();
         let b = b.tensor_view();
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             solve_read_into_entered(context, buffers, a, b, out)
         })
     }

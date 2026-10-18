@@ -88,3 +88,88 @@ fn forced_strategy_on_the_blas_linalg_lane_is_refused_before_writes() {
         }
     }
 }
+
+/// The direct caller-output solve takes the same refusal gate as the
+/// allocating entries: every forced strategy the BLAS linalg lane cannot honor
+/// is refused before the caller's sentinels are touched.
+#[cfg(feature = "blas")]
+#[test]
+fn forced_strategy_on_blas_solve_read_into_is_refused_before_writes() {
+    use std::num::NonZeroUsize;
+
+    let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
+    let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+
+    for strategy in [
+        CpuBatchStrategy::Outer,
+        CpuBatchStrategy::Inner,
+        CpuBatchStrategy::Split {
+            lanes: NonZeroUsize::new(2).unwrap(),
+        },
+        CpuBatchStrategy::WholeBatchVendor,
+    ] {
+        let mut out = Tensor::from_vec_col_major([2, 1], vec![-41.0_f64; 2]).unwrap();
+        let result = with_cpu_linalg(&mut backend, |session| {
+            with_batch_policy(session, CpuBatchPolicy::new(strategy), |session| {
+                with_cpu_exec_session(session, |cpu| {
+                    cpu.solve_read_into(
+                        TensorRead::from_tensor(&a),
+                        TensorRead::from_tensor(&b),
+                        tenferro_tensor::TensorWrite::from_tensor(&mut out),
+                    )
+                })
+                .expect("a CPU session")
+            })
+            .expect("the CPU session accepts the policy")
+        });
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.kind(),
+            tenferro_tensor::ErrorKind::Unsupported,
+            "{strategy:?}: {error}"
+        );
+        assert_eq!(
+            out.as_slice::<f64>().unwrap(),
+            &[-41.0, -41.0],
+            "{strategy:?}: the refusal must precede the caller-output write"
+        );
+    }
+}
+
+/// `tlinalg` resolves strategy availability before its own empty-batch return;
+/// the native empty shortcuts must not bypass that validation.
+#[cfg(feature = "native")]
+#[test]
+fn forced_whole_batch_vendor_on_native_empty_inputs_is_refused() {
+    use std::error::Error as _;
+
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    for shape in [vec![2, 2, 0], vec![0, 0]] {
+        let input = Tensor::from_vec_col_major(shape.clone(), Vec::<f64>::new()).unwrap();
+        let result = with_cpu_linalg(&mut backend, |session| {
+            with_batch_policy(
+                session,
+                CpuBatchPolicy::new(CpuBatchStrategy::WholeBatchVendor),
+                |session| {
+                    with_cpu_exec_session(session, |cpu| cpu.cholesky(&input))
+                        .expect("a CPU session")
+                },
+            )
+            .expect("the CPU session accepts the policy")
+        });
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.kind(),
+            tenferro_tensor::ErrorKind::Unsupported,
+            "{shape:?}: {error}"
+        );
+        assert!(
+            matches!(
+                error.source().and_then(|source| source.downcast_ref()),
+                Some(tlinalg::Error::StrategyUnavailable { .. })
+            ),
+            "{shape:?}: the provider refusal must stay the typed source: {error}"
+        );
+    }
+}
