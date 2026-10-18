@@ -109,32 +109,118 @@ fn backend_default_policy_follows_clones() {
     assert_eq!(strategy, CpuBatchStrategy::WholeBatchVendor);
 }
 
-/// A forced `Outer` reaches the `Exec` the contraction adapter hands to
-/// `cpueinsum`: the token carries the resolved strategy and its decision fans
-/// the batch over the budget instead of the route's `Auto` result.
+fn batched_matmul_config() -> tenferro_tensor::DotGeneralConfig {
+    tenferro_tensor::DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2].as_slice().into(),
+        rhs_batch_dims: [2].as_slice().into(),
+    }
+}
+
+fn contraction_inputs() -> (Tensor, Tensor) {
+    let (rows, inner, cols, batch) = (8usize, 8usize, 8usize, 16usize);
+    let lhs = Tensor::from_vec_col_major(
+        vec![rows, inner, batch],
+        (0..rows * inner * batch)
+            .map(|index| ((index % 7) as f64) - 3.0)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let rhs = Tensor::from_vec_col_major(
+        vec![inner, cols, batch],
+        (0..inner * cols * batch)
+            .map(|index| ((index % 5) as f64) - 2.0)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    (lhs, rhs)
+}
+
+fn dot_with_strategy(threads: usize, strategy: CpuBatchStrategy) -> Tensor {
+    use tenferro_tensor::TensorRead;
+
+    let (lhs, rhs) = contraction_inputs();
+    let config = batched_matmul_config();
+    let mut backend = CpuBackend::with_threads(threads).unwrap();
+    with_cpu_session(&mut backend, |session| {
+        crate::with_batch_policy(session, CpuBatchPolicy::new(strategy), |session| {
+            session
+                .dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+                .unwrap()
+        })
+        .expect("the CPU session accepts the policy")
+    })
+}
+
+/// A forced `Outer` executes the same binary contraction as `Sequential`, bit
+/// for bit, over a batch large enough to fan out.
 #[test]
-fn forced_outer_reaches_the_contraction_exec() {
+fn forced_outer_binary_contraction_matches_sequential() {
+    let sequential = dot_with_strategy(1, CpuBatchStrategy::Sequential);
+    let outer = dot_with_strategy(4, CpuBatchStrategy::Outer);
+    assert_eq!(
+        outer.as_slice::<f64>().unwrap(),
+        sequential.as_slice::<f64>().unwrap()
+    );
+}
+
+/// The forced `Outer` route is observable on the native alternatives: it must
+/// not stay on the coordinator-inline vendor loop.
+#[cfg_attr(feature = "blas", ignore = "needs cpueinsum-blas 0.3.1")]
+#[test]
+fn forced_outer_binary_contraction_takes_the_native_route() {
+    let _ = dot_with_strategy(4, CpuBatchStrategy::Outer);
+    assert_eq!(
+        crate::contraction::take_last_contraction_route(),
+        Some(crate::contraction::ContractionRoute::Native)
+    );
+}
+
+/// `WholeBatchVendor` is unavailable on the per-job BLAS contraction route; the
+/// refusal must precede the caller-owned output write.
+#[cfg(feature = "blas")]
+#[test]
+fn forced_whole_batch_vendor_on_blas_contraction_is_refused_before_writes() {
+    use tenferro_tensor::{TensorRead, TensorWrite};
+
+    let (lhs, rhs) = contraction_inputs();
+    let config = batched_matmul_config();
+    let mut out = Tensor::from_vec_col_major(vec![8, 8, 16], vec![-71.0_f64; 8 * 8 * 16]).unwrap();
     let mut backend = CpuBackend::with_threads(4).unwrap();
-    let decision = with_cpu_session(&mut backend, |session| {
+    let result = with_cpu_session(&mut backend, |session| {
         crate::with_batch_policy(
             session,
-            CpuBatchPolicy::new(CpuBatchStrategy::Outer),
+            CpuBatchPolicy::new(CpuBatchStrategy::WholeBatchVendor),
             |session| {
-                crate::with_cpu_exec_session(session, |cpu| {
-                    cpu.with_contraction_exec(|exec, _, _| {
-                        assert_eq!(exec.batch_policy().strategy, CpuBatchStrategy::Outer);
-                        Ok(exec
-                            .batch_decision(&cpueinsum::BatchQuery::new(8, 4096.0))
-                            .expect("forced Outer is available on the contraction route"))
-                    })
-                    .expect("a CPU session")
-                })
+                session.dot_general_read_into(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                    TensorWrite::from_tensor(&mut out),
+                )
             },
         )
         .expect("the CPU session accepts the policy")
-    })
-    .expect("the contraction exec carries the resolved policy");
-    assert_eq!(decision.lanes, 4, "{decision:?}");
+    });
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.kind(),
+        tenferro_tensor::ErrorKind::Unsupported,
+        "{error}"
+    );
+    assert!(
+        matches!(
+            std::error::Error::source(&error).and_then(|source| source.downcast_ref()),
+            Some(cpueinsum_blas::BlasError::StrategyUnavailable)
+        ),
+        "the provider refusal must stay the typed source: {error}"
+    );
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[-71.0_f64; 8 * 8 * 16]);
 }
 
 /// A session that is not a CPU execution session and forwards none.

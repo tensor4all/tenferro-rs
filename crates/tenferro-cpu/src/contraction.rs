@@ -28,6 +28,45 @@ use cpueinsum::BinaryPlan;
 #[cfg(feature = "blas")]
 use cpueinsum_blas::BinaryPlan;
 
+/// The numerical route a binary contraction took, for allocation/route tests.
+///
+/// Only the vendor/native distinction is exposed: the native alternatives keep
+/// their own finer [`cpueinsum::ExecutionRoute`] variants, which are not a
+/// stable test contract.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContractionRoute {
+    #[cfg_attr(not(feature = "blas"), allow(dead_code))]
+    Vendor,
+    Native,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LAST_CONTRACTION_ROUTE: std::cell::Cell<Option<ContractionRoute>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_last_contraction_route() -> Option<ContractionRoute> {
+    LAST_CONTRACTION_ROUTE.with(|last| last.replace(None))
+}
+
+#[cfg(all(test, feature = "blas"))]
+fn record_contraction_route(route: cpueinsum_blas::ExecutionRoute) {
+    use cpueinsum_blas::ExecutionRoute;
+    let route = match route {
+        ExecutionRoute::Vendor => ContractionRoute::Vendor,
+        ExecutionRoute::Native(_) => ContractionRoute::Native,
+    };
+    LAST_CONTRACTION_ROUTE.with(|last| last.set(Some(route)));
+}
+
+#[cfg(all(test, not(feature = "blas")))]
+fn record_contraction_route(_route: cpueinsum::ExecutionRoute) {
+    LAST_CONTRACTION_ROUTE.with(|last| last.set(Some(ContractionRoute::Native)));
+}
+
 #[cfg(feature = "native")]
 trait Scalar: PoolScalar + cpueinsum::Scalar {}
 #[cfg(feature = "native")]
@@ -419,18 +458,22 @@ fn initialized<T: Scalar>(
             let mut work = T::pool_acquire_zeroed(buffers, plan.work_len());
             #[cfg(feature = "native")]
             let _ = buffers;
-            let result = plan
-                .execute_slices_accum(
-                    exec,
-                    alpha,
-                    (a, lhs.offset()),
-                    (b, rhs.offset()),
-                    beta,
-                    SliceAccumulationSource::Output,
-                    (d, output_offset),
-                    #[cfg(feature = "blas")]
-                    &mut work,
-                )
+            let result = plan.execute_slices_accum(
+                exec,
+                alpha,
+                (a, lhs.offset()),
+                (b, rhs.offset()),
+                beta,
+                SliceAccumulationSource::Output,
+                (d, output_offset),
+                #[cfg(feature = "blas")]
+                &mut work,
+            );
+            #[cfg(test)]
+            if let Ok(route) = &result {
+                record_contraction_route(*route);
+            }
+            let result = result
                 .map(|_| ())
                 .map_err(|error| error.into_crate_error("dot_general"));
             #[cfg(feature = "blas")]
@@ -465,18 +508,22 @@ fn fresh<T: Scalar>(
             #[cfg(feature = "blas")]
             let mut work = T::pool_acquire_zeroed(buffers, plan.work_len());
             let mut output = PooledUninitOutput::<T>::new(buffers, shape)?;
-            let result = plan
-                .execute_uninit_slices(
-                    exec,
-                    alpha,
-                    (a, lhs.offset()),
-                    (b, rhs.offset()),
-                    beta,
-                    SliceAccumulationSource::Absent,
-                    (output.as_uninit_slice_mut(), 0),
-                    #[cfg(feature = "blas")]
-                    &mut work,
-                )
+            let result = plan.execute_uninit_slices(
+                exec,
+                alpha,
+                (a, lhs.offset()),
+                (b, rhs.offset()),
+                beta,
+                SliceAccumulationSource::Absent,
+                (output.as_uninit_slice_mut(), 0),
+                #[cfg(feature = "blas")]
+                &mut work,
+            );
+            #[cfg(test)]
+            if let Ok((_, route)) = &result {
+                record_contraction_route(*route);
+            }
+            let result = result
                 .map(|_| ())
                 .map_err(|error| error.into_crate_error("dot_general"));
             #[cfg(feature = "blas")]
