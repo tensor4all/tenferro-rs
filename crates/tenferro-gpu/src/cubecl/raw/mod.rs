@@ -8,10 +8,16 @@
 //! Safety model
 //! ------------
 //!
-//! - `Session`, [`StreamRef`], [`TensorRef`], [`DeviceBytes`], [`Module`], and
-//!   [`Function`] are all scoped to the request lifetime and are `!Send +
-//!   !Sync`, so the thread-local context/stream capability cannot migrate to
-//!   another thread.
+//! - `Session`, [`StreamRef`], [`TensorRef`], [`TensorMut`], and [`DeviceBytes`]
+//!   are scoped to the request lifetime and are `!Send + !Sync`, so the
+//!   thread-local context/stream capability cannot migrate to another thread.
+//! - [`Module`] and [`Function`] are compiled-image handles, not execution
+//!   capabilities. They are `Send + Sync`: the driver allows a `CUmodule` and
+//!   its `CUfunction`s to be used from any thread that has the owning context
+//!   current. The shared owner retained by both holds the
+//!   [`CudaRuntime`] pin, so a surviving function keeps the primary context
+//!   alive. A launch still happens through a raw [`Session`], which activates
+//!   its runtime's context on the calling thread.
 //! - `StreamRef` is not a `u64` and does not expose its native handle in safe
 //!   code; vendor FFI receives the handle only through an explicit unsafe
 //!   escape that must not retain it past the session scope.
@@ -40,69 +46,194 @@ pub(crate) use module::needs_shared_memory_opt_in;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tenferro_tensor::{TensorRank, TensorRead, TypedTensor, TypedTensorView};
 
 use cudarc::cublas::sys as cublas_sys;
 
-use super::runtime::CudaRuntime;
+use super::runtime::{CudaRuntime, RawContextRestore};
 use super::{CudaExtensionCache, CudaExtensionCacheGuard, CudaRuntimeIdentity};
 
 pub use nvrtc::NvrtcOptions;
 
 /// A loaded CUDA module (PTX or CUBIN) on the tenferro primary context.
 ///
-/// Retains the tenferro `CudaRuntime` so the context/device stays alive as
-/// long as the module exists. Every [`Function`] derived from it retains the
-/// same inner handle (`Rc`), so the image is never unloaded while a function
-/// handle is still in use. Dropping the last strong reference unloads the
-/// module.
+/// Retains the shared [`ModuleInner`] owner, which in turn retains the
+/// tenferro `CudaRuntime` so the context/device stays alive as long as any
+/// module or function handle exists. Every [`Function`] derived from it
+/// retains the same inner owner, so the image is never unloaded while a
+/// function handle is still in use. Dropping the last strong reference unloads
+/// the module.
 ///
-/// `Module` is `!Send + !Sync` (like the rest of the raw seam), matching the
-/// session-scoped execution authority of issue #1597.
-#[allow(dead_code)]
-// `runtime` is never dereferenced: holding the `CudaRuntime` Arc keeps the
-// tenferro primary context alive for the module's whole lifetime, which is
-// the load-bearing effect this field provides.
+/// `Module` is `Send + Sync`: a compiled image is not an execution capability,
+/// and the driver allows a `CUmodule` to be used from any thread that has the
+/// owning primary context current. Launching still requires a raw
+/// [`Session`], and dropping the last handle re-activates the owning context
+/// on the dropping thread before unloading.
 pub struct Module {
-    inner: Rc<ModuleInner>,
-    runtime: CudaRuntime,
-    _not_send_sync: PhantomData<Rc<()>>,
+    inner: Arc<ModuleInner>,
 }
 
-/// Shared inner handle shared between a [`Module`] and its [`Function`]s.
+/// Shared owner retained by a [`Module`] and every [`Function`] derived from
+/// it.
 ///
-/// Retains the tenferro primary context identity so unload re-activates the
-/// correct context on the (same, session-scoped) thread before the driver
-/// frees the image. `Module`/`Function` are `!Send + !Sync`, so this drop
-/// never races a foreign current-context.
+/// It holds the tenferro [`CudaRuntime`] pin, so a surviving function keeps
+/// the primary context (and its device) alive even after the loading backend
+/// and the [`Module`] handle are gone. [`Arc`] makes the ownership thread-safe;
+/// the driver handles are opaque values that are only converted back under the
+/// owning context.
+///
+/// Driver handles are stored as `usize`, not as raw pointers, so the shared
+/// owner is `Send + Sync` without an `unsafe impl`. The values are opaque
+/// driver image/context identities and are never dereferenced by Rust.
 pub(crate) struct ModuleInner {
-    handle: cudarc::driver::sys::CUmodule,
-    context: cudarc::driver::sys::CUcontext,
+    runtime: Option<CudaRuntime>,
+    handle: usize,
+    context: usize,
+}
+
+impl ModuleInner {
+    fn handle(&self) -> cudarc::driver::sys::CUmodule {
+        self.handle as cudarc::driver::sys::CUmodule
+    }
+
+    fn context(&self) -> cudarc::driver::sys::CUcontext {
+        self.context as cudarc::driver::sys::CUcontext
+    }
+
+    /// Activate the module's owning primary context on the calling thread.
+    ///
+    /// The returned guard restores the previous device/context on drop,
+    /// including the "no current context" case.
+    pub(crate) fn enter_context(&self, op: &'static str) -> crate::Result<RawContextRestore> {
+        let runtime = self.runtime.as_ref().ok_or_else(|| {
+            crate::Error::runtime_state(op, "module runtime pin was already released")
+        })?;
+        let ordinal = i32::try_from(runtime.device_ordinal())
+            .map_err(|source| crate::Error::backend_source(op, source))?;
+        RawContextRestore::enter(op, ordinal, self.context())
+    }
+
+    /// Activate the owning context only when the calling thread is not already
+    /// on it.
+    ///
+    /// A module handle is usable from any thread, so lookups and per-function
+    /// driver calls must not depend on the creating raw scope still being
+    /// current. The fast path avoids four driver calls when that context really
+    /// is current, which is the normal in-session case.
+    pub(crate) fn enter_context_if_needed(
+        &self,
+        op: &'static str,
+    ) -> crate::Result<Option<RawContextRestore>> {
+        let already_current = matches!(
+            cudarc::driver::result::ctx::get_current(),
+            Ok(Some(current)) if current == self.context()
+        );
+        if already_current {
+            Ok(None)
+        } else {
+            self.enter_context(op).map(Some)
+        }
+    }
+}
+
+/// Restore a thread's saved device/context after a module drop.
+///
+/// A saved context equal to the module's own context is not restored: dropping
+/// the runtime pin may have released its last retain, so the thread is left
+/// without a current context instead of with a dangling one.
+fn restore_thread_state(
+    saved_device: Result<i32, cudarc::runtime::result::RuntimeError>,
+    saved_context: Result<
+        Option<cudarc::driver::sys::CUcontext>,
+        cudarc::driver::result::DriverError,
+    >,
+    module_context: cudarc::driver::sys::CUcontext,
+) {
+    // ponytail: a saved context equal to the module's own context is cleared
+    // rather than restored. Dropping the runtime pin may have released its last
+    // retain, and the driver exposes no refcount query to distinguish that from
+    // another runtime still keeping the primary context alive. A caller that
+    // needs that exact binding re-enters it (a raw session restores it on exit).
+    let previous = match saved_context {
+        Ok(Some(previous)) if previous != module_context => Some(previous),
+        _ => None,
+    };
+    let mut failures = Vec::new();
+    if let Ok(device) = saved_device {
+        if let Err(err) = cudarc::runtime::result::device::set(device) {
+            failures.push(format!("device: {err:?}"));
+        }
+    }
+    // SAFETY: the saved context was current on this thread when the drop
+    // started and is not the module context released by the runtime pin; the
+    // null case clears the thread's binding instead of leaving a stale one.
+    let restored = match previous {
+        Some(previous) => unsafe { cudarc::driver::result::ctx::set_current(previous) },
+        None => unsafe { cudarc::driver::result::ctx::set_current(std::ptr::null_mut()) },
+    };
+    if let Err(err) = restored {
+        failures.push(format!("context: {err:?}"));
+    }
+    if !failures.is_empty() {
+        eprintln!(
+            "tenferro-gpu: failed to restore CUDA thread state during module unload: {}",
+            failures.join(", ")
+        );
+    }
 }
 
 impl Drop for ModuleInner {
     fn drop(&mut self) {
-        // SAFETY: `handle` came from `cuModuleLoadData` under the tenferro
-        // primary context and is not yet unloaded; every `Function` that
-        // could still reference it retains an `Rc<ModuleInner>`. The module
-        // is `!Send + !Sync`, so this drop runs on the session thread.
-        unsafe {
-            let was_current = cudarc::driver::result::ctx::get_current().ok();
-            let _ = cudarc::driver::result::ctx::set_current(self.context);
-            let _ = cudarc::driver::result::module::unload(self.handle);
-            if let Some(previous) = was_current.flatten() {
-                if previous != self.context {
-                    let _ = cudarc::driver::result::ctx::set_current(previous);
-                }
+        let saved_device = cudarc::runtime::result::device::get();
+        let saved_context = cudarc::driver::result::ctx::get_current();
+        let context = self.context();
+        let Some(runtime) = self.runtime.as_ref() else {
+            return;
+        };
+        let ordinal = match i32::try_from(runtime.device_ordinal()) {
+            Ok(ordinal) => ordinal,
+            Err(err) => {
+                eprintln!("tenferro-gpu: invalid CUDA device ordinal during module unload: {err}");
+                return;
             }
+        };
+        // The last handle may be dropped on another thread that has no current
+        // context (or a different one), so activate the owning primary context
+        // for the unload and restore the previous thread state afterwards,
+        // including the null case the old inner drop left behind.
+        if let Err(err) = cudarc::runtime::result::device::set(ordinal) {
+            eprintln!("tenferro-gpu: failed to select CUDA device during module unload: {err:?}");
+            return;
         }
+        // SAFETY: `context` is the live primary context retained by the module
+        // runtime pin, and `set_current` takes no ownership of it.
+        if let Err(err) = unsafe { cudarc::driver::result::ctx::set_current(context) } {
+            eprintln!(
+                "tenferro-gpu: failed to activate CUDA context during module unload: {err:?}"
+            );
+            restore_thread_state(saved_device, saved_context, context);
+            return;
+        }
+        // SAFETY: `handle` came from `cuModuleLoadData` under the retained
+        // primary context, which is current on this thread, and this is the
+        // last `Arc<ModuleInner>` so no function handle can still reference it.
+        unsafe {
+            let _ = cudarc::driver::result::module::unload(self.handle());
+        }
+        // Drop the runtime pin while the module context is current: runtime
+        // teardown activates the primary context for stream retirement, so the
+        // thread restoration must happen after that teardown, not before it.
+        drop(self.runtime.take());
+        restore_thread_state(saved_device, saved_context, context);
     }
 }
 
 impl Module {
     /// Wrap a freshly loaded driver module handle, retaining `runtime` so the
-    /// primary context stays alive for the module's lifetime.
+    /// primary context stays alive for every module and function handle.
     pub(crate) fn from_handle(
         op: &'static str,
         handle: cudarc::driver::sys::CUmodule,
@@ -116,67 +247,87 @@ impl Module {
         }
         let context = runtime.primary_context();
         Ok(Self {
-            inner: Rc::new(ModuleInner { handle, context }),
-            runtime,
-            _not_send_sync: PhantomData,
+            inner: Arc::new(ModuleInner {
+                runtime: Some(runtime),
+                handle: handle as usize,
+                context: context as usize,
+            }),
         })
     }
 
     /// Look up a kernel entry point by name.
     ///
-    /// The returned [`Function`] retains this module, so the module cannot be
-    /// unloaded while the function is alive.
+    /// The returned [`Function`] retains the shared owner of this module (and
+    /// the runtime pin), so the module cannot be unloaded while the function is
+    /// alive, even if the [`Module`] handle is dropped first. The lookup
+    /// activates the module's owning primary context when this thread is not
+    /// already on it, so a shared module handle can be used from any thread.
     ///
     /// # Errors
     ///
     /// Returns the driver's typed error via [`crate::Error::BackendSource`]
     /// when the symbol does not exist in the module.
     pub fn function(&self, name: &str) -> crate::Result<Function> {
+        // The handle is shareable, so look up the symbol under the module's
+        // owning context instead of assuming the creating raw scope is still
+        // current on this thread.
+        let _guard = self.inner.enter_context_if_needed("module.function")?;
         module::module_function(&self.inner, name, "module.function")
     }
 
     /// Return the CUDA module handle (for internal bridge and test use).
     #[allow(dead_code)]
     pub(crate) fn handle(&self) -> cudarc::driver::sys::CUmodule {
-        self.inner.handle
+        self.inner.handle()
     }
 }
 
 /// A handle to a kernel within a loaded [`Module`].
 ///
-/// Retains the owning module inner (`Rc`), so the underlying function handle
-/// is valid for as long as this handle lives and the module is not unloaded
-/// mid-flight.
-#[allow(dead_code)]
-// `module` is never dereferenced: the retained `Rc<ModuleInner>` prevents
-// module unload while a queued kernel may still reference the function handle,
-// which is the load-bearing effect this field provides.
+/// Retains the owning shared [`ModuleInner`] (module image, context identity,
+/// and the tenferro runtime pin), so the function handle stays valid even after
+/// the [`Module`] and the loading backend are dropped. The handle is
+/// `Send + Sync`; every launch still goes through a raw [`Session`], and the
+/// module's owning context is activated for dynamic shared-memory configuration
+/// and for the final unload.
 pub struct Function {
-    handle: cudarc::driver::sys::CUfunction,
-    module: Rc<ModuleInner>,
+    handle: usize,
+    module: Arc<ModuleInner>,
     /// Largest dynamic shared-memory budget this function was opted into with
     /// (`CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES`). `0` means "the
     /// driver's default", i.e. no attribute was set yet.
     ///
     /// The attribute only ever grows: a launch that requests no more than this
-    /// value reuses it instead of paying another driver call (#2085).
-    shared_mem_opt_in: std::cell::Cell<u32>,
+    /// value reuses it instead of paying another driver call (#2085). A
+    /// function handle is usable from several threads, so the fast path is an
+    /// atomic read and the raising path is serialized by `shared_mem_raise`.
+    shared_mem_opt_in: AtomicU32,
+    /// Serializes the "read recorded value, raise attribute" sequence so two
+    /// threads cannot shrink the attribute again after a larger request.
+    shared_mem_raise: Mutex<()>,
 }
 
 impl Function {
     /// Return the raw function handle (for internal launch use).
     pub(crate) fn handle(&self) -> cudarc::driver::sys::CUfunction {
-        self.handle
+        self.handle as cudarc::driver::sys::CUfunction
     }
 
     /// Largest dynamic shared-memory budget already opted into on this handle.
     pub(crate) fn shared_mem_opt_in(&self) -> u32 {
-        self.shared_mem_opt_in.get()
+        self.shared_mem_opt_in.load(Ordering::Acquire)
     }
 
     /// Record a successful dynamic shared-memory opt-in on this handle.
     pub(crate) fn set_shared_mem_opt_in(&self, bytes: u32) {
-        self.shared_mem_opt_in.set(bytes);
+        self.shared_mem_opt_in.store(bytes, Ordering::Release);
+    }
+
+    /// Serialize the shared-memory opt-in decision across threads.
+    pub(crate) fn lock_shared_memory_raise(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.shared_mem_raise
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -804,6 +955,18 @@ impl<'s> Session<'s> {
         config: LaunchConfig,
         args: &[KernelArg<'_>],
     ) -> crate::Result<()> {
+        // A `Function` is `Send + Sync` and may have been compiled by another
+        // runtime. The driver allows the handle from any thread, but only under
+        // the primary context that loaded it; a session on a different device
+        // would otherwise pass a foreign function to `cuLaunchKernel`.
+        if function.module.context() != self.runtime.primary_context() {
+            return Err(crate::Error::invalid_argument(
+                "raw.launch",
+                "function",
+                "function belongs to a different CUDA primary context; enter a raw session \
+                 on the runtime or device that loaded the module",
+            ));
+        }
         module::validate_launch_config(&config)?;
         module::ensure_dynamic_shared_memory(function, config.shared_mem_bytes)?;
 
@@ -860,7 +1023,9 @@ impl<'s> Session<'s> {
     /// This is the narrow public view over the existing bounded per-runtime
     /// [`CudaExtensionCache`](super::CudaExtensionCache). The guard holds the
     /// cache lock and serializes access; cache keys remain per exact runtime
-    /// instance (never per-device).
+    /// instance (never per-device). This is the only runtime-scoped cache in the
+    /// raw seam: [`Module`] and [`Function`] are shared directly through their
+    /// own `Send + Sync` owner instead of through a second cache framework.
     ///
     /// # Errors
     ///
@@ -1030,6 +1195,55 @@ impl<'s, T> TensorRef<'s, T> {
         self.byte_len
     }
 
+    /// Build a checked read-only sub-span of this reference.
+    ///
+    /// `bytes` is the byte offset from this span's base and `len` the length of
+    /// the sub-span. This is the arena form: one allocation can expose several
+    /// logical buffers without passing a naked `base + offset` integer. The
+    /// sub-span keeps the read-only authority of the parent and is consumed by
+    /// the existing [`KernelArg::tensor`] constructor.
+    ///
+    /// The offset must be element-aligned for `T`, `bytes + len` must fit the
+    /// parent span, and the resulting base address must not overflow. The
+    /// returned span shares the parent's session/tensor scope (lifetime `'s`),
+    /// so it cannot outlive the allocation it points into; it is a handle, not
+    /// a device read.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::raw::TensorRef;
+    ///
+    /// fn upper_half<'s>(arena: &TensorRef<'s, f64>) -> tenferro_tensor::Result<TensorRef<'s, f64>> {
+    ///     let half = arena.byte_len() / 2;
+    ///     arena.offset(half, half)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the offset is
+    /// not aligned for `T`, the offset plus length exceeds the parent span, or
+    /// the resulting address overflows.
+    pub fn offset(&self, bytes: usize, len: usize) -> crate::Result<Self> {
+        let base = checked_subspan(
+            self.base,
+            self.byte_len,
+            bytes,
+            len,
+            std::mem::size_of::<T>(),
+            "raw.tensor_ref.offset",
+        )?;
+        Ok(Self {
+            base,
+            byte_len: len,
+            _scope: PhantomData,
+            _dtype: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
     /// Extract the device base pointer for an FFI call.
     ///
     /// # Safety
@@ -1068,6 +1282,54 @@ impl<'s, T> TensorMut<'s, T> {
         self.byte_len
     }
 
+    /// Build a checked mutable sub-span of this reference.
+    ///
+    /// This is the mutable twin of [`TensorRef::offset`]: the sub-span keeps
+    /// the mutable authority of the exclusively borrowed parent and is consumed
+    /// by the existing [`KernelArg::tensor_mut`] constructor. The offset must
+    /// be element-aligned for `T`, `bytes + len` must fit the parent span, and
+    /// the resulting base address must not overflow.
+    ///
+    /// Two sub-spans of one parent are still only handles. Passing overlapping
+    /// mutable sub-spans to one launch violates the no-alias rule of
+    /// [`Session::launch`]; disjoint offsets are the caller's responsibility,
+    /// exactly as for two [`KernelArg::tensor_mut`] arguments today.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::raw::TensorMut;
+    ///
+    /// fn upper_half<'s>(arena: &TensorMut<'s, f64>) -> tenferro_tensor::Result<TensorMut<'s, f64>> {
+    ///     let half = arena.byte_len() / 2;
+    ///     arena.offset(half, half)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the offset is
+    /// not aligned for `T`, the offset plus length exceeds the parent span, or
+    /// the resulting address overflows.
+    pub fn offset(&self, bytes: usize, len: usize) -> crate::Result<Self> {
+        let base = checked_subspan(
+            self.base,
+            self.byte_len,
+            bytes,
+            len,
+            std::mem::size_of::<T>(),
+            "raw.tensor_mut.offset",
+        )?;
+        Ok(Self {
+            base,
+            byte_len: len,
+            _scope: PhantomData,
+            _dtype: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
     /// Extract the mutable device base pointer for an FFI call.
     ///
     /// # Safety
@@ -1078,6 +1340,50 @@ impl<'s, T> TensorMut<'s, T> {
     pub unsafe fn raw_ptr(&self) -> *mut std::ffi::c_void {
         self.base
     }
+}
+
+impl<T> fmt::Debug for TensorMut<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TensorMut")
+            .field("byte_len", &self.byte_len)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Check a byte sub-span against a parent span and return its base address.
+///
+/// `element_size` is the size of the typed element; an offset that is not a
+/// multiple of it would produce a misaligned `T` pointer and is rejected.
+pub(crate) fn checked_subspan(
+    base: *mut std::ffi::c_void,
+    parent_len: usize,
+    bytes: usize,
+    len: usize,
+    element_size: usize,
+    op: &'static str,
+) -> crate::Result<*mut std::ffi::c_void> {
+    let invalid = |message: String| crate::Error::invalid_argument(op, "span", message);
+    if element_size > 1 && !bytes.is_multiple_of(element_size) {
+        return Err(invalid(format!(
+            "byte offset {bytes} is not a multiple of the {element_size}-byte element type"
+        )));
+    }
+    let end = bytes.checked_add(len).ok_or_else(|| {
+        invalid(format!(
+            "sub-span [offset {bytes}, length {len}) overflows the address space"
+        ))
+    })?;
+    if end > parent_len {
+        return Err(invalid(format!(
+            "sub-span [offset {bytes}, end {end}) exceeds the {parent_len}-byte parent span"
+        )));
+    }
+    let address = (base as usize).checked_add(bytes).ok_or_else(|| {
+        invalid(format!(
+            "sub-span base address overflows by {bytes} bytes from the parent base"
+        ))
+    })?;
+    Ok(address as *mut std::ffi::c_void)
 }
 
 /// A typed argument for a raw CUDA kernel launch.

@@ -18,7 +18,8 @@
 //! host barrier.
 
 use std::ffi::CString;
-use std::rc::Rc;
+use std::sync::atomic::AtomicU32;
+use std::sync::{Arc, Mutex};
 
 use super::{Function, Module, ModuleInner};
 
@@ -51,20 +52,22 @@ pub(crate) fn load_module_data(
 /// Returns the driver's typed error (missing symbol / module invalid) via
 /// [`crate::Error::BackendSource`].
 pub(crate) fn module_function(
-    inner: &Rc<ModuleInner>,
+    inner: &Arc<ModuleInner>,
     name: &str,
     op: &'static str,
 ) -> crate::Result<Function> {
     let name_c = CString::new(name)
         .map_err(|_| crate::Error::invalid_argument(op, "symbol", "symbol name contains NUL"))?;
-    // SAFETY: `inner.handle` is a valid, loaded module handle kept alive by
-    // the `Arc` this function retains.
-    let handle = unsafe { cudarc::driver::result::module::get_function(inner.handle, name_c) }
+    // SAFETY: `inner` owns a valid, loaded module handle kept alive by the
+    // `Arc` this function retains, and `Module::function` activated its owning
+    // context for this lookup.
+    let handle = unsafe { cudarc::driver::result::module::get_function(inner.handle(), name_c) }
         .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(Function {
-        handle,
-        module: Rc::clone(inner),
-        shared_mem_opt_in: std::cell::Cell::new(0),
+        handle: handle as usize,
+        module: Arc::clone(inner),
+        shared_mem_opt_in: AtomicU32::new(0),
+        shared_mem_raise: Mutex::new(()),
     })
 }
 
@@ -108,37 +111,28 @@ pub(crate) fn ensure_dynamic_shared_memory(function: &Function, bytes: u32) -> c
         )
     })?;
 
+    // A function handle may be shared across threads, so serialize the
+    // read-decide-raise sequence. Without the lock, a smaller concurrent
+    // request could lower the attribute after a larger one raised it.
+    let _raise = function.lock_shared_memory_raise();
+    if !needs_shared_memory_opt_in(function.shared_mem_opt_in(), bytes) {
+        return Ok(());
+    }
+
     // Activate the context that owns the module instead of relying on the raw
     // scope that loaded the function still being current: a `Function` may be
-    // used outside its creating scope and thread later (#2085).
-    let context = function.module.context;
-    // SAFETY: `context` is the live tenferro primary context retained by the
-    // module, and `set_current` takes no ownership of it.
-    let previous = unsafe {
-        let previous = cudarc::driver::result::ctx::get_current().ok().flatten();
-        cudarc::driver::result::ctx::set_current(context)
-            .map_err(|err| crate::Error::backend_source("raw.launch", err))?;
-        previous
-    };
-
+    // used outside its creating scope and thread later (#2085). The guard
+    // restores the previous device/context, including "no current context".
+    let _guard = function.module.enter_context_if_needed("raw.launch")?;
     // SAFETY: the function handle belongs to the loaded module kept alive by
     // `function`, and its owning context is current on this thread.
     let set = unsafe {
         cudarc::driver::result::function::set_function_attribute(
-            function.handle,
+            function.handle(),
             cudarc::driver::sys::CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
             value,
         )
     };
-
-    if let Some(previous) = previous {
-        if previous != context {
-            // SAFETY: `previous` was current when this function started; restore
-            // it so the caller's scope is unchanged.
-            let _ = unsafe { cudarc::driver::result::ctx::set_current(previous) };
-        }
-    }
-
     set.map_err(|err| crate::Error::backend_source("raw.launch", err))?;
     function.set_shared_mem_opt_in(bytes);
     Ok(())

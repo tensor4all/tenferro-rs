@@ -136,7 +136,10 @@ extern "C" __global__ void add_kernel(
 
 `compile_nvrtc` returns a typed backend error containing the compiler log when
 compilation fails. Cache reusable modules with `raw::Session::resource` rather
-than compiling on every call.
+than compiling on every call (for example as `Arc<Module>`, which the cache
+accepts now that the handle is `Send`), or keep the `Send + Sync` module handle
+in your own process-wide storage (see "Share a compiled module across threads"
+below).
 
 ## Borrow tensors and launch
 
@@ -214,6 +217,52 @@ reads passed to `tensor_read` keep using the `tensor` binding unchanged.
 `session.stream()` exposes the same captured stream for a foreign CUDA library.
 Its native handle and `TensorRef::raw_ptr` / `TensorMut::raw_ptr` are unsafe FFI
 escapes: use them only inside the callback and never retain or destroy them.
+
+### Arena sub-spans
+
+An engine that keeps several logical buffers in one allocation can bind a
+checked sub-span instead of passing a naked `base + offset` integer:
+`TensorRef::offset(bytes, len)` and `TensorMut::offset(bytes, len)` check the
+offset and length against the parent span, reject an unaligned offset for `T`,
+and return the existing `TensorRef`/`TensorMut` types, so the normal
+`KernelArg::tensor` / `KernelArg::tensor_mut` constructors still apply. The
+read-only and mutable authorities never cross over: only `TensorMut::offset`
+produces a writable span. Overlapping mutable sub-spans passed to one launch
+still violate the launch's no-alias contract.
+
+```rust
+fn upper_half<'s>(
+    arena: &raw::TensorRef<'s, f64>,
+) -> tenferro_tensor::Result<raw::TensorRef<'s, f64>> {
+    let half = arena.byte_len() / 2;
+    arena.offset(half, half)
+}
+```
+
+### Share a compiled module across threads
+
+`raw::Module` and `raw::Function` are `Send + Sync`. They are compiled-image
+handles, not execution capabilities: a process-wide `OnceLock<Module>` (or a
+module value moved to another thread) is allowed. The shared owner retained by
+both handles keeps the tenferro runtime and CUDA primary context alive, so a
+`Function` may outlive the `Module` and the backend that loaded it. Every
+launch still goes through a `raw::Session`; on another thread, enter a raw
+session on the same runtime (or another runtime on the same device). Symbol
+lookup and the shared-memory opt-in activate the module's owning context, and
+dropping the last handle restores the dropping thread's previous context,
+including "no current context".
+
+The existing launch contract is unchanged: the function (and every tensor it
+references) must stay alive until the asynchronous work is synchronized.
+`raw::Session::resource` remains the only per-runtime cache; a shared module
+handle needs no second cache framework.
+
+```rust
+use std::sync::OnceLock;
+use tenferro_gpu::cuda::raw::Module;
+
+static MODULE: OnceLock<Module> = OnceLock::new();
+```
 
 ## Large dynamic shared-memory tiles
 

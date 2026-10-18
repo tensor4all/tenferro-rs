@@ -27,6 +27,7 @@ mod memoized_addr_tests;
 mod metadata_tests;
 mod plan_cache_tests;
 mod raw_launch_tests;
+mod raw_module_tests;
 mod raw_session_tests;
 mod reduction_tests;
 mod runtime_tests;
