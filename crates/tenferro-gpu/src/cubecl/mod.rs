@@ -152,6 +152,7 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
+mod batched_gemm;
 mod blas1;
 mod capability;
 mod device;

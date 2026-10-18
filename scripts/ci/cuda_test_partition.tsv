@@ -116,6 +116,8 @@ gpu	tenferro-gpu	cubecl::tests::gemm_accum_tests::test_accum_zero_contraction_sc
 gpu	tenferro-gpu	cubecl::tests::gemm_accum_tests::test_accum_zero_contraction_view_output_beta_error
 gpu	tenferro-gpu	cubecl::tests::gemm_accum_tests::test_read_view_operands_allocating_f64
 gpu	tenferro-gpu	cubecl::tests::gemm_accum_tests::test_workspace_retirement_defers_eviction_barrier_f64
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_batched_matmul_with_one_batch_stays_on_the_cutensor_path
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_conjugated_complex_batched_matmul_stays_on_the_cutensor_path
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_default_retention_cap_survives_cache_clear
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_plan_is_shared_by_an_owned_and_an_equivalent_view_operand
@@ -123,6 +125,12 @@ gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_shared_workspace_does_
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_shrinking_retention_cap_releases_scratch_and_keeps_plans
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_small_retention_cap_is_respected_and_keeps_plans
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_cutensor_zero_retention_cap_runs_without_retaining_scratch
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_non_standard_dot_general_stays_on_the_cutensor_path
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_batched_matmul_16_a100_fast_path_timing
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_standard_batched_matmul_batch_16_matches_the_cutensor_path
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_standard_batched_matmul_covers_both_transpose_combinations
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_standard_batched_matmul_flattens_two_batch_axes
+gpu	tenferro-gpu	cubecl::tests::gemm_tests::cuda_standard_batched_matmul_uses_one_strided_batched_gemm
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::test_dot_general_batched_matmul_f32
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::test_dot_general_complex_matmul_c32
 gpu	tenferro-gpu	cubecl::tests::gemm_tests::test_dot_general_complex_matmul_c64
@@ -914,6 +922,13 @@ host	tenferro-ad::integration	symbolic_input::same_symbolic_graph_reused_with_di
 host	tenferro-ad::integration	symbolic_input::symbolic_placeholder_is_concrete_shape_false
 host	tenferro-ad::integration	unification_retirement_contract::unification_7_removes_tidu_dependency_from_production_sources_and_manifests
 host	tenferro-ad::prelude	prelude_calls_traced_ad_operation
+host	tenferro-gpu	cubecl::batched_gemm::tests::a_single_matrix_keeps_the_cutensor_path
+host	tenferro-gpu	cubecl::batched_gemm::tests::both_transpose_combinations_are_expressed_with_cublas_flags
+host	tenferro-gpu	cubecl::batched_gemm::tests::non_standard_forms_fall_back
+host	tenferro-gpu	cubecl::batched_gemm::tests::rectangular_slices_keep_the_column_major_leading_dimensions
+host	tenferro-gpu	cubecl::batched_gemm::tests::several_batch_axes_flatten_into_one_batch_stride
+host	tenferro-gpu	cubecl::batched_gemm::tests::sizes_outside_the_portable_cublas_parameters_fall_back
+host	tenferro-gpu	cubecl::batched_gemm::tests::the_benchmark_shape_is_one_strided_batched_gemm
 host	tenferro-gpu	cubecl::dispatch::tests::owned_capability_rejection_preserves_the_typed_cuda_source
 host	tenferro-gpu	cubecl::error::tests::provider_status_preserves_classification_and_source
 host	tenferro-gpu	cubecl::error::tests::unsupported_dtype_preserves_classification_and_source
