@@ -146,6 +146,15 @@ prepared single-engine graph on a `&mut dyn BackendSession` the caller already
 entered, without opening a scoped session on that path, so it borrows an
 existing execution boundary rather than creating one.
 
+`Runtime::run_prepared` stays a boundary, and it now creates *one* compatible
+execution region for the whole eligible graph instead of one region per
+instruction. Eligibility is the scheduler's own whole-program predicate: a
+single-engine schedule whose prepared operations all support a scheduler-owned
+session and which contains no transfer node. Multi-engine schedules and
+schedules with a transfer keep the per-instruction route, and a prepared
+owner-only extension (no session support) also keeps it, because the owner
+entry forms its own session.
+
 ## Inventory at `a45833d4f`
 
 Column meanings: **entry** is the mechanism that creates execution state;

@@ -891,6 +891,26 @@ pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
         output_mode: RuntimeOutputMode,
         terminal_slots: &[bool],
     ) -> Result<()>;
+    /// Run a whole eligible prepared graph on one internally opened session.
+    ///
+    /// This is the steady-state default route of `Runtime::run_prepared`: the
+    /// executor state is leased once and a single backend session is entered
+    /// around the complete scheduled run, instead of one lease and one session
+    /// entry per instruction.
+    ///
+    /// Returns `Ok(None)` when this graph must keep the per-instruction leased
+    /// route, before any session entry or execution. Only a whole-program
+    /// session-compatibility failure selects that route; an execution error is
+    /// never retried on the leased path.
+    fn execute_prepared_single_session(
+        &self,
+        program: &ExecProgram,
+        schedule: &ScheduledGraph,
+        regions: &[super::region::ElementwiseRegion],
+        region_counters: &super::region::RegionExecutionCounters,
+        operations: &[PreparedOperationPlan],
+        inputs: &[TensorRead<'_>],
+    ) -> Result<Option<Vec<Tensor>>>;
     /// Execute one planned elementwise region as a single fused command.
     ///
     /// Reads `input_slots` from `slots`, runs `plan`, and writes the fused
@@ -1414,6 +1434,60 @@ where
         })?
     }
 
+    fn execute_prepared_single_session(
+        &self,
+        program: &ExecProgram,
+        schedule: &ScheduledGraph,
+        regions: &[super::region::ElementwiseRegion],
+        region_counters: &super::region::RegionExecutionCounters,
+        operations: &[PreparedOperationPlan],
+        inputs: &[TensorRead<'_>],
+    ) -> Result<Option<Vec<Tensor>>> {
+        // The normal blocking lease, exactly like the per-instruction route: two
+        // ordinary callers still serialize on the executor instead of failing with
+        // a busy-state error, and the lease already rejects entry from a thread that
+        // holds a caller-borrowed session.
+        let mut lease = self.lease_state("Runtime::run_prepared")?;
+        let TensorBackendExecutorState {
+            backend,
+            backend_cache,
+            extension_caches,
+            ..
+        } = lease.state_mut();
+        // Whole-program session compatibility decides the route. It is the same
+        // predicate the caller-borrowed route uses, so a graph with an owner-only
+        // extension (which forms its own session) keeps the leased path. Nothing has
+        // been entered or executed when this returns `None`.
+        if !crate::exec::can_run_in_single_exec_session_with_extensions(
+            program,
+            Some(&ExtensionExecutionDispatch {
+                operations,
+                caches: extension_caches,
+            }),
+        ) {
+            return Ok(None);
+        }
+        // One session entry for the whole run: every node, an accepted fusion, a
+        // declined fusion, and output materialization share this session, and the
+        // event domains drain inside it before the entry closes.
+        let outputs = backend.with_backend_session_cached(backend_cache, |session| {
+            let mut runner = ScheduledRunner::Borrowed {
+                session,
+                extension_caches,
+            };
+            execute_scheduled_reads(
+                program,
+                schedule,
+                regions,
+                region_counters,
+                operations,
+                inputs,
+                &mut runner,
+            )
+        })??;
+        Ok(Some(outputs))
+    }
+
     fn execute_elementwise_fusion_slots<'input>(
         &self,
         input_slots: &[usize],
@@ -1863,11 +1937,37 @@ pub(super) fn run_prepared(
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
+    let root = prepared.prepared.root();
+    // The steady-state route holds one session around the whole graph, so repeated
+    // `run_prepared` calls pay one session entry instead of one per instruction.
+    //
+    // Two graph shapes keep the per-instruction leased route:
+    // - a schedule that spans more than one engine, because one session cannot
+    //   execute on two engines;
+    // - a schedule with any transfer node, including a same-engine transfer
+    //   between storage classes, because a transfer provider runs between
+    //   sessions today and receives no session.
+    // A single-engine graph whose prepared operations are not session compatible
+    // (an owner-only extension) is declined by the hook itself, also before any
+    // session entry.
+    if !schedule_has_transfer(root.schedule())
+        && let Some(executor) = common_scheduled_executor(root.schedule())
+        && let Some(outputs) = executor.execute_prepared_single_session(
+            root.staging(),
+            root.schedule(),
+            root.regions(),
+            root.region_counters(),
+            prepared.prepared.operations(),
+            &inputs,
+        )?
+    {
+        return Ok(outputs);
+    }
     execute_scheduled_reads(
-        prepared.prepared.root().staging(),
-        prepared.prepared.root().schedule(),
-        prepared.prepared.root().regions(),
-        prepared.prepared.root().region_counters(),
+        root.staging(),
+        root.schedule(),
+        root.regions(),
+        root.region_counters(),
         prepared.prepared.operations(),
         &inputs,
         &mut ScheduledRunner::Leased,
@@ -1912,7 +2012,7 @@ pub(super) fn run_prepared_in(
     )?;
     let mut runner = ScheduledRunner::Borrowed {
         session,
-        state: state.as_mut(),
+        extension_caches: state.extension_caches_mut(),
     };
     execute_scheduled_reads(
         prepared.prepared.root().staging(),
@@ -1925,6 +2025,43 @@ pub(super) fn run_prepared_in(
     )
 }
 
+/// The executor shared by every scheduled location, or `None` when the graph
+/// spans more than one engine.
+fn common_scheduled_executor(
+    schedule: &ScheduledGraph,
+) -> Option<Arc<dyn ErasedTensorBackendExecutor>> {
+    // The root location always names one engine witness, so there is no
+    // "no engine" case to report: every other scheduled location must match it.
+    let first = schedule.root_location().witness().executor();
+    let same_engine = |witness: &super::snapshot::ExecutableEngineSnapshot| {
+        Arc::ptr_eq(first, witness.executor())
+    };
+    let single_engine = schedule
+        .input_locations()
+        .iter()
+        .all(|location| same_engine(location.witness()))
+        && schedule
+            .operation_locations()
+            .iter()
+            .all(|location| same_engine(location.witness()))
+        && schedule
+            .nodes()
+            .iter()
+            .all(|node| same_engine(node.event_domain_witness()));
+    single_engine.then(|| Arc::clone(first))
+}
+
+/// Whether `schedule` bridges providers with a transfer node.
+///
+/// A transfer bypasses the scheduler runner and calls its provider directly, so
+/// it cannot run while one graph-wide session is held.
+fn schedule_has_transfer(schedule: &ScheduledGraph) -> bool {
+    schedule
+        .nodes()
+        .iter()
+        .any(|node| matches!(node, ScheduledNode::Transfer(_)))
+}
+
 /// The one executor shared by every scheduled location of `schedule`.
 ///
 /// Returns a typed error when the graph spans more than one engine, which the
@@ -1934,35 +2071,14 @@ fn single_engine_executor(
     schedule: &ScheduledGraph,
     caller: &'static str,
 ) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
-    fn require_same(
-        first: &Arc<dyn ErasedTensorBackendExecutor>,
-        witness: &super::snapshot::ExecutableEngineSnapshot,
-        caller: &'static str,
-    ) -> Result<()> {
-        if Arc::ptr_eq(first, witness.executor()) {
-            return Ok(());
-        }
-        Err(Error::unsupported(
+    common_scheduled_executor(schedule).ok_or_else(|| {
+        Error::unsupported(
             caller,
             ErrorPhase::Execution,
             "the prepared graph spans multiple engines; Runtime::run_prepared_in runs one engine on \
              a caller-borrowed session, so use Runtime::run_prepared outside a session",
-        ))
-    }
-
-    // The root location always names one engine witness, so there is no
-    // "no engine" case to report: every other scheduled location must match it.
-    let first = schedule.root_location().witness().executor();
-    for location in schedule.input_locations() {
-        require_same(first, location.witness(), caller)?;
-    }
-    for location in schedule.operation_locations() {
-        require_same(first, location.witness(), caller)?;
-    }
-    for node in schedule.nodes() {
-        require_same(first, node.event_domain_witness(), caller)?;
-    }
-    Ok(Arc::clone(first))
+        )
+    })
 }
 
 /// Reject any prepared instruction that cannot execute on a borrowed session.
@@ -2117,17 +2233,24 @@ fn validate_prepared_epoch(
 
 /// How the scheduled executor obtains an executor state and a session for a node.
 ///
-/// The scheduler is shared: `Leased` is the existing per-node route used by
-/// `Runtime::run_prepared`, and `Borrowed` runs every node on the session the
-/// caller already entered (`Runtime::run_prepared_in`).
+/// The scheduler is shared: `Leased` is the per-node fallback used by
+/// `Runtime::run_prepared` for ineligible graphs and by `Runtime::run_compiled`,
+/// while `Borrowed` runs every node on one session — the caller-entered one in
+/// `Runtime::run_prepared_in`, or the internally opened graph-wide one in an
+/// eligible `Runtime::run_prepared`.
 enum ScheduledRunner<'a> {
     /// Each node leases its engine's executor state and opens its own session.
     Leased,
-    /// Every node runs on the caller-borrowed session and the executor state
-    /// leased once for the whole call.
+    /// Every node runs on `session` while one executor state stays leased for the
+    /// whole call.
+    ///
+    /// Both the caller-borrowed `Runtime::run_prepared_in` route and the
+    /// internally owned single-session route of `Runtime::run_prepared` use it;
+    /// only the source of `session` differs, so the runner keeps just the
+    /// extension-cache borrow it actually needs while executing.
     Borrowed {
         session: &'a mut dyn BackendSession,
-        state: &'a mut dyn BorrowedExecutorSessionState,
+        extension_caches: &'a mut ExtensionCacheStore,
     },
 }
 
@@ -2152,9 +2275,12 @@ impl ScheduledRunner<'_> {
                 output_mode,
                 terminal_slots,
             ),
-            Self::Borrowed { session, state } => execute_slot_instruction_in_session(
+            Self::Borrowed {
+                session,
+                extension_caches,
+            } => execute_slot_instruction_in_session(
                 &mut **session,
-                state.extension_caches_mut(),
+                extension_caches,
                 operations,
                 instruction_index,
                 instruction,
