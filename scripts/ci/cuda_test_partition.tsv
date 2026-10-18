@@ -1,6 +1,7 @@
 # Audited CUDA-feature inventory: lane	binary-id	test-name
 # Audit additions and helper chains; never classify by test-name substrings.
 benchmark	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark
+benchmark	tenferro-gpu	cubecl::tests::alloc_zero_baseline_tests::alloc_zero_baseline
 compile-only	tenferro-ad::integration	eager_backend_capability_contract::eager_backend_capability_boundary
 compile-only	tenferro-gpu::integration	session_contract::execution_session_capability_cannot_project_or_escape_owner_borrow
 gpu	tenferro-ad	extension::tests::eager_extension_cuda_host_input_is_rejected_before_factory
@@ -17,6 +18,7 @@ gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_concrete_ses
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_eager_values_and_gradients_match_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_traced_values_match_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_softmax_nan_and_infinity_policy_matches_cpu
+gpu	tenferro-ad::integration	gpu_raw_constant_binding::raw_kernel_reads_a_constant_from_host_in_place
 gpu	tenferro-gpu	cubecl::ffi::cutensor::tests::cutensor_library_is_loaded_once_per_process
 gpu	tenferro-gpu	cubecl::interop::tests::fill_zero::fill_zero_clears_a_compact_region_at_a_nonzero_offset
 gpu	tenferro-gpu	cubecl::interop::tests::fill_zero::fill_zero_covers_integer_and_bool_destinations
@@ -251,6 +253,23 @@ gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_rejects_hos
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_tensor_into_round_trips_and_reuses_one_allocation
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::owned_upload_and_offset_allocations_round_trip
 gpu	tenferro-gpu	cubecl::tests::transfer_tests::transfers_round_trip_every_dtype_and_size_class_bit_exactly
+gpu	tenferro-gpu	cubecl::tests::raw_module_tests::raw_tensor_offsets_bind_arena_subspans
+gpu	tenferro-gpu	cubecl::tests::raw_module_tests::raw_tensor_offsets_reject_out_of_range_and_overflow
+gpu	tenferro-gpu	cubecl::tests::raw_module_tests::raw_function_compiles_once_and_launches_from_another_thread
+gpu	tenferro-gpu	cubecl::tests::raw_module_tests::raw_module_caches_in_session_resource_across_threads
+gpu	tenferro-gpu	cubecl::tests::raw_module_tests::raw_function_survives_its_module_and_backend_and_restores_no_context_on_drop
+gpu	tenferro-gpu	cubecl::tests::raw_module_tests::raw_function_drop_restores_a_previous_non_null_context
+gpu	tenferro-gpu	cubecl::tests::raw_module_tests::raw_dropping_a_module_keeps_the_live_session_context
+gpu	tenferro-gpu	cubecl::tests::raw_external_tests::raw_external_wrap_constructors_reject_bad_spans
+gpu	tenferro-gpu	cubecl::tests::raw_external_tests::raw_external_cudarc_buffer_is_written_in_place
+gpu	tenferro-gpu	cubecl::tests::raw_external_tests::raw_external_cudarc_buffer_is_read_by_a_kernel
+gpu	tenferro-gpu	cubecl::tests::raw_launch_tests::raw_launch_uses_dynamic_shared_memory_above_48_kib
+gpu	tenferro-gpu	cubecl::tests::raw_launch_tests::raw_launch_rejects_dynamic_shared_memory_above_device_opt_in
+gpu	tenferro-gpu	cubecl::tests::raw_launch_tests::raw_dynamic_shared_memory_opt_in_is_shared_by_every_lookup
+gpu	tenferro-gpu	cubecl::tests::raw_launch_tests::raw_dynamic_shared_memory_opt_in_is_serialized_across_threads
+gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_tensor_read_binds_a_compact_view_in_place
+gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_tensor_read_binds_owned_storage_through_the_existing_path
+gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_tensor_read_rejects_a_noncompact_view_and_a_dtype_mismatch
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_a_non_contiguous_read
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_compact_views_with_offsets
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_strided_destination_regions
@@ -1005,6 +1024,9 @@ host	tenferro-gpu	native_permutation::tests::tiled_transpose_covers_single_matri
 host	tenferro-gpu	native_permutation::tests::tiled_transpose_matrix_covers_both_orientations
 host	tenferro-gpu	native_permutation::tests::transpose_and_equivalent_view_share_one_plan
 host	tenferro-gpu	native_permutation::tests::zero_sized_plan_is_linear_without_allocations
+host	tenferro-gpu	cubecl::tests::raw_module_tests::raw_subspan_checks_address_overflow_and_alignment
+host	tenferro-gpu	cubecl::tests::raw_external_tests::raw_external_span_validation_rejects_bad_spans
+host	tenferro-gpu	cubecl::tests::raw_launch_tests::raw_dynamic_shared_memory_opt_in_runs_once_per_function
 host	tenferro-gpu::integration	backend_read_contract::cuda_backend_implements_every_required_read_entry_point
 host	tenferro-gpu::integration	cubecl_launch_contract::bool_launch_domains_are_checked_before_output_allocation
 host	tenferro-gpu::integration	cubecl_launch_contract::bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded

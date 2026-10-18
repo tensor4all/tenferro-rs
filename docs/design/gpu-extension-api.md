@@ -70,6 +70,9 @@ authority**, not "a bag of raw handles".
   execution stream is bound". There is no separate copyable `CudaContext` handle.
 - `CudaExecSession`, both sub-sessions, and stream/context capabilities are
   non-constructible by users and are `!Send + !Sync` (thread-local capability).
+- Compiled `raw::Module`/`raw::Function` handles are image handles, not
+  execution capabilities: they are `Send + Sync` and retain the runtime/context
+  pin, while every launch still goes through a `raw::Session`.
 
 ### Public surface shape (names illustrative)
 
@@ -115,8 +118,8 @@ pub struct TensorMut<'s, T> { /* exclusive &mut or fresh output only */ }
 pub struct DeviceBytes<'s> { /* CubeCL-owned workspace */ }
 pub struct CudaResourceGuard<'s, T> { /* bounded per-runtime cache view */ }
 
-pub struct Module { /* runtime/context owner */ }
-pub struct Function { /* retains Module (Arc) */ }
+pub struct Module { /* runtime/context pin (Send + Sync) */ }
+pub struct Function { /* retains the shared Module owner (Send + Sync) */ }
 pub struct LaunchConfig { pub grid: [u32; 3], pub block: [u32; 3], pub shared_mem_bytes: u32 }
 pub struct KernelArg<'a> { /* scalar or checked device-address value */ }
 ```

@@ -16,6 +16,21 @@
 //! cuTENSOR 2.x library. See `docs/guides/custom-cuda-kernels.md` and the
 //! compatibility matrix in `docs/guides/devices-and-gpu.md` for the full table.
 //!
+//! # Downstream `#[cube]` kernels
+//!
+//! A downstream crate writes its own `#[cube(launch_unchecked)]` kernel against
+//! the framework `t4a-cubecl` package and launches it through the public
+//! [`cuda::cubecl::Session`](crate::cuda::cubecl::Session) seam: allocate the
+//! output with `alloc_output`, size the domain with `cube_count_1d` plus
+//! `cube_dim_1d`, bind the arguments with `array_arg`, and launch through
+//! `Session::client()`. The end-to-end flow, the `#[cube]` typing rules this pin
+//! enforces (index expressions must be `usize`, `usize::cast_from` accepts
+//! signed sources, the topology constants are `u32`), and the kernel-cache
+//! answer (nothing to cache downstream — CubeCL's per-device server keeps the
+//! compiled artifact) are documented in
+//! `docs/guides/custom-cuda-kernels.md`, with a runnable fixture in
+//! `samples/cubecl-kernel`.
+//!
 //! # Enabling the feature
 //!
 //! Add to your `Cargo.toml`:

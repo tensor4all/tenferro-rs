@@ -11,6 +11,7 @@ use crate::{DType, Error, Tensor, TypedTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{backend::BackendSessionHost, ErrorKind, ValidationError, ValidationKind};
 
+mod alloc_zero_baseline_tests;
 mod blas1_tests;
 mod capability_tests;
 mod copy_fault_tests;
@@ -25,7 +26,9 @@ mod kernel_specialization_tests;
 mod memoized_addr_tests;
 mod metadata_tests;
 mod plan_cache_tests;
+mod raw_external_tests;
 mod raw_launch_tests;
+mod raw_module_tests;
 mod raw_session_tests;
 mod reduction_tests;
 mod runtime_tests;

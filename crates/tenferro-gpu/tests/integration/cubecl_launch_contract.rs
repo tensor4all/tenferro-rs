@@ -1225,7 +1225,56 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         raw_tensor,
         &[
             "super::dispatch::cubecl_buffer(tensor, \"raw.tensor\")?;",
-            "cuda_device_ptr_from_addr(resource.resource().ptr, \"raw.tensor\")?;",
+            "self.device_ptr(prepared.handle().clone(), \"raw.tensor\")?;",
+        ],
+    );
+    // Owned, mutable, and view bindings share one resolver, so every device
+    // address is still resolved from a retained CubeCL handle through
+    // `get_resource` (the stream-alignment round trip of issue #1868).
+    let raw_device_ptr = source_section(
+        &raw_source,
+        "fn device_ptr(",
+        "fn compact_view_span_from_read(",
+    );
+    assert_ordered_needles(
+        "raw::Session::device_ptr",
+        raw_device_ptr,
+        &[
+            ".get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)",
+            "cuda_device_ptr_from_addr(resource.resource().ptr, op)",
+        ],
+    );
+    // The checked view binding keeps owned storage on `Session::tensor`, is
+    // compact-only, and folds the view offset into the resolved allocation
+    // instead of materializing the view (#2084).
+    let raw_read = source_section(
+        &raw_source,
+        "pub fn tensor_read<'a, 'b, T>(",
+        "/// Allocate a dense GPU tensor of `T`",
+    );
+    assert_ordered_needles(
+        "raw::Session::tensor_read",
+        raw_read,
+        &[
+            "if read.dtype() != T::dtype()",
+            "if let Some(tensor) = read.as_tensor()",
+            "return self.tensor(typed);",
+            "self.compact_view_span_from_read(read, OP)?",
+        ],
+    );
+    let raw_view_span = source_section(
+        &raw_source,
+        "fn compact_view_span<T>(",
+        "/// Borrowed, opaque CUDA execution stream.",
+    );
+    assert_ordered_needles(
+        "raw::Session::compact_view_span",
+        raw_view_span,
+        &[
+            "ensure_view_resident_on_runtime(&self.runtime, view, op)?;",
+            "if !view.is_col_major_contiguous()? {",
+            "prepared_view_access(view, op)?;",
+            "base.cast::<u8>().wrapping_add(byte_offset)",
         ],
     );
     assert!(

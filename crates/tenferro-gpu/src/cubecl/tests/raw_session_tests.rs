@@ -4,6 +4,7 @@
 //! matching the regular CUDA test convention in this crate.
 
 use crate::cubecl::CudaRuntime;
+use crate::cuda::raw;
 use crate::cuda::{gpu_available, CudaBackend, GpuExtensionCapability};
 
 use super::*;
@@ -340,4 +341,239 @@ fn raw_session_reuses_the_runtime_cublas_handle() {
         runtime_handle, handles[0],
         "the raw accessor must return the runtime's cached handle"
     );
+}
+
+/// Kernel copying `n` f64 values; the raw view binding test reads through it so
+/// the values, not just the pointer, prove what the kernel saw.
+const COPY_F64_KERNEL_SRC: &str = r#"
+extern "C" __global__ void copy_f64(double* out, const double* src, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        out[i] = src[i];
+    }
+}
+"#;
+
+/// #2084: a raw kernel must read device storage that exists only as a view.
+///
+/// An eager `constant_from_host` value, and any metadata-only view, has
+/// `TensorRead::as_tensor() == None`, so `Session::tensor` (which takes an owned
+/// `TypedTensor`) cannot bind it. `Session::tensor_read` resolves the base
+/// allocation through the view, applies the view offset, and returns only the
+/// view's own span. The assertions below are pointer identity and allocation
+/// counters, not matching values: the view binding must point *into* the
+/// original allocation, and binding it must not allocate anything.
+#[test]
+#[ignore = "requires CUDA"]
+fn raw_tensor_read_binds_a_compact_view_in_place() {
+    use tenferro_tensor::TensorValue;
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let host = tensor_f64(vec![8], (1..=8).map(f64::from).collect());
+    let gpu = upload(&backend, &host);
+
+    // Base address of the owned allocation through the unchanged
+    // `Session::tensor` binding.
+    let (owned_ptr, owned_byte_len) = with_cuda_exec(&mut backend, |session| {
+        session
+            .with_raw("test.raw_tensor_read", |raw| {
+                let owned = gpu.as_typed::<f64>().expect("f64 device tensor");
+                let reference = raw.tensor(owned)?;
+                // SAFETY: observes the validated address value only; no device
+                // memory is read or written here.
+                Ok((
+                    unsafe { reference.raw_ptr() } as usize,
+                    reference.byte_len(),
+                ))
+            })
+            .unwrap()
+    });
+    assert_eq!(owned_byte_len, 8 * std::mem::size_of::<f64>());
+
+    // A metadata-only compact view at element offset 2 over the same device
+    // allocation: this is the storage shape the eager runtime hands out, so
+    // `as_tensor()` is `None` and the old path cannot bind it.
+    let value = TensorValue::from_parts(gpu, vec![6], vec![1], 2).expect("compact offset view");
+    let read = value.tensor_read();
+    assert!(
+        read.as_tensor().is_none(),
+        "the case under test needs view storage, not an owned tensor"
+    );
+    assert!(read.is_col_major_contiguous().expect("compact view"));
+
+    let mut out = upload(&backend, &tensor_f64(vec![6], vec![0.0; 6]));
+    let pool_before = backend.cuda_output_pool_stats();
+    let (view_ptr, view_byte_len, repeated_ptr) = with_cuda_exec(&mut backend, |session| {
+        session
+            .with_raw("test.raw_tensor_read", |raw| {
+                let reference = raw.tensor_read::<f64>(&read)?;
+                // SAFETY: observes the validated address value only.
+                let view_ptr = unsafe { reference.raw_ptr() } as usize;
+                let view_byte_len = reference.byte_len();
+                let repeated = raw.tensor_read::<f64>(&read)?;
+                // SAFETY: as above; the second binding is address-only too.
+                let repeated_ptr = unsafe { repeated.raw_ptr() } as usize;
+
+                let out_ref =
+                    raw.tensor_mut(out.as_typed_mut::<f64>().expect("f64 output tensor"))?;
+                let module =
+                    raw.compile_nvrtc(COPY_F64_KERNEL_SRC, &raw::NvrtcOptions::default())?;
+                let function = module.function("copy_f64")?;
+                let config = raw::LaunchConfig::flat(6, 6, 0)?;
+                // SAFETY: the kernel ABI is (double*, const double*, int); the
+                // span bound by `reference` covers exactly the 6 f64 values the
+                // launch reads, `out_ref` is an exclusively borrowed 6-element
+                // span, and the module, output, and view outlive the launch plus
+                // the synchronization below.
+                unsafe {
+                    raw.launch(
+                        &function,
+                        config,
+                        &[
+                            raw::KernelArg::tensor_mut(&out_ref),
+                            raw::KernelArg::tensor(&reference),
+                            raw::KernelArg::i32(6),
+                        ],
+                    )?;
+                }
+                raw.synchronize()?;
+                Ok((view_ptr, view_byte_len, repeated_ptr))
+            })
+            .unwrap()
+    });
+    let pool_after = backend.cuda_output_pool_stats();
+
+    assert_eq!(
+        view_ptr,
+        owned_ptr + 2 * std::mem::size_of::<f64>(),
+        "the view binding must point into the original allocation at its logical offset, \
+         not at a duplicate copy"
+    );
+    assert_eq!(
+        view_byte_len,
+        6 * std::mem::size_of::<f64>(),
+        "the binding must expose the view span, not the whole backing allocation"
+    );
+    assert_eq!(
+        repeated_ptr, view_ptr,
+        "a repeated binding of the same read must resolve the same storage"
+    );
+    assert_eq!(
+        pool_after, pool_before,
+        "binding and launching against view storage must not allocate device memory"
+    );
+
+    let expected: Vec<f64> = (3..=8).map(f64::from).collect();
+    assert_eq!(
+        download(&backend, &out)
+            .as_slice::<f64>()
+            .expect("host f64"),
+        expected.as_slice(),
+        "the kernel must read the view's own values in place"
+    );
+}
+
+/// The owned arm of `tensor_read` stays on the existing `Session::tensor` path.
+///
+/// A `TensorRead::Tensor` must bind exactly the span `Session::tensor` binds for
+/// the same tensor, so owned kernel launches keep their previous pointer and
+/// length.
+#[test]
+#[ignore = "requires CUDA"]
+fn raw_tensor_read_binds_owned_storage_through_the_existing_path() {
+    use tenferro_tensor::TensorRead;
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let host = tensor_f64(vec![8], (1..=8).map(f64::from).collect());
+    let gpu = upload(&backend, &host);
+    let read = TensorRead::from_tensor(&gpu);
+    assert!(read.as_tensor().is_some(), "owned storage");
+
+    let mut out = upload(&backend, &tensor_f64(vec![8], vec![0.0; 8]));
+    with_cuda_exec(&mut backend, |session| {
+        session
+            .with_raw("test.raw_tensor_read_owned", |raw| {
+                let owned = gpu.as_typed::<f64>().expect("f64 device tensor");
+                let legacy = raw.tensor(owned)?;
+                let reference = raw.tensor_read::<f64>(&read)?;
+                // SAFETY: observes the validated address values only.
+                assert_eq!(
+                    unsafe { legacy.raw_ptr() } as usize,
+                    unsafe { reference.raw_ptr() } as usize,
+                    "the owned arm must reuse the `Session::tensor` binding"
+                );
+                assert_eq!(legacy.byte_len(), reference.byte_len());
+
+                let out_ref =
+                    raw.tensor_mut(out.as_typed_mut::<f64>().expect("f64 output tensor"))?;
+                let module =
+                    raw.compile_nvrtc(COPY_F64_KERNEL_SRC, &raw::NvrtcOptions::default())?;
+                let function = module.function("copy_f64")?;
+                let config = raw::LaunchConfig::flat(8, 8, 0)?;
+                // SAFETY: the kernel ABI is (double*, const double*, int); both
+                // spans hold 8 f64 values, `out_ref` is exclusively borrowed and
+                // does not alias the input, and module and tensors outlive the
+                // launch plus the synchronization below.
+                unsafe {
+                    raw.launch(
+                        &function,
+                        config,
+                        &[
+                            raw::KernelArg::tensor_mut(&out_ref),
+                            raw::KernelArg::tensor(&reference),
+                            raw::KernelArg::i32(8),
+                        ],
+                    )?;
+                }
+                raw.synchronize()?;
+                Ok(())
+            })
+            .unwrap()
+    });
+
+    let expected: Vec<f64> = (1..=8).map(f64::from).collect();
+    assert_eq!(
+        download(&backend, &out)
+            .as_slice::<f64>()
+            .expect("host f64"),
+        expected.as_slice(),
+        "the unchanged owned path must still read owned device storage"
+    );
+}
+
+/// A `TensorRef` is one base pointer plus one byte length, so a strided view
+/// cannot be described by it. The raw seam rejects such a view with a typed
+/// error instead of silently materializing (or mis-describing) it.
+#[test]
+#[ignore = "requires CUDA"]
+fn raw_tensor_read_rejects_a_noncompact_view_and_a_dtype_mismatch() {
+    use tenferro_tensor::{DType, TensorValue, ValidationKind};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let gpu = upload(&backend, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let value = TensorValue::from_tensor(gpu)
+        .transpose_view([1, 0])
+        .expect("transpose view");
+    let read = value.tensor_read();
+    assert!(read.as_tensor().is_none(), "the case under test is a view");
+    assert!(
+        !read.is_col_major_contiguous().expect("layout"),
+        "a transposed view is not compact column-major"
+    );
+
+    with_cuda_exec(&mut backend, |session| {
+        session
+            .with_raw("test.raw_tensor_read_noncompact", |raw| {
+                let error = raw.tensor_read::<f64>(&read).unwrap_err();
+                assert_validation_kind(&error, "raw.tensor_read", ValidationKind::InvalidArgument);
+
+                let error = raw.tensor_read::<f32>(&read).unwrap_err();
+                assert_dtype_mismatch(&error, "raw.tensor_read", DType::F32, DType::F64);
+                Ok(())
+            })
+            .unwrap()
+    });
 }

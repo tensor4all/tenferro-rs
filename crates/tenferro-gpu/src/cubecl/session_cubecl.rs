@@ -9,6 +9,22 @@
 //! launch CubeCL kernels are re-exported. Downstream crates must depend on the
 //! framework's `t4a-cubecl` package (see the design doc) to name `#[cube]`
 //! kernels; this module does **not** re-export the whole of `cubecl`.
+//!
+//! # Launching a downstream kernel
+//!
+//! The canonical flow is `alloc_output` for the output, `cube_count_1d` plus
+//! `cube_dim_1d` for the domain, `array_arg` for each buffer in kernel-parameter
+//! order, and `client()` for the launch itself — `KernelArguments` is never
+//! built by hand. The `#[cube]` typing rules this pin enforces and the
+//! kernel-cache answer are in `docs/guides/custom-cuda-kernels.md`, and
+//! `samples/cubecl-kernel` runs the whole flow on CUDA.
+//!
+//! Nothing has to be cached downstream: the compiled artifact lives in CubeCL's
+//! per-device server, which the client returned by [`Session::client`] reaches,
+//! so it is reused by every later [`CudaExecSession::with_cubecl`] scope and by
+//! any other backend constructed for the same device.
+//!
+//! [`CudaExecSession::with_cubecl`]: super::exec_session::CudaExecSession::with_cubecl
 
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -51,6 +67,11 @@ impl<'s> Session<'s> {
     }
 
     /// Borrow the tenferro CubeCL client.
+    ///
+    /// Pass it to the `launch_unchecked` entry point a `#[cube]` kernel
+    /// generates. The client is the one bound to this runtime's device, so the
+    /// kernel it compiles stays cached in that device's CubeCL server across
+    /// sessions; see the module docs for the cache question.
     pub fn client(&self) -> &Client {
         self.runtime.client()
     }
