@@ -3233,18 +3233,6 @@ fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
 
-fn checked_product(
-    op: &'static str,
-    role: &'static str,
-    shape: &[usize],
-) -> tenferro_tensor::Result<usize> {
-    shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim).ok_or_else(|| {
-            Error::invalid_argument(op, "shape", format!("{role} element count overflow"))
-        })
-    })
-}
-
 fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
     batched_vector_rhs_shape_of(a.shape(), b.shape())
 }

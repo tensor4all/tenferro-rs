@@ -10,7 +10,8 @@
 #[allow(unused_imports)]
 use super::linalg;
 #[cfg(any(not(feature = "native"), not(feature = "blas")))]
-use super::{batched_vector_rhs_shape_of, checked_product, has_zero_dim, square_matrix_dim};
+use super::{batched_vector_rhs_shape_of, has_zero_dim, square_matrix_dim};
+use crate::cpu::linalg::{pooled_copy, pooled_zeroed};
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
@@ -22,6 +23,7 @@ pub(super) trait CpuPackedLu: TensorScalar + PoolScalar + Copy {
     #[allow(clippy::too_many_arguments)]
     fn prepared_solve(
         ctx: &CpuExecutionContext<'_>,
+        buffers: &BufferPool,
         op: &'static str,
         n: usize,
         nrhs: usize,
@@ -36,6 +38,7 @@ pub(super) trait CpuPackedLu: TensorScalar + PoolScalar + Copy {
     #[allow(clippy::too_many_arguments)]
     fn factor_solve(
         ctx: &CpuExecutionContext<'_>,
+        buffers: &BufferPool,
         op: &'static str,
         n: usize,
         nrhs: usize,
@@ -51,6 +54,7 @@ macro_rules! impl_cpu_packed_lu {
             impl CpuPackedLu for $scalar {
                 fn prepared_solve(
                     ctx: &CpuExecutionContext<'_>,
+                    buffers: &BufferPool,
                     op: &'static str,
                     n: usize,
                     nrhs: usize,
@@ -60,7 +64,7 @@ macro_rules! impl_cpu_packed_lu {
                     transpose_a: bool,
                     conjugate_a: bool,
                 ) -> tenferro_tensor::Result<()> {
-                    let _ = (op, &ctx, &packed_lu, &pivots, &output, n, nrhs, transpose_a, conjugate_a);
+                    let _ = (op, &ctx, &buffers, &packed_lu, &pivots, &output, n, nrhs, transpose_a, conjugate_a);
                     {
 #[cfg(feature = "native")]
 {
@@ -68,6 +72,7 @@ macro_rules! impl_cpu_packed_lu {
                             {
                                 crate::cpu::tlinalg::solve_prepared_batch::<$scalar>(
                                     ctx,
+                                    buffers,
                                     tlinalg::Op::LuSolvePrepared,
                                     n,
                                     nrhs,
@@ -103,6 +108,7 @@ macro_rules! impl_cpu_packed_lu {
 
                 fn factor_solve(
                     ctx: &CpuExecutionContext<'_>,
+                    buffers: &BufferPool,
                     op: &'static str,
                     n: usize,
                     nrhs: usize,
@@ -110,7 +116,7 @@ macro_rules! impl_cpu_packed_lu {
                     pivots: &mut [i32],
                     output: &mut [Self],
                 ) -> tenferro_tensor::Result<()> {
-                    let _ = (op, &ctx, &packed_lu, &pivots, &output, n, nrhs);
+                    let _ = (op, &ctx, &buffers, &packed_lu, &pivots, &output, n, nrhs);
                     {
 #[cfg(feature = "native")]
 {
@@ -118,6 +124,7 @@ macro_rules! impl_cpu_packed_lu {
                             {
                                 crate::cpu::tlinalg::factor_solve_batch::<$scalar>(
                                     ctx,
+                                    buffers,
                                     tlinalg::Op::LuFactorSolve,
                                     n,
                                     nrhs,
@@ -153,25 +160,15 @@ macro_rules! impl_cpu_packed_lu {
 
 impl_cpu_packed_lu!(f32, f64, Complex32, Complex64);
 
-/// A pooled compact copy of `source` carrying `template`'s placement.
+/// A pooled compact copy of `source` carrying `source`'s placement.
 fn pooled_output<T: CpuPackedLu>(
-    buffers: &mut BufferPool,
+    buffers: &BufferPool,
+    op: &'static str,
     source: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<T>> {
-    let data = source.host_data()?;
-    let mut output = buffers.acquire_with_capacity::<T>(data.len());
-    output.extend_from_slice(data);
-    Ok(output)
-}
-
-fn tensor_like<T: TensorScalar, U>(
-    shape: Vec<usize>,
-    data: Vec<T>,
-    template: &TypedTensor<U>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
-    tensor.set_placement(template.placement().clone());
-    Ok(tensor)
+    let mut output = pooled_copy::<T>(buffers, op, "matrix", source.shape(), source.host_data()?)?;
+    output.set_placement(source.placement().clone());
+    Ok(output)
 }
 
 /// The `(n, nrhs)` of an RHS `b` against square batched `a` storage.
@@ -211,19 +208,20 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
             "{OP}: RHS shape {rhs_shape:?} reached the kernel without validation"
         )));
     };
-    let mut output = pooled_output(buffers, b)?;
+    let mut output = pooled_output(buffers, OP, b)?;
     T::prepared_solve(
         ctx,
+        buffers,
         OP,
         n,
         nrhs,
         packed_lu.host_data()?,
         pivots.host_data()?,
-        &mut output,
+        output.host_data_mut()?,
         transpose_a,
         conjugate_a,
     )?;
-    tensor_like(b.shape().to_vec(), output, b)
+    Ok(output)
 }
 
 /// Factor `A` and solve `A X = B` in one batched provider kernel call.
@@ -266,19 +264,24 @@ pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
     let mut pivot_shape = Vec::with_capacity(a.shape().len() - 1);
     pivot_shape.push(n);
     pivot_shape.extend_from_slice(&a.shape()[2..]);
-    let pivot_len = checked_product(OP, "pivot shape", &pivot_shape)?;
 
-    let mut lu_data = pooled_output(buffers, a)?;
-    let mut pivot_data = <i32 as PoolScalar>::pool_acquire_zeroed(buffers, pivot_len);
-    let mut output = pooled_output(buffers, b)?;
+    let mut lu_data = pooled_output(buffers, OP, a)?;
+    let mut pivot_data = pooled_zeroed::<i32>(buffers, OP, "pivots", &pivot_shape)?;
+    let mut output = pooled_output(buffers, OP, b)?;
     if !has_zero_dim(a.shape()) {
-        T::factor_solve(ctx, OP, n, nrhs, &mut lu_data, &mut pivot_data, &mut output)?;
+        T::factor_solve(
+            ctx,
+            buffers,
+            OP,
+            n,
+            nrhs,
+            lu_data.host_data_mut()?,
+            pivot_data.host_data_mut()?,
+            output.host_data_mut()?,
+        )?;
     }
-    Ok((
-        tensor_like(b.shape().to_vec(), output, b)?,
-        tensor_like(a.shape().to_vec(), lu_data, a)?,
-        tensor_like(pivot_shape, pivot_data, a)?,
-    ))
+    pivot_data.set_placement(a.placement().clone());
+    Ok((output, lu_data, pivot_data))
 }
 
 /// Dispatch a dtype-erased prepared solve to [`lu_solve_prepared_typed`].

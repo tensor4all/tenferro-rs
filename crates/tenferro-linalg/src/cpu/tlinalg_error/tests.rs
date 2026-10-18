@@ -92,6 +92,22 @@ fn every_variant_rebuilds_tenferros_kind_role_and_source() {
         error.source().and_then(|source| source.downcast_ref()),
         Some(TlError::StrategyUnavailable { .. })
     ));
+
+    // A workspace shorter than the host's own query is a broken host contract,
+    // not a caller error, so it reports as a runtime-state failure that still
+    // names the bytes the resolved route wanted.
+    let error = map_error(
+        Op::Qr,
+        TlError::InsufficientWorkspace {
+            op: Op::Qr,
+            needed: 128,
+            have: 64,
+        },
+    );
+    assert_eq!(error.kind(), ErrorKind::RuntimeState);
+    let rendered = error.to_string();
+    assert!(rendered.contains("128"), "{rendered}");
+    assert!(rendered.contains("64"), "{rendered}");
 }
 
 #[cfg(feature = "blas")]

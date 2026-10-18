@@ -78,7 +78,10 @@ syn = "2"
 # the 0.6.0 requirement. `strided-fused 0.6.0` propagates NaN through the fused
 # DAG so ordered reductions can use it (TF5), and `strided-view` owns its view
 # metadata inline. `tcontract-exec` is named directly because tenferro now
-# passes its `Exec` to tlinalg and cpueinsum.
+# passes its `Exec` to tlinalg and cpueinsum. `tlinalg` and `tlinalg-blas` are
+# pinned exactly at 0.3.1 in `crates/tenferro-linalg`; that release's additive
+# `*_workspace` / `*_into` entries are what the faer lane routes every family
+# through.
 strided-view = "=0.6.0"
 strided-traits = "=0.6.0"
 strided-perm = { version = "=0.6.0", features = ["parallel"] }
@@ -89,12 +92,12 @@ strided-basic = { version = "=0.6.0", default-features = false }
 strided-fused = { version = "=0.6.0", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "=0.6.0", features = ["parallel"] }
 libloading = "0.8"
-# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.3.0`
+# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.3.1`
 # resolves `t4a-faer =0.24.6` (its own manifest renames it via
 # `package = "t4a-faer"`), and a second, crates.io `faer` would hand a different
 # `Par`/`Mat` type to a downstream direct call than the one
 # `with_faer_parallelism` passes. `t4a-faer 0.24.6` is the fork commit 04542fae
-# that tlinalg 0.3.0 pins: it carries the evd eigenvector-normalization fix
+# that tlinalg 0.3.1 pins: it carries the evd eigenvector-normalization fix
 # (#2131) on top of the 0.24.5 tag. tenferro-cpu re-exports this build as
 # `tenferro_cpu::faer` under `native`. The fork keeps the 0.24 API and the
 # `faer` library name.

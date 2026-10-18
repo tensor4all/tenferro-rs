@@ -444,8 +444,12 @@ fn cpu_general_eig_values_only_paths_do_not_request_vectors() {
         "impl_faer_eig!(",
     );
     assert!(
-        faer_dispatch.contains("None => tlinalg::eig::eig_values("),
+        faer_dispatch.contains("tlinalg::eig::eig_values_into("),
         "Faer eig_values should call the provider's values-only entry point"
+    );
+    assert!(
+        faer_dispatch.contains("tlinalg::eig::eig_into("),
+        "Faer eig should call the provider's vectors entry point"
     );
     let faer_values = source_section(&faer_source, "pub(crate) fn eig_values(", "\n}\n");
     assert!(
