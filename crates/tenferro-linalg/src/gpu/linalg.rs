@@ -3145,15 +3145,13 @@ where
             }
         }
 
-        // Host barrier (only for reading the solver diagnostics).
-        let host_geqrf = raw.download_tensor::<i32>(&geqrf_info, OP)?;
-        for &value in host_geqrf.host_data()? {
-            check_solver_info(OP, "cusolverDn*geqrf", value)?;
-        }
-        let host_orgqr = raw.download_tensor::<i32>(&orgqr_info, OP)?;
-        for &value in host_orgqr.host_data()? {
-            check_solver_info(OP, "cusolverDn*orgqr", value)?;
-        }
+        // The vendor status flags stay on the device: reading them is a host
+        // barrier that waits for the factorization kernels, and cuSOLVER's QR
+        // flags report neither the illegal arguments (this path validates
+        // shape, dtype, and dimensions up front) nor a rank-deficient factor
+        // (a rank-deficient input is still a valid QR; the caller's own
+        // verification decides whether to accept the factors). This matches
+        // the CPU providers and `torch.linalg.qr`.
         Ok((q, work))
     })?;
 

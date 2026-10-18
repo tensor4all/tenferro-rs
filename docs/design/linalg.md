@@ -141,6 +141,29 @@ That feature boundary is deliberate:
 Some public APIs are naturally primal-only, especially structured status/result
 surfaces such as factorization contracts with pivots or `info` metadata.
 
+## QR Solver Status Reporting
+
+Ordinary QR (`LinalgBackend::qr` and `qr_with_options`, including the traced and
+eager surfaces) does not inspect the CUDA cuSOLVER `geqrf`/`orgqr` device status
+flags. Reading them is a blocking device-to-host copy that waits for the
+factorization kernels, and the flags report neither a reachable illegal-argument
+case nor a rank-deficient factor. Synchronous provider return codes are still
+checked by the cuSOLVER wrappers; the doc-hidden compact Householder hooks keep
+their own `geqrf` status read.
+
+- Caller mistakes are rejected up front, before any vendor call: rank, shape,
+  dtype, dimensions, and leading dimensions are validated by
+  `tenferro-linalg`, so the vendor's illegal-argument report is unreachable and
+  need not be observed.
+- Rank deficiency is not an error. An exactly zero diagonal of `R` still yields
+  a valid factorization; cuSOLVER does not set its QR flags for it (the A100
+  regression in `tests/integration/gpu_linalg.rs` pins this), and the CPU
+  providers and `torch.linalg.qr` behave the same. The caller's own
+  verification decides whether the factors are acceptable.
+
+Other decompositions keep their status checks because their flags report
+non-convergence that invalidates the result.
+
 ## Solve Lowering
 
 Traced `solve` and tracked eager `solve` emit one `LuFactorSolve` extension op

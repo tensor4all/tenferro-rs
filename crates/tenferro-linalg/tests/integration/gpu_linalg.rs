@@ -1219,6 +1219,48 @@ fn test_cuda_qr_positive_diagonal_owned_and_read_paths_stay_on_device() {
     }
 }
 
+/// A rank-deficient matrix whose reduced `R` diagonal is an exact zero.
+fn rank_deficient_qr_input() -> Tensor {
+    // Second column is exactly twice the first.
+    tensor_f64(vec![2, 2], vec![1.0, 0.0, 2.0, 0.0])
+}
+
+#[test]
+#[ignore]
+fn test_cuda_qr_default_skips_solver_status_readback() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let input = rank_deficient_qr_input();
+    let mut gpu = gpu_backend();
+    let input_gpu = upload(&gpu, &input);
+    // The default path does not inspect the device status flags, so a
+    // rank-deficient input still returns factors. This test does not prove the
+    // flags would have fired (cuSOLVER does not set them for rank deficiency);
+    // the source contract guards the removed reads.
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| session.qr(&input_gpu)).unwrap();
+    let q = download(&gpu, &outputs[0]);
+    let r = download(&gpu, &outputs[1]);
+    let q_values: Vec<num_complex::Complex64> = q
+        .as_slice::<f64>()
+        .unwrap()
+        .iter()
+        .map(|&value| num_complex::Complex64::new(value, 0.0))
+        .collect();
+    assert_isometric(&q_values, 2, 2, 1.0e-12, "Q^H Q");
+    assert_eq!(
+        r.as_slice::<f64>().unwrap()[3],
+        0.0,
+        "the reduced R diagonal must be an exact zero"
+    );
+    let recon = matmul_f64(
+        q.as_slice::<f64>().unwrap(),
+        r.as_slice::<f64>().unwrap(),
+        2,
+        2,
+        2,
+    );
+    assert_tensor_close(&tensor_f64(vec![2, 2], recon), &input, 1.0e-12);
+}
+
 #[test]
 #[ignore]
 fn test_cuda_compact_householder_qr_wide_empty_range_and_rank_deficient_import() {

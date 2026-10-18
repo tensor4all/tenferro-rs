@@ -646,6 +646,12 @@ pub fn svd_full(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedT
 
 /// Build a traced QR decomposition op.
 ///
+/// The CUDA provider does not read the cuSOLVER `geqrf`/`orgqr` status flags,
+/// so forward QR issues no host round trip and reports neither a vendor
+/// parameter error nor a rank deficiency. Caller shapes and dtypes are
+/// validated up front; a rank-deficient input still yields its valid factors,
+/// and the caller's own verification decides whether to accept them.
+///
 /// # Examples
 ///
 /// ```
