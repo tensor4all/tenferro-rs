@@ -100,6 +100,7 @@ _GPU_DEVICE_CONTROL_FILES = frozenset(
         ".github/workflows/ci-cache-publish.yml",
         "scripts/ci/change_policy.py",
         "scripts/ci/runpod_client.py",
+        "scripts/ci/runpod_http.py",
         "scripts/ci/runpod_config.json",
         "scripts/ci/runpod_contract.py",
         "scripts/ci/recover_runpod_pr.py",

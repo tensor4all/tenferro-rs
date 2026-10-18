@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from scripts.ci.runpod_cost import parse_runpod_timestamp
-from scripts.ci.runpod_lifecycle import HostedClient, PODS_URL, WORKFLOW_PATH, owner
+from scripts.ci.runpod_lifecycle import HostedClient, WORKFLOW_PATH, owner
 from scripts.ci.runpod_workflow_cost import report
 
 
@@ -37,7 +37,12 @@ def reason_to_reap(pod: dict, run: dict, repository: str, now: dt.datetime) -> s
         raise ValueError(f"Unknown workflow status: {run['status']}")
     # The active watcher covers 15m setup and a 60m accepted-pod lifetime.
     # This independent 2h backstop also covers failed/cancelled startup jobs.
-    started = parse_runpod_timestamp(pod["lastStartedAt"])
+    # A v2 Pod may be stuck in PROVISIONING and never have startedAt. Use its
+    # creation time only for orphan age, never to invent a paid cost window.
+    timestamp = pod.get("startedAt") or pod.get("lastStartedAt") or pod.get("createdAt")
+    if not isinstance(timestamp, str):
+        raise ValueError("Pod has no readable start or creation time for orphan recovery")
+    started = parse_runpod_timestamp(timestamp)
     if (now - started).total_seconds() >= 7200:
         return "CI pod exceeded the two-hour lifetime backstop"
     return None
@@ -84,12 +89,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     client = HostedClient.from_environment()
-    status, body = client.transport(PODS_URL, client.pod_token)
-    if status != 200:
-        raise RuntimeError(f"Cannot list RunPod pods: HTTP {status}")
-    pods = json.loads(body)
-    if not isinstance(pods, list):
-        raise ValueError("RunPod GET /pods did not return a list")
+    pods = client.pods()
     result = reap(client, pods, execute=args.execute, now=dt.datetime.now(dt.timezone.utc))
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     return 1 if result["errors"] else 0

@@ -1,0 +1,30 @@
+{
+  "gpus": [
+    {
+      "id": "NVIDIA GeForce RTX 4090",
+      "name": "RTX 4090",
+      "pool": "ADA_24",
+      "manufacturer": "NVIDIA",
+      "memory": 24,
+      "secure": true,
+      "community": true,
+      "price": {
+        "secure": 0.44,
+        "community": 0.31,
+        "serverless": 1.1
+      },
+      "maxCount": {
+        "secure": 8,
+        "community": 4
+      },
+      "availability": "HIGH",
+      "dataCenters": [
+        {
+          "id": "US-KS-2",
+          "name": "US Kansas 2",
+          "availability": "HIGH"
+        }
+      ]
+    }
+  ]
+}

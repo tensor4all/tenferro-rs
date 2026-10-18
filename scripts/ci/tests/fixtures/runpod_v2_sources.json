@@ -1,0 +1,6 @@
+{
+  "source": "https://api.runpod.io/v2/openapi.json",
+  "retrieved": "2026-10-18",
+  "sha256": "fe8a74b177282ec89a9ba1c75d3ce1d4bd1a2a9b9609fbdb4bd131d5b4a24506",
+  "transformation": "Relevant operations and recursively referenced components only. Descriptions, examples and documentation extensions omitted; validation keywords retained. Separate response fixtures are unmodified examples from the same document."
+}

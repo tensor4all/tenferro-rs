@@ -7,9 +7,11 @@ from pathlib import Path
 import subprocess
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+from scripts.ci.runpod_http import Response
+from scripts.ci.runpod_lifecycle import request
 
-from scripts.ci.runpod_setup_watchdog import execution_started, main, request, watch
+from scripts.ci.runpod_setup_watchdog import execution_started, main, watch
 
 GPU = 'Paid GPU lifecycle / CUDA GPU tests on RunPod'
 STARTED = {'name': GPU, 'status': 'in_progress', 'steps': [
@@ -90,40 +92,43 @@ class SetupWatchdogTests(unittest.TestCase):
                   cancel=lambda: self.fail('cancelled before deletion'), now=lambda: 1)
 
     def test_unreadable_pod_metadata_deletes_before_failing(self):
+        client = Mock()
+        client.pod.return_value = Response(503, {}, b"")
         with patch.dict(os.environ, ENV), patch('sys.argv', ['watchdog']), \
-             patch('scripts.ci.runpod_setup_watchdog.time.sleep'), \
-             patch('scripts.ci.runpod_setup_watchdog.request', side_effect=[(503, b'')] * 3 + [(204, b'')]) as call:
+             patch('scripts.ci.runpod_setup_watchdog.HostedClient', return_value=client):
             with self.assertRaisesRegex(RuntimeError, 'start time'):
                 main()
-            self.assertEqual(call.call_args_list[-1].args[-1], 'DELETE')
+        client.delete.assert_called_once_with(ENV['POD_ID'])
+        client.cancel.assert_not_called()
 
     def test_pod_already_deleted_is_idempotent(self):
+        client = Mock()
+        client.pod.return_value = Response(404, {}, b"")
         with patch.dict(os.environ, ENV), patch('sys.argv', ['watchdog']), \
-             patch('scripts.ci.runpod_setup_watchdog.request', return_value=(404, b'')) as call:
+             patch('scripts.ci.runpod_setup_watchdog.HostedClient', return_value=client):
             self.assertEqual(main(), 0)
-            self.assertEqual(call.call_count, 1)
+        client.delete.assert_not_called()
 
-    def test_cli_deadline_retries_transient_deletion_then_cancels(self):
-        replies = [(200, b'{"lastStartedAt":"2000-01-01T00:00:00Z"}'),
-                   (200, b'{"jobs":[]}'), (503, b''), (204, b''),
-                   (200, b'{"run_attempt":2,"status":"in_progress"}'), (202, b'')]
+    def test_cli_deadline_deletes_then_cancels(self):
+        client = Mock()
+        client.pod.return_value = Response(200, {}, b'{"startedAt":"2000-01-01T00:00:00Z"}')
+        client.obsolete.return_value = None
+        client.jobs.return_value = []
         with patch.dict(os.environ, ENV), patch('sys.argv', ['watchdog']), \
-             patch('scripts.ci.runpod_lifecycle.time.sleep'), \
-             patch('scripts.ci.runpod_setup_watchdog.request', side_effect=replies) as call:
+             patch('scripts.ci.runpod_setup_watchdog.HostedClient', return_value=client):
             self.assertEqual(main(), 1)
-            self.assertEqual([c.args[-1] for c in call.call_args_list[2:4]], ['DELETE', 'DELETE'])
-            self.assertEqual(call.call_args_list[-1].args[-1], 'POST')
+        names = [call[0] for call in client.mock_calls]
+        self.assertLess(names.index('delete'), names.index('cancel'))
 
-    def test_cli_follows_attempt_specific_job_pages(self):
-        pod = json.dumps({'lastStartedAt': dt.datetime.now(dt.timezone.utc).isoformat()}).encode()
-        first = json.dumps({'jobs': [{'name': 'Other job', 'status': 'completed'}] * 100}).encode()
-        second = json.dumps({'jobs': [FINISHED]}).encode()
+    def test_cli_follows_attempt_specific_jobs(self):
+        client = Mock()
+        client.pod.return_value = Response(200, {}, json.dumps({'startedAt': dt.datetime.now(dt.timezone.utc).isoformat()}).encode())
+        client.obsolete.return_value = None
+        client.jobs.return_value = [FINISHED]
         with patch.dict(os.environ, ENV), patch('sys.argv', ['watchdog']), \
-             patch('scripts.ci.runpod_setup_watchdog.request', side_effect=[(200, pod), (200, first), (200, second)]) as call:
+             patch('scripts.ci.runpod_setup_watchdog.HostedClient', return_value=client):
             self.assertEqual(main(), 0)
-            self.assertIn('/attempts/2/jobs?', call.call_args_list[1].args[0])
-            self.assertIn('page=2', call.call_args_list[2].args[0])
-            self.assertEqual(call.call_count, 3)
+        client.jobs.assert_called_once_with(ENV['GITHUB_RUN_ID'], ENV['GITHUB_RUN_ATTEMPT'])
 
     def test_http_error_status_is_preserved_for_retry_decisions(self):
         error = urllib.error.HTTPError('https://fixture.invalid', 429, 'rate limited', {}, io.BytesIO(b'retry'))
@@ -131,13 +136,15 @@ class SetupWatchdogTests(unittest.TestCase):
             self.assertEqual(request('https://fixture.invalid', 'fixture-key'), (429, b'retry'))
 
     def test_missing_or_null_start_time_confirms_deletion(self):
-        for body in (b'null', b'{"lastStartedAt":null}', b'{}'):
+        for body in (b'null', b'{"startedAt":null}', b'{}'):
+            client = Mock()
+            client.pod.return_value = Response(200, {}, body)
             with self.subTest(body=body), patch.dict(os.environ, ENV), \
                  patch('sys.argv', ['watchdog']), \
-                 patch('scripts.ci.runpod_setup_watchdog.request', side_effect=[(200, body), (204, b'')]) as call:
-                with self.assertRaisesRegex(ValueError, 'lastStartedAt'):
+                 patch('scripts.ci.runpod_setup_watchdog.HostedClient', return_value=client):
+                with self.assertRaisesRegex(ValueError, 'startedAt'):
                     main()
-                self.assertEqual(call.call_args_list[-1].args[-1], 'DELETE')
+            client.delete.assert_called_once_with(ENV['POD_ID'])
 
     def test_workflow_keeps_privileged_watcher_hosted_on_trusted_source(self):
         from scripts.ci.tests.test_runpod_cost_contracts import job
@@ -159,13 +166,13 @@ class SetupWatchdogTests(unittest.TestCase):
         child = (Path(__file__).resolve().parents[3] / '.github/workflows/runpod-gpu-execute.yml').read_text()
         step = child.split('- name: Delete pod if setup watchdog could not finish', 1)[1].split('\n  run-gpu-tests:', 1)[0]
         self.assertIn('if: failure()', step)
-        self.assertIn('timeout-minutes: 1', step)
+        self.assertIn('timeout-minutes: 4', step)
         script = step_script(job(child, 'setup-watchdog'), 'Delete pod if setup watchdog could not finish')
-        stub = ('curl() { [[ " $* " == *" -X DELETE https://rest.runpod.io/v1/pods/fixture "* ]] '
+        stub = ('curl() { [[ " $* " == *" -X DELETE https://api.runpod.io/v2/pods/fixture "* ]] '
                 '|| return 2; printf "%s" "$FIXTURE_STATUS"; }\n')
         for status, success in (('204', True), ('404', True), ('403', False), ('503', False)):
             with self.subTest(status=status):
                 run = subprocess.run(['bash', '-c', stub + script], capture_output=True, text=True,
-                    env={**os.environ, 'FIXTURE_STATUS': status, 'POD_ID': 'fixture',
+                    cwd='/tmp', env={**os.environ, 'GITHUB_STEP_SUMMARY': '/dev/null', 'FIXTURE_STATUS': status, 'POD_ID': 'fixture',
                          'RUNPOD_API_KEY': 'fixture-key'})
                 self.assertEqual(run.returncode == 0, success, run.stdout + run.stderr)

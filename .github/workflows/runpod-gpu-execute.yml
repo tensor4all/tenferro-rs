@@ -375,25 +375,25 @@ jobs:
           POD_ID: ${{ steps.create_pod.outputs.pod_id }}
         run: |
           set -euo pipefail
-
-          echo "Deleting RunPod pod after startup failure: ${POD_ID}"
-
-          response_file=/tmp/runpod-delete-response.json
-          status="$(
-            curl -sS \
-              --request DELETE \
-              --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
-              --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              --output "$response_file" \
-              --write-out "%{http_code}"
-          )"
-
-          echo "RunPod delete HTTP status: ${status}"
-          jq . "$response_file" || cat "$response_file" || true
-
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Warning: failed to delete RunPod pod after startup failure" >&2
+          if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
+            echo "No POD_ID; nothing to delete"
             exit 0
+          fi
+          if [ -f scripts/ci/runpod_http.py ]; then
+            python3 -m scripts.ci.runpod_http delete --config scripts/ci/runpod_config.json
+          else
+            # Checkout may have failed. curl honors Retry-After (seconds and HTTP date).
+            # Keep this independent last-resort cleanup bounded and never print response bodies.
+            status="$(curl -sS --connect-timeout 5 --max-time 15 \
+              --retry 4 --retry-delay 5 --retry-max-time 150 \
+              -o /tmp/runpod-delete-response.json -w '%{http_code}' \
+              -X DELETE "https://api.runpod.io/v2/pods/${POD_ID}" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}")" || status=000
+            if [[ "$status" != 404 && ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+              echo "::error::Could not confirm deletion of RunPod pod ${POD_ID} (HTTP ${status}); it may still be billing."
+              echo "RunPod cleanup requires attention: ${POD_ID} (HTTP ${status})" >> "${GITHUB_STEP_SUMMARY}"
+              exit 1
+            fi
           fi
 
   setup-watchdog:
@@ -429,18 +429,32 @@ jobs:
         # Checkout/helper failures must not leave the accepted pod waiting
         # for the independent GPU job's longer timeout.
         if: failure()
-        timeout-minutes: 1
+        timeout-minutes: 4
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
         run: |
           set -euo pipefail
-          status="$(curl --retry 2 --retry-delay 5 --retry-all-errors --max-time 15 \
-            -sS -o /tmp/watchdog-delete-response.json -w '%{http_code}' \
-            -X DELETE "https://rest.runpod.io/v1/pods/${POD_ID}" \
-            -H "Authorization: Bearer ${RUNPOD_API_KEY}")"
-          echo "Setup watchdog fallback DELETE HTTP status: ${status}"
-          [[ "$status" == 404 || ("$status" -ge 200 && "$status" -lt 300) ]]
+          if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
+            echo "No POD_ID; nothing to delete"
+            exit 0
+          fi
+          if [ -f scripts/ci/runpod_http.py ]; then
+            python3 -m scripts.ci.runpod_http delete --config scripts/ci/runpod_config.json
+          else
+            # Checkout may have failed. curl honors Retry-After (seconds and HTTP date).
+            # Keep this independent last-resort cleanup bounded and never print response bodies.
+            status="$(curl -sS --connect-timeout 5 --max-time 15 \
+              --retry 4 --retry-delay 5 --retry-max-time 150 \
+              -o /tmp/runpod-delete-response.json -w '%{http_code}' \
+              -X DELETE "https://api.runpod.io/v2/pods/${POD_ID}" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}")" || status=000
+            if [[ "$status" != 404 && ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+              echo "::error::Could not confirm deletion of RunPod pod ${POD_ID} (HTTP ${status}); it may still be billing."
+              echo "RunPod cleanup requires attention: ${POD_ID} (HTTP ${status})" >> "${GITHUB_STEP_SUMMARY}"
+              exit 1
+            fi
+          fi
 
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
@@ -879,69 +893,47 @@ jobs:
       actions: read
 
     steps:
-      # Capture the record before DELETE makes it unavailable. No checkout
-      # or report belongs on the paid path; this best-effort read has a hard
-      # five-second bound and cannot prevent the mandatory deletion.
-      - name: Read pod record for cost reporting
-        if: needs.start-runpod.outputs.pod_id != '' && needs.start-runpod.outputs.pod_id != 'null'
-        continue-on-error: true
+      - name: Checkout trusted RunPod cleanup helpers
+        if: always()
         timeout-minutes: 1
-        env:
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
-        run: |
-          set -euo pipefail
-          get_status="$(
-            curl -sS --connect-timeout 2 --max-time 5 \
-              --url "https://rest.runpod.io/v1/pods/${POD_ID}?includeMachine=true" \
-              --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              --output /tmp/runpod-pod.json \
-              --write-out "%{http_code}"
-          )" || get_status=000
-          if [ "$get_status" -lt 200 ] || [ "$get_status" -ge 300 ]; then
-            echo "::warning::RunPod pod record unavailable (HTTP ${get_status}); will try the saved startup record after deletion."
-          fi
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
 
       - name: Delete RunPod pod
         id: delete_pod
         # In a keep_failed_pods debug dispatch, a failed provision keeps its
         # rejected pods for console-log triage; only an ACCEPTED pod (the
         # start-runpod job succeeded) is still cleaned up unconditionally.
-        if: inputs.keep_failed_pods != true || needs.start-runpod.result == 'success'
+        if: always() && (inputs.keep_failed_pods != true || needs.start-runpod.result == 'success')
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
         run: |
           set -euo pipefail
-
           if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
             echo "No POD_ID; nothing to delete"
             exit 0
           fi
-
-          echo "Deleting RunPod pod: ${POD_ID}"
-
-          response_file=/tmp/runpod-delete-response.json
-          status="$(
-            curl -sS --connect-timeout 5 --max-time 15 \
-              --retry 2 --retry-delay 5 --retry-all-errors \
-              --request DELETE \
-              --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
-              --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              --output "$response_file" \
-              --write-out "%{http_code}"
-          )"
-
-          echo "RunPod delete HTTP status: ${status}"
-          jq . "$response_file" || cat "$response_file" || true
-
-          if [ "$status" != 404 ] && { [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; }; then
-            echo "::error::Failed to delete RunPod pod ${POD_ID} (HTTP ${status})" >&2
-            exit 1
+          if [ -f scripts/ci/runpod_http.py ]; then
+            python3 -m scripts.ci.runpod_http delete --config scripts/ci/runpod_config.json --record-output /tmp/runpod-pod.json
+          else
+            # Checkout may have failed. curl honors Retry-After (seconds and HTTP date).
+            # Keep this independent last-resort cleanup bounded and never print response bodies.
+            status="$(curl -sS --connect-timeout 5 --max-time 15 \
+              --retry 4 --retry-delay 5 --retry-max-time 150 \
+              -o /tmp/runpod-delete-response.json -w '%{http_code}' \
+              -X DELETE "https://api.runpod.io/v2/pods/${POD_ID}" \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}")" || status=000
+            if [[ "$status" != 404 && ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+              echo "::error::Could not confirm deletion of RunPod pod ${POD_ID} (HTTP ${status}); it may still be billing."
+              echo "RunPod cleanup requires attention: ${POD_ID} (HTTP ${status})" >> "${GITHUB_STEP_SUMMARY}"
+              exit 1
+            fi
           fi
-
           echo "deleted_at=$(date --utc +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
-          echo "Deleted RunPod pod: ${POD_ID}"
 
       - name: Checkout trusted RunPod cost report
         if: always() && steps.delete_pod.outputs.deleted_at != ''

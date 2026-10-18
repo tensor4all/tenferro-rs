@@ -365,7 +365,7 @@ jobs:
       - name: Validate GPU IDs and CUDA versions against live OpenAPI
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-        run: python3 scripts/ci/runpod_contract.py
+        run: python3 -m scripts.ci.runpod_contract
 
   pre-runpod-gate:
     name: Wait for rustfmt and clippy

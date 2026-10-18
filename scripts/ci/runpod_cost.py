@@ -53,10 +53,10 @@ def cost_report(
 ) -> tuple[list[str], list[str]]:
     """Return (report lines, warnings) for one pod record at time `now`."""
 
-    cost = pod.get("adjustedCostPerHr")
+    cost = pod.get("cost", pod.get("adjustedCostPerHr"))
     if not isinstance(cost, (int, float)) or isinstance(cost, bool) or cost <= 0:
         cost = pod.get("costPerHr")
-    started = pod.get("lastStartedAt")
+    started = pod.get("startedAt", pod.get("lastStartedAt"))
     if not isinstance(cost, (int, float)) or isinstance(cost, bool):
         return [], [f"RunPod cost data unavailable in pod record (costPerHr={cost!r})"]
     if not isinstance(started, str) or not started:

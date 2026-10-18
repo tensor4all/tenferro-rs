@@ -20,17 +20,20 @@ The reviewed tier allowlist in `runpod_config.json` remains the eligibility
 boundary — live data never adds a GPU type maintainers did not review.
 `runpod_pricing.candidate_plan` builds the attempt order:
 
-1. Query the public RunPod GraphQL `gpuTypes` endpoint (no credential) for
-   Secure Cloud stock, VRAM, and hourly price of the eligible types.
+1. GET the authenticated REST v2 `/catalog/gpus` endpoint with
+   `include=AVAILABILITY`, `product=POD`, `cloud=SECURE`, GPU count and CUDA
+   versions for Secure Cloud stock, VRAM and the eligible types' list prices.
 2. Drop out-of-stock types, types without a Secure Cloud offer, and types
    below `min_vram_gb`.
 3. Emit one single-GPU candidate per type, cheapest first, capped by
    `max_price_candidates`.
-4. Always append the static reviewed tiers as the documented fallback, so a
-   failed or stale pricing answer degrades to today's behavior instead of
-   losing GPU coverage.
+4. Reserve a static candidate slot per reviewed tier inside the provision attempt
+   budget, reducing the live-price prefix if necessary. Interleave remaining
+   single-type static candidates by tier and deduplicate GPU IDs already priced.
+   Each tier is reachable within the configured six attempts; the independent
+   consecutive-startup-failure stop still limits paid failures.
 
-`allowedCudaVersions` metadata filtering stays on every create request as
+`gpu.allowedCudaVersions` metadata filtering stays on every create request as
 the first-line filter; the runtime smoke proof below is the real
 compatibility decision.
 
@@ -67,10 +70,9 @@ credentials stay GitHub-hosted):
   `run-gpu-tests` targets the accepted attempt's label;
 - create one candidate pod at a time, cheapest first;
 - watch two signals: the org runner registry (runner online = smoke proof
-  passed) and the pod's container state via GraphQL (`desiredStatus` plus
-  the `runtime` object — RunPod keeps `desiredStatus` at RUNNING after the
-  container exits, so a null runtime after boot is the authoritative
-  startup-failure signal);
+  passed) and REST v2 Pod `status` plus `runtime`. Accept only RUNNING with
+  runtime present and the fresh attempt's runner online. EXITED, ERROR and
+  TERMINATED reject immediately; runtime loss after boot also rejects;
 - delete a rejected or timed-out pod immediately and move to the next
   candidate, reusing the same immutable per-run archive (#1403) — retries
   never compile Rust;
@@ -111,7 +113,7 @@ the staged execution SDK's runtime selection aligned.
 
 The accepted job installs its remaining execution tools without recommended
 packages. `zstd` lands before archive cache restore, retaining compatibility
-with hosted cache writers. Readiness is polled every two seconds; startup,
+with hosted cache writers. Readiness is polled every ten seconds; startup,
 setup and lifetime deadlines and failed-candidate deletion remain bounded.
 There is no pod-side runner archive download or persistent tarball cache.
 
@@ -164,7 +166,7 @@ setup takes about 2.5 minutes; archive downloads allow one bounded retry:
 - the archive artifact download is retried once with the same bound.
 
 A separate hosted setup watchdog bounds the accepted pod from its
-`lastStartedAt` to the start of `Run CUDA tests from archive` to 900 seconds.
+`startedAt` to the start of `Run CUDA tests from archive` to 900 seconds.
 It retains the RunPod credential on the hosted runner, polls attempt-specific job
 progress, and confirms deletion if setup expires or the GPU job finishes
 before reaching tests. Progress API failures do not extend the deadline;
@@ -199,7 +201,9 @@ record cannot be uploaded or is later removed, the pod is reclaimable. An API
 failure reading retention records leaves the decision unknown for that sweep. The
 owning GitHub run must match the repository and GPU workflow path. A candidate
 is reclaimed if its run completed at least five minutes ago, its attempt was
-superseded, or its active pod exceeds the two-hour lifetime backstop. API errors
+superseded, or its active pod exceeds the two-hour lifetime backstop. A v2
+Pod stuck before startup uses `createdAt` for orphan age when `startedAt` is
+null; this fallback is never used for cost estimates. API errors
 leave the pod untouched and fail visibly for the next scheduled retry.
 
 Deletion is bounded and idempotent; cancellation follows confirmed deletion and
@@ -214,7 +218,7 @@ Seeding the test archive onto persistent storage remains deferred.
 ## Observability
 
 - Each attempt logs candidate name, GPU type, hourly price
-  (`costPerHr`/`adjustedCostPerHr` from the pod record), outcome, rejection
+  (`cost` from the v2 pod record), outcome, rejection
   reason, and startup or wasted seconds with an estimated paid cost in
   dollars. Rejections also accumulate, so an accepted pod reports what the
   rejected candidates before it cost and an exhaustion error reports the
@@ -224,10 +228,9 @@ Seeding the test archive onto persistent storage remains deferred.
   machine" step echoes them next to `nvidia-smi`.
 - `cleanup-runpod` captures the pod record with a five-second bound, deletes
   the pod, and reports its paid window by stage (`runpod_workflow_cost.py`).
-  RunPod's REST
-  `lastStartedAt` is Go's time format (`2026-10-04 11:09:24.633 +0000 UTC`),
-  not ISO-8601; the previous inline parser raised on it in every cleanup job
-  that had a pod (#2002). Both forms are parsed, an unreadable record prints a
+  v2 uses ISO-8601 `startedAt` and `cost`; historic saved v1 records with
+  Go-format `lastStartedAt` and `costPerHr` remain readable. Unknown or null
+  start times are never replaced with `createdAt`. An unreadable record prints a
   `::warning::`, and reporting runs as a non-blocking step after deletion.
   Early watchdog deletion logs the cost from its already-held pod metadata
   before requesting workflow cancellation, preserving interrupted-run evidence.
@@ -315,22 +318,22 @@ read-only workflow permissions, and unconditional cleanup are preserved.
 Secret isolation, precisely: the long-lived RunPod API key and GitHub App
 token never reach the pod; the single-use, single-job JIT runner config is
 the one credential that necessarily does, and the smoke child runs with it
-stripped from its environment (`env -u RUNNER_JIT_CONFIG`). The pricing
-query is unauthenticated. The new scripts are part of the GPU control
+stripped from its environment (`env -u RUNNER_JIT_CONFIG`). The catalog
+request uses the RunPod key only on the hosted runner. The new scripts are part of the GPU control
 plane in `change_policy.py`, so changing them requires the GPU gate.
 
 ## Residual risks
 
-- The GraphQL pricing endpoint is not part of the versioned REST contract;
-  failures fall back to static tiers by design.
+- Catalog list prices and availability are advisory; catalog failures fall
+  back to static reviewed single-GPU candidates. The assigned Pod `cost` is
+  the reporting rate, not a billing invoice.
 - Pod-status polling depends on RunPod reporting exited containers
   promptly; the per-candidate timeout bounds the damage.
 - End-to-end behavior on paid hardware (smoke rejection, candidate
   failover, cost logging) can only be demonstrated in live CI runs.
-- Pod logs are not exposed by any RunPod API; the `keep_failed_pods`
-  dispatch input keeps rejected pods alive (billing!) so their console
-  logs can be read in the RunPod dashboard when a smoke failure needs
-  manual triage.
+- v2 exposes a Pod log endpoint, but this migration does not add a log
+  collector. The existing `keep_failed_pods` dispatch input still retains
+  rejected pods for manual dashboard inspection and continues billing.
 - The hosted setup watchdog also covers a queued GPU job, but its own hosted
   queue can delay enforcement. The 900-second deadline is not extended by
   that delay; deletion still requires working provider APIs and is bounded
@@ -340,3 +343,59 @@ plane in `change_policy.py`, so changing them requires the GPU gate.
   claiming an end-to-end billing bound.
 - The gate reuse and the parent concurrency group run from the default branch,
   so they first execute live on the first RunPod run after they merge.
+
+
+## REST v2 migration and request policy
+
+All live RunPod calls use `https://api.runpod.io/v2`, following the
+[official migration guide](https://docs.runpod.io/api-reference-v2/migrate-from-v1)
+and [OpenAPI schema](https://api.runpod.io/v2/openapi.json). Pod create/get/list/
+delete, metadata, hosted lifecycle watchdog, orphan reaper and manual cleanup
+are migrated together. Creation sends nested `gpu` and `mounts`, `image`, `disk`,
+`entrypoint` and `cmd`. Assigned GPU comes from `gpu.id`. Listing reads `pods`
+and bounded cursor pagination before making any reaper decisions. Ownership
+environment and exact workflow-attempt checks remain unchanged.
+
+GraphQL inventory and replacement are complete: former `gpuTypes` price/stock
+reads now use the catalog, and former Pod `desiredStatus`/`runtime` queries use
+`GET /v2/pods/{id}`. No GraphQL runtime dependency remains, so no later switch
+is needed for the announced January 2027 retirement. The REST v1 November 15
+retirement and October 27 rate-limit changes require no separate URL-only fix.
+
+The normal startup cadence is ten seconds (at most six Pod reads/minute per
+active provisioner, previously thirty). Each iteration also checks PR state;
+the runner registry is read only after a live RUNNING Pod observation. Pricing
+is one catalog read per provision invocation, with no tight retry loop. Existing
+global paid-work concurrency serializes automatic GPU creation; manual cleanup,
+the watcher and scheduled reaper can still overlap, as can other API-key users.
+There is no distributed account-wide rate limiter. Configure fewer parallel
+callers if account-wide limits require it; per-process cooldown is not a global
+quota guarantee.
+
+HTTP 408/429, transport failures and 5xx use bounded backoff. Retry-After accepts
+seconds and HTTP dates and is a minimum, even above the 60-second backoff cap.
+Catalog, creation, startup observations and rejected-Pod deletion share a
+process-local cooldown across candidate changes. Unknown/malformed observations
+back off and never mean container death or a healthy runner. Recovery restores
+the normal cadence. Startup requests and waits fit the remaining 420-second
+candidate deadline; a longer required pause ends that candidate without an early
+retry. Create retains its 60-second deadline and attempt budget.
+
+Shared cleanup uses at most five DELETE attempts within 180 seconds, with
+20-second request timeouts capped by remaining budget. A 404 confirms deletion;
+permanent errors stop retries. A lost response may be checked with GET only
+after cooldown. Exhaustion fails visibly, writes the remaining Pod ID to the
+job summary and stops new paid creation. Pre-delete cost metadata is a single
+best-effort GET bounded to five seconds inside the same helper; its cooldown
+also applies to DELETE, and missing data falls back to the saved startup
+snapshot after deletion. Reporting never prevents deletion. Normal cleanup
+fetches only trusted helper sources before deletion; if checkout fails, a
+bounded v2 curl fallback remains independent of Python files and reports the
+remaining Pod ID. Hosted queue/provider outages still prevent a strict billing
+guarantee; the scheduled owned-Pod reaper supplies independent recovery.
+
+API-shape, timeout, retry/cooldown, malformed observation, ownership, metadata
+and workflow failure paths are verified with fixtures and local HTTP only.
+No paid Pod is created to validate this migration. Published v2 schema/example
+fixtures record their retrieval source and date in
+`scripts/ci/tests/fixtures/runpod_v2_sources.json`.

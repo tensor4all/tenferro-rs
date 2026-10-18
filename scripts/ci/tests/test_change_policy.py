@@ -78,6 +78,7 @@ class ChangePolicyTests(unittest.TestCase):
         """A diff that can change what the pod executes is proven on a pod."""
         for path in (
             "scripts/ci/runpod_client.py",
+            "scripts/ci/runpod_http.py",
             "scripts/ci/runpod_config.json",
             ".github/workflows/runpod-gpu-test.yml",
             ".github/workflows/runpod-gpu-execute.yml",

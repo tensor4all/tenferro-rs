@@ -29,10 +29,10 @@ def stage(name: str) -> str:
 
 
 def report(pod: dict, jobs: list[dict], deleted_at: str, gpu_type_id: str = "") -> dict:
-    begin = parse_runpod_timestamp(pod["lastStartedAt"])
+    begin = parse_runpod_timestamp(pod.get("startedAt", pod.get("lastStartedAt")))
     end = parse_runpod_timestamp(deleted_at)
     seconds = (end - begin).total_seconds()
-    price = pod.get("adjustedCostPerHr")
+    price = pod.get("cost", pod.get("adjustedCostPerHr"))
     if not isinstance(price, (float, int)) or isinstance(price, bool) or price <= 0:
         price = pod.get("costPerHr")
     if not isinstance(price, (float, int)) or isinstance(price, bool) or not math.isfinite(price) or price <= 0 or seconds < 0:
@@ -120,7 +120,7 @@ def main() -> int:
         value["pod_record_source"] = source
         value["placement"] = {
             "machine_id": pod.get("machineId"),
-            "data_center_id": (pod.get("machine") or {}).get("dataCenterId"),
+            "data_center_id": pod.get("dataCenterId") or (pod.get("machine") or {}).get("dataCenterId"),
         }
         value["tested_ref"] = args.tested_ref
         value["cache_hits"] = {

@@ -1,56 +1,22 @@
 import unittest
+import json
+from pathlib import Path
 
 from scripts.ci.runpod_contract import (
     ContractError,
     configured_cuda_versions,
     configured_gpu_tiers,
-    extract_allowed_cuda_versions,
     extract_gpu_type_ids,
     resolve_local_ref,
+    schema_properties,
     validate_cuda_versions,
     validate_gpu_type_ids,
 )
 
 
-SCHEMA = {
-    "paths": {
-        "/pods": {
-            "post": {
-                "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/CreatePod"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    },
-    "components": {
-        "schemas": {
-            "CreatePod": {
-                "type": "object",
-                "properties": {
-                    "gpuTypeIds": {
-                        "type": "array",
-                        "items": {
-                            "enum": [
-                                "NVIDIA A40",
-                                "NVIDIA GeForce RTX 4090",
-                            ]
-                        },
-                    },
-                    "allowedCudaVersions": {
-                        "type": "array",
-                        "items": {"enum": ["13.0", "12.9", "12.8", "12.4"]},
-                    },
-                },
-            }
-        }
-    },
-}
+FIXTURES = Path(__file__).with_name("fixtures")
+SCHEMA = json.loads((FIXTURES / "runpod_v2_openapi.json").read_text())
+CATALOG = {"gpus": [{"id": "NVIDIA A40"}, {"id": "NVIDIA GeForce RTX 4090"}]}
 
 
 class RunPodContractTests(unittest.TestCase):
@@ -112,51 +78,54 @@ class RunPodContractTests(unittest.TestCase):
                 }
             )
 
-    def test_extract_gpu_enum_follows_local_ref(self) -> None:
+    def test_extract_gpu_ids_uses_catalog_not_schema_enum(self):
         self.assertEqual(
-            extract_gpu_type_ids(SCHEMA),
+            extract_gpu_type_ids(CATALOG),
             frozenset({"NVIDIA A40", "NVIDIA GeForce RTX 4090"}),
         )
-        self.assertEqual(
-            extract_allowed_cuda_versions(SCHEMA),
-            frozenset({"13.0", "12.9", "12.8", "12.4"}),
-        )
+        validate_gpu_type_ids(SCHEMA, ["NVIDIA A40"], CATALOG)
 
-    def test_validate_reports_every_invalid_configured_id(self) -> None:
-        with self.assertRaisesRegex(
-            ContractError, "Tesla T4.*Unknown GPU"
-        ):
-            validate_gpu_type_ids(SCHEMA, ["Tesla T4", "Unknown GPU"])
+    def test_invalid_catalog_ids_are_reported(self):
+        with self.assertRaisesRegex(ContractError, "Tesla T4.*Unknown GPU"):
+            validate_gpu_type_ids(SCHEMA, ["Tesla T4", "Unknown GPU"], CATALOG)
 
-    def test_validate_reports_unsupported_cuda_version(self) -> None:
-        with self.assertRaisesRegex(ContractError, "12.7"):
-            validate_cuda_versions(SCHEMA, ["12.8", "12.7"])
+    def test_cuda_validation_checks_v2_pattern_not_old_enum(self):
+        validate_cuda_versions(SCHEMA, ["12.7", "13.0"])
+        with self.assertRaisesRegex(ContractError, "13"):
+            validate_cuda_versions(SCHEMA, ["13"])
 
-    def test_missing_post_schema_is_a_hard_error(self) -> None:
-        with self.assertRaisesRegex(ContractError, "POST /pods"):
-            extract_gpu_type_ids({"paths": {}})
+    def test_missing_v2_post_schema_is_a_hard_error(self):
+        with self.assertRaisesRegex(ContractError, "POST /v2/pods"):
+            validate_gpu_type_ids({"paths": {}}, ["NVIDIA A40"], CATALOG)
 
-    def test_non_local_reference_is_rejected(self) -> None:
+    def test_non_local_reference_is_rejected(self):
         with self.assertRaisesRegex(ContractError, "non-local"):
             resolve_local_ref(SCHEMA, "https://example.test/CreatePod")
 
-    def test_non_string_enum_member_is_rejected(self) -> None:
-        schema = {
-            **SCHEMA,
-            "components": {
-                "schemas": {
-                    "CreatePod": {
-                        "properties": {
-                            "gpuTypeIds": {
-                                "items": {"enum": ["NVIDIA A40", 7]}
-                            }
-                        }
-                    }
-                }
-            },
-        }
-        with self.assertRaisesRegex(ContractError, "must contain strings"):
-            extract_gpu_type_ids(schema)
+    def test_malformed_catalog_is_rejected(self):
+        for catalog in ({}, {"gpus": []}, {"gpus": [{"id": 7}]}):
+            with self.assertRaises(ContractError):
+                extract_gpu_type_ids(catalog)
+
+    def test_generated_payload_matches_published_v2_schema(self):
+        from scripts.ci.runpod_client import build_pod_payload
+
+        config = json.loads(
+            (Path(__file__).resolve().parents[1] / "runpod_config.json").read_text()
+        )
+        payload = build_pod_payload(config, "image", "startup", "jit", ["NVIDIA A40"])
+        properties = schema_properties(SCHEMA, {"$ref": "#/components/schemas/CreatePodRequest"})
+        self.assertLessEqual(set(payload), set(properties))
+        self.assertNotIn("gpuTypeIds", properties)
+        self.assertEqual(payload["image"], "image")
+        self.assertEqual(payload["entrypoint"], ["bash", "-lc"])
+        self.assertEqual(payload["cmd"], ["startup"])
+        for field in ("gpu", "mounts"):
+            allowed = schema_properties(SCHEMA, properties[field])
+            self.assertLessEqual(set(payload[field]), set(allowed))
+        self.assertEqual(payload["gpu"]["id"], "NVIDIA A40")
+        self.assertEqual(payload["gpu"]["count"], config["gpu_count"])
+        self.assertEqual(payload["mounts"]["persistent"], {"size": config["volume_gb"], "path": config["volume_mount_path"]})
 
 
 if __name__ == "__main__":

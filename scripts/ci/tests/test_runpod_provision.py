@@ -37,7 +37,7 @@ PLAN = [
 
 
 def live(desired: str = "RUNNING") -> PodState:
-    return PodState(desired=desired, has_runtime=True)
+    return PodState(status=desired, has_runtime=True)
 
 
 def created(pod_id: str, gpu: str, tier: str, cost: float = 0.44) -> CreateResult:
@@ -45,7 +45,7 @@ def created(pod_id: str, gpu: str, tier: str, cost: float = 0.44) -> CreateResul
         pod_id=pod_id,
         gpu_type_id=gpu,
         gpu_tier=tier,
-        body=json.dumps({"id": pod_id, "costPerHr": cost}).encode(),
+        body=json.dumps({"id": pod_id, "cost": cost}).encode(),
     )
 
 
@@ -61,24 +61,57 @@ class Clock:
 
 
 class ParseCostTests(unittest.TestCase):
-    def test_prefers_adjusted_cost(self) -> None:
-        body = json.dumps({"adjustedCostPerHr": 0.4, "costPerHr": 0.5}).encode()
+    def test_reads_v2_cost(self) -> None:
+        body = json.dumps({"cost": 0.4}).encode()
         self.assertEqual(parse_cost_per_hr(body), 0.4)
 
     def test_missing_or_invalid_cost_is_none(self) -> None:
         self.assertIsNone(parse_cost_per_hr(b"{}"))
         self.assertIsNone(parse_cost_per_hr(b"not json"))
-        self.assertIsNone(parse_cost_per_hr(json.dumps({"costPerHr": True}).encode()))
+        self.assertIsNone(parse_cost_per_hr(json.dumps({"cost": True}).encode()))
 
 
 class ProvisionTests(unittest.TestCase):
+    def test_retry_after_longer_than_startup_budget_never_polls_early(self):
+        clock = Clock()
+        observations = []
+        deleted = []
+        def status(pod_id, *, deadline):
+            observations.append((clock.now, deadline))
+            return PodState(None, None, retry_seconds=120)
+        with self.assertRaises(ProvisionExhaustedError):
+            provision({**CONFIG, 'startup_timeout_seconds': 20, 'max_provision_attempts': 1},
+                PLAN, label_prefix='fixture', mint_runner=lambda _: 'jit',
+                create=lambda req, jit: created('pod', 'NVIDIA A40', req.tier_name),
+                pod_status=status, runner_online=lambda *a, **kw: self.fail('unknown Pod cannot be accepted'),
+                delete_pod=lambda pod: (deleted.append(pod), True)[1],
+                sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertEqual(observations, [(0, 20)])
+        self.assertEqual(clock.now, 20)
+        self.assertEqual(deleted, ['pod'])
+
+    def test_poll_request_consuming_deadline_does_not_accept_late_runner(self):
+        clock = Clock()
+        deleted = []
+        def status(pod_id, *, deadline):
+            clock.now = deadline
+            return PodState('RUNNING', True)
+        with self.assertRaises(ProvisionExhaustedError):
+            provision({**CONFIG, 'max_provision_attempts': 1}, PLAN,
+                label_prefix='fixture', mint_runner=lambda _: 'jit',
+                create=lambda req, jit: created('pod', 'NVIDIA A40', req.tier_name),
+                pod_status=status, runner_online=lambda *a, **kw: self.fail('startup deadline expired'),
+                delete_pod=lambda pod: (deleted.append(pod), True)[1],
+                sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertEqual(deleted, ['pod'])
+
     def test_obsolete_during_startup_deletes_and_never_creates_next_candidate(self) -> None:
         reasons = iter([None, "PR head moved"])
         create = mock.Mock(side_effect=lambda req, jit: created("old-pod", "A40", req.tier_name))
         deleted = []
         with self.assertRaisesRegex(ObsoleteRunError, "Stopped obsolete paid startup"):
-            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _: "jit",
-                      create=create, runner_online=lambda _: False, pod_status=lambda _: live(),
+            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _, **kw: "jit",
+                      create=create, runner_online=lambda _, **kw: False, pod_status=lambda _, **kw: live(),
                       delete_pod=lambda pod: (deleted.append(pod), True)[1], obsolete=lambda: next(reasons))
         self.assertEqual(deleted, ["old-pod"])
         self.assertEqual(create.call_count, 1)
@@ -99,9 +132,9 @@ class ProvisionTests(unittest.TestCase):
         deleted = []
         retained = mock.Mock()
         with self.assertRaises(ObsoleteRunError):
-            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _: "jit",
+            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _, **kw: "jit",
                       create=lambda req, jit: created("debug-pod", "A40", req.tier_name),
-                      runner_online=lambda _: False, pod_status=lambda _: live(), keep_failed_pods=True,
+                      runner_online=lambda _, **kw: False, pod_status=lambda _, **kw: live(), keep_failed_pods=True,
                       delete_pod=lambda pod: (deleted.append(pod), True)[1], obsolete=lambda: next(reasons),
                       record_retained_pods=retained)
         self.assertEqual(deleted, ["debug-pod"])
@@ -110,16 +143,16 @@ class ProvisionTests(unittest.TestCase):
     def test_obsolete_before_startup_spends_nothing(self) -> None:
         create = mock.Mock()
         with self.assertRaisesRegex(ObsoleteRunError, "Not provisioning"):
-            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _: "jit",
-                      create=create, runner_online=lambda _: False, pod_status=lambda _: live(),
-                      delete_pod=lambda _: self.fail("no pod exists"), obsolete=lambda: "PR closed")
+            provision(CONFIG, PLAN, label_prefix="runpod-1-1", mint_runner=lambda _, **kw: "jit",
+                      create=create, runner_online=lambda _, **kw: False, pod_status=lambda _, **kw: live(),
+                      delete_pod=lambda _, **kw: self.fail("no pod exists"), obsolete=lambda: "PR closed")
         create.assert_not_called()
 
     def test_first_candidate_accepted_when_runner_comes_online(self) -> None:
         clock = Clock()
         online_after = {"count": 3}
 
-        def runner_online(label: str) -> bool:
+        def runner_online(label: str, **kw) -> bool:
             online_after["count"] -= 1
             return online_after["count"] <= 0
 
@@ -128,11 +161,11 @@ class ProvisionTests(unittest.TestCase):
             CONFIG,
             PLAN,
             label_prefix="runpod-1-1",
-            mint_runner=lambda label: f"jit-{label}",
+            mint_runner=lambda label, **kw: f"jit-{label}",
             create=lambda req, jit: created("pod-1", "NVIDIA A40", req.tier_name),
             runner_online=runner_online,
-            pod_status=lambda pod_id: live(),
-            delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
+            pod_status=lambda pod_id, **kw: live(),
+            delete_pod=lambda pod_id, **kw: (deleted.append(pod_id), True)[1],
             monotonic=clock.monotonic,
             sleep=clock.sleep,
         )
@@ -165,11 +198,11 @@ class ProvisionTests(unittest.TestCase):
             CONFIG,
             PLAN,
             label_prefix="runpod-1-1",
-            mint_runner=lambda label: f"jit-{label}",
+            mint_runner=lambda label, **kw: f"jit-{label}",
             create=create,
-            runner_online=lambda label: current["id"] in accepted,
-            pod_status=lambda pod_id: live(statuses[pod_id]),
-            delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
+            runner_online=lambda label, **kw: current["id"] in accepted,
+            pod_status=lambda pod_id, **kw: live(statuses[pod_id]),
+            delete_pod=lambda pod_id, **kw: (deleted.append(pod_id), True)[1],
             publish_pod_id=published.append,
             monotonic=clock.monotonic,
             sleep=clock.sleep,
@@ -187,11 +220,11 @@ class ProvisionTests(unittest.TestCase):
                 {**CONFIG, "max_provision_attempts": 1},
                 PLAN,
                 label_prefix="runpod-1-1",
-                mint_runner=lambda label: f"jit-{label}",
+                mint_runner=lambda label, **kw: f"jit-{label}",
                 create=lambda req, jit: created("pod-slow", "NVIDIA A40", req.tier_name),
-                runner_online=lambda label: False,
-                pod_status=lambda pod_id: live(),
-                delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
+                runner_online=lambda label, **kw: False,
+                pod_status=lambda pod_id, **kw: live(),
+                delete_pod=lambda pod_id, **kw: (deleted.append(pod_id), True)[1],
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
@@ -211,11 +244,11 @@ class ProvisionTests(unittest.TestCase):
             CONFIG,
             PLAN,
             label_prefix="runpod-1-1",
-            mint_runner=lambda label: f"jit-{label}",
+            mint_runner=lambda label, **kw: f"jit-{label}",
             create=create,
-            runner_online=lambda label: True,
-            pod_status=lambda pod_id: live(),
-            delete_pod=lambda pod_id: self.fail("no pod to delete"),
+            runner_online=lambda label, **kw: True,
+            pod_status=lambda pod_id, **kw: live(),
+            delete_pod=lambda pod_id, **kw: self.fail("no pod to delete"),
             monotonic=clock.monotonic,
             sleep=clock.sleep,
         )
@@ -239,7 +272,7 @@ class ProvisionTests(unittest.TestCase):
             minted.append(label)
             return f"jit-{label}"
 
-        def runner_online(label: str) -> bool:
+        def runner_online(label: str, **kw) -> bool:
             waited.append(label)
             return label == "runpod-1-1-c2"
 
@@ -250,8 +283,8 @@ class ProvisionTests(unittest.TestCase):
             mint_runner=mint_runner,
             create=lambda req, jit: (jits.append(jit), next(pods))[1],
             runner_online=runner_online,
-            pod_status=lambda pod_id: live(statuses[pod_id]),
-            delete_pod=lambda pod_id: True,
+            pod_status=lambda pod_id, **kw: live(statuses[pod_id]),
+            delete_pod=lambda pod_id, **kw: True,
             monotonic=clock.monotonic,
             sleep=clock.sleep,
         )
@@ -280,11 +313,11 @@ class ProvisionTests(unittest.TestCase):
             CONFIG,
             PLAN,
             label_prefix="runpod-1-1",
-            mint_runner=lambda label: f"jit-{label}",
+            mint_runner=lambda label, **kw: f"jit-{label}",
             create=create,
-            runner_online=lambda label: True,
-            pod_status=lambda pod_id: live(),
-            delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
+            runner_online=lambda label, **kw: True,
+            pod_status=lambda pod_id, **kw: live(),
+            delete_pod=lambda pod_id, **kw: (deleted.append(pod_id), True)[1],
             publish_pod_id=published.append,
             monotonic=clock.monotonic,
             sleep=clock.sleep,
@@ -306,11 +339,11 @@ class ProvisionTests(unittest.TestCase):
                 CONFIG,
                 PLAN,
                 label_prefix="runpod-1-1",
-                mint_runner=lambda label: f"jit-{label}",
+                mint_runner=lambda label, **kw: f"jit-{label}",
                 create=create,
-                runner_online=lambda label: False,
-                pod_status=lambda pod_id: live("EXITED"),
-                delete_pod=lambda pod_id: False,
+                runner_online=lambda label, **kw: False,
+                pod_status=lambda pod_id, **kw: live("EXITED"),
+                delete_pod=lambda pod_id, **kw: False,
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
@@ -331,14 +364,14 @@ class ProvisionTests(unittest.TestCase):
             CONFIG,
             PLAN,
             label_prefix="runpod-1-1",
-            mint_runner=lambda label: f"jit-{label}",
+            mint_runner=lambda label, **kw: f"jit-{label}",
             create=lambda req, jit: next(pods),
             # The runner registry reports online the whole time (stale or
             # died-after-registering record); the dead pod must still be
             # rejected.
-            runner_online=lambda label: True,
-            pod_status=lambda pod_id: live(statuses[pod_id]),
-            delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
+            runner_online=lambda label, **kw: True,
+            pod_status=lambda pod_id, **kw: live(statuses[pod_id]),
+            delete_pod=lambda pod_id, **kw: (deleted.append(pod_id), True)[1],
             monotonic=clock.monotonic,
             sleep=clock.sleep,
         )
@@ -351,8 +384,8 @@ class ProvisionTests(unittest.TestCase):
         clock = Clock()
         states = iter(
             [
-                PodState(desired="RUNNING", has_runtime=True),
-                PodState(desired="RUNNING", has_runtime=False),
+                PodState(status="RUNNING", has_runtime=True),
+                PodState(status="RUNNING", has_runtime=False),
             ]
         )
         deleted: list[str] = []
@@ -361,11 +394,11 @@ class ProvisionTests(unittest.TestCase):
                 {**CONFIG, "max_provision_attempts": 1},
                 PLAN,
                 label_prefix="runpod-1-1",
-                mint_runner=lambda label: f"jit-{label}",
+                mint_runner=lambda label, **kw: f"jit-{label}",
                 create=lambda req, jit: created("pod-dead", "NVIDIA A40", req.tier_name),
-                runner_online=lambda label: False,
-                pod_status=lambda pod_id: next(states),
-                delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
+                runner_online=lambda label, **kw: False,
+                pod_status=lambda pod_id, **kw: next(states),
+                delete_pod=lambda pod_id, **kw: (deleted.append(pod_id), True)[1],
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
@@ -378,20 +411,20 @@ class ProvisionTests(unittest.TestCase):
         clock = Clock()
         boot = {"polls": 0}
 
-        def pod_status(pod_id: str) -> PodState:
+        def pod_status(pod_id: str, **kw) -> PodState:
             boot["polls"] += 1
             # Image pull phase: runtime not yet present.
-            return PodState(desired="RUNNING", has_runtime=boot["polls"] > 3)
+            return PodState(status="RUNNING", has_runtime=boot["polls"] > 3)
 
         result = provision(
             CONFIG,
             PLAN,
             label_prefix="runpod-1-1",
-            mint_runner=lambda label: f"jit-{label}",
+            mint_runner=lambda label, **kw: f"jit-{label}",
             create=lambda req, jit: created("pod-boot", "NVIDIA A40", req.tier_name),
-            runner_online=lambda label: boot["polls"] > 5,
+            runner_online=lambda label, **kw: boot["polls"] > 5,
             pod_status=pod_status,
-            delete_pod=lambda pod_id: self.fail("healthy pod must not be deleted"),
+            delete_pod=lambda pod_id, **kw: self.fail("healthy pod must not be deleted"),
             monotonic=clock.monotonic,
             sleep=clock.sleep,
         )
@@ -405,11 +438,11 @@ class ProvisionTests(unittest.TestCase):
                 {**CONFIG, "max_provision_attempts": 1},
                 PLAN,
                 label_prefix="runpod-1-1",
-                mint_runner=lambda label: f"jit-{label}",
+                mint_runner=lambda label, **kw: f"jit-{label}",
                 create=lambda req, jit: created("pod-debug", "NVIDIA A40", req.tier_name),
-                runner_online=lambda label: False,
-                pod_status=lambda pod_id: live("EXITED"),
-                delete_pod=lambda pod_id: self.fail("debug mode must not delete"),
+                runner_online=lambda label, **kw: False,
+                pod_status=lambda pod_id, **kw: live("EXITED"),
+                delete_pod=lambda pod_id, **kw: self.fail("debug mode must not delete"),
                 keep_failed_pods=True,
                 record_retained_pods=retained,
                 monotonic=clock.monotonic,
@@ -431,11 +464,11 @@ class ProvisionTests(unittest.TestCase):
                 CONFIG,
                 PLAN,
                 label_prefix="runpod-1-1",
-                mint_runner=lambda label: f"jit-{label}",
+                mint_runner=lambda label, **kw: f"jit-{label}",
                 create=create,
-                runner_online=lambda label: True,
-                pod_status=lambda pod_id: live(),
-                delete_pod=lambda pod_id: True,
+                runner_online=lambda label, **kw: True,
+                pod_status=lambda pod_id, **kw: live(),
+                delete_pod=lambda pod_id, **kw: True,
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
@@ -463,11 +496,11 @@ class ProvisionTests(unittest.TestCase):
                 },
                 PLAN,
                 label_prefix="runpod-1-1",
-                mint_runner=lambda label: f"jit-{label}",
+                mint_runner=lambda label, **kw: f"jit-{label}",
                 create=create,
-                runner_online=lambda label: False,
-                pod_status=lambda pod_id: live(),
-                delete_pod=lambda pod_id: True,
+                runner_online=lambda label, **kw: False,
+                pod_status=lambda pod_id, **kw: live(),
+                delete_pod=lambda pod_id, **kw: True,
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
@@ -497,11 +530,11 @@ class ProvisionTests(unittest.TestCase):
                 },
                 PLAN,
                 label_prefix="runpod-1-1",
-                mint_runner=lambda label: f"jit-{label}",
+                mint_runner=lambda label, **kw: f"jit-{label}",
                 create=create,
-                runner_online=lambda label: False,
-                pod_status=lambda pod_id: live(),
-                delete_pod=lambda pod_id: True,
+                runner_online=lambda label, **kw: False,
+                pod_status=lambda pod_id, **kw: live(),
+                delete_pod=lambda pod_id, **kw: True,
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
@@ -530,11 +563,11 @@ class ProvisionTests(unittest.TestCase):
                 },
                 PLAN + [("a100", ["NVIDIA A100 80GB PCIe"])],
                 label_prefix="runpod-1-1",
-                mint_runner=lambda label: f"jit-{label}",
+                mint_runner=lambda label, **kw: f"jit-{label}",
                 create=create,
-                runner_online=lambda label: False,
-                pod_status=lambda pod_id: live(),
-                delete_pod=lambda pod_id: True,
+                runner_online=lambda label, **kw: False,
+                pod_status=lambda pod_id, **kw: live(),
+                delete_pod=lambda pod_id, **kw: True,
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
@@ -551,13 +584,13 @@ class ProvisionTests(unittest.TestCase):
                     {**CONFIG, "max_provision_attempts": 1},
                     PLAN,
                     label_prefix="runpod-1-1",
-                    mint_runner=lambda label: f"jit-{label}",
+                    mint_runner=lambda label, **kw: f"jit-{label}",
                     create=lambda req, jit: created(
                         "pod-slow", "NVIDIA A40", req.tier_name, cost=0.44
                     ),
-                    runner_online=lambda label: False,
-                    pod_status=lambda pod_id: live(),
-                    delete_pod=lambda pod_id: True,
+                    runner_online=lambda label, **kw: False,
+                    pod_status=lambda pod_id, **kw: live(),
+                    delete_pod=lambda pod_id, **kw: True,
                     monotonic=clock.monotonic,
                     sleep=clock.sleep,
                 )
@@ -576,45 +609,47 @@ class PodApiTransportTests(unittest.TestCase):
         def failing_urlopen(*args, **kwargs):
             raise urllib.error.URLError("dns hiccup")
 
-        delete_pod = _pod_api("https://rest.example/v1/pods", "key")
-        pod_status = _pod_state_checker("https://gql.example/graphql", "key")
+        delete_pod = _pod_api("https://rest.example/v2/pods", "key")
+        pod_status = _pod_state_checker("https://rest.example/v2/pods", "key")
         with mock.patch.object(
             provision_module.urllib.request, "urlopen", failing_urlopen
         ), mock.patch.object(provision_module.time, "sleep"):
             # status: transient -> unknown state (keep waiting), no exception
             state = pod_status("pod-1")
-            self.assertIsNone(state.desired)
+            self.assertIsNone(state.status)
             self.assertIsNone(state.has_runtime)
             # delete: retries then reports unconfirmed -> False, no exception
             self.assertFalse(delete_pod("pod-1"))
 
-    def test_pod_state_reads_desired_status_and_runtime(self) -> None:
+    def test_pod_state_reads_v2_status_and_runtime(self) -> None:
         import io
 
         payloads = iter(
             [
-                b'{"data": {"pod": {"desiredStatus": "RUNNING", "runtime": {"uptimeInSeconds": 12}}}}',
-                b'{"data": {"pod": {"desiredStatus": "RUNNING", "runtime": null}}}',
+                b'{"status":"RUNNING","runtime":{"uptime":12}}',
+                b'{"status":"RUNNING","runtime":null}',
             ]
         )
 
         class FakeResponse(io.BytesIO):
+            status = 200
+            headers = {}
             def __enter__(self):
                 return self
 
             def __exit__(self, *args):
                 return False
 
-        pod_status = _pod_state_checker("https://gql.example/graphql", "key")
+        pod_status = _pod_state_checker("https://rest.example/v2/pods", "key")
         with mock.patch.object(
             provision_module.urllib.request,
             "urlopen",
             lambda *a, **k: FakeResponse(next(payloads)),
         ):
             first = pod_status("pod-1")
-            self.assertEqual(first, PodState(desired="RUNNING", has_runtime=True))
+            self.assertEqual(first, PodState(status="RUNNING", has_runtime=True))
             second = pod_status("pod-1")
-            self.assertEqual(second, PodState(desired="RUNNING", has_runtime=False))
+            self.assertEqual(second, PodState(status="RUNNING", has_runtime=False))
 
 
 if __name__ == "__main__":
