@@ -12,6 +12,7 @@
   "_comment_post_u8_cpu_kernel_split_baseline": "The CPU elementwise implementation moved from tenferro-cpu into tenferro-internal-cpu-kernels as a release-build reuse boundary. The explicit threshold below carries the current CI line-coverage baseline under the new file path.",
   "_comment_issue_2004_cpu_boundaries_baseline": "Issue #2004 replaced the runtime provider/domain machinery with cpueinsum and tlinalg delegation: crates/tenferro-cpu/src/gemm/mod.rs shrank from the old provider route to the bounded plan cache, contraction.rs is the new prepared-plan adapter, and backend.rs/exec_session.rs lost the executor surface. The explicit thresholds for those files record the measured workspace llvm-cov baseline of the rewritten, smaller modules; raise them with meaningful coverage, not padding.",
   "_comment_storage_ownership_baseline": "P8-P13 storage ownership keeps provider/root mapping, allocation-group retirement, and backend-resident dtype branches behind explicit hardware/provider contracts. The storage API, runtime, AD, CUDA, WebGPU, and structured Metal-skip evidence cover those behaviors; these thresholds record the current workspace llvm-cov baseline and are raised only with meaningful branch coverage, never padding tests.",
+  "_comment_batch_policy_scope": "crates/tenferro-cpu/src/batch_policy.rs is the scoped CpuBatchPolicy override (#2142). Every region of with_batch_policy runs in the precedence/error/unwind/non-CPU tests (crates/tenferro-cpu/src/backend/tests/batch_policy.rs) and the forced-lane linalg/einsum tests, but llvm-cov also attributes zero-count instantiations from a second tenferro-cpu build (feature unification) and from generic instantiations in test binaries that never call it, which caps the merged line figure at the measured baseline. Raise it only with meaningful coverage.",
   "default": 80,
   "exclude": [
     "crates/tenferro-gpu/src/kernels/diagonal.rs",
@@ -109,6 +110,7 @@
     "kdv_pinn/src/main.rs": 0,
     "kdv_pinn/src/network.rs": 67,
     "kdv_pinn/src/pde.rs": 79,
-    "kdv_pinn/src/plot.rs": 13
+    "kdv_pinn/src/plot.rs": 13,
+    "crates/tenferro-cpu/src/batch_policy.rs": 71
   }
 }
