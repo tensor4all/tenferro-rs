@@ -70,8 +70,9 @@ syn = "2"
 # tlinalg, strided) on one registry source: a split strided source gives two
 # `StridedView` types that cannot meet at a crate boundary. All six strided
 # crates move together at 0.6.0 -- the core no longer lags a patch behind the
-# providers. The providers move together too: the published `cpueinsum 0.3.0`
-# carries `tcontract 0.3.0`, which pins `strided-view =0.6.0` and
+# providers. The providers move together too: the published `cpueinsum 0.3.1`
+# carries `tcontract 0.3.1` (forced batch strategies honoured on every BLAS and
+# faer route; `tcontract-exec` stays 0.3.0), which pins `strided-view =0.6.0` and
 # `strided-basic =0.6.0` from crates.io; an older `cpueinsum` reaches an older
 # `tcontract` that pins an older strided exactly and would not resolve beside
 # the 0.6.0 requirement. `strided-fused 0.6.0` propagates NaN through the fused
@@ -81,8 +82,8 @@ syn = "2"
 strided-view = "=0.6.0"
 strided-traits = "=0.6.0"
 strided-perm = { version = "=0.6.0", features = ["parallel"] }
-cpueinsum = "=0.3.0"
-cpueinsum-blas = "=0.3.0"
+cpueinsum = "=0.3.1"
+cpueinsum-blas = "=0.3.1"
 tcontract-exec = "=0.3.0"
 strided-basic = { version = "=0.6.0", default-features = false }
 strided-fused = { version = "=0.6.0", default-features = false, features = ["parallel"] }

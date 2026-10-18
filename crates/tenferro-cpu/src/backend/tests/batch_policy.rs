@@ -171,7 +171,6 @@ fn forced_outer_binary_contraction_matches_sequential() {
 
 /// The forced `Outer` route is observable on the native alternatives: it must
 /// not stay on the coordinator-inline vendor loop.
-#[cfg_attr(feature = "blas", ignore = "needs cpueinsum-blas 0.3.1")]
 #[test]
 fn forced_outer_binary_contraction_takes_the_native_route() {
     let _ = dot_with_strategy(4, CpuBatchStrategy::Outer);
