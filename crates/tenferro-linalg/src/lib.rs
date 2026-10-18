@@ -94,6 +94,7 @@ mod extension;
 mod gpu;
 mod householder;
 pub mod prelude;
+mod qr_backward;
 mod rank_revealing_qr;
 mod tensor_ext;
 mod traced;

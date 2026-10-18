@@ -1263,6 +1263,33 @@ fn linearize_qr_with_factors(
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
 
+    // Concrete square full-rank QR lowers to one fused extension op. It runs
+    // the same formula as the generic graph, but a single backend-session
+    // entry per JVP/VJP instead of ~40 primitive entries. Rectangular and
+    // symbolic shapes keep the generic graph.
+    if let Some((m_size, n_size)) = concrete_dims
+        && m_size == n_size
+        && matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
+    {
+        let outputs = builder.add_operation(
+            linalg_std_op(LinalgOp::QrJvp { q_active, r_active }),
+            vec![q, r, ValueRef::Local(da)],
+            OperationRole::Linearized {
+                active_mask: vec![false, false, true],
+            },
+        );
+        let mut result = vec![None, None];
+        let mut output_index = 0;
+        if q_active {
+            result[0] = Some(outputs[output_index]);
+            output_index += 1;
+        }
+        if r_active {
+            result[1] = Some(outputs[output_index]);
+        }
+        return Ok(result);
+    }
+
     if let Some((m_size, n_size)) = concrete_dims.filter(|(m_size, n_size)| n_size > m_size) {
         let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank, dtype);
         let leading_selector =

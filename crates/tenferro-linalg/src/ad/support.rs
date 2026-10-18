@@ -172,6 +172,8 @@ impl LinalgAdOpKind {
             LinalgOp::SvdFull => Self::SvdFull,
             LinalgOp::SvdVals { .. } => Self::SvdVals,
             LinalgOp::Qr { .. } => Self::Qr,
+            // Fused internal QR derivative carriers share the public QR entry.
+            LinalgOp::QrJvp { .. } | LinalgOp::QrVjp { .. } => Self::Qr,
             LinalgOp::RankRevealingQr { .. } => Self::RankRevealingQr,
             LinalgOp::HouseholderQrFactor => Self::HouseholderQrFactor,
             LinalgOp::HouseholderQrFromFactors => Self::HouseholderQrFromFactors,

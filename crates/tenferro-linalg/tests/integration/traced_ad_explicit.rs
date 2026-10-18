@@ -1115,6 +1115,8 @@ fn op_label(op: &StdTensorOp) -> String {
             for linalg_op in [
                 "LuFactorSolve",
                 "Lu",
+                "QrJvp",
+                "QrVjp",
                 "Qr",
                 "TriangularSolve",
                 "LuSolvePrepared",
@@ -1400,17 +1402,10 @@ fn qr_sum_grad_optimized_graph_is_structurally_compact() {
             vec![2, 2],
             vec![2.0, 0.5, 0.25, 3.0],
             expected_counts(&[
-                ("Add", 4),
-                ("BroadcastInDim", 2),
-                ("DotGeneral", 3),
-                ("EmbedDiag", 1),
-                ("Extension(TriangularSolve)", 1),
-                ("ExtractDiag", 1),
-                ("Mul", 1),
-                ("Neg", 1),
-                ("Reshape", 2),
-                ("Transpose", 3),
-                ("Triu", 1),
+                // Square QR reverse mode is one fused QrVjp carrier, not the
+                // generic triangular-solve + matmul graph.
+                ("Extension(TriangularSolve)", 0),
+                ("Extension(QrVjp)", 1),
             ]),
         ),
         (
@@ -1474,7 +1469,46 @@ fn qr_sum_grad_optimized_graph_is_structurally_compact() {
                 .unwrap_or(0),
             "{name}: QR pullback should keep the triangular solve count"
         );
+        assert_eq!(
+            summary.counts.get("Extension(QrVjp)").copied().unwrap_or(0),
+            expected.get("Extension(QrVjp)").copied().unwrap_or(0),
+            "{name}: square QR pullback should use one fused QrVjp carrier"
+        );
     }
+}
+
+#[test]
+fn square_qr_jvp_uses_one_fused_qr_carrier() {
+    let ad = ad_context();
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.5, 0.25, 3.0]))
+            .unwrap();
+    let tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.2, 0.1, -0.1, 0.4]))
+            .unwrap();
+    let loss = qr_sum_loss(&matrix);
+    let jvp = ad.jvp(&loss, &matrix, &tangent).unwrap();
+    let summary = graph_op_summary(&jvp);
+
+    assert_eq!(
+        summary.counts.get("Extension(QrJvp)").copied().unwrap_or(0),
+        1,
+        "square JVP should lower to one fused QrJvp carrier: {summary:?}"
+    );
+    assert_eq!(
+        summary
+            .counts
+            .get("Extension(TriangularSolve)")
+            .copied()
+            .unwrap_or(0),
+        0,
+        "fused JVP must not retain the generic triangular-solve graph: {summary:?}"
+    );
+    assert_eq!(
+        summary.counts.get("DotGeneral").copied().unwrap_or(0),
+        0,
+        "fused JVP must not retain the generic matmul graph: {summary:?}"
+    );
 }
 
 #[test]

@@ -42,6 +42,9 @@ mod linalg_internal_path_contract;
 #[cfg(feature = "autodiff")]
 #[path = "integration/oracle_replay.rs"]
 mod oracle_replay;
+#[cfg(feature = "autodiff")]
+#[path = "integration/qr_fused_ad.rs"]
+mod qr_fused_ad;
 #[path = "integration/small_append_performance_contract.rs"]
 mod small_append_performance_contract;
 #[path = "integration/solve_residuals.rs"]

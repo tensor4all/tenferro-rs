@@ -462,6 +462,22 @@ pub(crate) enum LinalgOp {
     Qr {
         gauge: QrGauge,
     },
+    /// Internal fused square-QR JVP carrier.
+    ///
+    /// Inputs `(q, r, da)`; outputs `(dq, dr)` filtered by the active mask.
+    /// Emitted only for concrete square `F32`/`F64`/`C32`/`C64` primals.
+    QrJvp {
+        q_active: bool,
+        r_active: bool,
+    },
+    /// Internal fused square-QR VJP carrier.
+    ///
+    /// Inputs are `(q, r, [dq_cotangent], [dr_cotangent])` in the order the
+    /// active mask requests, with one input cotangent output.
+    QrVjp {
+        q_active: bool,
+        r_active: bool,
+    },
     RankRevealingQr {
         gauge: QrGauge,
         rtol: f64,
@@ -527,6 +543,8 @@ impl LinalgOp {
             | Self::TriangularSolve { .. } => 1,
             Self::Svd { .. } | Self::SvdFull | Self::LuFactorSolve => 3,
             Self::RankRevealingQr { .. } | Self::Lu => 4,
+            Self::QrJvp { q_active, r_active } => usize::from(q_active) + usize::from(r_active),
+            Self::QrVjp { .. } => 1,
             Self::Qr { .. }
             | Self::HouseholderQrFactor
             | Self::HouseholderQrFromFactors
@@ -554,8 +572,9 @@ impl LinalgOp {
             | Self::HouseholderQrQColumns { .. }
             | Self::HouseholderQrThinQ { .. } => 2,
             Self::LogAbsDetFromLuFactor => 2,
-            Self::SignDetFromLuFactor | Self::HouseholderQrAppend => 3,
+            Self::SignDetFromLuFactor | Self::HouseholderQrAppend | Self::QrJvp { .. } => 3,
             Self::HouseholderQrAppendTangent => 4,
+            Self::QrVjp { q_active, r_active } => 2 + usize::from(q_active) + usize::from(r_active),
             Self::HouseholderQrSplitTangent { .. } => 3,
             Self::LuSolvePrepared { .. } => 4,
             _ => 1,
@@ -592,6 +611,8 @@ impl LinalgOp {
             Self::HouseholderQrSplitTangent { .. } => 26,
             Self::RankRevealingQr { .. } => 27,
             Self::LuFactorSolve => 28,
+            Self::QrJvp { .. } => 29,
+            Self::QrVjp { .. } => 30,
         }
     }
 }
@@ -652,6 +673,10 @@ impl ExtensionOp for LinalgExtensionOp {
                 hash_qr_gauge(hasher, gauge);
                 hasher.write_u64(rtol.to_bits());
                 hasher.write_u64(atol.to_bits());
+            }
+            LinalgOp::QrJvp { q_active, r_active } | LinalgOp::QrVjp { q_active, r_active } => {
+                hasher.write_u8(u8::from(q_active));
+                hasher.write_u8(u8::from(r_active));
             }
             LinalgOp::HouseholderQrQColumns { start, end, gauge } => {
                 hasher.write_usize(start);
@@ -850,6 +875,12 @@ impl ExtensionOp for LinalgExtensionOp {
                 vec![svd_values_meta(input_dtypes[0], input_shapes[0])?]
             }
             LinalgOp::Qr { .. } => qr_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::QrJvp { q_active, r_active } => {
+                qr_jvp_meta(&input_dtypes, &input_shapes, q_active, r_active)?
+            }
+            LinalgOp::QrVjp { q_active, r_active } => {
+                qr_vjp_meta(&input_dtypes, &input_shapes, q_active, r_active)?
+            }
             LinalgOp::RankRevealingQr { .. } => {
                 rank_revealing_qr_meta(input_dtypes[0], input_shapes[0])?
             }
@@ -1163,6 +1194,24 @@ fn execute_linalg<B: LinalgBackend>(
             Ok(vec![backend.svd_values_with_driver(inputs[0], driver)?])
         }
         LinalgOp::Qr { gauge } => backend.qr_with_options(inputs[0], QrOptions { gauge }),
+        LinalgOp::QrJvp { q_active, r_active } => {
+            crate::qr_backward::qr_jvp(backend, inputs[0], inputs[1], inputs[2], q_active, r_active)
+        }
+        LinalgOp::QrVjp { q_active, r_active } => {
+            let q_cotangent = if q_active { Some(inputs[2]) } else { None };
+            let r_cotangent = if r_active {
+                Some(inputs[2 + usize::from(q_active)])
+            } else {
+                None
+            };
+            Ok(vec![crate::qr_backward::qr_vjp(
+                backend,
+                inputs[0],
+                inputs[1],
+                q_cotangent,
+                r_cotangent,
+            )?])
+        }
         LinalgOp::RankRevealingQr { gauge, rtol, atol } => {
             backend.rank_revealing_qr(inputs[0], RankRevealingQrOptions { gauge, rtol, atol })
         }
@@ -1754,6 +1803,43 @@ fn qr_meta(dtype: DType, shape: &[SymDim]) -> tenferro_tensor::Result<Vec<(DType
         (dtype, matrix_shape(m, k.clone(), batch)),
         (dtype, matrix_shape(k, n, batch)),
     ])
+}
+
+fn qr_jvp_meta(
+    dtypes: &[DType],
+    shapes: &[&[SymDim]],
+    q_active: bool,
+    r_active: bool,
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    const OP: &str = "tenferro-linalg.qr_jvp";
+    for shape in shapes.iter().take(3) {
+        require_matrix_meta(OP, shape)?;
+    }
+    let dtype = promote_dtypes(dtypes);
+    let mut outputs = Vec::with_capacity(usize::from(q_active) + usize::from(r_active));
+    if q_active {
+        outputs.push((dtype, shapes[0].to_vec()));
+    }
+    if r_active {
+        outputs.push((dtype, shapes[1].to_vec()));
+    }
+    Ok(outputs)
+}
+
+fn qr_vjp_meta(
+    dtypes: &[DType],
+    shapes: &[&[SymDim]],
+    q_active: bool,
+    r_active: bool,
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    const OP: &str = "tenferro-linalg.qr_vjp";
+    for shape in shapes
+        .iter()
+        .take(2 + usize::from(q_active) + usize::from(r_active))
+    {
+        require_matrix_meta(OP, shape)?;
+    }
+    Ok(vec![(promote_dtypes(dtypes), shapes[0].to_vec())])
 }
 
 fn rank_revealing_qr_meta(

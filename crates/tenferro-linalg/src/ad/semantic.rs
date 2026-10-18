@@ -1246,6 +1246,20 @@ fn transpose_semantic_linear_fragment_operation(
     context: &SemanticLinearFragmentTransposeContext<'_>,
     builder: &mut SemanticProgramBuilder,
 ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
+    // A linear fragment may contain a multi-output extension such as the
+    // fused square-QR JVP. Its transpose rule consumes every output cotangent,
+    // so extension dispatch happens before the single-cotangent core path.
+    if let SemanticLinearFragmentOp::Extension(extension) = &operation.operation {
+        return transpose_linalg_extension(
+            extension.as_ref(),
+            operation,
+            cotangent_outputs,
+            active_mask,
+            context.external_values,
+            context.fixed_locals,
+            builder,
+        );
+    }
     let Some(cotangent) = cotangent_outputs.first().copied().flatten() else {
         return Ok(vec![None; operation.inputs.len()]);
     };
@@ -1351,15 +1365,6 @@ fn transpose_semantic_linear_fragment_operation(
             let value = builder.add_op(CoreSemanticOp::Triu { k: *k }, &[cotangent])?[0];
             unary(value)
         }
-        SemanticLinearFragmentOp::Extension(extension) => transpose_linalg_extension(
-            extension.as_ref(),
-            operation,
-            cotangent,
-            active_mask,
-            context.external_values,
-            context.fixed_locals,
-            builder,
-        ),
         SemanticLinearFragmentOp::Unsupported(operation) => Err(semantic_internal(
             context.role,
             format!("unsupported linear linalg fragment operation {operation}"),
@@ -1864,7 +1869,7 @@ fn conjugate_if_complex(
 fn transpose_linalg_extension(
     extension: &dyn tenferro_ad::extension::ExtensionOp,
     operation: &SemanticLinearFragmentOperation,
-    cotangent: ProgramValue,
+    cotangent_outputs: &[Option<ProgramValue>],
     active_mask: &[bool],
     external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
     fixed_locals: &[Option<ProgramValue>],
@@ -1879,6 +1884,8 @@ fn transpose_linalg_extension(
             | LinalgOp::FullPivLuSolve { .. }
             | LinalgOp::Solve
             | LinalgOp::HouseholderQrAppendTangent
+            | LinalgOp::QrJvp { .. }
+            | LinalgOp::QrVjp { .. }
     ) {
         return Err(semantic_internal(
             role,
@@ -1888,6 +1895,17 @@ fn transpose_linalg_extension(
             ),
         ));
     }
+    // Active inputs do not carry a concrete forward value in this fragment;
+    // their metadata is only used to describe the extension operands. A
+    // multi-output extension may have active operands with different shapes
+    // from the cotangent, so the transpose rule itself must treat these keys as
+    // metadata-only for inputs it does not read.
+    let active_value = cotangent_outputs
+        .iter()
+        .copied()
+        .flatten()
+        .next()
+        .ok_or_else(|| semantic_internal(role, "linear linalg transpose is missing a cotangent"))?;
     let mut context = ShapeGuardContext::default();
     let mut fixed_values = HashMap::new();
     let mut keys = Vec::with_capacity(operation.inputs.len());
@@ -1897,7 +1915,7 @@ fn transpose_linalg_extension(
             id: 10_000 + u64::try_from(index).expect("small linalg extension arity"),
         });
         let value = if *active {
-            cotangent
+            active_value
         } else {
             match input {
                 SemanticLinearFragmentInput::External(key) => external_values.get(key).copied(),
@@ -1927,8 +1945,11 @@ fn transpose_linalg_extension(
         .cloned()
         .map(PrimitiveTransposeInput::Residual)
         .collect();
+    let cotangent_locals: Vec<_> = (0..cotangent_outputs.len())
+        .map(|index| cotangent_outputs[index].map(|_| index))
+        .collect();
     let mut emitted = SemanticRuleBuilder::with_seeds(
-        &[Some(cotangent)],
+        cotangent_outputs,
         &fixed_values,
         &shape_sources,
         builder,
@@ -1938,7 +1959,7 @@ fn transpose_linalg_extension(
         .linear_transpose(
             extension,
             &mut emitted,
-            &[Some(0)],
+            &cotangent_locals,
             &inputs,
             active_mask,
             &mut context,

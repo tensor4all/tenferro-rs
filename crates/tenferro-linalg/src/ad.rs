@@ -137,6 +137,88 @@ impl LinalgAdRule {
             LinalgOp::Qr { .. } => {
                 rules::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx)
             }
+            LinalgOp::QrJvp { q_active, r_active } => {
+                // The fused JVP is linear in its tangent input, so its own
+                // linearization is the same fused op on the tangent. The primal
+                // `q`/`r` tangents need the second-order QR formula, which the
+                // fused carrier does not implement.
+                // ponytail: first-order fusion only. Higher-order QR through
+                // the fused carrier returns Unsupported instead of silently
+                // emitting a wrong second derivative. Rectangular and symbolic
+                // shapes keep the generic graph and retain higher-order support.
+                if tangent_in[0].is_some() || tangent_in[1].is_some() {
+                    return Err(ADRuleError::unsupported(
+                        "tenferro-linalg.qr_jvp",
+                        ADRuleKind::Jvp,
+                    ));
+                }
+                let Some(d_da) = tangent_in[2] else {
+                    return Ok(vec![None; op.output_count()]);
+                };
+                let outputs = builder.add_operation(
+                    rules::linalg_std_op(LinalgOp::QrJvp { q_active, r_active }),
+                    vec![
+                        ValueRef::External(primal_in[0].clone()),
+                        ValueRef::External(primal_in[1].clone()),
+                        ValueRef::Local(d_da),
+                    ],
+                    OperationRole::Linearized {
+                        active_mask: vec![false, false, true],
+                    },
+                );
+                Ok(outputs.into_iter().map(Some).collect())
+            }
+            LinalgOp::QrVjp { q_active, r_active } => {
+                if tangent_in[0].is_some() || tangent_in[1].is_some() {
+                    return Err(ADRuleError::unsupported(
+                        "tenferro-linalg.qr_vjp",
+                        ADRuleKind::Jvp,
+                    ));
+                }
+                let mut index = 2;
+                let q_tangent = q_active.then(|| {
+                    let tangent = tangent_in[index];
+                    index += 1;
+                    tangent
+                });
+                let r_tangent = r_active.then(|| tangent_in[index]);
+                let q_tangent = q_tangent.flatten();
+                let r_tangent = r_tangent.flatten();
+                if q_tangent.is_none() && r_tangent.is_none() {
+                    return Ok(vec![None]);
+                }
+                // A zero tangent in only one of two active cotangents has no
+                // zero-valued carrier in this op; decline rather than silently
+                // treating the primal cotangent as a tangent.
+                if (q_active && q_tangent.is_none()) || (r_active && r_tangent.is_none()) {
+                    return Err(ADRuleError::unsupported(
+                        "tenferro-linalg.qr_vjp",
+                        ADRuleKind::Jvp,
+                    ));
+                }
+                let mut inputs = vec![
+                    ValueRef::External(primal_in[0].clone()),
+                    ValueRef::External(primal_in[1].clone()),
+                ];
+                let mut active_mask = vec![false, false];
+                if let Some(tangent) = q_tangent {
+                    inputs.push(ValueRef::Local(tangent));
+                    active_mask.push(true);
+                }
+                if let Some(tangent) = r_tangent {
+                    inputs.push(ValueRef::Local(tangent));
+                    active_mask.push(true);
+                }
+                let output = builder.add_operation(
+                    rules::linalg_std_op(LinalgOp::QrVjp {
+                        q_active: q_tangent.is_some(),
+                        r_active: r_tangent.is_some(),
+                    }),
+                    inputs,
+                    OperationRole::Linearized { active_mask },
+                )[0];
+                Ok(vec![Some(output)])
+            }
             LinalgOp::RankRevealingQr { .. } => Err(ADRuleError::unsupported(
                 "tenferro-linalg.rank_revealing_qr",
                 ADRuleKind::Jvp,
@@ -283,6 +365,67 @@ impl LinalgAdRule {
                             )[0],
                         );
                     }
+                }
+                Ok(result)
+            }
+            LinalgOp::QrJvp { q_active, r_active } => {
+                let q = fixed_transpose_value("qr_jvp", 0, &inputs[0])?;
+                let r = fixed_transpose_value("qr_jvp", 1, &inputs[1])?;
+                let mut index = 0;
+                let q_cotangent = if q_active {
+                    let cotangent = cotangent_out[index];
+                    index += 1;
+                    cotangent
+                } else {
+                    None
+                };
+                let r_cotangent = if r_active { cotangent_out[index] } else { None };
+                let mut result = vec![None; op.input_count()];
+                if q_cotangent.is_none() && r_cotangent.is_none() {
+                    return Ok(result);
+                }
+                let mut vjp_inputs = vec![q, r];
+                let mut active_mask = vec![false, false];
+                if let Some(cotangent) = q_cotangent {
+                    vjp_inputs.push(ValueRef::Local(cotangent));
+                    active_mask.push(true);
+                }
+                if let Some(cotangent) = r_cotangent {
+                    vjp_inputs.push(ValueRef::Local(cotangent));
+                    active_mask.push(true);
+                }
+                let output = builder.add_operation(
+                    rules::linalg_std_op(LinalgOp::QrVjp {
+                        q_active: q_cotangent.is_some(),
+                        r_active: r_cotangent.is_some(),
+                    }),
+                    vjp_inputs,
+                    OperationRole::Linearized { active_mask },
+                )[0];
+                result[2] = Some(output);
+                Ok(result)
+            }
+            LinalgOp::QrVjp { q_active, r_active } => {
+                let Some(cotangent) = cotangent_out[0] else {
+                    return Ok(vec![None; op.input_count()]);
+                };
+                let q = fixed_transpose_value("qr_vjp", 0, &inputs[0])?;
+                let r = fixed_transpose_value("qr_vjp", 1, &inputs[1])?;
+                let jvp = builder.add_operation(
+                    rules::linalg_std_op(LinalgOp::QrJvp { q_active, r_active }),
+                    vec![q, r, ValueRef::Local(cotangent)],
+                    OperationRole::Linearized {
+                        active_mask: vec![false, false, true],
+                    },
+                );
+                let mut result = vec![None; op.input_count()];
+                let mut output_index = 0;
+                if q_active {
+                    result[2] = Some(jvp[output_index]);
+                    output_index += 1;
+                }
+                if r_active {
+                    result[2 + usize::from(q_active)] = Some(jvp[output_index]);
                 }
                 Ok(result)
             }
