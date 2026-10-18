@@ -847,10 +847,10 @@ fn semantic_core_dot_general_supports_ordered_jvp_and_hermitian_vjp() {
         [DimExpr::Const(3), DimExpr::Const(4)],
         CoreSemanticOp::DotGeneral {
             config: DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-                rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         },
     );
@@ -958,10 +958,10 @@ fn semantic_core_dot_general_jvp_and_vjp_execute_numerically() {
         [DimExpr::Const(3), DimExpr::Const(2)],
         CoreSemanticOp::DotGeneral {
             config: DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-                rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         },
     );

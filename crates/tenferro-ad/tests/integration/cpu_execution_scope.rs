@@ -57,10 +57,10 @@ fn shared_scope_eager_and_prepared_matmul_primal_jvp_vjp() {
                 }
             }
             let config = DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-                rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                lhs_batch_dims: [2].as_slice().iter().copied().collect(),
-                rhs_batch_dims: [2].as_slice().iter().copied().collect(),
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [2].as_slice().into(),
+                rhs_batch_dims: [2].as_slice().into(),
             };
             let x = EagerTensor::requires_grad_in(tensor(&shape, a.clone()), Arc::clone(&eager))
                 .unwrap();

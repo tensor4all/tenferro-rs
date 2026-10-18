@@ -116,8 +116,8 @@ fn run_grouped(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
 fn run_sequential(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
     let mut out = fixture.out.duplicate().unwrap();
     let dot_config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
         lhs_batch_dims: Default::default(),
         rhs_batch_dims: Default::default(),
     };

@@ -2879,8 +2879,8 @@ fn matmul_preserve_trailing_batch<B: BackendSession + ?Sized>(
 ) -> tenferro_tensor::Result<Tensor> {
     let batch: Vec<usize> = (2..lhs.shape().len()).collect();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
         lhs_batch_dims: batch.clone().iter().copied().collect(),
         rhs_batch_dims: batch.iter().copied().collect(),
     };
@@ -2901,8 +2901,8 @@ fn linalg_matmul_read<B: BackendSession + ?Sized>(
     let rhs_batch_start = if rhs_is_vector { 1 } else { 2 };
     let rhs_batch_dims: Vec<usize> = (rhs_batch_start..rhs.shape().len()).collect();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
         lhs_batch_dims: lhs_batch_dims.iter().copied().collect(),
         rhs_batch_dims: rhs_batch_dims.iter().copied().collect(),
     };

@@ -69,10 +69,10 @@ fn dot_general_inline_axes_preserve_all_validation_errors() {
 #[test]
 fn validate_dims_with_explicit_ranks_rejects_out_of_range_contract() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [2].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [2].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let err = config
         .validate_dims_with_ranks(2, 2)
@@ -91,10 +91,10 @@ fn validate_dims_with_explicit_ranks_rejects_out_of_range_contract() {
 #[test]
 fn validate_dims_with_explicit_ranks_accepts_valid_config() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     config.validate_dims_with_ranks(2, 2).unwrap();
 }
@@ -139,8 +139,8 @@ fn degenerate_no_contract_is_an_outer_product_even_for_equal_shapes() {
     let all_batch = DotGeneralConfig {
         lhs_contracting_dims: no_dims(),
         rhs_contracting_dims: no_dims(),
-        lhs_batch_dims: [0, 1].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [0, 1].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [0, 1].as_slice().into(),
+        rhs_batch_dims: [0, 1].as_slice().into(),
     };
     assert_eq!(
         degenerate_dot_kind(&all_batch, &[2, 2], &[2, 2]),
@@ -155,16 +155,16 @@ fn degenerate_no_contract_is_an_outer_product_even_for_equal_shapes() {
     let permuted = DotGeneralConfig {
         lhs_contracting_dims: no_dims(),
         rhs_contracting_dims: no_dims(),
-        lhs_batch_dims: [0, 1].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [1, 0].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [0, 1].as_slice().into(),
+        rhs_batch_dims: [1, 0].as_slice().into(),
     };
     assert_eq!(degenerate_dot_kind(&permuted, &[2, 2], &[2, 2]), None);
 
     let permuted_left = DotGeneralConfig {
         lhs_contracting_dims: no_dims(),
         rhs_contracting_dims: no_dims(),
-        lhs_batch_dims: [1, 0].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [0, 1].as_slice().iter().copied().collect(),
+        lhs_batch_dims: [1, 0].as_slice().into(),
+        rhs_batch_dims: [0, 1].as_slice().into(),
     };
     assert_eq!(degenerate_dot_kind(&permuted_left, &[2, 2], &[2, 2]), None);
 }

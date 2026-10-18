@@ -441,10 +441,10 @@ fn runtime_bound_conjugating_dot_preserves_fast_and_tracked_paths() -> Result<()
         vec![Complex64::new(1.0, 2.0)],
     )?)?;
     let config = tenferro_tensor::DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let (plain, lhs_conj, both, tracked_out) = ctx.with_eager_session(|session| {
         Ok::<_, Error>((
@@ -489,10 +489,10 @@ fn runtime_bound_eager_dot_general_preserves_ad_and_validates_dimensions() -> Re
             vec![5.0_f64, 6.0, 7.0, 8.0],
         )?)?;
         let config = tenferro_tensor::DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-            rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-            lhs_batch_dims: [].as_slice().iter().copied().collect(),
-            rhs_batch_dims: [].as_slice().iter().copied().collect(),
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         };
         let result = session.dot_general(&lhs, &rhs, config.clone())?;
         let loss = session.reduce_sum(&result, None)?;
@@ -501,10 +501,10 @@ fn runtime_bound_eager_dot_general_preserves_ad_and_validates_dimensions() -> Re
             Err(Error::ContextMismatch { .. })
         ));
         let invalid = tenferro_tensor::DotGeneralConfig {
-            lhs_contracting_dims: [2].as_slice().iter().copied().collect(),
-            rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-            lhs_batch_dims: [].as_slice().iter().copied().collect(),
-            rhs_batch_dims: [].as_slice().iter().copied().collect(),
+            lhs_contracting_dims: [2].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         };
         assert!(matches!(
             session.dot_general(&lhs, &rhs, invalid),

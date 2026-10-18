@@ -96,10 +96,10 @@ fn make_std_instr(
 #[test]
 fn compile_default_options_match_default_entrypoint() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let program = CompiledProgram {
         instructions: vec![make_std_instr(
@@ -418,10 +418,10 @@ fn transpose_folding_ignores_non_identity_reshape_chain() {
         vec![dim_shape(&[6])],
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_exec_instr_with_meta(
         ExecOp::DotGeneral(config.clone()),
@@ -445,10 +445,10 @@ fn transpose_folding_ignores_non_identity_reshape_chain() {
 #[test]
 fn dot_decomposer_is_disabled_by_default_and_opt_in() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [2].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [2].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let program = CompiledProgram {
         instructions: vec![make_std_instr(
@@ -500,10 +500,10 @@ fn dot_decomposer_is_disabled_by_default_and_opt_in() {
 #[test]
 fn test_dot_dimension_sorter_sorts_contracting() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [3, 2].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [2, 1].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [0].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [0].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [3, 2].as_slice().into(),
+        rhs_contracting_dims: [2, 1].as_slice().into(),
+        lhs_batch_dims: [0].as_slice().into(),
+        rhs_batch_dims: [0].as_slice().into(),
     };
     let instr = make_exec_instr(ExecOp::DotGeneral(config), vec![0, 1], vec![2]);
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -522,10 +522,10 @@ fn test_dot_dimension_sorter_sorts_contracting() {
 #[test]
 fn test_dot_dimension_sorter_already_sorted() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let instr = make_exec_instr(ExecOp::DotGeneral(config.clone()), vec![0, 1], vec![2]);
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -541,10 +541,10 @@ fn test_dot_dimension_sorter_already_sorted() {
 #[test]
 fn test_dot_dimension_sorter_rhs_consecutive_unsorted() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [2, 0].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [3, 2].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [2, 0].as_slice().into(),
+        rhs_contracting_dims: [3, 2].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let instr = make_exec_instr(ExecOp::DotGeneral(config), vec![0, 1], vec![2]);
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -564,10 +564,10 @@ fn test_dot_dimension_sorter_rhs_consecutive_unsorted() {
 fn test_transpose_folding_absorbs_transpose_on_lhs() {
     let transpose = make_exec_instr(ExecOp::Transpose { perm: vec![1, 0] }, vec![0], vec![2]);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config), vec![2, 1], vec![3]);
     let mut program = make_exec_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -589,10 +589,10 @@ fn test_transpose_folding_absorbs_transpose_on_lhs() {
 fn test_transpose_folding_absorbs_transpose_on_rhs() {
     let transpose = make_exec_instr(ExecOp::Transpose { perm: vec![1, 0] }, vec![1], vec![2]);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config), vec![0, 2], vec![3]);
     let mut program = make_exec_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -620,10 +620,10 @@ fn test_transpose_folding_rejects_free_dim_reorder() {
         vec![2],
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [2].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [3].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [1].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [2].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [3].as_slice().into(),
+        rhs_batch_dims: [1].as_slice().into(),
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config.clone()), vec![2, 1], vec![3]);
     let mut program = make_exec_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -643,10 +643,10 @@ fn test_transpose_folding_fixed_point() {
     let transpose_a = make_exec_instr(ExecOp::Transpose { perm: vec![1, 0] }, vec![0], vec![2]);
     let transpose_b = make_exec_instr(ExecOp::Transpose { perm: vec![1, 0] }, vec![1], vec![3]);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config), vec![2, 3], vec![4]);
     let mut program =
@@ -802,10 +802,10 @@ fn test_conj_sinking_preserves_transpose_folding_path_to_dot_conj() {
         vec![dim_shape(&[3, 2])],
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_exec_instr_with_meta(
         ExecOp::DotGeneral(config),
@@ -861,10 +861,10 @@ fn test_dot_conj_folding_absorbs_both_operands() {
         vec![dim_shape(&[3, 4])],
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_exec_instr_with_meta(
         ExecOp::DotGeneral(config),
@@ -910,10 +910,10 @@ fn dot_conj_folding_preserves_rank_reducing_reshape_operand() {
         vec![dim_shape(&[2, 3])],
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_exec_instr_with_meta(
         ExecOp::DotGeneral(config),
@@ -944,10 +944,10 @@ fn dot_conj_folding_preserves_rank_reducing_reshape_operand() {
 #[test]
 fn test_full_pipeline_matmul() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let program = CompiledProgram {
         instructions: vec![make_std_instr(
@@ -991,10 +991,10 @@ fn test_full_pipeline_transpose_matmul() {
         vec![2],
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_std_instr(
         StdTensorOp::DotGeneral {
@@ -1053,10 +1053,10 @@ fn test_full_pipeline_transpose_matmul() {
 fn test_full_pipeline_dot_absorbs_conj_without_layout_materialization() {
     let conj = make_std_instr(StdTensorOp::Conj, vec![1], vec![2]);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_std_instr(StdTensorOp::DotGeneral { config }, vec![0, 2], vec![3]);
     let program = CompiledProgram {
@@ -1112,10 +1112,10 @@ fn test_eliminate_dead_code_removes_unused_transpose() {
     // A Transpose whose output is never consumed must be removed.
     let transpose = make_exec_instr(ExecOp::Transpose { perm: vec![1, 0] }, vec![0], vec![2]);
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config), vec![0, 1], vec![3]);
     let mut program = make_exec_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -1138,10 +1138,10 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     // should emit a canonical DotGeneral + output Reshape. Run end-to-end
     // to verify numerical correctness.
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [2].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [2].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let program = CompiledProgram {
         instructions: vec![make_std_instr(

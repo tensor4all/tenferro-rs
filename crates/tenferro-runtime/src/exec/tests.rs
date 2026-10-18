@@ -613,10 +613,10 @@ fn non_host_dispatch_cases() -> Vec<ExecOp> {
 
 fn dot_config() -> DotGeneralConfig {
     DotGeneralConfig {
-        lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     }
 }
 

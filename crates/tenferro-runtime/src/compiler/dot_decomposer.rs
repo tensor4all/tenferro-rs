@@ -683,7 +683,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
     let rhs_free_count_canon = usize::from(fi_r > 0);
     let canonical_config = DotGeneralConfig {
         lhs_contracting_dims: [lhs_free_count_canon].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
+        rhs_contracting_dims: [0].as_slice().into(),
         lhs_batch_dims: ((lhs_free_count_canon + 1)..(lhs_free_count_canon + 1 + nb)).collect(),
         rhs_batch_dims: ((rhs_free_count_canon + 1)..(rhs_free_count_canon + 1 + nb)).collect(),
     };

@@ -1292,10 +1292,10 @@ pub trait TensorSessionOpsExt {
     /// let lhs = Tensor::from_vec_col_major(vec![1, 2], vec![2.0_f64, 3.0])?;
     /// let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 5.0])?;
     /// let config = DotGeneralConfig {
-    ///     lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-    ///     rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-    ///     lhs_batch_dims: [].as_slice().iter().copied().collect(),
-    ///     rhs_batch_dims: [].as_slice().iter().copied().collect(),
+    ///     lhs_contracting_dims: [1].as_slice().into(),
+    ///     rhs_contracting_dims: [0].as_slice().into(),
+    ///     lhs_batch_dims: [].as_slice().into(),
+    ///     rhs_batch_dims: [].as_slice().into(),
     /// };
     /// let y = backend.with_backend_session(|session| lhs.dot_general(&rhs, config, session))??;
     /// assert_eq!(y.as_slice::<f64>()?, &[23.0]);
@@ -1326,10 +1326,10 @@ pub trait TensorSessionOpsExt {
     /// let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(0.0, 1.0)])?;
     /// let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(0.0, 1.0)])?;
     /// let config = DotGeneralConfig {
-    ///     lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-    ///     rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-    ///     lhs_batch_dims: [].as_slice().iter().copied().collect(),
-    ///     rhs_batch_dims: [].as_slice().iter().copied().collect(),
+    ///     lhs_contracting_dims: [1].as_slice().into(),
+    ///     rhs_contracting_dims: [0].as_slice().into(),
+    ///     lhs_batch_dims: [].as_slice().into(),
+    ///     rhs_batch_dims: [].as_slice().into(),
     /// };
     /// let y = backend.with_backend_session(|session| lhs.dot_general_with_conj(&rhs, config, true, false, session))??;
     /// assert_eq!(y.as_slice::<Complex64>()?, &[Complex64::new(1.0, 0.0)]);

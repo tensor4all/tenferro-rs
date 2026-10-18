@@ -36,10 +36,10 @@ fn invalid_dot_general_config(message: impl Into<String>) -> Error {
 /// use tenferro_tensor::DotGeneralConfig;
 ///
 /// let config = DotGeneralConfig {
-///     lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-///     rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-///     lhs_batch_dims: [].as_slice().iter().copied().collect(),
-///     rhs_batch_dims: [].as_slice().iter().copied().collect(),
+///     lhs_contracting_dims: [1].as_slice().into(),
+///     rhs_contracting_dims: [0].as_slice().into(),
+///     lhs_batch_dims: [].as_slice().into(),
+///     rhs_batch_dims: [].as_slice().into(),
 /// };
 /// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -162,10 +162,10 @@ impl DotGeneralConfig {
     /// use tenferro_tensor::DotGeneralConfig;
     ///
     /// let config = DotGeneralConfig {
-    ///     lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-    ///     rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-    ///     lhs_batch_dims: [].as_slice().iter().copied().collect(),
-    ///     rhs_batch_dims: [].as_slice().iter().copied().collect(),
+    ///     lhs_contracting_dims: [1].as_slice().into(),
+    ///     rhs_contracting_dims: [0].as_slice().into(),
+    ///     lhs_batch_dims: [].as_slice().into(),
+    ///     rhs_batch_dims: [].as_slice().into(),
     /// };
     /// config.validate_dims_with_ranks(2, 2).unwrap();
     /// ```

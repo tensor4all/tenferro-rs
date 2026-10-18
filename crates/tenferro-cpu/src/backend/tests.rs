@@ -767,10 +767,10 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
     let rhs =
         Tensor::from_typed::<f32>(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [0].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let dot_error = backend
@@ -938,10 +938,10 @@ fn builder_selects_a_tenferro_owned_engine_and_cache_controls_stay_bounded() {
     let a = Tensor::from_vec_col_major(vec![4, 4], (0..16).map(|i| i as f64).collect::<Vec<_>>())
         .unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut cache = gemm::GemmAnalysisCache::with_capacity(2);
     assert_eq!(cache.capacity(), 2);

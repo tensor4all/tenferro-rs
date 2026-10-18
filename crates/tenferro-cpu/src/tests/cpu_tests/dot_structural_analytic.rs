@@ -23,10 +23,10 @@ fn test_dot_general_matmul() {
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
                 &DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
                 },
             )
         })
@@ -62,10 +62,10 @@ fn test_dot_general_with_conj_matches_materialized_complex_matmul() {
         TypedTensor::from_vec_col_major(vec![2, 2], rhs_data.clone()).unwrap(),
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend = CpuBackend::new();
 
@@ -95,10 +95,10 @@ fn test_dot_general_read_accepts_tensor_and_view_inputs() {
     let rhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let rhs_view = TensorView::f64(&rhs_shape, &rhs_data).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend = CpuBackend::new();
 
@@ -140,10 +140,10 @@ fn test_dot_general_read_accepts_transposed_host_view_input() {
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend = CpuBackend::new();
 
@@ -169,10 +169,10 @@ fn test_dot_general_read_into_writes_compact_and_strided_outputs() {
     let rhs_shape = [3usize, 2];
     let rhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend = CpuBackend::new();
 
@@ -223,10 +223,10 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend = CpuBackend::new();
 
@@ -280,10 +280,10 @@ fn test_dot_general_read_into_accum_updates_existing_output() {
     let initial = [10.0_f64, 20.0, 30.0, 40.0];
     let mut out = Tensor::from_vec_col_major(vec![2, 2], initial.to_vec()).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let accum = DotGeneralAccumulation {
         lhs_conj: false,
@@ -384,10 +384,10 @@ fn test_dot_general_read_into_accum_applies_complex_conj_and_scalars() {
         TypedTensor::from_vec_col_major(vec![2, 2], initial.clone()).unwrap(),
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let alpha = Complex64::new(0.5, -1.0);
     let beta = Complex64::new(-0.25, 0.75);
@@ -429,10 +429,10 @@ fn test_dot_general_read_into_accum_rejects_scalar_dtype_mismatch() {
     let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
     let mut out = Tensor::from_vec_col_major(vec![1, 1], vec![4.0_f64]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let accum = DotGeneralAccumulation {
         lhs_conj: false,
@@ -467,10 +467,10 @@ fn test_dot_general_read_into_accum_rejects_scalar_dtype_mismatch() {
 #[test]
 fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let lhs_f32 = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
@@ -556,10 +556,10 @@ fn test_dot_general_read_blas_negative_stride_view_falls_back() {
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
     let mut backend = CpuBackend::new();
 
@@ -592,10 +592,10 @@ fn test_dot_general_inner_product_returns_rank0_scalar() {
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
                 &DotGeneralConfig {
-                    lhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    lhs_contracting_dims: [0].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
                 },
             )
         })
@@ -618,10 +618,10 @@ fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
                 &DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
                 },
             )
         })
@@ -650,10 +650,10 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
                 &DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
                 },
             )
         })
@@ -698,10 +698,10 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
                 &DotGeneralConfig {
-                    lhs_contracting_dims: [3].as_slice().iter().copied().collect(),
-                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                    lhs_batch_dims: [0, 2].as_slice().iter().copied().collect(),
-                    rhs_batch_dims: [2, 3].as_slice().iter().copied().collect(),
+                    lhs_contracting_dims: [3].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [0, 2].as_slice().into(),
+                    rhs_batch_dims: [2, 3].as_slice().into(),
                 },
             )
         })
@@ -736,10 +736,10 @@ fn test_dot_general_falls_back_for_mixed_batch_orders() {
     let rhs_view =
         TypedTensorView::from_slice([1, 1, 2, 3], [1, 1, 1, 2], 0, &rhs_storage).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [2, 3].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [2, 3].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2, 3].as_slice().into(),
+        rhs_batch_dims: [2, 3].as_slice().into(),
     };
     let mut backend = CpuBackend::new();
 
@@ -1537,10 +1537,10 @@ fn canonical_fallback_honors_operand_offsets_and_output_strides() {
     // also requires a unit row stride.
     let mut out_storage = vec![-7.0_f64; 12];
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
     };
 
     let mut backend = CpuBackend::with_threads(1).unwrap();
@@ -1592,10 +1592,10 @@ fn auto_batched_gemm_on_lanes_matches_reference_with_padded_batches() {
     let lhs = Tensor::from_vec_col_major(vec![m, m, batch], lhs_data.clone()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![m, m, batch], rhs_data.clone()).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [2].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [2].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2].as_slice().into(),
+        rhs_batch_dims: [2].as_slice().into(),
     };
 
     // A nonzero view offset shifts every lane's chunk split.
@@ -1726,10 +1726,10 @@ fn auto_allocated_batched_gemm_on_lanes_matches_reference() {
     let lhs = Tensor::from_vec_col_major(vec![m, m, batch], lhs_data.clone()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![m, m, batch], rhs_data.clone()).unwrap();
     let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-        rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-        lhs_batch_dims: [2].as_slice().iter().copied().collect(),
-        rhs_batch_dims: [2].as_slice().iter().copied().collect(),
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2].as_slice().into(),
+        rhs_batch_dims: [2].as_slice().into(),
     };
 
     let mut backend = CpuBackend::with_threads(4).unwrap();

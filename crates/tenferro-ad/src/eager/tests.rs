@@ -243,10 +243,10 @@ fn untracked_standard_op_results_do_not_enter_value_record_registry() {
                 &lhs,
                 &rhs,
                 DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
                 },
             )
         })
@@ -1382,10 +1382,10 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
                 &x_t,
                 &x,
                 DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().iter().copied().collect(),
-                    rhs_contracting_dims: [0].as_slice().iter().copied().collect(),
-                    lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                    rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
                 },
             )
         })

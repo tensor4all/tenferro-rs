@@ -129,10 +129,10 @@ fn eager_input_promotion_plan_covers_all_promoted_families() {
         StdTensorOp::Compare(CompareDir::Eq),
         StdTensorOp::DotGeneral {
             config: DotGeneralConfig {
-                lhs_contracting_dims: [].as_slice().iter().copied().collect(),
-                rhs_contracting_dims: [].as_slice().iter().copied().collect(),
-                lhs_batch_dims: [].as_slice().iter().copied().collect(),
-                rhs_batch_dims: [].as_slice().iter().copied().collect(),
+                lhs_contracting_dims: [].as_slice().into(),
+                rhs_contracting_dims: [].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         },
     ];

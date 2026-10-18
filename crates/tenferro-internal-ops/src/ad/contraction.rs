@@ -802,7 +802,7 @@ fn transpose_plan_for_lhs(
 
     let new_config = DotGeneralConfig {
         lhs_contracting_dims: ct_rhs_free_positions,
-        rhs_contracting_dims: rhs_free.iter().copied().collect(),
+        rhs_contracting_dims: rhs_free.into(),
         lhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
         rhs_batch_dims: config.rhs_batch_dims.clone(),
     };
@@ -849,7 +849,7 @@ fn transpose_plan_for_rhs(
 
     let output_rank = lhs_free.len() + rhs_free.len() + n_batch;
     let new_config = DotGeneralConfig {
-        lhs_contracting_dims: lhs_free.iter().copied().collect(),
+        lhs_contracting_dims: lhs_free.into(),
         rhs_contracting_dims: ct_lhs_free_positions,
         lhs_batch_dims: config.lhs_batch_dims.clone(),
         rhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
