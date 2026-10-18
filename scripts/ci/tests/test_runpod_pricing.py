@@ -141,8 +141,6 @@ class CandidatePlanTests(unittest.TestCase):
                 ("price-0.44-NVIDIA A40", ["NVIDIA A40"]),
                 ("price-0.79-NVIDIA L40S", ["NVIDIA L40S"]),
                 ("cost-preferred", ["NVIDIA RTX A4000"]),
-                ("cost-preferred", ["NVIDIA A40"]),
-                ("premium", ["NVIDIA L40S"]),
             ],
         )
 
@@ -161,7 +159,7 @@ class CandidatePlanTests(unittest.TestCase):
         self.assertEqual(plan[0][0], "price-0.44-NVIDIA A40")
         self.assertEqual(
             [name for name, _ in plan[1:]],
-            ["cost-preferred", "cost-preferred", "premium"],
+            ["cost-preferred", "premium"],
         )
 
     def test_pricing_failure_falls_back_to_static_tiers(self) -> None:
@@ -174,8 +172,36 @@ class CandidatePlanTests(unittest.TestCase):
             transport=failing_transport,
         )
         self.assertEqual(
-            [name for name, _ in plan], ["cost-preferred", "cost-preferred", "premium"]
+            [name for name, _ in plan], ["cost-preferred", "premium", "cost-preferred"]
         )
+
+    def test_all_real_tiers_are_reachable_within_six_attempts(self):
+        from pathlib import Path
+        from scripts.ci.runpod_contract import configured_gpu_tiers
+        config = json.loads((Path(__file__).resolve().parents[1]/'runpod_config.json').read_text())
+        tiers = configured_gpu_tiers(config)
+        for live in (False, True):
+            with self.subTest(live=live):
+                entries = [gpu_entry(gpu, price=0.1 + i * 0.1)
+                           for i, gpu in enumerate(tiers[0][1][:3])]
+                plan = candidate_plan(config, tiers,
+                    transport=lambda: (200, body(*entries)) if live else (503, b''))
+                selected = [ids[0] for _, ids in plan[:config['max_provision_attempts']]]
+                for name, ids in tiers:
+                    self.assertTrue(set(selected).intersection(ids), (name, selected))
+                all_ids = [ids[0] for _, ids in plan]
+                self.assertEqual(len(all_ids), len(set(all_ids)))
+                self.assertEqual(set(all_ids), {gpu for _, ids in tiers for gpu in ids})
+
+    def test_price_prefix_cannot_consume_reserved_tier_slots(self):
+        plan = candidate_plan({'max_provision_attempts': 3, 'max_price_candidates': 3},
+            self.TIERS, transport=lambda: (200, body(
+                gpu_entry('NVIDIA A40', price=0.1), gpu_entry('NVIDIA RTX A4000', price=0.2))))
+        self.assertEqual([ids[0] for _, ids in plan[:3]],
+                         ['NVIDIA A40', 'NVIDIA RTX A4000', 'NVIDIA L40S'])
+        with self.assertRaisesRegex(ValueError, 'one candidate per GPU tier'):
+            candidate_plan({'max_provision_attempts': 1}, self.TIERS,
+                           transport=lambda: self.fail('invalid budget must fail before HTTP'))
 
     def test_pricing_never_adds_unreviewed_gpu_types(self) -> None:
         plan = candidate_plan(

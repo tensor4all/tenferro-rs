@@ -120,7 +120,7 @@ def main() -> int:
         value["pod_record_source"] = source
         value["placement"] = {
             "machine_id": pod.get("machineId"),
-            "data_center_id": (pod.get("machine") or {}).get("dataCenterId"),
+            "data_center_id": pod.get("dataCenterId") or (pod.get("machine") or {}).get("dataCenterId"),
         }
         value["tested_ref"] = args.tested_ref
         value["cache_hits"] = {

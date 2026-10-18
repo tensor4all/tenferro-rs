@@ -187,9 +187,10 @@ def candidate_plan(
     """Build the ordered create-attempt plan.
 
     Live-priced candidates come first, one GPU type per attempt, cheapest
-    first and capped by ``max_price_candidates``. The static reviewed tiers
-    always follow as the documented fallback so a stale or failed pricing
-    answer can never make CI lose GPU coverage entirely.
+    first and capped by ``max_price_candidates``. Reserve room for one
+    candidate from each static tier within the provision attempt budget.
+    Interleave the remaining static GPUs by tier and never retry the same
+    GPU type as both a priced and static candidate.
     """
 
     eligible: list[str] = []
@@ -198,7 +199,12 @@ def candidate_plan(
             if gpu_id not in eligible:
                 eligible.append(gpu_id)
 
+    budget = int(config.get("max_provision_attempts", 4))
+    active_tiers = [(name, ids) for name, ids in tiers if ids]
+    if budget < len(active_tiers):
+        raise ValueError("max_provision_attempts must allow at least one candidate per GPU tier")
     plan: list[tuple[str, list[str]]] = []
+    seen: set[str] = set()
     try:
         offers = fetch_gpu_offers(
             eligible,
@@ -214,22 +220,25 @@ def candidate_plan(
         print(f"Live pricing unavailable; using static tier order: {error}")
         offers = []
 
-    limit = int(config.get("max_price_candidates", 4))
+    limit = min(int(config.get("max_price_candidates", 4)), budget - len(active_tiers))
     for offer in offers[:limit]:
         print(
             f"Price-ordered candidate: {offer.gpu_type_id} at "
             f"${offer.price_per_hr:.2f}/hr (stock {offer.stock_status}, "
             f"{offer.memory_gb:g} GB VRAM)"
         )
-        plan.append(
-            (
+        if offer.gpu_type_id not in seen:
+            plan.append((
                 f"price-{offer.price_per_hr:.2f}-{offer.gpu_type_id}",
                 [offer.gpu_type_id],
-            )
-        )
+            ))
+            seen.add(offer.gpu_type_id)
     if not offers:
         print("No live-priced candidates; static reviewed tiers only.")
 
-    for tier_name, gpu_type_ids in tiers:
-        plan.extend((tier_name, [gpu_id]) for gpu_id in gpu_type_ids)
+    for index in range(max((len(ids) for _, ids in active_tiers), default=0)):
+        for tier_name, ids in active_tiers:
+            if index < len(ids) and ids[index] not in seen:
+                plan.append((tier_name, [ids[index]]))
+                seen.add(ids[index])
     return plan

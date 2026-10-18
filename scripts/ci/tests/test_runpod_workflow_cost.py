@@ -80,6 +80,26 @@ class StageCostTests(unittest.TestCase):
             self.assertEqual(value['stages']['cuda_tests']['seconds'], 40)
             self.assertEqual(value['paid_seconds'], 60)
 
+    def test_cli_preserves_v2_placement_and_legacy_fallback(self):
+        cases = [({'dataCenterId': 'v2-center', 'machine': {'dataCenterId': 'legacy-center'}}, 'v2-center'),
+                 ({'machine': {'dataCenterId': 'legacy-center'}}, 'legacy-center'),
+                 ({'dataCenterId': None, 'machine': {'dataCenterId': 'legacy-center'}}, 'legacy-center')]
+        for placement, expected in cases:
+            with self.subTest(placement=placement), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                pod = {'id': 'pod', 'startedAt': '2026-10-08T13:00:00Z', 'cost': 0.5, **placement}
+                (root/'pod').write_text(json.dumps(pod))
+                (root/'jobs').write_text('[]')
+                run = subprocess.run([sys.executable, '-m', 'scripts.ci.runpod_workflow_cost',
+                    '--pod', str(root/'pod'), '--jobs', str(root/'jobs'), '--pod-id', 'pod',
+                    '--deleted-at', '2026-10-08T13:01:00Z', '--output', str(root/'output')],
+                    cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                value = json.loads((root/'output').read_text())
+                self.assertEqual(value['placement']['data_center_id'], expected)
+                self.assertEqual(value['paid_seconds'], 60)
+                self.assertAlmostEqual(value['estimated_gpu_cost'], 0.5/60)
+
     def test_staged_dependencies_count_as_runtime_setup(self):
         names = ['Download staged execution payload', 'Install staged execution payload',
                  'Transfer selected CUDA SDK', 'Install selected CUDA SDK']

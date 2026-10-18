@@ -6,6 +6,10 @@
   lifecycle observations, watchdog, metadata, independent reaper and manual
   cleanup. Adapt the already verified benchmark HTTP/client policy while
   retaining tenferro-rs ownership, obsolete-PR cancellation and cost controls.
+- Reserve attempt slots for every reviewed GPU tier, interleave static fallback
+  types and deduplicate priced IDs so later tiers remain reachable without
+  increasing the paid attempt budget. Cost artifacts prefer v2 placement fields
+  while preserving the historical fallback.
 - Keep provider cooldown across candidate changes, and reduce ordinary startup
   polling to ten seconds. Never accept an unknown observation as healthy.
 - Keep historical saved cost records readable while live requests use v2 fields.

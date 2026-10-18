@@ -27,9 +27,11 @@ boundary — live data never adds a GPU type maintainers did not review.
    below `min_vram_gb`.
 3. Emit one single-GPU candidate per type, cheapest first, capped by
    `max_price_candidates`.
-4. Always append each static reviewed GPU as a separate single-type candidate, so a
-   failed or stale pricing answer degrades to today's behavior instead of
-   losing GPU coverage.
+4. Reserve a static candidate slot per reviewed tier inside the provision attempt
+   budget, reducing the live-price prefix if necessary. Interleave remaining
+   single-type static candidates by tier and deduplicate GPU IDs already priced.
+   Each tier is reachable within the configured six attempts; the independent
+   consecutive-startup-failure stop still limits paid failures.
 
 `gpu.allowedCudaVersions` metadata filtering stays on every create request as
 the first-line filter; the runtime smoke proof below is the real
