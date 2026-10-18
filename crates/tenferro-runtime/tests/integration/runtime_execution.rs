@@ -2272,6 +2272,159 @@ fn runtime_run_prepared_in_rejects_non_session_capable_operation_before_launch(
     Ok(())
 }
 
+/// An owner-only extension cannot run on a borrowed session, so `run_prepared`
+/// keeps its per-instruction leased route and still succeeds, while
+/// `run_prepared_in` still rejects the graph before launch.
+#[test]
+fn runtime_run_prepared_keeps_owner_only_extensions_on_the_leased_route(
+) -> Result<(), Box<dyn StdError>> {
+    let counters = Arc::new(ExtensionCounters::default());
+    let backend = CpuBackend::new();
+    let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    // The default route must keep the owner entry for a non-session-capable
+    // prepared operation instead of routing it through a graph-wide session.
+    let output = runtime.run_prepared(&prepared, &[&input])?;
+    assert_eq!(output[0].as_slice::<f64>()?, &[3.0, 5.0]);
+    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+
+    let mut backend = backend;
+    let error = backend
+        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))
+        .expect("session admission succeeds")
+        .expect_err("an owner-only extension must be rejected by the borrowed route");
+    assert!(matches!(error, Error::Unsupported { .. }), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support a caller-borrowed session"),
+        "{error}"
+    );
+    assert_eq!(
+        counters.execute.load(Ordering::SeqCst),
+        1,
+        "preflight must reject before any prepared operation executes"
+    );
+    Ok(())
+}
+
+/// A two-engine graph cannot hold one session, and its transfer provider runs
+/// between sessions, so `run_prepared` keeps the leased route: values, transfer
+/// count, and both event-domain retirements are unchanged.
+#[test]
+fn runtime_run_prepared_keeps_transfer_graphs_on_the_leased_route() -> Result<(), Box<dyn StdError>>
+{
+    let core_domain = AllocationDomainId::fresh();
+    let extension_domain = AllocationDomainId::fresh();
+    let core_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)));
+    let extension_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)));
+    let counters = Arc::new(ExtensionCounters::default());
+    let core_engine_id = "tenferro-test.prepared-transfer-source.v1";
+    let extension_engine_id = "tenferro-test.prepared-transfer-destination.v1";
+    let source_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let destination_storage = StorageClass::new("tenferro-test.storage.prepared-destination.v1")?;
+    let transfer = Arc::new(RecordingTransferProvider::materializing(
+        source_storage.clone(),
+        destination_storage.clone(),
+        extension_backend.clone(),
+    ));
+    let event_log = Arc::new(Mutex::new(Vec::new()));
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id_for_target(
+        &core_backend,
+        core_engine_id,
+        source_storage.as_str(),
+        cpu_core_capabilities(&core_backend),
+        CpuRegistrationState::executable_with_driver(recording_event_domain("source", &event_log)),
+        &format!("test-engine:{core_engine_id}"),
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id_for_target(
+        &extension_backend,
+        extension_engine_id,
+        destination_storage.as_str(),
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable_with_driver(recording_event_domain(
+            "destination",
+            &event_log,
+        )),
+        &format!("test-engine:{extension_engine_id}"),
+    )?)?;
+    builder.register_transfer_provider(
+        TransferEndpoint::new(EngineId::new(core_engine_id)?, source_storage.clone()),
+        TransferEndpoint::new(
+            EngineId::new(extension_engine_id)?,
+            destination_storage.clone(),
+        ),
+        transfer.clone(),
+    )?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.prepared-transfer")
+            .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
+        counters: Arc::clone(&counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let sum = (&x + &x)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&sum],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+
+    let output = runtime.run_prepared(&prepared, &[&input])?;
+
+    assert_eq!(tensor_f64_values(&output[0])?, [6.0, 10.0]);
+    assert_eq!(transfer.calls(), 1, "the graph transfers its value once");
+    assert_eq!(
+        transfer.materialized_domains(),
+        vec![(None, Some(extension_domain))]
+    );
+    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *counters.last_execute_domain.lock().expect("domain lock"),
+        Some(extension_domain)
+    );
+    let events = event_log.lock().expect("event log lock").clone();
+    assert!(events.contains(&"source:begin".to_owned()), "{events:?}");
+    assert!(
+        events.contains(&"destination:begin".to_owned()),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&"source:drain".to_owned()),
+        "the source event domain must retire before run_prepared returns: {events:?}"
+    );
+    assert!(
+        events.contains(&"destination:drain".to_owned()),
+        "the destination event domain must retire before run_prepared returns: {events:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
 ) -> Result<(), Box<dyn StdError>> {

@@ -2,14 +2,16 @@ use std::any::Any;
 use std::error::Error as StdError;
 use std::io;
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
 
+use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, Placement, StorageBuffer, Tensor, TensorRead, TensorValue, TensorView,
-    TypedTensor,
+    AllocationDomainId, AllocationId, BackendRuntimeCache, BackendSession, BackendSessionHost,
+    BackendStorage, DType, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
+    SessionEntryError, StorageBuffer, Tensor, TensorBackend, TensorDeviceTransfer, TensorRead,
+    TensorValue, TensorView, TypedTensor,
 };
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
@@ -21,13 +23,18 @@ use crate::runtime::execution::{
 };
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
-    CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration,
-    EventDomainDriver, EventDomainId, EventDomainRun, EventToken, ExecutableEngineContract,
-    ExecutionContextIdentity, ExecutionInputs, HardwareClassId, ImmediateEventDomainDriver,
-    InputIngressContract, InputPlacementContract, InputSignatureContract, PreparedOperationPlan,
-    ProviderDeviceIdentity, ProviderExecutableBinding, ProviderId, RegistrationIdentity,
-    ResidentOutputContract, Runtime, RuntimeConfigError, RuntimeEpoch, RuntimeId,
-    RuntimeInputContract, ScopedExecutionOutcome, ScopedReadInputs, StorageClass, SubmissionError,
+    CacheOwnerError, CacheStats, CoreCapabilityBundle, CorePrepareContext, DotGeneralPreparation,
+    DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime, EngineId,
+    EngineRegistration, EventDomainDriver, EventDomainId, EventDomainRun, EventToken,
+    ExecutableEngineContract, ExecutionContextIdentity, ExecutionInputs, HardwareClassId,
+    ImmediateEventDomainDriver, IndexingPrepareRequest, IndexingRuntime, InputIngressContract,
+    InputPlacementContract, InputSignatureContract, LayoutPrepareRequest, LayoutRuntime,
+    PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
+    PreparedOperationPlan, ProviderDeviceIdentity, ProviderExecutableBinding, ProviderId,
+    ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity, ResidentOutputContract,
+    Runtime, RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeInputContract,
+    ScopedExecutionOutcome, ScopedReadInputs, SpecializationProjection, StorageClass,
+    SubmissionError,
 };
 use crate::{Error, ErrorPhase, GraphCompiler, TracedTensor};
 
@@ -233,6 +240,22 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
             ErrorPhase::Execution,
             "operationless admission test unexpectedly executed an instruction",
         ))
+    }
+
+    fn execute_prepared_single_session(
+        &self,
+        _program: &ExecProgram,
+        _schedule: &crate::runtime::schedule::ScheduledGraph,
+        _regions: &[crate::runtime::region::ElementwiseRegion],
+        _region_counters: &crate::runtime::region::RegionExecutionCounters,
+        _operations: &[PreparedOperationPlan],
+        _inputs: &[TensorRead<'_>],
+    ) -> crate::Result<Option<Vec<Tensor>>> {
+        // This double cannot lease a session state, so it declines the
+        // single-session route and the graph keeps the per-instruction leased path.
+        // The ordering test then observes materialization inside the same run's
+        // event-domain lifetime, exactly as before.
+        Ok(None)
     }
 
     fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> crate::Result<Tensor> {
@@ -747,4 +770,493 @@ fn result_retention_preserves_output_that_reuses_last_input_slot() {
         panic!("same-slot output must remain owned");
     };
     assert_eq!(output.as_slice::<f64>().expect("f64 output"), &[-1.0, -2.0]);
+}
+
+// --- one backend session per eligible prepared graph -------------------------
+
+const COUNTING_ENGINE_ID: &str = "tenferro-test.session-counting-engine.v1";
+const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
+const CPU_STORAGE_CLASS_ID: &str = "tenferro-cpu.host.v1";
+
+/// A `CpuBackend` host whose backend-session entries are counted.
+///
+/// `cached_entries` counts the runtime-cache-aware entry a graph-wide session
+/// uses. `uncached_entries` counts the plain (non-cache-aware) entry; the leased
+/// fallback also uses the cached entry, so a non-zero plain count means a node
+/// or the output collection escaped the graph-wide cached session. No production
+/// seam exposes either count, so the default `run_prepared` route is asserted
+/// through this wrapper.
+#[derive(Clone, Debug)]
+struct CountingSessionHost {
+    inner: CpuBackend,
+    cached_entries: Arc<AtomicUsize>,
+    uncached_entries: Arc<AtomicUsize>,
+    /// Index of the cached entry that panics instead of admitting work.
+    panic_on_cached_entry: Arc<AtomicUsize>,
+}
+
+impl CountingSessionHost {
+    fn new() -> Self {
+        Self {
+            inner: CpuBackend::new(),
+            cached_entries: Arc::new(AtomicUsize::new(0)),
+            uncached_entries: Arc::new(AtomicUsize::new(0)),
+            panic_on_cached_entry: Arc::new(AtomicUsize::new(usize::MAX)),
+        }
+    }
+
+    fn cached_entries(&self) -> usize {
+        self.cached_entries.load(Ordering::SeqCst)
+    }
+
+    fn uncached_entries(&self) -> usize {
+        self.uncached_entries.load(Ordering::SeqCst)
+    }
+
+    /// Panic inside the session body of the next cached entry.
+    fn panic_on_next_cached_entry(&self) {
+        let next = self.cached_entries.load(Ordering::SeqCst);
+        self.panic_on_cached_entry.store(next, Ordering::SeqCst);
+    }
+}
+
+impl BackendRuntimeCache for CountingSessionHost {
+    type RuntimeCache = <CpuBackend as BackendRuntimeCache>::RuntimeCache;
+}
+
+impl TensorBackend for CountingSessionHost {}
+
+impl TensorDeviceTransfer for CountingSessionHost {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        self.inner.download_to_host(tensor)
+    }
+
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        self.inner.upload_host_tensor(tensor)
+    }
+}
+
+impl BackendSessionHost for CountingSessionHost {
+    fn with_backend_session<R>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
+    ) -> Result<R, SessionEntryError> {
+        self.uncached_entries.fetch_add(1, Ordering::SeqCst);
+        self.inner.with_backend_session(f)
+    }
+
+    fn with_backend_session_cached<R>(
+        &mut self,
+        cache: &mut Self::RuntimeCache,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
+    ) -> Result<R, SessionEntryError> {
+        let entry = self.cached_entries.fetch_add(1, Ordering::SeqCst);
+        let panic_inside = self.panic_on_cached_entry.load(Ordering::SeqCst) == entry;
+        self.inner
+            .with_backend_session_cached(cache, move |session| {
+                if panic_inside {
+                    panic!("injected backend-session panic");
+                }
+                f(session)
+            })
+    }
+
+    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+        self.inner.owns_session(session)
+    }
+}
+
+/// A provider that prepares metadata-only plans, so a counting test can prepare
+/// core operations for its engine.
+///
+/// The counting host is the *execution* backend, and the crate's unit-test build
+/// cannot name the CPU provider's capability traits (the dev-dependency links a
+/// separate `tenferro_runtime` instance), so this provider only returns the
+/// binding and specialization the runtime asked for. Core operations dispatch on
+/// the backend session during execution, so the prepared plan carries no
+/// executable work of its own.
+#[derive(Debug)]
+struct MetadataOnlyProvider;
+
+#[derive(Debug)]
+struct MetadataOnlyOperation {
+    binding: PreparedOperationBinding,
+    specialization: SpecializationProjection,
+}
+
+impl MetadataOnlyOperation {
+    fn new(context: &CorePrepareContext<'_>) -> Self {
+        Self {
+            binding: context.binding().clone(),
+            specialization: context.specialization().clone(),
+        }
+    }
+}
+
+impl PreparedOperation for MetadataOnlyOperation {
+    fn binding(&self) -> &PreparedOperationBinding {
+        &self.binding
+    }
+
+    fn specialization(&self) -> &SpecializationProjection {
+        &self.specialization
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+fn metadata_only_plan(context: &CorePrepareContext<'_>) -> PrepareCapability {
+    PrepareCapability::Prepared(PreparedOperationPlan::metadata(Arc::new(
+        MetadataOnlyOperation::new(context),
+    )))
+}
+
+impl ElementwiseRuntime for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: ElementwisePrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+impl ReductionRuntime for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: ReductionPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+impl IndexingRuntime for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: IndexingPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+impl DotGeneralPreparation for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: DotGeneralPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+impl LayoutRuntime for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: LayoutPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+fn metadata_only_capabilities() -> CoreCapabilityBundle {
+    let provider = Arc::new(MetadataOnlyProvider);
+    let mut capabilities = CoreCapabilityBundle::builder();
+    capabilities
+        .elementwise(provider.clone())
+        .reduction(provider.clone())
+        .indexing(provider.clone())
+        .dot_general(provider.clone())
+        .layout(provider);
+    capabilities.build()
+}
+
+fn host_cpu_ingress(storage: &StorageClass) -> InputIngressContract {
+    fn is_host(placement: &Placement) -> bool {
+        matches!(
+            placement.memory_kind,
+            MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+        )
+    }
+    let placement_storage = storage.clone();
+    let signature_storage = storage.clone();
+    let runtime_storage = storage.clone();
+    let resident_storage = storage.clone();
+    InputIngressContract::new(
+        InputPlacementContract::new(move |placement, candidate| {
+            is_host(placement) && candidate == &placement_storage
+        }),
+        InputSignatureContract::new(move |placement, family, domain, candidate| {
+            is_host(placement)
+                && family.is_none()
+                && domain.is_none()
+                && candidate == &signature_storage
+        }),
+        RuntimeInputContract::new(move |input: &TensorRead<'_>, candidate| {
+            is_host(input.placement())
+                && input.backend_family().is_none()
+                && candidate == &runtime_storage
+        }),
+        ResidentOutputContract::new(move |input: &TensorRead<'_>, candidate| {
+            is_host(input.placement())
+                && input.backend_family().is_none()
+                && candidate == &resident_storage
+        }),
+    )
+}
+
+fn counting_engine_registration(host: &CountingSessionHost) -> EngineRegistration {
+    let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).expect("cpu storage class");
+    EngineRegistration::executable(
+        ProviderExecutableBinding::new(
+            EngineId::new(COUNTING_ENGINE_ID).expect("counting engine id"),
+            HardwareClassId::new(CPU_HARDWARE_CLASS_ID).expect("cpu hardware class"),
+            Arc::from(vec![storage.clone()]),
+            storage.clone(),
+            ExecutableEngineContract::new(
+                test_provider_device_identity("session-counting"),
+                metadata_only_capabilities(),
+                host.clone(),
+                Arc::new(ImmediateEventDomainDriver::new()),
+                host_cpu_ingress(&storage),
+                None,
+            ),
+        )
+        .expect("counting provider binding"),
+    )
+}
+
+fn runtime_with_counting_host(host: &CountingSessionHost) -> Runtime {
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(counting_engine_registration(host))
+        .expect("register counting engine");
+    builder.build().expect("counting runtime")
+}
+
+/// Several scheduled operations of an eligible graph share one session entry.
+///
+/// A reduction keeps the graph out of the elementwise-region planner, so every
+/// instruction dispatches on its own and the per-instruction route would show
+/// one cached entry per node.
+#[test]
+fn run_prepared_opens_one_session_for_several_scheduled_operations() -> Result<(), Box<dyn StdError>>
+{
+    let host = CountingSessionHost::new();
+    let runtime = runtime_with_counting_host(&host);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let squared = (&x * &x)?;
+    let y = squared.reduce_sum(None)?;
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])?;
+    let input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+    // Count from after preparation: preparation and backend construction are not
+    // what this test measures.
+    let cached_after_preparation = host.cached_entries();
+    let uncached_after_preparation = host.uncached_entries();
+
+    for _ in 0..2 {
+        let output = runtime.run_prepared(&prepared, &[&input])?;
+        assert_eq!(output[0].as_slice::<f64>()?, &[14.0]);
+    }
+
+    assert_eq!(
+        host.cached_entries() - cached_after_preparation,
+        2,
+        "each run_prepared call must open exactly one backend session for the graph"
+    );
+    assert_eq!(
+        host.uncached_entries() - uncached_after_preparation,
+        0,
+        "no per-instruction or per-materialization session may run beside the graph session"
+    );
+    assert_eq!(
+        prepared.elementwise_region_execution_counts(),
+        (0, 0),
+        "a reduction graph plans no elementwise region"
+    );
+    Ok(())
+}
+
+/// An accepted fusion, its per-instruction fallback, and the identity graph all
+/// stay inside the one graph session.
+#[test]
+fn run_prepared_opens_one_session_for_fused_and_declined_fusions() -> Result<(), Box<dyn StdError>>
+{
+    let host = CountingSessionHost::new();
+    let runtime = runtime_with_counting_host(&host);
+
+    // Above the CPU fused kernel's element floor: the planned region executes as
+    // one fused command.
+    let fused_length = 16 * 1024usize;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[fused_length])?;
+    let doubled = (&x + &x)?;
+    let chain = doubled.mul(&doubled)?.exp()?.tanh()?;
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&chain, &[(&x, DType::F64, &[fused_length])])?;
+    let fused_data: Vec<f64> = (0..fused_length)
+        .map(|index| 0.25 + (index % 17) as f64 * 0.125)
+        .collect();
+    let input = Tensor::from_vec_col_major(vec![fused_length], fused_data.clone())?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+    let before_fused = host.cached_entries();
+    let mut fused_output = runtime.run_prepared(&prepared, &[&input])?;
+    assert_eq!(
+        host.cached_entries() - before_fused,
+        1,
+        "an accepted fusion must not open a session beside the graph session"
+    );
+    assert_eq!(
+        prepared.elementwise_region_execution_counts(),
+        (1, 0),
+        "the long elementwise chain must execute as one fused command"
+    );
+    let fused_output = fused_output.pop().expect("one output");
+    for (index, value) in fused_output.as_slice::<f64>()?.iter().enumerate() {
+        let doubled = fused_data[index] + fused_data[index];
+        assert!((value - (doubled * doubled).exp().tanh()).abs() <= 1e-12);
+    }
+
+    // Below the floor: the same chain is planned, the backend declines it, and the
+    // region falls back per instruction on the same session.
+    let small_length = 4usize;
+    let small_x = TracedTensor::input_concrete_shape(DType::F64, &[small_length])?;
+    let small_doubled = (&small_x + &small_x)?;
+    let small_chain = small_doubled.mul(&small_doubled)?.exp()?.tanh()?;
+    let small_program = GraphCompiler::new()
+        .compile_with_input_specs(&small_chain, &[(&small_x, DType::F64, &[small_length])])?;
+    let small_data = [0.5_f64, 1.0, 1.5, 2.0];
+    let small_input = Tensor::from_vec_col_major(vec![small_length], small_data.to_vec())?;
+    let small_prepared = runtime.prepare_compiled(&small_program, &[&small_input])?;
+    let before_declined = host.cached_entries();
+    let mut declined_output = runtime.run_prepared(&small_prepared, &[&small_input])?;
+    assert_eq!(
+        host.cached_entries() - before_declined,
+        1,
+        "a declined fusion must fall back inside the graph session, not beside it"
+    );
+    assert_eq!(
+        small_prepared.elementwise_region_execution_counts(),
+        (0, 1),
+        "the CPU backend declines fusion below its element floor"
+    );
+    let declined_output = declined_output.pop().expect("one output");
+    for (index, value) in declined_output.as_slice::<f64>()?.iter().enumerate() {
+        let doubled = small_data[index] + small_data[index];
+        assert!((value - (doubled * doubled).exp().tanh()).abs() <= 1e-12);
+    }
+
+    // The identity graph has no scheduled node, so its only work is the output
+    // copy. That copy must run on the same graph session: the per-instruction
+    // route materializes on a fresh plain session instead, which would show up in
+    // `uncached_entries`.
+    let identity_x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let identity_program = GraphCompiler::new()
+        .compile_with_input_specs(&identity_x, &[(&identity_x, DType::F64, &[2])])?;
+    let identity_input = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 7.0])?;
+    let identity_prepared = runtime.prepare_compiled(&identity_program, &[&identity_input])?;
+    let before_identity = host.cached_entries();
+    let before_identity_uncached = host.uncached_entries();
+    let identity_output = runtime.run_prepared(&identity_prepared, &[&identity_input])?;
+    assert_eq!(identity_output[0].as_slice::<f64>()?, &[4.0, 7.0]);
+    assert_eq!(
+        host.cached_entries() - before_identity,
+        1,
+        "the identity graph must open exactly one backend session"
+    );
+    assert_eq!(
+        host.uncached_entries() - before_identity_uncached,
+        0,
+        "identity output materialization must stay inside the graph session"
+    );
+    Ok(())
+}
+
+/// An execution error inside the graph session releases the lease and the
+/// session, so the same prepared handle runs again.
+#[test]
+fn run_prepared_reuses_the_executor_after_an_execution_error() -> Result<(), Box<dyn StdError>> {
+    let host = CountingSessionHost::new();
+    let runtime = runtime_with_counting_host(&host);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = (&x * &x)?;
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+    // Device-resident storage cannot enter the host ingress of this engine, so the
+    // failure happens inside the run after its session was opened.
+    let foreign_input = Tensor::from_typed::<f64>(TypedTensor::from_buffer_col_major(
+        vec![2],
+        StorageBuffer::Backend(Box::new(ForeignProbeBuffer {
+            values: Arc::new(Mutex::new(vec![3.0, 5.0])),
+            domain: AllocationDomainId::fresh(),
+            allocation: next_test_allocation_id(),
+        })),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: None,
+            cpu_affinity: None,
+        },
+    )?);
+    let cached_before = host.cached_entries();
+
+    let error = runtime
+        .run_prepared(&prepared, &[&foreign_input])
+        .expect_err("a device-resident input must fail host ingress inside the graph session");
+    let message = error.to_string();
+    assert!(
+        message.contains("residency")
+            || message.contains("allocation")
+            || message.contains("ingress"),
+        "unexpected ingress error: {message}"
+    );
+    assert_eq!(
+        host.cached_entries() - cached_before,
+        1,
+        "the failed run still used exactly one graph session"
+    );
+
+    let output = runtime.run_prepared(&prepared, &[&input])?;
+    assert_eq!(output[0].as_slice::<f64>()?, &[9.0, 25.0]);
+    assert_eq!(
+        host.cached_entries() - cached_before,
+        2,
+        "the executor must be reusable after an ordinary execution error"
+    );
+    Ok(())
+}
+
+/// A panic inside the graph session keeps the executor's established poisoned
+/// behavior: session resources are released and later calls report the poison
+/// instead of running on a half-released backend.
+#[test]
+fn run_prepared_poisons_the_executor_after_a_session_panic() -> Result<(), Box<dyn StdError>> {
+    let host = CountingSessionHost::new();
+    let runtime = runtime_with_counting_host(&host);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = (&x + &x)?;
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&input])?;
+    host.panic_on_next_cached_entry();
+    let cached_before = host.cached_entries();
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = runtime.run_prepared(&prepared, &[&input]);
+    }));
+
+    assert!(panic.is_err(), "an injected session panic must unwind");
+    assert_eq!(
+        host.cached_entries() - cached_before,
+        1,
+        "the panic must happen inside the single graph session"
+    );
+
+    let error = runtime
+        .run_prepared(&prepared, &[&input])
+        .expect_err("a panicked executor must stay poisoned");
+    assert!(
+        error.to_string().contains("poisoned"),
+        "unexpected post-panic error: {error}"
+    );
+    Ok(())
 }

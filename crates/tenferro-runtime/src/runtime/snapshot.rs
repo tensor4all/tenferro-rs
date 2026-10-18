@@ -1077,6 +1077,15 @@ impl Runtime {
 
     /// Run a graph previously prepared by [`Self::prepare_compiled`].
     ///
+    /// An eligible graph runs every scheduled node inside one backend session,
+    /// so repeated runs pay one session entry for the graph instead of one per
+    /// instruction. Eligibility requires a single-engine schedule whose prepared
+    /// operations all support a scheduler-owned session and which contains no
+    /// transfer node; every other graph keeps the per-instruction route, which is
+    /// also the route an owner-only extension (a prepared operation without
+    /// session support) needs. The GPU event domains are retired before this
+    /// returns on both routes.
+    ///
     /// # Errors
     ///
     /// Returns metadata validation errors for incompatible inputs, a runtime
