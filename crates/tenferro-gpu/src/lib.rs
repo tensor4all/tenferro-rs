@@ -66,6 +66,13 @@ pub mod cuda {
     /// `#[cube]` kernels against tenferro's GPU runtime. This module does not
     /// re-export the whole of `cubecl`; downstream crates declare the framework
     /// `t4a-cubecl` package explicitly.
+    ///
+    /// The canonical downstream flow is allocate (`Session::alloc_output`),
+    /// launch (`Session::cube_count_1d` + `Session::cube_dim_1d` +
+    /// `Session::array_arg` + `Session::client`), synchronize, download. It is
+    /// documented, together with the `#[cube]` typing rules and the kernel-cache
+    /// answer, in `docs/guides/custom-cuda-kernels.md`; `samples/cubecl-kernel`
+    /// is the runnable fixture.
     pub mod cubecl {
         pub use super::super::cubecl::session_cubecl::Session;
         // Narrow prelude: only the types needed to describe a CubeCL launch.
