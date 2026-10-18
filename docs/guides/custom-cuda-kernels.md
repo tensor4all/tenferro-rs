@@ -1,7 +1,10 @@
 # Custom CUDA kernels
 
 External crates can launch CUDA kernels against tenferro-owned tensors through
-the public `tenferro_gpu::cuda::raw` API. The supported path is always:
+the public `tenferro_gpu::cuda::raw` API, and can run a raw kernel in place on
+CUDA memory they already own through the explicitly unsafe
+`Session::tensor_ref_from_raw` / `Session::tensor_mut_from_raw` seam. The
+supported path is:
 
 ```text
 CudaBackend::with_backend_session
@@ -230,7 +233,7 @@ read-only and mutable authorities never cross over: only `TensorMut::offset`
 produces a writable span. Overlapping mutable sub-spans passed to one launch
 still violate the launch's no-alias contract.
 
-```rust
+```text
 fn upper_half<'s>(
     arena: &raw::TensorRef<'s, f64>,
 ) -> tenferro_tensor::Result<raw::TensorRef<'s, f64>> {
@@ -238,6 +241,38 @@ fn upper_half<'s>(
     arena.offset(half, half)
 }
 ```
+
+### Externally owned CUDA memory
+
+A downstream that already owns a CUDA allocation (for example a `cudarc`
+`CudaSlice`) can run a raw kernel on it without copying it into a tenferro
+tensor. Inside `with_raw`, the unsafe
+`Session::tensor_ref_from_raw(ptr, byte_len, op)` and
+`Session::tensor_mut_from_raw(ptr, byte_len, op)` constructors wrap the
+address as the existing session-scoped `TensorRef`/`TensorMut`, so
+`KernelArg::tensor` / `KernelArg::tensor_mut` and `TensorRef::offset` work
+unchanged. The constructors only validate null, zero length, alignment for `T`,
+whole elements, and address overflow; they do not allocate, copy, upload, or
+prove residency.
+
+The unsafe contract is the caller's:
+
+- the range is a live allocation on this runtime's **primary CUDA context**
+  (a `cudarc::driver::CudaContext::new` allocation qualifies; a non-primary
+  context on the same device does not);
+- reads are initialized and writes are exclusive for the whole span until the
+  work completes;
+- all producers and consumers are ordered on the **session stream**, not a
+  separate cudarc stream; wrap the captured session stream with
+  `CudaContext::wrap_borrowed_stream`, or use cross-stream events;
+- the external allocation stays alive until completion. `with_raw` does not
+  synchronize on return, including on error paths, so synchronize (or make the
+  session stream wait on an event) before freeing or reusing the buffer.
+
+The CubeCL session cannot bind external memory: its `tensor_binding`,
+`array_arg`, and allocation helpers derive handles from tenferro-resident
+`TypedTensor` values, not raw addresses. Use the raw-only seam above, or
+re-host the state in a tenferro tensor.
 
 ### Share a compiled module across threads
 
@@ -257,7 +292,7 @@ references) must stay alive until the asynchronous work is synchronized.
 `raw::Session::resource` remains the only per-runtime cache; a shared module
 handle needs no second cache framework.
 
-```rust
+```text
 use std::sync::OnceLock;
 use tenferro_gpu::cuda::raw::Module;
 

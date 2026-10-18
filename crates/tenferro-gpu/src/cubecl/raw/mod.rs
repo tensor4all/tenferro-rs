@@ -31,6 +31,13 @@
 //! - A mutable device access can only be produced through [`Session::tensor_mut`]
 //!   which requires an exclusive `&mut` borrow of a compatibly-typed tensor, or
 //!   through a freshly allocated [`Session::alloc_output`] tensor.
+//! - Memory owned outside tenferro (for example a `cudarc` allocation) enters
+//!   only through the unsafe [`Session::tensor_ref_from_raw`] and
+//!   [`Session::tensor_mut_from_raw`] constructors. They wrap an address and
+//!   validate only null, zero-length, element-alignment, and overflow; the
+//!   context, stream-ordering, initialization, exclusivity, and allocation
+//!   lifetime are the caller's contract documented on those methods. No
+//!   allocation, copy, upload, or residency check happens on that path.
 //! - A raw kernel launch is an `unsafe fn` (see [`Session::launch`]) whose
 //!   ABI, argument order, alias, and liveness invariants are the caller's
 //!   contract.
@@ -606,6 +613,160 @@ impl<'s> Session<'s> {
         let base = self.device_ptr(prepared.handle().clone(), "raw.tensor_mut")?;
         Ok(TensorMut {
             base,
+            byte_len,
+            _scope: PhantomData,
+            _dtype: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    /// Wrap an externally owned CUDA device span as a read-only [`TensorRef`].
+    ///
+    /// This is the interop seam for memory tenferro did not allocate, such as a
+    /// `cudarc` `CudaSlice` or a driver-API buffer the downstream already owns.
+    /// It only wraps the address: nothing is allocated, copied, uploaded, or
+    /// checked for residency, and the result is an ordinary session-scoped
+    /// [`TensorRef`], so [`KernelArg::tensor`] and [`TensorRef::offset`] work
+    /// unchanged. The returned reference cannot outlive the `&self` session
+    /// borrow, but that borrow does not own the external allocation (see the
+    /// lifetime clause below).
+    ///
+    /// Null pointers, zero lengths, a pointer not aligned for `T`, a length that
+    /// is not a whole number of `T` elements, and an address range that
+    /// overflows `usize` are rejected with
+    /// [`crate::Error::Validation`]/`InvalidArgument`. Those checks cannot prove
+    /// that the address is really device memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee all of the following:
+    ///
+    /// - **Valid device range**: `[ptr, ptr + byte_len)` is a live device
+    ///   allocation on this session's device and belongs to the CUDA primary
+    ///   context of this session's runtime. Memory from a different CUDA context
+    ///   (including a non-primary context created on the same device) or a
+    ///   different device is not valid, even when the address is numerically the
+    ///   same. A `cudarc::driver::CudaContext::new` allocation is on the primary
+    ///   context and therefore qualifies; `CudaContext::new_non_primary` does
+    ///   not.
+    /// - **Alignment and initialization**: the pointer is aligned for `T`, and
+    ///   every byte the kernel reads has been initialized. Reads racing a write
+    ///   are undefined.
+    /// - **Stream ordering**: all work that produced the current contents is
+    ///   ordered before this session's stream. A cudarc stream created with
+    ///   `CudaStream::new_stream`/`fork` is **not** automatically the session's
+    ///   stream; wrap the captured session stream
+    ///   ([`Session::stream`] plus `StreamRef::raw_handle`) with
+    ///   `CudaContext::wrap_borrowed_stream`, or order the two streams with
+    ///   events. Kernels launched through this session are enqueued on the
+    ///   session's stream only.
+    /// - **No concurrent writers**: this read-only wrapper is only used while no
+    ///   other host or device writer can touch the span. The kernel must only
+    ///   read it under [`Session::launch`]'s aliasing contract.
+    /// - **Caller-owned lifetime through completion**: the allocation must stay
+    ///   alive and unmoved until all work that touches it has completed.
+    ///   [`CudaExecSession::with_raw`](super::exec_session::CudaExecSession::with_raw)
+    ///   does not synchronize on return, including on its error paths, so
+    ///   dropping or freeing the external allocation immediately after the
+    ///   callback is a use-after-free unless the caller has synchronized or made
+    ///   the session stream wait on an event first. The `'a` lifetime on the
+    ///   returned handle ties it to the session borrow only; it is not a proof of
+    ///   allocation lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns `crate::Error::Validation` (`InvalidArgument`) when the pointer
+    /// is null, `byte_len` is zero or not a whole number of `T` elements, the
+    /// address is misaligned for `T`, or `ptr + byte_len` overflows.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::ffi::c_void;
+    /// use tenferro_gpu::cuda::raw::{KernelArg, Session};
+    ///
+    /// fn wrap<'s>(
+    ///     raw: &'s Session<'s>,
+    ///     ptr: *mut c_void,
+    ///     bytes: usize,
+    /// ) -> tenferro_tensor::Result<usize> {
+    ///     // SAFETY: the caller of this helper guarantees the context, range,
+    ///     // ordering, and lifetime contract documented on the method.
+    ///     let reference = unsafe { raw.tensor_ref_from_raw::<f64>(ptr, bytes, "docs.external") }?;
+    ///     let _arg = KernelArg::tensor(&reference);
+    ///     Ok(reference.byte_len())
+    /// }
+    /// ```
+    pub unsafe fn tensor_ref_from_raw<'a, T>(
+        &'a self,
+        ptr: *mut std::ffi::c_void,
+        byte_len: usize,
+        op: &'static str,
+    ) -> crate::Result<TensorRef<'a, T>> {
+        validate_external_span::<T>(ptr, byte_len, op)?;
+        Ok(TensorRef {
+            base: ptr,
+            byte_len,
+            _scope: PhantomData,
+            _dtype: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    /// Wrap an externally owned CUDA device span as a mutable [`TensorMut`].
+    ///
+    /// This is the mutable twin of [`Session::tensor_ref_from_raw`]: it wraps an
+    /// address without allocating, copying, or checking residency, and the
+    /// result is consumed by [`KernelArg::tensor_mut`] exactly like a
+    /// tenferro-owned mutable span. Null, zero-length, misaligned, partial-
+    /// element, and overflowing spans are rejected with
+    /// [`crate::Error::Validation`]/`InvalidArgument`.
+    ///
+    /// # Safety
+    ///
+    /// Every requirement of [`Session::tensor_ref_from_raw`] applies, and in
+    /// addition the caller must have exclusive write authority over the whole
+    /// span until the work completes: no other kernel argument, host thread, or
+    /// foreign stream may read or write it concurrently, and contents the kernel
+    /// does not initialize must not be read afterwards. In particular, the
+    /// session cannot prove that the external owner will not reuse the buffer;
+    /// synchronize (or make the session stream wait on an event) before handing
+    /// it back, and remember that `with_raw` does not synchronize on success or
+    /// error.
+    ///
+    /// # Errors
+    ///
+    /// Returns `crate::Error::Validation` (`InvalidArgument`) when the pointer
+    /// is null, `byte_len` is zero or not a whole number of `T` elements, the
+    /// address is misaligned for `T`, or `ptr + byte_len` overflows.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::ffi::c_void;
+    /// use tenferro_gpu::cuda::raw::{KernelArg, Session};
+    ///
+    /// fn wrap<'s>(
+    ///     raw: &'s Session<'s>,
+    ///     ptr: *mut c_void,
+    ///     bytes: usize,
+    /// ) -> tenferro_tensor::Result<usize> {
+    ///     // SAFETY: the caller of this helper holds exclusive write authority
+    ///     // and keeps the allocation alive until the work completes.
+    ///     let reference = unsafe { raw.tensor_mut_from_raw::<f64>(ptr, bytes, "docs.external_mut") }?;
+    ///     let _arg = KernelArg::tensor_mut(&reference);
+    ///     Ok(reference.byte_len())
+    /// }
+    /// ```
+    pub unsafe fn tensor_mut_from_raw<'a, T>(
+        &'a self,
+        ptr: *mut std::ffi::c_void,
+        byte_len: usize,
+        op: &'static str,
+    ) -> crate::Result<TensorMut<'a, T>> {
+        validate_external_span::<T>(ptr, byte_len, op)?;
+        Ok(TensorMut {
+            base: ptr,
             byte_len,
             _scope: PhantomData,
             _dtype: PhantomData,
@@ -1384,6 +1545,63 @@ pub(crate) fn checked_subspan(
         ))
     })?;
     Ok(address as *mut std::ffi::c_void)
+}
+
+/// Validate an externally owned device span before wrapping it.
+///
+/// Only the properties an address can prove are checked here: null, zero
+/// length, element alignment, whole elements, and address overflow. Device
+/// validity, context ownership, stream ordering, initialization, exclusivity,
+/// and allocation lifetime remain the caller's contract; see
+/// [`Session::tensor_ref_from_raw`] and [`Session::tensor_mut_from_raw`].
+pub(crate) fn validate_external_span<T>(
+    ptr: *mut std::ffi::c_void,
+    byte_len: usize,
+    op: &'static str,
+) -> crate::Result<()> {
+    if ptr.is_null() {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "ptr",
+            "external device pointer must not be null",
+        ));
+    }
+    if byte_len == 0 {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "byte_len",
+            "external device span must not be empty",
+        ));
+    }
+    let alignment = std::mem::align_of::<T>();
+    if !(ptr as usize).is_multiple_of(alignment) {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "ptr",
+            format!(
+                "external device pointer {ptr:p} is not aligned for the {alignment}-byte element type"
+            ),
+        ));
+    }
+    let element_size = std::mem::size_of::<T>();
+    if element_size > 0 && !byte_len.is_multiple_of(element_size) {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "byte_len",
+            format!(
+                "external device span of {byte_len} bytes is not a whole number of \
+                 {element_size}-byte elements"
+            ),
+        ));
+    }
+    if (ptr as usize).checked_add(byte_len).is_none() {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "byte_len",
+            format!("external device span [{ptr:p}, +{byte_len}) overflows the address space"),
+        ));
+    }
+    Ok(())
 }
 
 /// A typed argument for a raw CUDA kernel launch.

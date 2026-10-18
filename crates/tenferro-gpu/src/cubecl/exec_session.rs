@@ -347,6 +347,28 @@ impl CudaExecSession<'_> {
     /// entry flush was a redundant blocking device-thread round trip (#1887).
     /// The success path does not synchronize.
     ///
+    /// # Externally owned CUDA memory
+    ///
+    /// This CubeCL session **cannot bind memory it does not own**. Its binding
+    /// constructors (`tensor_binding`, `array_arg`, and the allocation helpers)
+    /// take a tenferro `TypedTensor` resident on this runtime and derive a CubeCL
+    /// allocation handle from it; CubeCL launch arguments are handles into its
+    /// own pool, not raw addresses, so a `cudarc` allocation has no handle to
+    /// bind here and there is no upload-free interop path through `with_cubecl`.
+    ///
+    /// The supported interop is **raw-only**: enter
+    /// [`with_raw`](Self::with_raw) on the same runtime/device, wrap the external
+    /// address with
+    /// [`raw::Session::tensor_ref_from_raw`](crate::cuda::raw::Session::tensor_ref_from_raw)
+    /// or
+    /// [`raw::Session::tensor_mut_from_raw`](crate::cuda::raw::Session::tensor_mut_from_raw),
+    /// and launch a raw module with [`raw::Session::launch`](crate::cuda::raw::Session::launch).
+    /// That path requires the external allocation to belong to this runtime's
+    /// primary CUDA context and to be ordered on the session's captured stream;
+    /// the full contract is on the constructors. A downstream that needs a CubeCL
+    /// binding must re-host the state in a tenferro tensor instead (uploading
+    /// once, not per kernel).
+    ///
     /// # Examples
     ///
     /// ```
