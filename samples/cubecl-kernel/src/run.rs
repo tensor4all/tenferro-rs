@@ -6,7 +6,6 @@ use cubecl::client::Client;
 use cubecl::prelude::{BufferArg, CubeCount, CubeDim};
 use tenferro_gpu::cuda::{
     download_tensor, upload_tensor, with_cuda_exec_session, CudaBackend, CudaExecSession,
-    CudaRuntime,
 };
 use tenferro_tensor::backend::BackendSessionHost;
 use tenferro_tensor::{Error, Tensor, TypedTensor};
@@ -413,12 +412,6 @@ pub fn run_kernel_cache_check() -> tenferro_tensor::Result<()> {
     }
     Ok(())
 }
-
-// Keep the runtime type visible for the seam contract without adding an unused
-// import lint: `CudaRuntime` is referenced above via `runtime: CudaRuntime`
-// inference on `exec.runtime().clone()`.
-#[allow(dead_code)]
-fn _cuda_runtime_type_check(_: &CudaRuntime) {}
 
 #[allow(dead_code)]
 // compile-checked source of the guide's ordering snippet

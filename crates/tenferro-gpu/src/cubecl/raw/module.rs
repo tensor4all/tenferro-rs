@@ -18,8 +18,7 @@
 //! host barrier.
 
 use std::ffi::CString;
-use std::sync::atomic::AtomicU32;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use super::{Function, Module, ModuleInner};
 
@@ -66,8 +65,6 @@ pub(crate) fn module_function(
     Ok(Function {
         handle: handle as usize,
         module: Arc::clone(inner),
-        shared_mem_opt_in: AtomicU32::new(0),
-        shared_mem_raise: Mutex::new(()),
     })
 }
 
@@ -88,11 +85,14 @@ pub(crate) fn needs_shared_memory_opt_in(current: u32, bytes: u32) -> bool {
 /// Raise `CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES` to `bytes` when a
 /// launch asks for more dynamic shared memory than the 48 KiB default.
 ///
-/// The attribute only grows, so the last value recorded on the function is
-/// reused: a repeated or smaller request above the default still needs no
-/// driver call (#2085). The requested value is not clamped; a value above the
-/// device's `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN` is rejected
-/// by the driver and returned as a typed backend error.
+/// The attribute only grows, so the last value recorded for the underlying
+/// `CUfunction` is reused: a repeated or smaller request above the default
+/// still needs no driver call (#2085). The record lives on the module owner and
+/// is keyed by the function handle, so two [`Module::function`] lookups of the
+/// same symbol share one budget and cannot shrink each other's attribute. The
+/// requested value is not clamped; a value above the device's
+/// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN` is rejected by the
+/// driver and returned as a typed backend error.
 ///
 /// # Errors
 ///
@@ -100,7 +100,9 @@ pub(crate) fn needs_shared_memory_opt_in(current: u32, bytes: u32) -> bool {
 /// `i32` attribute value, or [`crate::Error::BackendSource`] when the context
 /// cannot be activated or the driver rejects the attribute.
 pub(crate) fn ensure_dynamic_shared_memory(function: &Function, bytes: u32) -> crate::Result<()> {
-    if !needs_shared_memory_opt_in(function.shared_mem_opt_in(), bytes) {
+    // Below the no-opt-in default there is nothing to raise, so the common
+    // case pays no lock.
+    if !needs_shared_memory_opt_in(0, bytes) {
         return Ok(());
     }
     let value = i32::try_from(bytes).map_err(|_| {
@@ -111,11 +113,15 @@ pub(crate) fn ensure_dynamic_shared_memory(function: &Function, bytes: u32) -> c
         )
     })?;
 
-    // A function handle may be shared across threads, so serialize the
-    // read-decide-raise sequence. Without the lock, a smaller concurrent
-    // request could lower the attribute after a larger one raised it.
-    let _raise = function.lock_shared_memory_raise();
-    if !needs_shared_memory_opt_in(function.shared_mem_opt_in(), bytes) {
+    // A function handle is shared by every lookup of the same symbol and across
+    // threads, so the module owner's table holds the recorded value and its
+    // lock serializes the read-decide-raise sequence. Without that, a smaller
+    // concurrent request could lower the attribute after a larger one raised
+    // it, and a later large launch would fail.
+    let function_handle = function.handle;
+    let mut opt_in = function.module.lock_shared_memory_opt_in();
+    let recorded = opt_in.get(&function_handle).copied().unwrap_or(0);
+    if !needs_shared_memory_opt_in(recorded, bytes) {
         return Ok(());
     }
 
@@ -134,7 +140,7 @@ pub(crate) fn ensure_dynamic_shared_memory(function: &Function, bytes: u32) -> c
         )
     };
     set.map_err(|err| crate::Error::backend_source("raw.launch", err))?;
-    function.set_shared_mem_opt_in(bytes);
+    opt_in.insert(function_handle, bytes);
     Ok(())
 }
 

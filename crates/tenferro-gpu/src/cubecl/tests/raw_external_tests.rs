@@ -9,15 +9,9 @@ use std::sync::Arc;
 
 use super::*;
 use crate::cubecl::tests::with_cuda_exec;
+use crate::cuda::gpu_available;
 use crate::cuda::raw::{self, KernelArg, LaunchConfig, NvrtcOptions};
-use crate::cuda::{gpu_available, CudaBackend};
 use cudarc::driver::{CudaContext, CudaStream, DevicePtr, DevicePtrMut};
-
-fn first_cuda_backend() -> Option<CudaBackend> {
-    let devices = crate::cuda::cuda_devices().ok()?;
-    let device = devices.first()?;
-    CudaBackend::new(device.id()).ok()
-}
 
 /// Wrap the session's captured stream as a borrowed cudarc stream.
 ///
@@ -100,7 +94,7 @@ fn raw_external_span_validation_rejects_bad_spans() {
 #[ignore = "requires CUDA"]
 fn raw_external_wrap_constructors_reject_bad_spans() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let mut backend = gpu_backend();
     with_cuda_exec(&mut backend, |session| {
         session
             .with_raw("test.external_bad_span", |sess| {
@@ -130,7 +124,7 @@ fn raw_external_wrap_constructors_reject_bad_spans() {
 #[ignore = "requires CUDA"]
 fn raw_external_cudarc_buffer_is_written_in_place() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let mut backend = gpu_backend();
     with_cuda_exec(&mut backend, |session| {
         let ordinal = session.device_info().id().ordinal() as usize;
         session
@@ -188,7 +182,7 @@ fn raw_external_cudarc_buffer_is_written_in_place() {
 #[ignore = "requires CUDA"]
 fn raw_external_cudarc_buffer_is_read_by_a_kernel() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let mut backend = gpu_backend();
     with_cuda_exec(&mut backend, |session| {
         let ordinal = session.device_info().id().ordinal() as usize;
         let runtime = session.runtime().clone();

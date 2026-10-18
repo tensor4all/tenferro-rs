@@ -11,12 +11,6 @@ use super::*;
 use crate::cuda::raw;
 use crate::cuda::{gpu_available, CudaBackend};
 
-fn first_cuda_backend() -> Option<CudaBackend> {
-    let devices = crate::cuda::cuda_devices().ok()?;
-    let device = devices.first()?;
-    CudaBackend::new(device.id()).ok()
-}
-
 /// Kernel copying `n` f64 values, used to prove a sub-span points where the
 /// caller asked and nowhere else.
 const COPY_F64_KERNEL_SRC: &str = r#"
@@ -45,7 +39,7 @@ fn download_f64(runtime: &crate::cuda::CudaRuntime, tensor: &Tensor) -> Vec<f64>
 #[ignore = "requires CUDA"]
 fn raw_tensor_offsets_bind_arena_subspans() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let mut backend = gpu_backend();
     let runtime = backend.runtime().clone();
     const N: usize = 8;
     const ELEMENT: usize = std::mem::size_of::<f64>();
@@ -121,7 +115,7 @@ fn raw_tensor_offsets_bind_arena_subspans() {
 #[ignore = "requires CUDA"]
 fn raw_tensor_offsets_reject_out_of_range_and_overflow() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let mut backend = gpu_backend();
     const N: usize = 4;
     let arena = upload(&backend, &tensor_f64(vec![N], vec![1.0; N]));
     let mut out = upload(&backend, &tensor_f64(vec![N], vec![0.0; N]));
@@ -197,7 +191,7 @@ fn raw_tensor_offsets_reject_out_of_range_and_overflow() {
 #[ignore = "requires CUDA"]
 fn raw_function_compiles_once_and_launches_from_another_thread() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let mut backend = gpu_backend();
     let runtime = backend.runtime().clone();
 
     // Compile-time contract: a compiled module is a shareable handle.
@@ -288,7 +282,7 @@ fn raw_function_compiles_once_and_launches_from_another_thread() {
 #[ignore = "requires CUDA"]
 fn raw_module_caches_in_session_resource_across_threads() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let mut backend = gpu_backend();
     let runtime = backend.runtime().clone();
     let compiles = Arc::new(AtomicUsize::new(0));
     let compile_counter = Arc::clone(&compiles);
@@ -368,6 +362,71 @@ fn raw_module_caches_in_session_resource_across_threads() {
     assert!(stats.hits >= 1, "the cached module must be a cache hit");
     let expected: Vec<f64> = (1..=N).map(|value| value as f64).collect();
     assert_eq!(download_f64(&runtime, &output), expected);
+}
+
+/// Dropping a module's last handle inside an active raw session must keep that
+/// session's current context: the next module load and launch in the same
+/// callback still depend on it (#2086).
+#[test]
+#[ignore = "requires CUDA"]
+fn raw_dropping_a_module_keeps_the_live_session_context() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = gpu_backend();
+    let runtime = backend.runtime().clone();
+    const N: usize = 4;
+    let input = upload(&backend, &tensor_f64(vec![N], vec![1.0, 2.0, 3.0, 4.0]));
+    let mut output = upload(&backend, &tensor_f64(vec![N], vec![0.0; N]));
+
+    with_cuda_exec(&mut backend, |session| {
+        session
+            .with_raw("test.raw_drop_live_module", |raw| {
+                let first =
+                    raw.compile_nvrtc(COPY_F64_KERNEL_SRC, &raw::NvrtcOptions::default())?;
+                let first_function = first.function("copy_f64")?;
+                // Last handle of the first module: this unloads it while the
+                // session is still live.
+                drop(first_function);
+                drop(first);
+                assert!(
+                    matches!(cudarc::driver::result::ctx::get_current(), Ok(Some(_))),
+                    "the live raw session must still have its context current after the unload"
+                );
+
+                // Loading and launching a second module proves the context is
+                // usable, not merely reported as current.
+                let second =
+                    raw.compile_nvrtc(COPY_F64_KERNEL_SRC, &raw::NvrtcOptions::default())?;
+                let function = second.function("copy_f64")?;
+                let input_ref = raw.tensor(input.as_typed::<f64>().expect("f64 input"))?;
+                let output_ref =
+                    raw.tensor_mut(output.as_typed_mut::<f64>().expect("f64 output"))?;
+                let config = raw::LaunchConfig::flat(N as u32, N as u32, 0)?;
+                // SAFETY: the kernel ABI is (double*, const double*, int); both
+                // spans hold N f64 values, the output is uniquely borrowed and
+                // does not alias the input, and the second module and both
+                // tensors outlive the synchronization below.
+                unsafe {
+                    raw.launch(
+                        &function,
+                        config,
+                        &[
+                            raw::KernelArg::tensor_mut(&output_ref),
+                            raw::KernelArg::tensor(&input_ref),
+                            raw::KernelArg::i32(N as i32),
+                        ],
+                    )?;
+                }
+                raw.synchronize()?;
+                Ok(())
+            })
+            .unwrap();
+    });
+
+    assert_eq!(
+        download_f64(&runtime, &output),
+        vec![1.0, 2.0, 3.0, 4.0],
+        "a module loaded after another module's unload must launch in the same session"
+    );
 }
 
 /// A `Function` outlives both its `Module` and the backend that loaded it, and

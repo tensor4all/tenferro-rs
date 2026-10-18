@@ -50,11 +50,12 @@ mod nvrtc;
 #[cfg(test)]
 pub(crate) use module::needs_shared_memory_opt_in;
 
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use tenferro_tensor::{TensorRank, TensorRead, TypedTensor, TypedTensorView};
 
@@ -99,6 +100,15 @@ pub(crate) struct ModuleInner {
     runtime: Option<CudaRuntime>,
     handle: usize,
     context: usize,
+    /// Largest dynamic shared-memory opt-in recorded per underlying
+    /// `CUfunction` handle.
+    ///
+    /// Two [`Module::function`] lookups of the same symbol return the same
+    /// driver function, so they must share one budget; a per-lookup wrapper
+    /// would let the second lookup shrink the attribute again (#2085). One
+    /// lock for the whole map also serializes a same-module raise across
+    /// threads.
+    shared_memory_opt_in: Mutex<HashMap<usize, u32>>,
 }
 
 impl ModuleInner {
@@ -121,6 +131,13 @@ impl ModuleInner {
         let ordinal = i32::try_from(runtime.device_ordinal())
             .map_err(|source| crate::Error::backend_source(op, source))?;
         RawContextRestore::enter(op, ordinal, self.context())
+    }
+
+    /// Lock the per-function shared-memory opt-in table.
+    pub(crate) fn lock_shared_memory_opt_in(&self) -> MutexGuard<'_, HashMap<usize, u32>> {
+        self.shared_memory_opt_in
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Activate the owning context only when the calling thread is not already
@@ -146,11 +163,32 @@ impl ModuleInner {
     }
 }
 
+// Number of raw sessions currently alive on this thread.
+//
+// The module unload path needs it to tell "the saved context is this module's
+// own, but nothing retains it any more" from "a live raw session still requires
+// this context". A thread-local depth is exact for the enter/exit protocol:
+// `Session` is `!Send + !Sync`, so the session that activated the context is
+// always on the thread that observes it.
+thread_local! {
+    static RAW_SESSION_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Whether the calling thread is inside at least one raw session.
+fn raw_session_is_active() -> bool {
+    RAW_SESSION_DEPTH.with(|depth| depth.get() > 0)
+}
+
 /// Restore a thread's saved device/context after a module drop.
 ///
-/// A saved context equal to the module's own context is not restored: dropping
-/// the runtime pin may have released its last retain, so the thread is left
-/// without a current context instead of with a dangling one.
+/// A saved context equal to the module's own context is kept current only while
+/// a raw session is still active on this thread: that session's runtime pin
+/// retains the primary context, and clearing it would break every later module
+/// load, symbol lookup, and launch in the same callback (#2086). Otherwise the
+/// saved context is dropped in favour of "no current context", because dropping
+/// the runtime pin may have released its last retain and the driver exposes no
+/// refcount query to distinguish that from another runtime still keeping the
+/// primary context alive.
 fn restore_thread_state(
     saved_device: Result<i32, cudarc::runtime::result::RuntimeError>,
     saved_context: Result<
@@ -159,13 +197,10 @@ fn restore_thread_state(
     >,
     module_context: cudarc::driver::sys::CUcontext,
 ) {
-    // ponytail: a saved context equal to the module's own context is cleared
-    // rather than restored. Dropping the runtime pin may have released its last
-    // retain, and the driver exposes no refcount query to distinguish that from
-    // another runtime still keeping the primary context alive. A caller that
-    // needs that exact binding re-enters it (a raw session restores it on exit).
+    let session_is_live = raw_session_is_active();
     let previous = match saved_context {
-        Ok(Some(previous)) if previous != module_context => Some(previous),
+        Ok(Some(previous)) if previous == module_context => session_is_live.then_some(previous),
+        Ok(Some(previous)) => Some(previous),
         _ => None,
     };
     let mut failures = Vec::new();
@@ -174,9 +209,10 @@ fn restore_thread_state(
             failures.push(format!("device: {err:?}"));
         }
     }
-    // SAFETY: the saved context was current on this thread when the drop
-    // started and is not the module context released by the runtime pin; the
-    // null case clears the thread's binding instead of leaving a stale one.
+    // SAFETY: a restored context was current on this thread when the drop
+    // started; either it differs from the module context just released, or a
+    // live raw session on this thread still pins it. The null case clears the
+    // thread's binding instead of leaving a stale one.
     let restored = match previous {
         Some(previous) => unsafe { cudarc::driver::result::ctx::set_current(previous) },
         None => unsafe { cudarc::driver::result::ctx::set_current(std::ptr::null_mut()) },
@@ -258,6 +294,7 @@ impl Module {
                 runtime: Some(runtime),
                 handle: handle as usize,
                 context: context as usize,
+                shared_memory_opt_in: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -300,41 +337,12 @@ impl Module {
 pub struct Function {
     handle: usize,
     module: Arc<ModuleInner>,
-    /// Largest dynamic shared-memory budget this function was opted into with
-    /// (`CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES`). `0` means "the
-    /// driver's default", i.e. no attribute was set yet.
-    ///
-    /// The attribute only ever grows: a launch that requests no more than this
-    /// value reuses it instead of paying another driver call (#2085). A
-    /// function handle is usable from several threads, so the fast path is an
-    /// atomic read and the raising path is serialized by `shared_mem_raise`.
-    shared_mem_opt_in: AtomicU32,
-    /// Serializes the "read recorded value, raise attribute" sequence so two
-    /// threads cannot shrink the attribute again after a larger request.
-    shared_mem_raise: Mutex<()>,
 }
 
 impl Function {
     /// Return the raw function handle (for internal launch use).
     pub(crate) fn handle(&self) -> cudarc::driver::sys::CUfunction {
         self.handle as cudarc::driver::sys::CUfunction
-    }
-
-    /// Largest dynamic shared-memory budget already opted into on this handle.
-    pub(crate) fn shared_mem_opt_in(&self) -> u32 {
-        self.shared_mem_opt_in.load(Ordering::Acquire)
-    }
-
-    /// Record a successful dynamic shared-memory opt-in on this handle.
-    pub(crate) fn set_shared_mem_opt_in(&self, bytes: u32) {
-        self.shared_mem_opt_in.store(bytes, Ordering::Release);
-    }
-
-    /// Serialize the shared-memory opt-in decision across threads.
-    pub(crate) fn lock_shared_memory_raise(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.shared_mem_raise
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -395,6 +403,12 @@ pub struct Session<'s> {
     _scope: PhantomData<&'s ()>,
 }
 
+impl Drop for Session<'_> {
+    fn drop(&mut self) {
+        RAW_SESSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
 impl<'s> Session<'s> {
     /// Create a raw session bound to `runtime`, `cache`, and the current
     /// CubeCL stream.
@@ -409,6 +423,7 @@ impl<'s> Session<'s> {
         cache: &'s CudaExtensionCache,
         stream: u64,
     ) -> Self {
+        RAW_SESSION_DEPTH.with(|depth| depth.set(depth.get() + 1));
         Self {
             runtime,
             cache,
@@ -668,16 +683,22 @@ impl<'s> Session<'s> {
     ///   [`CudaExecSession::with_raw`](super::exec_session::CudaExecSession::with_raw)
     ///   does not synchronize on return, including on its error paths, so
     ///   dropping or freeing the external allocation immediately after the
-    ///   callback is a use-after-free unless the caller has synchronized or made
-    ///   the session stream wait on an event first. The `'a` lifetime on the
+    ///   callback is a use-after-free unless the caller has observed completion
+    ///   first: [`Session::synchronize`] is the direct form. For an asynchronous
+    ///   handoff, record a CUDA event **after** the session's work and make the
+    ///   later consumer (or the stream-ordered reclamation) wait on that event.
+    ///   Making the session stream wait on an event recorded *before* the work
+    ///   only delays this stream; it does not establish completion and does not
+    ///   permit freeing the allocation on the host. The `'a` lifetime on the
     ///   returned handle ties it to the session borrow only; it is not a proof of
     ///   allocation lifetime.
     ///
     /// # Errors
     ///
-    /// Returns `crate::Error::Validation` (`InvalidArgument`) when the pointer
-    /// is null, `byte_len` is zero or not a whole number of `T` elements, the
-    /// address is misaligned for `T`, or `ptr + byte_len` overflows.
+    /// Returns `crate::Error::Validation` carrying
+    /// `ValidationError::InvalidArgument` when the pointer is null, `byte_len`
+    /// is zero or not a whole number of `T` elements, the address is misaligned
+    /// for `T`, or `ptr + byte_len` overflows.
     ///
     /// # Examples
     ///
@@ -730,15 +751,17 @@ impl<'s> Session<'s> {
     /// foreign stream may read or write it concurrently, and contents the kernel
     /// does not initialize must not be read afterwards. In particular, the
     /// session cannot prove that the external owner will not reuse the buffer;
-    /// synchronize (or make the session stream wait on an event) before handing
-    /// it back, and remember that `with_raw` does not synchronize on success or
-    /// error.
+    /// observe completion before handing it back (synchronize, or make the
+    /// reusing consumer or stream-ordered reclamation wait on an event recorded
+    /// **after** the session's work), and remember that `with_raw` does not
+    /// synchronize on success or error.
     ///
     /// # Errors
     ///
-    /// Returns `crate::Error::Validation` (`InvalidArgument`) when the pointer
-    /// is null, `byte_len` is zero or not a whole number of `T` elements, the
-    /// address is misaligned for `T`, or `ptr + byte_len` overflows.
+    /// Returns `crate::Error::Validation` carrying
+    /// `ValidationError::InvalidArgument` when the pointer is null, `byte_len`
+    /// is zero or not a whole number of `T` elements, the address is misaligned
+    /// for `T`, or `ptr + byte_len` overflows.
     ///
     /// # Examples
     ///

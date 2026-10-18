@@ -266,8 +266,14 @@ The unsafe contract is the caller's:
   separate cudarc stream; wrap the captured session stream with
   `CudaContext::wrap_borrowed_stream`, or use cross-stream events;
 - the external allocation stays alive until completion. `with_raw` does not
-  synchronize on return, including on error paths, so synchronize (or make the
-  session stream wait on an event) before freeing or reusing the buffer.
+  synchronize on return, including on error paths, so observe completion before
+  freeing, reusing, or dropping the buffer: `raw::Session::synchronize` is the
+  direct form. For an asynchronous handoff, record a CUDA event **after** the
+  session's work and make the later consumer (or the stream-ordered
+  reclamation) wait on that event. Making the session stream wait on an event
+  recorded before the work only delays that stream; it does not establish
+  completion, so it is not an alternative to synchronizing before an immediate
+  host-side free.
 
 The CubeCL session cannot bind external memory: its `tensor_binding`,
 `array_arg`, and allocation helpers derive handles from tenferro-resident
@@ -305,10 +311,12 @@ Since Volta the driver caps a launch that requests more than 48 KiB of dynamic
 shared memory unless the kernel opts in first. `raw::Session::launch` performs
 that opt-in implicitly: the first launch whose `LaunchConfig::shared_mem_bytes`
 exceeds 48 KiB raises
-`CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES` on the launched
-`raw::Function`, and a later launch calls the driver again only when it asks for
-more than the value already set. There is no separate opt-in flag and no
-`Function` setter to call.
+`CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES` on the underlying CUDA
+function, and a later launch calls the driver again only when it asks for more
+than the value already set. The recorded budget belongs to that function, not to
+a lookup: repeated `Module::function` calls for the same symbol and launches
+from other threads share it, so a smaller request never lowers the attribute
+again. There is no separate opt-in flag and no `Function` setter to call.
 
 The device's opt-in ceiling is
 `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`, which the CubeCL
@@ -337,7 +345,10 @@ and `launch` returns the typed `BackendSource` error
 `raw_launch_uses_dynamic_shared_memory_above_48_kib` (a 64 KiB / 16384 f32 tile
 launched on an A100, values checked after download) and
 `raw_launch_rejects_dynamic_shared_memory_above_device_opt_in` (the typed
-rejection above the ceiling) cover both paths (#2085).
+rejection above the ceiling) cover both paths (#2085), and
+`raw_dynamic_shared_memory_opt_in_is_shared_by_every_lookup` plus
+`raw_dynamic_shared_memory_opt_in_is_serialized_across_threads` cover the shared
+budget.
 
 ## Ordering, synchronization, and safety
 
