@@ -50,13 +50,28 @@
   least one allocation as a liveness check on its counter. The body is now
   genuinely allocation-free, so the assertion was rewritten to require
   `direct_allocations == 0` and keep the liveness check on the runtime path.
-- Deferred, not silently dropped: the kernel-crate workspace forms (`tlinalg`
-  `*_workspace` / `*_into`, `cpueinsum::execute_bounded`) are not in the pinned
-  0.3.0 provider surface, so tenferro keeps the `Vec`-handing workspace path and
-  `execute_uninit`; adding the raw forms follows upstream. The small
-  QR/SVD/LU per-lane allocation ceilings and the batch-size-independence check
-  described in #2178 item 7 are in
-  `crates/tenferro-linalg/tests/small_linalg_allocation.rs` (one- and two-thread
-  lanes, with separate single-item and batched ceilings), and the
-  two-operation fused-region ceiling is in
-  `crates/tenferro-cpu-fused/tests/fused_region_allocations.rs`.
+- #2178 item 6 is no longer deferred: `tlinalg`/`tlinalg-blas` are pinned at
+  `=0.3.1`, whose additive `*_workspace` / `*_into` entries every faer family
+  now uses. Each call takes one byte region from the session pool for the
+  provider's complete per-lane scratch (the query and the call share one
+  `Exec`), and writes straight into pooled `_into` destinations whose recycler
+  returns the storage when the caller drops the tensor. Both halves of that are
+  the existing pool: no second allocator, no per-call `Vec` scratch. Results are
+  bitwise identical to the wrapper route, which the provider pins to 0.3.0 on
+  its own battery and which was re-checked here family by family.
+- The host residual on that route is 3 allocations per call at one thread:
+  the `BufferPool` in-flight-accounting node the per-operation loan reset
+  re-creates, the linalg module's result `Vec`, and the CPU backend's
+  dtype-erased `Vec<Tensor>`. A second lane adds one rayon `HeapJob` per spawn.
+  The small QR/SVD/LU per-lane ceilings and the batch-size-independence check
+  described in #2178 item 7 now record those numbers
+  (`crates/tenferro-linalg/tests/small_linalg_allocation.rs`, one- and two-thread
+  lanes, separate single-item and batched ceilings); the two-operation
+  fused-region ceiling is in
+  `crates/tenferro-cpu-fused/tests/fused_region_allocations.rs`. The wider
+  per-route ceilings in `crates/tenferro-linalg/tests/cpu_linalg_allocation.rs`
+  and `tests/lapack_allocation.rs` are lowered to their re-measured values.
+- Not in this item: the contraction lane keeps `execute_uninit_slices`. The
+  pinned `cpueinsum 0.3.1` `execute_bounded` still takes a caller-sliced
+  `&mut [T]` work buffer rather than a borrowed byte region, so there is no
+  `*_into`-style arena entry to move that lane onto.

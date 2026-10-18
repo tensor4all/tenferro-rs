@@ -89,6 +89,18 @@ Batch lanes. Every batched CPU linalg family hands one parallelism token to
 provider owns lane selection, vendor batching, and scratch within that budget.
 The former host lane plan and `CpuBatchPolicy` plumbing were removed by #2004.
 
+Scratch ownership. The faer lane drives every family through the provider's
+borrowed-workspace pair: `<family>_workspace(shape, batch, exec)` reports the
+bytes one call needs at the route the *same* `Exec` resolves, and
+`<family>_into(..., workspace, exec)` carves its complete per-lane scratch
+(worst-case alignment padding included) from that one region. The region is a
+byte view over the session buffer pool, and fresh outputs are pooled
+`MaybeUninit` leases the provider writes in full, so the storage returns to the
+pool when the caller drops the tensor. A warm pool therefore leaves only host
+bookkeeping allocations per call (#2178 item 6). A new family uses that pair,
+not the provider's `Vec` wrappers, and maps the provider's
+`Error::InsufficientWorkspace` as an internal-contract failure because the
+host's own query sized the call.
 
 ## Concrete, Read, And Typed Boundary
 

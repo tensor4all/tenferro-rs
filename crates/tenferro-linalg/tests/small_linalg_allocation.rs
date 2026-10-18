@@ -131,54 +131,70 @@ fn check_family(
     );
 }
 
-// Measured steady-state ceilings through the public linalg route. The count
-// includes the pooled outputs plus the provider's residual plan/workspace
-// scratch; the deferred `*_into`/`*_workspace` API is what would isolate the
-// provider-only 4/3/5 scratch.
+// Measured steady-state ceilings through the public linalg route, at
+// `tlinalg 0.3.1` on the borrowed-workspace route. Every faer family now
+// queries `*_workspace` and writes straight into pooled `*_into` destinations,
+// so the provider scratch is one pooled region per call and the outputs return
+// to the pool when the caller drops them.
+//
+// The residual 3 allocations per call on the one-thread lane are host/pool
+// bookkeeping, not provider scratch:
+//   * one `BufferPool` in-flight-accounting node insert: `BufferPoolLoan::drop`
+//     clears the in-flight maps after every operation
+//     (`tenferro-cpu/src/backend.rs`), so the next operation's first tracked
+//     checkout re-inserts its key;
+//   * the provider module's own result `Vec` (the `qr_impl`/`svd_impl` output
+//     list or the `lu_factor` triple) and the CPU backend's dtype-erased
+//     `Vec<Tensor>` mapping of it.
+// The two-thread lane adds one allocation per fanned-out lane: rayon's
+// `HeapJob` for the second lane's `tlinalg::batch::run` spawn.
 #[cfg(feature = "native")]
-const QR_CEILING_1T: usize = 12;
+const QR_CEILING_1T: (usize, usize) = (3, 3);
 #[cfg(feature = "native")]
-const QR_CEILING_2T: usize = 18;
+const QR_CEILING_2T: (usize, usize) = (3, 5);
 #[cfg(feature = "native")]
-const SVD_CEILING_1T: usize = 14;
+const SVD_CEILING_1T: (usize, usize) = (3, 3);
 #[cfg(feature = "native")]
-const SVD_CEILING_2T: usize = 19;
+const SVD_CEILING_2T: (usize, usize) = (3, 5);
 #[cfg(feature = "native")]
-const PACKED_LU_CEILING_1T: usize = 13;
+const PACKED_LU_CEILING_1T: (usize, usize) = (3, 3);
 #[cfg(feature = "native")]
-const PACKED_LU_CEILING_2T: usize = 20;
+const PACKED_LU_CEILING_2T: (usize, usize) = (3, 5);
 #[cfg(feature = "native")]
 const QR_BATCH_GROWTH_1T: usize = 0;
-// Measured: batch 1 = 12, batch 64 = 18. The six extra allocations are the
-// second lane's hoisted scratch, created when Auto fans out from one lane to
+// Measured: batch 1 = 3, batch 64 = 5. The two extra allocations are the
+// second lane's rayon `HeapJob`, created when Auto fans out from one lane to
 // two; they do not grow per item beyond the budget.
 #[cfg(feature = "native")]
-const QR_BATCH_GROWTH_2T: usize = 6;
+const QR_BATCH_GROWTH_2T: usize = 2;
 #[cfg(feature = "native")]
 const SVD_BATCH_GROWTH_1T: usize = 0;
-// Measured: batch 1 = 14, batch 64 = 19, the same second-lane scratch.
+// Measured: batch 1 = 3, batch 64 = 5, the same second-lane spawn.
 #[cfg(feature = "native")]
-const SVD_BATCH_GROWTH_2T: usize = 5;
+const SVD_BATCH_GROWTH_2T: usize = 2;
 #[cfg(feature = "native")]
 const PACKED_LU_BATCH_GROWTH_1T: usize = 0;
-// Measured: batch 1 = 13, batch 64 = 20, the same second-lane scratch.
+// Measured: batch 1 = 3, batch 64 = 5, the same second-lane spawn.
 #[cfg(feature = "native")]
-const PACKED_LU_BATCH_GROWTH_2T: usize = 7;
+const PACKED_LU_BATCH_GROWTH_2T: usize = 2;
+// Re-measured on `tlinalg-blas 0.3.1`: the LAPACK route already took its
+// scratch from the session pool, and the release's removed per-call
+// permutation/tau buffers do not appear on these three families' paths.
 #[cfg(feature = "blas")]
-const QR_CEILING_1T: usize = 9;
+const QR_CEILING_1T: (usize, usize) = (9, 9);
 #[cfg(feature = "blas")]
-const QR_CEILING_2T: usize = 9;
+const QR_CEILING_2T: (usize, usize) = (9, 9);
 #[cfg(feature = "blas")]
-const SVD_CEILING_1T: usize = 13;
+const SVD_CEILING_1T: (usize, usize) = (13, 13);
 #[cfg(feature = "blas")]
-const SVD_CEILING_2T: usize = 13;
+const SVD_CEILING_2T: (usize, usize) = (13, 13);
 // Measured: batch 1 = 7, batch 64 = 8. The packed-LU route keeps one
 // batch-sized scratch vector outside the hoisted workspace; recorded as a
 // finding rather than hidden.
 #[cfg(feature = "blas")]
-const PACKED_LU_CEILING_1T: usize = 8;
+const PACKED_LU_CEILING_1T: (usize, usize) = (7, 8);
 #[cfg(feature = "blas")]
-const PACKED_LU_CEILING_2T: usize = 8;
+const PACKED_LU_CEILING_2T: (usize, usize) = (7, 8);
 #[cfg(feature = "blas")]
 const QR_BATCH_GROWTH_1T: usize = 0;
 #[cfg(feature = "blas")]
@@ -194,9 +210,9 @@ const PACKED_LU_BATCH_GROWTH_2T: usize = 1;
 
 fn check_lane(
     threads: usize,
-    qr_ceiling: usize,
-    svd_ceiling: usize,
-    packed_lu_ceiling: usize,
+    qr_ceiling: (usize, usize),
+    svd_ceiling: (usize, usize),
+    packed_lu_ceiling: (usize, usize),
     qr_growth: usize,
     svd_growth: usize,
     packed_lu_growth: usize,
@@ -206,8 +222,8 @@ fn check_lane(
     check_family(
         &mut backend,
         &format!("qr {suffix}"),
-        qr_ceiling,
-        qr_ceiling,
+        qr_ceiling.0,
+        qr_ceiling.1,
         qr_growth,
         |session, input| {
             with_cpu(session, |cpu| {
@@ -218,8 +234,8 @@ fn check_lane(
     check_family(
         &mut backend,
         &format!("svd {suffix}"),
-        svd_ceiling,
-        svd_ceiling,
+        svd_ceiling.0,
+        svd_ceiling.1,
         svd_growth,
         |session, input| {
             with_cpu(session, |cpu| {
@@ -230,8 +246,8 @@ fn check_lane(
     check_family(
         &mut backend,
         &format!("packed_lu {suffix}"),
-        packed_lu_ceiling,
-        packed_lu_ceiling,
+        packed_lu_ceiling.0,
+        packed_lu_ceiling.1,
         packed_lu_growth,
         |session, input| {
             with_cpu(session, |cpu| {
